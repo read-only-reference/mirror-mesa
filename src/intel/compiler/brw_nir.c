@@ -273,14 +273,10 @@ brw_nir_lower_vs_inputs(nir_shader *nir,
 
    const unsigned num_inputs = util_bitcount64(nir->info.inputs_read);
 
-   nir_foreach_function(function, nir) {
-      if (!function->impl)
-         continue;
+   nir_foreach_function_impl(impl, nir) {
+      nir_builder b = nir_builder_create(impl);
 
-      nir_builder b;
-      nir_builder_init(&b, function->impl);
-
-      nir_foreach_block(block, function->impl) {
+      nir_foreach_block(block, impl) {
          nir_foreach_instr_safe(instr, block) {
             if (instr->type != nir_instr_type_intrinsic)
                continue;
@@ -388,11 +384,8 @@ brw_nir_lower_vue_inputs(nir_shader *nir,
 
    nir_io_add_const_offset_to_base(nir, nir_var_shader_in);
 
-   nir_foreach_function(function, nir) {
-      if (!function->impl)
-         continue;
-
-      nir_foreach_block(block, function->impl) {
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
          nir_foreach_instr(instr, block) {
             if (instr->type != nir_instr_type_intrinsic)
                continue;
@@ -439,14 +432,11 @@ brw_nir_lower_tes_inputs(nir_shader *nir, const struct brw_vue_map *vue_map)
 
    nir_io_add_const_offset_to_base(nir, nir_var_shader_in);
 
-   nir_foreach_function(function, nir) {
-      if (function->impl) {
-         nir_builder b;
-         nir_builder_init(&b, function->impl);
-         nir_foreach_block(block, function->impl) {
-            remap_patch_urb_offsets(block, &b, vue_map,
-                                    nir->info.tess._primitive_mode);
-         }
+   nir_foreach_function_impl(impl, nir) {
+      nir_builder b = nir_builder_create(impl);
+      nir_foreach_block(block, impl) {
+         remap_patch_urb_offsets(block, &b, vue_map,
+                                 nir->info.tess._primitive_mode);
       }
    }
 }
@@ -595,13 +585,10 @@ brw_nir_lower_tcs_outputs(nir_shader *nir, const struct brw_vue_map *vue_map,
 
    nir_io_add_const_offset_to_base(nir, nir_var_shader_out);
 
-   nir_foreach_function(function, nir) {
-      if (function->impl) {
-         nir_builder b;
-         nir_builder_init(&b, function->impl);
-         nir_foreach_block(block, function->impl) {
-            remap_patch_urb_offsets(block, &b, vue_map, tes_primitive_mode);
-         }
+   nir_foreach_function_impl(impl, nir) {
+      nir_builder b = nir_builder_create(impl);
+      nir_foreach_block(block, impl) {
+         remap_patch_urb_offsets(block, &b, vue_map, tes_primitive_mode);
       }
    }
 }
@@ -710,6 +697,13 @@ brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler)
       OPT(nir_opt_intrinsics);
       OPT(nir_opt_idiv_const, 32);
       OPT(nir_opt_algebraic);
+
+      /* BFI2 did not exist until Gfx7, so there's no point in trying to
+       * optimize an instruction that should not get generated.
+       */
+      if (compiler->devinfo->ver >= 7)
+         OPT(nir_opt_reassociate_bfi);
+
       OPT(nir_lower_constant_convert_alu_types);
       OPT(nir_opt_constant_folding);
 
@@ -946,7 +940,7 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
     *
     * So when robust image access is enabled, just avoid the workaround.
     */
-   if (devinfo->ver >= 12 && !opts->robust_image_access)
+   if (intel_needs_workaround(devinfo, 1806565034) && !opts->robust_image_access)
       OPT(brw_nir_clamp_image_1d_2d_array_sizes);
 
    const nir_lower_tex_options tex_options = {
@@ -1308,8 +1302,10 @@ brw_nir_should_vectorize_mem(unsigned align_mul, unsigned align_offset,
       return false;
 
    if (low->intrinsic == nir_intrinsic_load_global_const_block_intel ||
+       low->intrinsic == nir_intrinsic_load_ubo_uniform_block_intel ||
        low->intrinsic == nir_intrinsic_load_ssbo_uniform_block_intel ||
-       low->intrinsic == nir_intrinsic_load_shared_uniform_block_intel) {
+       low->intrinsic == nir_intrinsic_load_shared_uniform_block_intel ||
+       low->intrinsic == nir_intrinsic_load_global_constant_uniform_block_intel) {
       if (num_components > 4) {
          if (!util_is_power_of_two_nonzero(num_components))
             return false;
@@ -1347,8 +1343,8 @@ bool combine_all_memory_barriers(nir_intrinsic_instr *a,
                                  void *data)
 {
    /* Only combine pure memory barriers */
-   if ((nir_intrinsic_execution_scope(a) != NIR_SCOPE_NONE) ||
-       (nir_intrinsic_execution_scope(b) != NIR_SCOPE_NONE))
+   if ((nir_intrinsic_execution_scope(a) != SCOPE_NONE) ||
+       (nir_intrinsic_execution_scope(b) != SCOPE_NONE))
       return false;
 
    /* Translation to backend IR will get rid of modes we don't care about, so
@@ -1368,7 +1364,7 @@ bool combine_all_memory_barriers(nir_intrinsic_instr *a,
 
 static nir_mem_access_size_align
 get_mem_access_size_align(nir_intrinsic_op intrin, uint8_t bytes,
-                          uint32_t align_mul, uint32_t align_offset,
+                          uint8_t bit_size, uint32_t align_mul, uint32_t align_offset,
                           bool offset_is_const, const void *cb_data)
 {
    const uint32_t align = nir_combined_align(align_mul, align_offset);
@@ -1495,15 +1491,17 @@ brw_vectorize_lower_mem_access(nir_shader *nir,
       }
    }
 
-   OPT(nir_lower_mem_access_bit_sizes,
-       nir_var_mem_ssbo |
-       nir_var_mem_constant |
-       nir_var_mem_task_payload |
-       nir_var_shader_temp |
-       nir_var_function_temp |
-       nir_var_mem_global |
-       nir_var_mem_shared,
-       get_mem_access_size_align, NULL);
+   nir_lower_mem_access_bit_sizes_options mem_access_options = {
+      .modes = nir_var_mem_ssbo |
+               nir_var_mem_constant |
+               nir_var_mem_task_payload |
+               nir_var_shader_temp |
+               nir_var_function_temp |
+               nir_var_mem_global |
+               nir_var_mem_shared,
+      .callback = get_mem_access_size_align,
+   };
+   OPT(nir_lower_mem_access_bit_sizes, &mem_access_options);
 
    while (progress) {
       progress = false;
@@ -1520,8 +1518,8 @@ brw_vectorize_lower_mem_access(nir_shader *nir,
 static bool
 nir_shader_has_local_variables(const nir_shader *nir)
 {
-   nir_foreach_function(func, nir) {
-      if (func->impl && !exec_list_is_empty(&func->impl->locals))
+   nir_foreach_function_impl(impl, nir) {
+      if (!exec_list_is_empty(&impl->locals))
          return true;
    }
 
@@ -1690,13 +1688,12 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
    OPT(nir_copy_prop);
    OPT(nir_opt_dce);
 
-   OPT(nir_lower_locals_to_regs);
+   OPT(nir_lower_locals_to_regs, 32);
 
    if (unlikely(debug_enabled)) {
       /* Re-index SSA defs so we print more sensible numbers. */
-      nir_foreach_function(function, nir) {
-         if (function->impl)
-            nir_index_ssa_defs(function->impl);
+      nir_foreach_function_impl(impl, nir) {
+         nir_index_ssa_defs(impl);
       }
 
       fprintf(stderr, "NIR (SSA form) for %s shader:\n",

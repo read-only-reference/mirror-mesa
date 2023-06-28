@@ -74,7 +74,7 @@ d3d12_wgl_framebuffer_destroy(struct stw_winsys_framebuffer *fb,
       /* Ensure all resources are flushed */
       ctx->flush(ctx, &fence, PIPE_FLUSH_HINT_FINISH);
       if (fence) {
-         ctx->screen->fence_finish(ctx->screen, ctx, fence, PIPE_TIMEOUT_INFINITE);
+         ctx->screen->fence_finish(ctx->screen, ctx, fence, OS_TIMEOUT_INFINITE);
          ctx->screen->fence_reference(ctx->screen, &fence, NULL);
       }
    }
@@ -164,7 +164,7 @@ d3d12_wgl_framebuffer_resize(stw_winsys_framebuffer *fb,
    framebuffer->pformat = templ->format;
 }
 
-static boolean
+static bool
 d3d12_wgl_framebuffer_present(stw_winsys_framebuffer *fb, int interval)
 {
    auto framebuffer = d3d12_wgl_framebuffer(fb);

@@ -1127,6 +1127,10 @@ static int gfx6_compute_surface(ADDR_HANDLE addrlib, const struct radeon_info *i
    if (!compressed)
       AddrDccIn.bpp = AddrSurfInfoIn.bpp = surf->bpe * 8;
 
+   /* Setting ADDR_FMT_32_32_32 breaks gfx6-8, while INVALID works. */
+   if (AddrSurfInfoIn.format == ADDR_FMT_32_32_32)
+      AddrSurfInfoIn.format = ADDR_FMT_INVALID;
+
    AddrDccIn.numSamples = AddrSurfInfoIn.numSamples = MAX2(1, config->info.samples);
    AddrSurfInfoIn.tileIndex = -1;
 
@@ -1434,7 +1438,9 @@ static int gfx6_compute_surface(ADDR_HANDLE addrlib, const struct radeon_info *i
       surf->flags &= ~RADEON_SURF_TC_COMPATIBLE_HTILE;
    }
 
-   surf->is_linear = surf->u.legacy.level[0].mode == RADEON_SURF_MODE_LINEAR_ALIGNED;
+   surf->is_linear = (only_stencil ? surf->u.legacy.zs.stencil_level[0].mode :
+                                     surf->u.legacy.level[0].mode) == RADEON_SURF_MODE_LINEAR_ALIGNED;
+
    surf->is_displayable = surf->is_linear || surf->micro_tile_mode == RADEON_MICRO_MODE_DISPLAY ||
                           surf->micro_tile_mode == RADEON_MICRO_MODE_RENDER;
 
@@ -2385,7 +2391,8 @@ static int gfx9_compute_surface(struct ac_addrlib *addrlib, const struct radeon_
          return r;
    }
 
-   surf->is_linear = surf->u.gfx9.swizzle_mode == ADDR_SW_LINEAR;
+   surf->is_linear = (only_stencil ? surf->u.gfx9.zs.stencil_swizzle_mode :
+                                     surf->u.gfx9.swizzle_mode) == ADDR_SW_LINEAR;
 
    /* Query whether the surface is displayable. */
    /* This is only useful for surfaces that are allocated without SCANOUT. */
@@ -2992,20 +2999,21 @@ static uint32_t ac_surface_get_pitch_align(const struct radeon_info *info,
 }
 
 bool ac_surface_override_offset_stride(const struct radeon_info *info, struct radeon_surf *surf,
-                                       unsigned num_mipmap_levels, uint64_t offset, unsigned pitch)
+                                       unsigned num_layers, unsigned num_mipmap_levels,
+                                       uint64_t offset, unsigned pitch)
 {
    if ((ac_surface_get_pitch_align(info, surf) - 1) & pitch)
       return false;
 
-   /*
-    * GFX10 and newer don't support custom strides. Furthermore, for
-    * multiple miplevels or compression data we'd really need to rerun
-    * addrlib to update all the fields in the surface. That, however, is a
-    * software limitation and could be relaxed later.
+   /* Require an equal pitch with metadata (DCC), mipmapping, non-linear layout (that could be
+    * relaxed), or when the chip is GFX10, which is the only generation that can't override
+    * the pitch.
     */
    bool require_equal_pitch = surf->surf_size != surf->total_size ||
+                              num_layers != 1 ||
                               num_mipmap_levels != 1 ||
-                              info->gfx_level >= GFX10;
+                              !surf->is_linear ||
+                              info->gfx_level == GFX10;
 
    if (info->gfx_level >= GFX9) {
       if (pitch) {
@@ -3338,7 +3346,7 @@ static nir_ssa_def *gfx10_nir_meta_addr_from_coord(nir_builder *b, const struct 
          }
       }
 
-      address = nir_ior(b, address, nir_ishl(b, v, nir_imm_int(b, i)));
+      address = nir_ior(b, address, nir_ishl_imm(b, v, i));
    }
 
    unsigned blkMask = (1 << blkSizeLog2) - 1;
@@ -3348,15 +3356,14 @@ static nir_ssa_def *gfx10_nir_meta_addr_from_coord(nir_builder *b, const struct 
    nir_ssa_def *yb = nir_ushr_imm(b, y, meta_block_height_log2);
    nir_ssa_def *pb = nir_ushr_imm(b, meta_pitch, meta_block_width_log2);
    nir_ssa_def *blkIndex = nir_iadd(b, nir_imul(b, yb, pb), xb);
-   nir_ssa_def *pipeXor = nir_iand_imm(b, nir_ishl(b, nir_iand_imm(b, pipe_xor, pipeMask),
-                                                   nir_imm_int(b, m_pipeInterleaveLog2)), blkMask);
+   nir_ssa_def *pipeXor = nir_iand_imm(b, nir_ishl_imm(b, nir_iand_imm(b, pipe_xor, pipeMask),
+                                                       m_pipeInterleaveLog2), blkMask);
 
    if (bit_position)
-      *bit_position = nir_ishl(b, nir_iand(b, address, nir_imm_int(b, 1)),
-                                  nir_imm_int(b, 2));
+      *bit_position = nir_ishl_imm(b, nir_iand_imm(b, address, 1), 2);
 
    return nir_iadd(b, nir_iadd(b, nir_imul(b, meta_slice_size, z),
-                               nir_imul(b, blkIndex, nir_ishl(b, one, nir_imm_int(b, blkSizeLog2)))),
+                               nir_imul(b, blkIndex, nir_ishl_imm(b, one, blkSizeLog2))),
                    nir_ixor(b, nir_ushr(b, address, one), pipeXor));
 }
 
@@ -3409,23 +3416,22 @@ static nir_ssa_def *gfx9_nir_meta_addr_from_coord(nir_builder *b, const struct r
 
          xor = nir_ixor(b, xor, ison);
       }
-      address = nir_ior(b, address, nir_ishl(b, xor, nir_imm_int(b, i)));
+      address = nir_ior(b, address, nir_ishl_imm(b, xor, i));
    }
 
    /* Fill the remaining bits with the block index. */
    unsigned last = num_bits - 1;
    address = nir_ior(b, address,
-                     nir_ishl(b, nir_ushr_imm(b, blockIndex,
+                     nir_ishl_imm(b, nir_ushr_imm(b, blockIndex,
                                               equation->u.gfx9.bit[last].coord[0].ord),
-                     nir_imm_int(b, last)));
+                                  last));
 
    if (bit_position)
-      *bit_position = nir_ishl(b, nir_iand(b, address, nir_imm_int(b, 1)),
-                                  nir_imm_int(b, 2));
+      *bit_position = nir_ishl_imm(b, nir_iand_imm(b, address, 1), 2);
 
    nir_ssa_def *pipeXor = nir_iand_imm(b, pipe_xor, (1 << numPipeBits) - 1);
    return nir_ixor(b, nir_ushr(b, address, one),
-                   nir_ishl(b, pipeXor, nir_imm_int(b, m_pipeInterleaveLog2)));
+                   nir_ishl_imm(b, pipeXor, m_pipeInterleaveLog2));
 }
 
 nir_ssa_def *ac_nir_dcc_addr_from_coord(nir_builder *b, const struct radeon_info *info,

@@ -341,7 +341,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_GLSL_FEATURE_LEVEL:
    case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
       if (is_a6xx(screen))
-         return 450;
+         return 460;
       else if (is_ir3(screen))
          return 140;
       else
@@ -473,6 +473,10 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return !is_a5xx(screen);
 
    /* Stream output. */
+   case PIPE_CAP_MAX_VERTEX_STREAMS:
+      if (is_a6xx(screen))  /* has SO + GS */
+         return PIPE_MAX_SO_BUFFERS;
+      return 0;
    case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
       if (is_ir3(screen))
          return PIPE_MAX_SO_BUFFERS;
@@ -539,6 +543,8 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return (screen->max_freq > 0) &&
              (is_a4xx(screen) || is_a5xx(screen) || is_a6xx(screen));
    case PIPE_CAP_QUERY_BUFFER_OBJECT:
+   case PIPE_CAP_QUERY_SO_OVERFLOW:
+   case PIPE_CAP_QUERY_PIPELINE_STATISTICS_SINGLE:
       return is_a6xx(screen);
 
    case PIPE_CAP_VENDOR_ID:
@@ -647,6 +653,9 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen,
       if (has_compute(screen))
          break;
       return 0;
+   case PIPE_SHADER_TASK:
+   case PIPE_SHADER_MESH:
+      return 0;
    default:
       mesa_loge("unknown shader type %d", shader);
       return 0;
@@ -713,8 +722,6 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen,
    case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
    case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
       return 16;
-   case PIPE_SHADER_CAP_PREFERRED_IR:
-      return PIPE_SHADER_IR_NIR;
    case PIPE_SHADER_CAP_SUPPORTED_IRS:
       return (1 << PIPE_SHADER_IR_NIR) |
              COND(has_compute(screen) && (shader == PIPE_SHADER_COMPUTE),
@@ -1177,7 +1184,7 @@ fd_screen_create(int fd,
    /* fdN_screen_init() should set this: */
    assert(screen->primtypes);
    screen->primtypes_mask = 0;
-   for (unsigned i = 0; i <= PIPE_PRIM_MAX; i++)
+   for (unsigned i = 0; i <= MESA_PRIM_COUNT; i++)
       if (screen->primtypes[i])
          screen->primtypes_mask |= (1 << i);
 

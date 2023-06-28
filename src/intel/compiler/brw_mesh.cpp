@@ -110,7 +110,7 @@ brw_nir_lower_launch_mesh_workgroups_instr(nir_builder *b, nir_instr *instr, voi
    /* Make sure that the mesh workgroup size is taken from the first invocation
     * (nir_intrinsic_launch_mesh_workgroups requirement)
     */
-   nir_ssa_def *cmp = nir_ieq(b, local_invocation_index, nir_imm_int(b, 0));
+   nir_ssa_def *cmp = nir_ieq_imm(b, local_invocation_index, 0);
    nir_if *if_stmt = nir_push_if(b, cmp);
    {
       /* TUE header contains 4 words:
@@ -277,7 +277,7 @@ brw_compile_task(const struct brw_compiler *compiler,
    struct nir_shader *nir = params->nir;
    const struct brw_task_prog_key *key = params->key;
    struct brw_task_prog_data *prog_data = params->prog_data;
-   const bool debug_enabled = INTEL_DEBUG(DEBUG_TASK);
+   const bool debug_enabled = brw_should_print_shader(nir, DEBUG_TASK);
 
    brw_nir_lower_tue_outputs(nir, &prog_data->map);
 
@@ -639,7 +639,7 @@ brw_nir_initialize_mue(nir_shader *nir,
 
    nir_builder b;
    nir_function_impl *entrypoint = nir_shader_get_entrypoint(nir);
-   nir_builder_init(&b, entrypoint);
+   b = nir_builder_create(entrypoint);
    b.cursor = nir_before_block(nir_start_block(entrypoint));
 
    nir_ssa_def *dw_off = nir_imm_int(&b, 0);
@@ -684,8 +684,7 @@ brw_nir_initialize_mue(nir_shader *nir,
       /* Zero "remaining" primitive headers starting from the last one covered
        * by the loop above + workgroup_size.
        */
-      nir_ssa_def *cmp = nir_ilt(&b, local_invocation_index,
-                                     nir_imm_int(&b, remaining));
+      nir_ssa_def *cmp = nir_ilt_imm(&b, local_invocation_index, remaining);
       nir_if *if_stmt = nir_push_if(&b, cmp);
       {
          nir_ssa_def *prim = nir_iadd_imm(&b, local_invocation_index,
@@ -705,7 +704,7 @@ brw_nir_initialize_mue(nir_shader *nir,
     * may start filling MUE before other finished initializing.
     */
    if (workgroup_size > dispatch_width) {
-      nir_scoped_barrier(&b, NIR_SCOPE_WORKGROUP, NIR_SCOPE_WORKGROUP,
+      nir_scoped_barrier(&b, SCOPE_WORKGROUP, SCOPE_WORKGROUP,
                          NIR_MEMORY_ACQ_REL, nir_var_shader_out);
    }
 
@@ -821,11 +820,8 @@ brw_can_pack_primitive_indices(nir_shader *nir, struct index_packing_state *stat
    assert(type->without_array()->is_vector());
    assert(type->without_array()->vector_elements == state->vertices_per_primitive);
 
-   nir_foreach_function(function, nir) {
-      if (!function->impl)
-         continue;
-
-      nir_foreach_block(block, function->impl) {
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
          nir_foreach_instr(instr, block) {
             if (instr->type != nir_instr_type_intrinsic)
                continue;
@@ -970,7 +966,7 @@ brw_compile_mesh(const struct brw_compiler *compiler,
    struct nir_shader *nir = params->nir;
    const struct brw_mesh_prog_key *key = params->key;
    struct brw_mesh_prog_data *prog_data = params->prog_data;
-   const bool debug_enabled = INTEL_DEBUG(DEBUG_MESH);
+   const bool debug_enabled = brw_should_print_shader(nir, DEBUG_MESH);
 
    prog_data->base.base.stage = MESA_SHADER_MESH;
    prog_data->base.base.total_shared = nir->info.shared_size;

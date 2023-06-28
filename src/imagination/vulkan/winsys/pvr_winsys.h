@@ -50,7 +50,7 @@ struct pvr_winsys_heaps {
    struct pvr_winsys_heap *general_heap;
    struct pvr_winsys_heap *pds_heap;
    struct pvr_winsys_heap *rgn_hdr_heap;
-   struct pvr_winsys_heap *transfer_3d_heap;
+   struct pvr_winsys_heap *transfer_frag_heap;
    struct pvr_winsys_heap *usc_heap;
    struct pvr_winsys_heap *vis_test_heap;
 };
@@ -66,10 +66,10 @@ struct pvr_winsys_heap {
    struct pvr_winsys *ws;
 
    pvr_dev_addr_t base_addr;
-   pvr_dev_addr_t reserved_addr;
+   pvr_dev_addr_t static_data_carveout_addr;
 
    uint64_t size;
-   uint64_t reserved_size;
+   uint64_t static_data_carveout_size;
 
    uint32_t page_size;
    uint32_t log2_page_size;
@@ -149,6 +149,11 @@ struct pvr_winsys_rt_dataset_create_info {
    /* Local freelist */
    struct pvr_winsys_free_list *local_free_list;
 
+   uint32_t width;
+   uint32_t height;
+   uint32_t samples;
+   uint16_t layers;
+
    /* ISP register values */
    uint32_t isp_merge_lower_x;
    uint32_t isp_merge_lower_y;
@@ -156,18 +161,6 @@ struct pvr_winsys_rt_dataset_create_info {
    uint32_t isp_merge_scale_y;
    uint32_t isp_merge_upper_x;
    uint32_t isp_merge_upper_y;
-   uint32_t isp_mtile_size;
-
-   /* PPP register values */
-   uint64_t ppp_multi_sample_ctl;
-   uint64_t ppp_multi_sample_ctl_y_flipped;
-   uint32_t ppp_screen;
-
-   /* TE register values */
-   uint32_t te_aa;
-   uint32_t te_mtile1;
-   uint32_t te_mtile2;
-   uint32_t te_screen;
 
    /* Allocations and associated information */
    pvr_dev_addr_t vheap_table_dev_addr;
@@ -183,10 +176,6 @@ struct pvr_winsys_rt_dataset_create_info {
       pvr_dev_addr_t rgn_header_dev_addr;
    } rt_datas[ROGUE_NUM_RTDATAS];
    uint64_t rgn_header_size;
-
-   /* Miscellaneous */
-   uint32_t mtile_stride;
-   uint16_t max_rts;
 };
 
 struct pvr_winsys_rt_dataset {
@@ -251,8 +240,6 @@ struct pvr_winsys_transfer_ctx {
    struct pvr_winsys *ws;
 };
 
-#define PVR_WINSYS_TRANSFER_FLAG_SINGLE_CORE BITFIELD_BIT(0U)
-
 #define PVR_TRANSFER_MAX_PREPARES_PER_SUBMIT 16U
 #define PVR_TRANSFER_MAX_RENDER_TARGETS 3U
 
@@ -283,13 +270,14 @@ struct pvr_winsys_transfer_regs {
 
 struct pvr_winsys_transfer_cmd {
    /* Firmware stream buffer. This is the maximum possible size taking into
-    * consideration all HW features.
+    * consideration all HW features, quirks and enhancements.
     */
    uint8_t fw_stream[172];
    uint32_t fw_stream_len;
 
-   /* Must be 0 or a combination of PVR_WINSYS_TRANSFER_FLAG_* flags. */
-   uint32_t flags;
+   struct pvr_winsys_transfer_cmd_flags {
+      bool use_single_core : 1;
+   } flags;
 };
 
 struct pvr_winsys_transfer_submit_info {
@@ -302,9 +290,6 @@ struct pvr_winsys_transfer_submit_info {
    struct pvr_winsys_transfer_cmd cmds[PVR_TRANSFER_MAX_PREPARES_PER_SUBMIT];
 };
 
-#define PVR_WINSYS_COMPUTE_FLAG_PREVENT_ALL_OVERLAP BITFIELD_BIT(0U)
-#define PVR_WINSYS_COMPUTE_FLAG_SINGLE_CORE BITFIELD_BIT(1U)
-
 struct pvr_winsys_compute_submit_info {
    uint32_t frame_num;
    uint32_t job_num;
@@ -312,31 +297,16 @@ struct pvr_winsys_compute_submit_info {
    struct vk_sync *wait;
 
    /* Firmware stream buffer. This is the maximum possible size taking into
-    * consideration all HW features.
+    * consideration all HW features, quirks and enhancements.
     */
-   uint8_t fw_stream[92];
+   uint8_t fw_stream[100];
    uint32_t fw_stream_len;
 
-   /* Firmware extension stream buffer. This is the maximum possible size taking
-    * into considation all quirks and enhancements.
-    */
-   uint8_t fw_ext_stream[8];
-   uint32_t fw_ext_stream_len;
-
-   /* Must be 0 or a combination of PVR_WINSYS_COMPUTE_FLAG_* flags. */
-   uint32_t flags;
+   struct pvr_winsys_compute_submit_flags {
+      bool prevent_all_overlap : 1;
+      bool use_single_core : 1;
+   } flags;
 };
-
-#define PVR_WINSYS_GEOM_FLAG_FIRST_GEOMETRY BITFIELD_BIT(0U)
-#define PVR_WINSYS_GEOM_FLAG_LAST_GEOMETRY BITFIELD_BIT(1U)
-#define PVR_WINSYS_GEOM_FLAG_SINGLE_CORE BITFIELD_BIT(2U)
-
-#define PVR_WINSYS_FRAG_FLAG_DEPTH_BUFFER_PRESENT BITFIELD_BIT(0U)
-#define PVR_WINSYS_FRAG_FLAG_STENCIL_BUFFER_PRESENT BITFIELD_BIT(1U)
-#define PVR_WINSYS_FRAG_FLAG_PREVENT_CDM_OVERLAP BITFIELD_BIT(2U)
-#define PVR_WINSYS_FRAG_FLAG_SINGLE_CORE BITFIELD_BIT(3U)
-#define PVR_WINSYS_FRAG_FLAG_GET_VIS_RESULTS BITFIELD_BIT(4U)
-#define PVR_WINSYS_FRAG_FLAG_SPMSCRATCHBUFFER (5U)
 
 struct pvr_winsys_render_submit_info {
    struct pvr_winsys_rt_dataset *rt_dataset;
@@ -350,38 +320,35 @@ struct pvr_winsys_render_submit_info {
 
    struct pvr_winsys_geometry_state {
       /* Firmware stream buffer. This is the maximum possible size taking into
-       * consideration all HW features.
+       * consideration all HW features, quirks and enhancements.
        */
-      uint8_t fw_stream[52];
+      uint8_t fw_stream[64];
       uint32_t fw_stream_len;
 
-      /* Firmware extension stream buffer. This is the maximum possible size
-       * taking into considation all quirks and enhancements.
-       */
-      uint8_t fw_ext_stream[12];
-      uint32_t fw_ext_stream_len;
-
-      /* Must be 0 or a combination of PVR_WINSYS_GEOM_FLAG_* flags. */
-      uint32_t flags;
+      struct pvr_winsys_geometry_state_flags {
+         bool is_first_geometry : 1;
+         bool is_last_geometry : 1;
+         bool use_single_core : 1;
+      } flags;
 
       struct vk_sync *wait;
    } geometry;
 
    struct pvr_winsys_fragment_state {
       /* Firmware stream buffer. This is the maximum possible size taking into
-       * consideration all HW features.
+       * consideration all HW features, quirks and enhancements.
        */
-      uint8_t fw_stream[432];
+      uint8_t fw_stream[440];
       uint32_t fw_stream_len;
 
-      /* Firmware extension stream buffer. This is the maximum possible size
-       * taking into considation all quirks and enhancements.
-       */
-      uint8_t fw_ext_stream[8];
-      uint32_t fw_ext_stream_len;
-
-      /* Must be 0 or a combination of PVR_WINSYS_FRAG_FLAG_* flags. */
-      uint32_t flags;
+      struct pvr_winsys_fragment_state_flags {
+         bool has_depth_buffer : 1;
+         bool has_stencil_buffer : 1;
+         bool prevent_cdm_overlap : 1;
+         bool use_single_core : 1;
+         bool get_vis_results : 1;
+         bool has_spm_scratch_buffer : 1;
+      } flags;
 
       struct vk_sync *wait;
    } fragment;
@@ -438,6 +405,7 @@ struct pvr_winsys_ops {
    VkResult (*render_target_dataset_create)(
       struct pvr_winsys *ws,
       const struct pvr_winsys_rt_dataset_create_info *create_info,
+      const struct pvr_device_info *dev_info,
       struct pvr_winsys_rt_dataset **const rt_dataset_out);
    void (*render_target_dataset_destroy)(
       struct pvr_winsys_rt_dataset *rt_dataset);

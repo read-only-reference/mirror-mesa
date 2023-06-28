@@ -240,7 +240,7 @@ get_aoa_deref_offset(nir_builder *b,
       nir_ssa_def *index = nir_ssa_for_src(b, deref->arr.index, 1);
       assert(deref->arr.index.ssa);
       offset = nir_iadd(b, offset,
-                           nir_imul(b, index, nir_imm_int(b, array_size)));
+                           nir_imul_imm(b, index, array_size));
 
       deref = nir_deref_instr_parent(deref);
       assert(glsl_type_is_array(deref->type));
@@ -262,8 +262,7 @@ iris_lower_storage_image_derefs(nir_shader *nir)
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    nir_foreach_block(block, impl) {
       nir_foreach_instr_safe(instr, block) {
@@ -285,8 +284,8 @@ iris_lower_storage_image_derefs(nir_shader *nir)
 
             b.cursor = nir_before_instr(&intrin->instr);
             nir_ssa_def *index =
-               nir_iadd(&b, nir_imm_int(&b, var->data.driver_location),
-                            get_aoa_deref_offset(&b, deref, 1));
+               nir_iadd_imm(&b, get_aoa_deref_offset(&b, deref, 1),
+                                var->data.driver_location);
             nir_rewrite_image_intrinsic(intrin, index, false);
             break;
          }
@@ -469,8 +468,7 @@ iris_setup_uniforms(ASSERTED const struct intel_device_info *devinfo,
 
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    b.cursor = nir_before_block(nir_start_block(impl));
    nir_ssa_def *temp_ubo_name = nir_ssa_undef(&b, 1, 32);
@@ -626,11 +624,11 @@ iris_setup_uniforms(ASSERTED const struct intel_device_info *devinfo,
             }
 
             b.cursor = nir_before_instr(instr);
-            offset = nir_iadd(&b,
+            offset = nir_iadd_imm(&b,
                get_aoa_deref_offset(&b, deref, BRW_IMAGE_PARAM_SIZE * 4),
-               nir_imm_int(&b, system_values_start +
-                               img_idx[var->data.binding] * 4 +
-                               nir_intrinsic_base(intrin) * 16));
+               system_values_start +
+               img_idx[var->data.binding] * 4 +
+               nir_intrinsic_base(intrin) * 16);
             break;
          }
          case nir_intrinsic_load_workgroup_size: {
@@ -1036,8 +1034,7 @@ iris_setup_binding_table(const struct intel_device_info *devinfo,
     * to change those, as we haven't set any of the *_start entries in brw
     * binding_table.
     */
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    nir_foreach_block (block, impl) {
       nir_foreach_instr (instr, block) {

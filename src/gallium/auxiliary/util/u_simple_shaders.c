@@ -85,7 +85,7 @@ util_make_vertex_passthrough_shader_with_so(struct pipe_context *pipe,
       return NULL;
 
    if (window_space)
-      ureg_property(ureg, TGSI_PROPERTY_VS_WINDOW_SPACE_POSITION, TRUE);
+      ureg_property(ureg, TGSI_PROPERTY_VS_WINDOW_SPACE_POSITION, true);
 
    for (i = 0; i < num_attribs; i++) {
       struct ureg_src src;
@@ -372,7 +372,7 @@ void *
 util_make_fragment_passthrough_shader(struct pipe_context *pipe,
                                       int input_semantic,
                                       int input_interpolate,
-                                      boolean write_all_cbufs)
+                                      bool write_all_cbufs)
 {
    static const char shader_templ[] =
          "FRAG\n"
@@ -914,8 +914,8 @@ util_make_fs_msaa_resolve_bilinear(struct pipe_context *pipe,
 void *
 util_make_geometry_passthrough_shader(struct pipe_context *pipe,
                                       uint num_attribs,
-                                      const ubyte *semantic_names,
-                                      const ubyte *semantic_indexes)
+                                      const uint8_t *semantic_names,
+                                      const uint8_t *semantic_indexes)
 {
    static const unsigned zero[4] = {0, 0, 0, 0};
 
@@ -930,8 +930,8 @@ util_make_geometry_passthrough_shader(struct pipe_context *pipe,
    if (!ureg)
       return NULL;
 
-   ureg_property(ureg, TGSI_PROPERTY_GS_INPUT_PRIM, PIPE_PRIM_POINTS);
-   ureg_property(ureg, TGSI_PROPERTY_GS_OUTPUT_PRIM, PIPE_PRIM_POINTS);
+   ureg_property(ureg, TGSI_PROPERTY_GS_INPUT_PRIM, MESA_PRIM_POINTS);
+   ureg_property(ureg, TGSI_PROPERTY_GS_OUTPUT_PRIM, MESA_PRIM_POINTS);
    ureg_property(ureg, TGSI_PROPERTY_GS_MAX_OUTPUT_VERTICES, 1);
    ureg_property(ureg, TGSI_PROPERTY_GS_INVOCATIONS, 1);
    imm = ureg_DECL_immediate_uint(ureg, zero, 4);
@@ -1134,10 +1134,10 @@ void *
 util_make_tess_ctrl_passthrough_shader(struct pipe_context *pipe,
                                        uint num_vs_outputs,
                                        uint num_tes_inputs,
-                                       const ubyte *vs_semantic_names,
-                                       const ubyte *vs_semantic_indexes,
-                                       const ubyte *tes_semantic_names,
-                                       const ubyte *tes_semantic_indexes,
+                                       const uint8_t *vs_semantic_names,
+                                       const uint8_t *vs_semantic_indexes,
+                                       const uint8_t *tes_semantic_names,
+                                       const uint8_t *tes_semantic_indexes,
                                        const unsigned vertices_per_patch)
 {
    unsigned i, j;

@@ -241,7 +241,7 @@ st_nir_add_point_size(nir_shader *nir)
 
    nir_builder b;
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
-   nir_builder_init(&b, impl);
+   b = nir_builder_create(impl);
    bool found = false;
    nir_foreach_block_safe(block, impl) {
       nir_foreach_instr_safe(instr, block) {
@@ -315,7 +315,7 @@ st_nir_zero_initialize_clip_distance(nir_shader *nir)
       return false;
    nir_builder b;
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
-   nir_builder_init(&b, impl);
+   b = nir_builder_create(impl);
    b.cursor = nir_before_block(nir_start_block(impl));
    if (clip_dist0)
       zero_array_members(&b, clip_dist0);
@@ -338,6 +338,15 @@ st_nir_preprocess(struct st_context *st, struct gl_program *prog,
       st->ctx->Const.ShaderCompilerOptions[prog->info.stage].NirOptions;
    assert(options);
    nir_shader *nir = prog->nir;
+
+   if (prog->info.stage == MESA_SHADER_FRAGMENT &&
+       st->screen->get_param(st->screen, PIPE_CAP_FBFETCH)) {
+      nir_shader_gather_info(prog->nir, nir_shader_get_entrypoint(prog->nir));
+      NIR_PASS_V(prog->nir, gl_nir_lower_blend_equation_advanced,
+                 st->ctx->Extensions.KHR_blend_equation_advanced_coherent);
+      nir_lower_global_vars_to_local(prog->nir);
+      NIR_PASS_V(prog->nir, nir_opt_combine_stores, nir_var_shader_out);
+   }
 
    /* Set the next shader stage hint for VS and TES. */
    if (!nir->info.separate_shader &&

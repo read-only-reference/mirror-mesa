@@ -59,7 +59,7 @@ lower_vec3_to_vec4_instr(nir_builder *b, nir_instr *instr, void *data)
          intrin->dest.ssa.num_components = 4;
 
          b->cursor = nir_after_instr(&intrin->instr);
-         nir_ssa_def *vec3 = nir_channels(b, &intrin->dest.ssa, 0x7);
+         nir_ssa_def *vec3 = nir_trim_vector(b, &intrin->dest.ssa, 3);
          nir_ssa_def_rewrite_uses_after(&intrin->dest.ssa,
                                         vec3,
                                         vec3->parent_instr);
@@ -134,11 +134,8 @@ nir_lower_vec3_to_vec4(nir_shader *shader, nir_variable_mode modes)
    }
 
    if (modes & nir_var_function_temp) {
-      nir_foreach_function(function, shader) {
-         if (!function->impl)
-            continue;
-
-         nir_foreach_function_temp_variable(var, function->impl) {
+      nir_foreach_function_impl(impl, shader) {
+         nir_foreach_function_temp_variable(var, impl) {
             const struct glsl_type *vec4_type =
                glsl_type_replace_vec3_with_vec4(var->type);
             if (var->type != vec4_type) {

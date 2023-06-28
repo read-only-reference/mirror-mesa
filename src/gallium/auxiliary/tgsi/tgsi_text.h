@@ -28,7 +28,7 @@
 #ifndef TGSI_TEXT_H
 #define TGSI_TEXT_H
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 
 #if defined __cplusplus
 extern "C" {
@@ -36,7 +36,7 @@ extern "C" {
 
 struct tgsi_token;
 
-boolean
+bool
 tgsi_text_translate(
    const char *text,
    struct tgsi_token *tokens,

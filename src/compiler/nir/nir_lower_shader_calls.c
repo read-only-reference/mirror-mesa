@@ -560,8 +560,8 @@ spill_ssa_defs_and_lower_shader_calls(nir_shader *shader, uint32_t num_calls,
    }
 
    nir_builder before, after;
-   nir_builder_init(&before, impl);
-   nir_builder_init(&after, impl);
+   before = nir_builder_create(impl);
+   after = nir_builder_create(impl);
 
    call_idx = 0;
    unsigned max_scratch_size = shader->scratch_size;
@@ -855,16 +855,15 @@ duplicate_loop_bodies(nir_function_impl *impl, nir_instr *resume_instr)
          resume_reg->num_components = 1;
          resume_reg->bit_size = 1;
 
-         nir_builder b;
-         nir_builder_init(&b, impl);
+         nir_builder b = nir_builder_create(impl);
 
          /* Initialize resume to true */
          b.cursor = nir_before_cf_list(&impl->body);
-         nir_store_reg(&b, resume_reg, nir_imm_true(&b), 1);
+         nir_store_register(&b, resume_reg, nir_imm_true(&b), 1);
 
          /* Set resume to false right after the resume instruction */
          b.cursor = nir_after_instr(resume_instr);
-         nir_store_reg(&b, resume_reg, nir_imm_false(&b), 1);
+         nir_store_register(&b, resume_reg, nir_imm_false(&b), 1);
       }
 
       /* Before we go any further, make sure that everything which exits the
@@ -1103,8 +1102,7 @@ flatten_resume_if_ladder(nir_builder *b,
             /* We want to place anything re-materialized from inside the loop
              * at the top of the resume half of the loop.
              */
-            nir_builder bl;
-            nir_builder_init(&bl, b->impl);
+            nir_builder bl = nir_builder_create(b->impl);
             bl.cursor = nir_before_cf_list(&_if->then_list);
 
             ASSERTED bool found =
@@ -1163,6 +1161,21 @@ found_resume:
       nir_cf_extract(&cf_list, nir_after_instr(resume_instr),
                                nir_after_cf_list(child_list));
    }
+
+   /* If the resume instruction is in the first block of the child_list,
+    * and the cursor is still before that block, the nir_cf_extract() may
+    * extract the block object pointed by the cursor, and instead create
+    * a new one for the code before the resume. In such case the cursor
+    * will be broken, as it will point to a block which is no longer
+    * in a function.
+    *
+    * Luckily, in both cases when this is possible, the intended cursor
+    * position is right before the child_list, so we can fix the cursor here.
+    */
+   if (child_list_contains_cursor &&
+       b->cursor.option == nir_cursor_before_block &&
+       b->cursor.block->cf_node.parent == NULL)
+      b->cursor = nir_before_cf_list(child_list);
 
    if (cursor_is_after_jump(b->cursor)) {
       /* If the resume instruction is in a loop, it's possible cf_list ends
@@ -1260,8 +1273,7 @@ lower_resume(nir_shader *shader, int call_idx)
    /* Create a nop instruction to use as a cursor as we extract and re-insert
     * stuff into the CFG.
     */
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
    b.cursor = nir_before_cf_list(&impl->body);
    ASSERTED bool found =
       flatten_resume_if_ladder(&b, &impl->cf_node, &impl->body,
@@ -1283,8 +1295,7 @@ replace_resume_with_halt(nir_shader *shader, nir_instr *keep)
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    nir_foreach_block_safe(block, impl) {
       nir_foreach_instr_safe(instr, block) {
@@ -1506,8 +1517,7 @@ nir_opt_trim_stack_values(nir_shader *shader)
             continue;
          }
 
-         nir_builder b;
-         nir_builder_init(&b, impl);
+         nir_builder b = nir_builder_create(impl);
          b.cursor = nir_before_instr(instr);
 
          nir_ssa_def *value = nir_channels(&b, intrin->src[0].ssa, read_mask);
@@ -1794,15 +1804,12 @@ nir_opt_stack_loads(nir_shader *shader)
 {
    bool progress = false;
 
-   nir_foreach_function(func, shader) {
-      if (!func->impl)
-         continue;
-
-      nir_metadata_require(func->impl, nir_metadata_dominance |
-                                       nir_metadata_block_index);
+   nir_foreach_function_impl(impl, shader) {
+      nir_metadata_require(impl, nir_metadata_dominance |
+                                 nir_metadata_block_index);
 
       bool func_progress = false;
-      nir_foreach_block_safe(block, func->impl) {
+      nir_foreach_block_safe(block, impl) {
          nir_foreach_instr_safe(instr, block) {
             if (instr->type != nir_instr_type_intrinsic)
                continue;
@@ -1812,7 +1819,7 @@ nir_opt_stack_loads(nir_shader *shader)
                continue;
 
             nir_ssa_def *value = &intrin->dest.ssa;
-            nir_block *new_block = find_last_dominant_use_block(func->impl, value);
+            nir_block *new_block = find_last_dominant_use_block(impl, value);
             if (new_block == block)
                continue;
 
@@ -1824,7 +1831,7 @@ nir_opt_stack_loads(nir_shader *shader)
          }
       }
 
-      nir_metadata_preserve(func->impl,
+      nir_metadata_preserve(impl,
                             func_progress ? (nir_metadata_block_index |
                                              nir_metadata_dominance |
                                              nir_metadata_loop_analysis) :
@@ -1959,9 +1966,6 @@ nir_lower_shader_calls(nir_shader *shader,
                        void *mem_ctx)
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
-
-   nir_builder b;
-   nir_builder_init(&b, impl);
 
    int num_calls = 0;
    nir_foreach_block(block, impl) {

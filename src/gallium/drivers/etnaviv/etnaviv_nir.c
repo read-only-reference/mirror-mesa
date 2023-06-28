@@ -33,8 +33,7 @@ void
 etna_lower_io(nir_shader *shader, struct etna_shader_variant *v)
 {
    nir_foreach_function(function, shader) {
-      nir_builder b;
-      nir_builder_init(&b, function->impl);
+      nir_builder b = nir_builder_create(function->impl);
 
       nir_foreach_block(block, function->impl) {
          nir_foreach_instr_safe(instr, block) {
@@ -50,7 +49,7 @@ etna_lower_io(nir_shader *shader, struct etna_shader_variant *v)
 
                   b.cursor = nir_after_instr(instr);
 
-                  nir_ssa_def *ssa = nir_ine(&b, &intr->dest.ssa, nir_imm_int(&b, 0));
+                  nir_ssa_def *ssa = nir_ine_imm(&b, &intr->dest.ssa, 0);
                   if (v->key.front_ccw)
                      nir_instr_as_alu(ssa->parent_instr)->op = nir_op_ieq;
 
@@ -151,8 +150,7 @@ etna_lower_alu_impl(nir_function_impl *impl, bool has_new_transcendentals)
 {
    nir_shader *shader = impl->function->shader;
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    /* in a seperate loop so we can apply the multiple-uniform logic to the new fmul */
    nir_foreach_block(block, impl) {

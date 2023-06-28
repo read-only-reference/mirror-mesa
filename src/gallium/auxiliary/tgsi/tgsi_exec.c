@@ -51,7 +51,7 @@
  *   Brian Paul
  */
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "pipe/p_state.h"
 #include "pipe/p_shader_tokens.h"
 #include "tgsi/tgsi_dump.h"
@@ -1005,14 +1005,13 @@ print_temp(const struct tgsi_exec_machine *mach, uint index)
 void
 tgsi_exec_set_constant_buffers(struct tgsi_exec_machine *mach,
                                unsigned num_bufs,
-                               const void **bufs,
-                               const unsigned *buf_sizes)
+                               const struct tgsi_exec_consts_info *bufs)
 {
    unsigned i;
 
    for (i = 0; i < num_bufs; i++) {
-      mach->Consts[i] = bufs[i];
-      mach->ConstsSize[i] = buf_sizes[i];
+      mach->Consts[i] = bufs[i].ptr;
+      mach->ConstsSize[i] = bufs[i].size;
    }
 }
 
@@ -1095,7 +1094,7 @@ tgsi_exec_machine_bind_shader(
 
       mach->Inputs = inputs;
       mach->Outputs = outputs;
-      mach->UsedGeometryShader = TRUE;
+      mach->UsedGeometryShader = true;
    }
 
    declarations = (struct tgsi_full_declaration *)
@@ -2434,7 +2433,7 @@ exec_txq(struct tgsi_exec_machine *mach,
 static void
 exec_sample(struct tgsi_exec_machine *mach,
             const struct tgsi_full_instruction *inst,
-            uint modifier, boolean compare)
+            uint modifier, bool compare)
 {
    const uint resource_unit = inst->Src[1].Register.Index;
    const uint sampler_unit = inst->Src[2].Register.Index;
@@ -4893,7 +4892,7 @@ exec_interp_at_centroid(struct tgsi_exec_machine *mach,
  * Returns TRUE if a barrier instruction is hit,
  * otherwise FALSE.
  */
-static boolean
+static bool
 exec_instruction(
    struct tgsi_exec_machine *mach,
    const struct tgsi_full_instruction *inst,
@@ -5204,7 +5203,7 @@ exec_instruction(
             mach->SwitchStackTop = 0;
             mach->BreakStackTop = 0;
             *pc = -1;
-            return FALSE;
+            return false;
          }
 
          assert(mach->CallStackTop > 0);
@@ -5587,19 +5586,19 @@ exec_instruction(
       break;
 
    case TGSI_OPCODE_SAMPLE:
-      exec_sample(mach, inst, TEX_MODIFIER_NONE, FALSE);
+      exec_sample(mach, inst, TEX_MODIFIER_NONE, false);
       break;
 
    case TGSI_OPCODE_SAMPLE_B:
-      exec_sample(mach, inst, TEX_MODIFIER_LOD_BIAS, FALSE);
+      exec_sample(mach, inst, TEX_MODIFIER_LOD_BIAS, false);
       break;
 
    case TGSI_OPCODE_SAMPLE_C:
-      exec_sample(mach, inst, TEX_MODIFIER_NONE, TRUE);
+      exec_sample(mach, inst, TEX_MODIFIER_NONE, true);
       break;
 
    case TGSI_OPCODE_SAMPLE_C_LZ:
-      exec_sample(mach, inst, TEX_MODIFIER_LEVEL_ZERO, TRUE);
+      exec_sample(mach, inst, TEX_MODIFIER_LEVEL_ZERO, true);
       break;
 
    case TGSI_OPCODE_SAMPLE_D:
@@ -5607,11 +5606,11 @@ exec_instruction(
       break;
 
    case TGSI_OPCODE_SAMPLE_L:
-      exec_sample(mach, inst, TEX_MODIFIER_EXPLICIT_LOD, FALSE);
+      exec_sample(mach, inst, TEX_MODIFIER_EXPLICIT_LOD, false);
       break;
 
    case TGSI_OPCODE_GATHER4:
-      exec_sample(mach, inst, TEX_MODIFIER_GATHER, FALSE);
+      exec_sample(mach, inst, TEX_MODIFIER_GATHER, false);
       break;
 
    case TGSI_OPCODE_SVIEWINFO:
@@ -5816,7 +5815,7 @@ exec_instruction(
       break;
    case TGSI_OPCODE_BARRIER:
    case TGSI_OPCODE_MEMBAR:
-      return TRUE;
+      return true;
       break;
 
    case TGSI_OPCODE_I64ABS:
@@ -5941,7 +5940,7 @@ exec_instruction(
    default:
       assert( 0 );
    }
-   return FALSE;
+   return false;
 }
 
 static void
@@ -6016,7 +6015,7 @@ tgsi_exec_machine_run( struct tgsi_exec_machine *mach, int start_pc )
 
       /* execute instructions, until pc is set to -1 */
       while (mach->pc != -1) {
-         boolean barrier_hit;
+         bool barrier_hit;
 #if DEBUG_EXECUTION
          uint i;
 

@@ -51,8 +51,7 @@ struct state {
 static nir_ssa_def *
 bitfield_extract(nir_builder *b, nir_ssa_def *v, uint32_t start, uint32_t mask)
 {
-   return nir_iand(b, nir_ushr(b, v, nir_imm_int(b, start)),
-                   nir_imm_int(b, mask));
+   return nir_iand_imm(b, nir_ushr_imm(b, v, start), mask);
 }
 
 static nir_ssa_def *
@@ -146,8 +145,8 @@ build_local_offset(nir_builder *b, struct state *state, nir_ssa_def *vertex,
    case MESA_SHADER_TESS_CTRL:
    case MESA_SHADER_GEOMETRY:
       vertex_stride = nir_load_vs_vertex_stride_ir3(b);
-      attr_offset = nir_iadd(b, nir_load_primitive_location_ir3(b, index),
-                             nir_imm_int(b, comp * 4));
+      attr_offset = nir_iadd_imm(b, nir_load_primitive_location_ir3(b, index),
+                                 comp * 4);
       break;
    default:
       unreachable("bad shader stage");
@@ -157,7 +156,7 @@ build_local_offset(nir_builder *b, struct state *state, nir_ssa_def *vertex,
 
    return nir_iadd(
       b, nir_iadd(b, primitive_offset, vertex_offset),
-      nir_iadd(b, attr_offset, nir_ishl(b, offset, nir_imm_int(b, 4))));
+      nir_iadd(b, attr_offset, nir_ishl_imm(b, offset, 4)));
 }
 
 static nir_intrinsic_instr *
@@ -302,8 +301,7 @@ ir3_nir_lower_to_explicit_output(nir_shader *shader,
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
    assert(impl);
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
    b.cursor = nir_before_cf_list(&impl->body);
 
    if (v->type == MESA_SHADER_VERTEX && topology != IR3_TESS_NONE)
@@ -378,8 +376,7 @@ ir3_nir_lower_to_explicit_input(nir_shader *shader,
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
    assert(impl);
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
    b.cursor = nir_before_cf_list(&impl->body);
 
    if (shader->info.stage == MESA_SHADER_GEOMETRY)
@@ -419,7 +416,7 @@ build_per_vertex_offset(nir_builder *b, struct state *state,
       /* Offset is in vec4's, but we need it in unit of components for the
        * load/store_global_ir3 offset.
        */
-      offset = nir_ishl(b, offset, nir_imm_int(b, 2));
+      offset = nir_ishl_imm(b, offset, 2);
    }
 
    nir_ssa_def *vertex_offset;
@@ -430,8 +427,8 @@ build_per_vertex_offset(nir_builder *b, struct state *state,
          attr_offset = nir_imm_int(b, state->map.loc[index] + comp);
          break;
       case MESA_SHADER_TESS_EVAL:
-         attr_offset = nir_iadd(b, nir_load_primitive_location_ir3(b, index),
-                                nir_imm_int(b, comp));
+         attr_offset = nir_iadd_imm(b, nir_load_primitive_location_ir3(b, index),
+                                    comp);
          break;
       default:
          unreachable("bad shader state");
@@ -439,12 +436,12 @@ build_per_vertex_offset(nir_builder *b, struct state *state,
 
       attr_offset = nir_iadd(b, attr_offset,
                              nir_imul24(b, offset, build_tcs_out_vertices(b)));
-      vertex_offset = nir_ishl(b, vertex, nir_imm_int(b, 2));
+      vertex_offset = nir_ishl_imm(b, vertex, 2);
    } else {
       assert(location >= VARYING_SLOT_PATCH0 &&
              location <= VARYING_SLOT_TESS_MAX);
       unsigned index = location - VARYING_SLOT_PATCH0;
-      attr_offset = nir_iadd(b, nir_imm_int(b, index * 4 + comp), offset);
+      attr_offset = nir_iadd_imm(b, offset, index * 4 + comp);
       vertex_offset = nir_imm_int(b, 0);
    }
 
@@ -508,7 +505,7 @@ build_tessfactor_base(nir_builder *b, gl_varying_slot slot, uint32_t comp,
       unreachable("bad");
    }
 
-   return nir_iadd(b, patch_offset, nir_imm_int(b, offset + comp));
+   return nir_iadd_imm(b, patch_offset, offset + comp);
 }
 
 static void
@@ -621,7 +618,7 @@ lower_tess_ctrl_block(nir_block *block, nir_builder *b, struct state *state)
 
                nir_ssa_def *offset = nir_iadd_imm(
                   b, intr->src[1].ssa, nir_intrinsic_component(intr));
-               nif = nir_push_if(b, nir_ult(b, offset, nir_imm_int(b, levels)));
+               nif = nir_push_if(b, nir_ult_imm(b, offset, levels));
             }
 
             nir_ssa_def *offset = build_tessfactor_base(
@@ -683,8 +680,7 @@ ir3_nir_lower_tess_ctrl(nir_shader *shader, struct ir3_shader_variant *v,
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
    assert(impl);
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
    b.cursor = nir_before_cf_list(&impl->body);
 
    state.header = nir_load_tcs_header_ir3(&b);
@@ -723,7 +719,7 @@ ir3_nir_lower_tess_ctrl(nir_shader *shader, struct ir3_shader_variant *v,
    nir_ssa_def *iid = build_invocation_id(&b, &state);
 
    const uint32_t nvertices = shader->info.tess.tcs_vertices_out;
-   nir_ssa_def *cond = nir_ult(&b, iid, nir_imm_int(&b, nvertices));
+   nir_ssa_def *cond = nir_ult_imm(&b, iid, nvertices);
 
    nir_if *nif = nir_push_if(&b, cond);
 
@@ -837,8 +833,7 @@ ir3_nir_lower_tess_eval(nir_shader *shader, struct ir3_shader_variant *v,
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
    assert(impl);
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    nir_foreach_block_safe (block, impl)
       lower_tess_eval_block(block, &b, &state);
@@ -890,8 +885,8 @@ lower_gs_block(nir_block *block, nir_builder *b, struct state *state)
          unsigned stream = nir_intrinsic_stream_id(intr);
          /* vertex_flags_out |= stream */
          nir_store_var(b, state->vertex_flags_out,
-                       nir_ior(b, nir_load_var(b, state->vertex_flags_out),
-                               nir_imm_int(b, stream)),
+                       nir_ior_imm(b, nir_load_var(b, state->vertex_flags_out),
+                                   stream),
                        0x1 /* .x */);
 
          copy_vars(b, &state->emit_outputs, &state->old_outputs);
@@ -899,15 +894,17 @@ lower_gs_block(nir_block *block, nir_builder *b, struct state *state)
          nir_instr_remove(&intr->instr);
 
          nir_store_var(b, state->emitted_vertex_var,
-                       nir_iadd(b, nir_load_var(b, state->emitted_vertex_var),
-                                nir_imm_int(b, 1)),
+                       nir_iadd_imm(b,
+                                    nir_load_var(b,
+                                                 state->emitted_vertex_var),
+                                                 1),
                        0x1);
 
          nir_pop_if(b, NULL);
 
          /* Increment the vertex count by 1 */
          nir_store_var(b, state->vertex_count_var,
-                       nir_iadd(b, count, nir_imm_int(b, 1)), 0x1); /* .x */
+                       nir_iadd_imm(b, count, 1), 0x1); /* .x */
          nir_store_var(b, state->vertex_flags_out, nir_imm_int(b, 0), 0x1);
 
          break;
@@ -947,8 +944,7 @@ ir3_nir_lower_gs(nir_shader *shader)
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
    assert(impl);
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
    b.cursor = nir_before_cf_list(&impl->body);
 
    state.header = nir_load_gs_header_ir3(&b);

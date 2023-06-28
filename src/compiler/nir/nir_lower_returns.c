@@ -136,7 +136,7 @@ lower_returns_in_if(nir_if *if_stmt, struct lower_returns_state *state)
           * predecessor, and should've been removed by the opt_remove_phis before
           * beginning this pass.
           */
-         nir_block *succ_block = nir_after_cf_node(&if_stmt->cf_node).block;
+         ASSERTED nir_block *succ_block = nir_after_cf_node(&if_stmt->cf_node).block;
          assert(nir_block_first_instr(succ_block) == NULL ||
                 nir_block_first_instr(succ_block)->type != nir_instr_type_phi);
 
@@ -280,13 +280,14 @@ nir_lower_returns_impl(nir_function_impl *impl)
    state.return_flag = NULL;
    state.has_predicated_return = false;
    state.removed_unreachable_code = false;
-   nir_builder_init(&state.builder, impl);
+   state.builder = nir_builder_create(impl);
 
    bool progress = lower_returns_in_cf_list(&impl->body, &state);
    progress = progress || state.removed_unreachable_code;
 
    if (progress) {
       nir_metadata_preserve(impl, nir_metadata_none);
+      nir_rematerialize_derefs_in_use_blocks_impl(impl);
       nir_repair_ssa_impl(impl);
    } else {
       nir_metadata_preserve(impl, nir_metadata_all);
@@ -303,9 +304,8 @@ nir_lower_returns(nir_shader *shader)
     */
    bool progress = nir_opt_remove_phis(shader);
 
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         progress |= nir_lower_returns_impl(function->impl) || progress;
+   nir_foreach_function_impl(impl, shader) {
+      progress |= nir_lower_returns_impl(impl) || progress;
    }
 
    return progress;

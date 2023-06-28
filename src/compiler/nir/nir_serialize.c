@@ -187,11 +187,15 @@ read_constant(read_ctx *ctx, nir_variable *nvar)
 {
    nir_constant *c = ralloc(nvar, nir_constant);
 
+   static const nir_const_value zero_vals[ARRAY_SIZE(c->values)] = { 0 };
    blob_copy_bytes(ctx->blob, (uint8_t *)c->values, sizeof(c->values));
+   c->is_null_constant = memcmp(c->values, zero_vals, sizeof(c->values)) == 0;
    c->num_elements = blob_read_uint32(ctx->blob);
    c->elements = ralloc_array(nvar, nir_constant *, c->num_elements);
-   for (unsigned i = 0; i < c->num_elements; i++)
+   for (unsigned i = 0; i < c->num_elements; i++) {
       c->elements[i] = read_constant(ctx, nvar);
+      c->is_null_constant &= c->elements[i]->is_null_constant;
+   }
 
    return c;
 }
@@ -1997,10 +2001,9 @@ write_function_impl(write_ctx *ctx, const nir_function_impl *fi)
 }
 
 static nir_function_impl *
-read_function_impl(read_ctx *ctx, nir_function *fxn)
+read_function_impl(read_ctx *ctx)
 {
    nir_function_impl *fi = nir_function_impl_create_bare(ctx->nir);
-   fi->function = fxn;
 
    fi->structured = blob_read_uint8(ctx->blob);
    bool preamble = blob_read_uint8(ctx->blob);
@@ -2149,9 +2152,8 @@ nir_serialize(struct blob *blob, const nir_shader *nir, bool strip)
       write_function(&ctx, fxn);
    }
 
-   nir_foreach_function(fxn, nir) {
-      if (fxn->impl)
-         write_function_impl(&ctx, fxn->impl);
+   nir_foreach_function_impl(impl, nir) {
+      write_function_impl(&ctx, impl);
    }
 
    blob_write_uint32(blob, nir->constant_data_size);
@@ -2219,7 +2221,7 @@ nir_deserialize(void *mem_ctx,
 
    nir_foreach_function(fxn, ctx.nir) {
       if (fxn->impl == NIR_SERIALIZE_FUNC_HAS_IMPL)
-         fxn->impl = read_function_impl(&ctx, fxn);
+         nir_function_set_impl(fxn, read_function_impl(&ctx));
    }
 
    ctx.nir->constant_data_size = blob_read_uint32(blob);

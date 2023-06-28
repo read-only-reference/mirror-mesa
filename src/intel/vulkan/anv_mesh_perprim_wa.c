@@ -153,16 +153,15 @@ anv_mesh_convert_attrs_prim_to_vert(struct nir_shader *nir,
          num_mesh_vertices_per_primitive(nir->info.mesh.primitive_type);
 
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
    b.cursor = nir_after_cf_list(&impl->body);
 
    /* wait for all subgroups to finish */
-   nir_scoped_barrier(&b, NIR_SCOPE_WORKGROUP);
+   nir_scoped_barrier(&b, SCOPE_WORKGROUP);
 
    nir_ssa_def *zero = nir_imm_int(&b, 0);
 
-   nir_ssa_def *local_invocation_index = nir_build_load_local_invocation_index(&b);
+   nir_ssa_def *local_invocation_index = nir_load_local_invocation_index(&b);
 
    nir_ssa_def *cmp = nir_ieq(&b, local_invocation_index, zero);
    nir_if *if_stmt = nir_push_if(&b, cmp);
@@ -495,8 +494,7 @@ anv_frag_convert_attrs_prim_to_vert(struct nir_shader *nir,
    nir_deref_instr *new_derefs[VARYING_SLOT_MAX] = {NULL, };
 
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
    b.cursor = nir_before_cf_list(&impl->body);
 
    nir_foreach_shader_in_variable_safe(var, nir) {

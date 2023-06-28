@@ -825,6 +825,8 @@ fs_inst::components_read(unsigned i) const
       /* Surface operation source. */
       else if (i == SURFACE_LOGICAL_SRC_DATA)
          return lsc_op_num_data_values(op);
+      else
+         return 1;
    }
    case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
       return (i == 0 ? 2 : 1);
@@ -2826,8 +2828,13 @@ fs_visitor::opt_algebraic()
 	 break;
       }
 
-      /* Swap if src[0] is immediate. */
-      if (progress && inst->is_commutative()) {
+      /* Ensure that the correct source has the immediate value. 2-source
+       * instructions must have the immediate in src[1]. On Gfx12 and later,
+       * some 3-source instructions can have the immediate in src[0] or
+       * src[2]. It's complicated, so don't mess with 3-source instructions
+       * here.
+       */
+      if (progress && inst->sources == 2 && inst->is_commutative()) {
          if (inst->src[0].file == IMM) {
             fs_reg tmp = inst->src[1];
             inst->src[1] = inst->src[0];
@@ -5686,29 +5693,25 @@ fs_visitor::lower_find_live_channel()
 }
 
 void
-fs_visitor::dump_instructions() const
+fs_visitor::dump_instructions_to_file(FILE *file) const
 {
-   dump_instructions(NULL);
-}
-
-void
-fs_visitor::dump_instructions(const char *name) const
-{
-   FILE *file = stderr;
-   if (name && geteuid() != 0) {
-      file = fopen(name, "w");
-      if (!file)
-         file = stderr;
-   }
-
    if (cfg) {
       const register_pressure &rp = regpressure_analysis.require();
       unsigned ip = 0, max_pressure = 0;
+      unsigned cf_count = 0;
       foreach_block_and_inst(block, backend_instruction, inst, cfg) {
+         if (inst->is_control_flow_end())
+            cf_count -= 1;
+
          max_pressure = MAX2(max_pressure, rp.regs_live_at_ip[ip]);
          fprintf(file, "{%3d} %4d: ", rp.regs_live_at_ip[ip], ip);
+         for (unsigned i = 0; i < cf_count; i++)
+            fprintf(file, "  ");
          dump_instruction(inst, file);
          ip++;
+
+         if (inst->is_control_flow_begin())
+            cf_count += 1;
       }
       fprintf(file, "Maximum %3d registers live at once.\n", max_pressure);
    } else {
@@ -5718,20 +5721,10 @@ fs_visitor::dump_instructions(const char *name) const
          dump_instruction(inst, file);
       }
    }
-
-   if (file != stderr) {
-      fclose(file);
-   }
 }
 
 void
-fs_visitor::dump_instruction(const backend_instruction *be_inst) const
-{
-   dump_instruction(be_inst, stderr);
-}
-
-void
-fs_visitor::dump_instruction(const backend_instruction *be_inst, FILE *file) const
+fs_visitor::dump_instruction_to_file(const backend_instruction *be_inst, FILE *file) const
 {
    const fs_inst *inst = (const fs_inst *)be_inst;
 
@@ -7157,11 +7150,8 @@ brw_compute_barycentric_interp_modes(const struct intel_device_info *devinfo,
 {
    unsigned barycentric_interp_modes = 0;
 
-   nir_foreach_function(f, shader) {
-      if (!f->impl)
-         continue;
-
-      nir_foreach_block(block, f->impl) {
+   nir_foreach_function_impl(impl, shader) {
+      nir_foreach_block(block, impl) {
          nir_foreach_instr(instr, block) {
             if (instr->type != nir_instr_type_intrinsic)
                continue;
@@ -7262,11 +7252,8 @@ brw_nir_move_interpolation_to_top(nir_shader *nir)
 {
    bool progress = false;
 
-   nir_foreach_function(f, nir) {
-      if (!f->impl)
-         continue;
-
-      nir_block *top = nir_start_block(f->impl);
+   nir_foreach_function_impl(impl, nir) {
+      nir_block *top = nir_start_block(impl);
       nir_cursor cursor = nir_before_instr(nir_block_first_instr(top));
       bool impl_progress = false;
 
@@ -7307,7 +7294,7 @@ brw_nir_move_interpolation_to_top(nir_shader *nir)
 
       progress = progress || impl_progress;
 
-      nir_metadata_preserve(f->impl, impl_progress ? (nir_metadata_block_index |
+      nir_metadata_preserve(impl, impl_progress ? (nir_metadata_block_index |
                                                       nir_metadata_dominance)
                                                    : nir_metadata_all);
    }
@@ -7467,7 +7454,7 @@ brw_compile_fs(const struct brw_compiler *compiler,
    struct brw_wm_prog_data *prog_data = params->prog_data;
    bool allow_spilling = params->allow_spilling;
    const bool debug_enabled =
-      INTEL_DEBUG(params->debug_flag ? params->debug_flag : DEBUG_WM);
+      brw_should_print_shader(nir, params->debug_flag ? params->debug_flag : DEBUG_WM);
 
    prog_data->base.stage = MESA_SHADER_FRAGMENT;
    prog_data->base.ray_queries = nir->info.ray_queries;
@@ -7824,7 +7811,7 @@ brw_compile_cs(const struct brw_compiler *compiler,
    struct brw_cs_prog_data *prog_data = params->prog_data;
 
    const bool debug_enabled =
-      INTEL_DEBUG(params->debug_flag ? params->debug_flag : DEBUG_CS);
+      brw_should_print_shader(nir, params->debug_flag ? params->debug_flag : DEBUG_CS);
 
    prog_data->base.stage = MESA_SHADER_COMPUTE;
    prog_data->base.total_shared = nir->info.shared_size;
@@ -7973,7 +7960,7 @@ compile_single_bs(const struct brw_compiler *compiler, void *log_data,
                   int *prog_offset,
                   char **error_str)
 {
-   const bool debug_enabled = INTEL_DEBUG(DEBUG_RT);
+   const bool debug_enabled = brw_should_print_shader(shader, DEBUG_RT);
 
    prog_data->base.stage = shader->info.stage;
    prog_data->max_stack_size = MAX2(prog_data->max_stack_size,
@@ -8067,7 +8054,7 @@ brw_compile_bs(const struct brw_compiler *compiler,
    struct brw_bs_prog_data *prog_data = params->prog_data;
    unsigned num_resume_shaders = params->num_resume_shaders;
    nir_shader **resume_shaders = params->resume_shaders;
-   const bool debug_enabled = INTEL_DEBUG(DEBUG_RT);
+   const bool debug_enabled = brw_should_print_shader(shader, DEBUG_RT);
 
    prog_data->base.stage = shader->info.stage;
    prog_data->base.ray_queries = shader->info.ray_queries;
@@ -8173,4 +8160,9 @@ fs_visitor::workgroup_size() const
    assert(gl_shader_stage_uses_workgroup(stage));
    const struct brw_cs_prog_data *cs = brw_cs_prog_data(prog_data);
    return cs->local_size[0] * cs->local_size[1] * cs->local_size[2];
+}
+
+bool brw_should_print_shader(const nir_shader *shader, uint64_t debug_flag)
+{
+   return INTEL_DEBUG(debug_flag) && (!shader->info.internal || NIR_DEBUG(PRINT_INTERNAL));
 }

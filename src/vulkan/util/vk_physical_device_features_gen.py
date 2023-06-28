@@ -45,6 +45,9 @@ RENAMED_FEATURES = {
 
     ('MeshShaderFeaturesNV', 'taskShader'): 'taskShaderNV',
     ('MeshShaderFeaturesNV', 'meshShader'): 'meshShaderNV',
+
+    ('CooperativeMatrixFeaturesNV', 'cooperativeMatrix'): 'cooperativeMatrixNV',
+    ('CooperativeMatrixFeaturesNV', 'cooperativeMatrixRobustBufferAccess'): 'cooperativeMatrixRobustBufferAccessNV',
 }
 
 KNOWN_ALIASES = [
@@ -360,6 +363,10 @@ def get_feature_structs(doc, api, beta):
         if _type.attrib.get('structextends') != 'VkPhysicalDeviceFeatures2,VkDeviceCreateInfo':
             continue
         if _type.attrib['name'] not in required:
+            continue
+
+        # Skip extensions with a define for now
+        if required[_type.attrib['name']].guard is not None:
             continue
 
         # find Vulkan structure type

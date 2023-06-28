@@ -186,15 +186,6 @@ gather_vars_written(struct copy_prop_var_state *state,
 
          nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
          switch (intrin->intrinsic) {
-         case nir_intrinsic_control_barrier:
-         case nir_intrinsic_group_memory_barrier:
-         case nir_intrinsic_memory_barrier:
-            written->modes |= nir_var_shader_out |
-                              nir_var_mem_ssbo |
-                              nir_var_mem_shared |
-                              nir_var_mem_global;
-            break;
-
          case nir_intrinsic_scoped_barrier:
             if (nir_intrinsic_memory_semantics(intrin) & NIR_MEMORY_ACQUIRE)
                written->modes |= nir_intrinsic_memory_modes(intrin);
@@ -998,35 +989,6 @@ copy_prop_vars_block(struct copy_prop_var_state *state,
 
       nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
       switch (intrin->intrinsic) {
-      case nir_intrinsic_control_barrier:
-      case nir_intrinsic_memory_barrier:
-         if (debug) dump_instr(instr);
-
-         apply_barrier_for_modes(copies, nir_var_shader_out |
-                                         nir_var_mem_ssbo |
-                                         nir_var_mem_shared |
-                                         nir_var_mem_global);
-         break;
-
-      case nir_intrinsic_memory_barrier_buffer:
-         if (debug) dump_instr(instr);
-
-         apply_barrier_for_modes(copies, nir_var_mem_ssbo |
-                                         nir_var_mem_global);
-         break;
-
-      case nir_intrinsic_memory_barrier_shared:
-         if (debug) dump_instr(instr);
-
-         apply_barrier_for_modes(copies, nir_var_mem_shared);
-         break;
-
-      case nir_intrinsic_memory_barrier_tcs_patch:
-         if (debug) dump_instr(instr);
-
-         apply_barrier_for_modes(copies, nir_var_shader_out);
-         break;
-
       case nir_intrinsic_scoped_barrier:
          if (debug) dump_instr(instr);
 
@@ -1406,8 +1368,7 @@ copy_prop_vars_cf_node(struct copy_prop_var_state *state,
 
    case nir_cf_node_block: {
       nir_block *block = nir_cf_node_as_block(cf_node);
-      nir_builder b;
-      nir_builder_init(&b, state->impl);
+      nir_builder b = nir_builder_create(state->impl);
       copy_prop_vars_block(state, &b, block, copies);
       break;
    }
@@ -1513,10 +1474,8 @@ nir_opt_copy_prop_vars(nir_shader *shader)
 {
    bool progress = false;
 
-   nir_foreach_function(function, shader) {
-      if (!function->impl)
-         continue;
-      progress |= nir_copy_prop_vars_impl(function->impl);
+   nir_foreach_function_impl(impl, shader) {
+      progress |= nir_copy_prop_vars_impl(impl);
    }
 
    return progress;

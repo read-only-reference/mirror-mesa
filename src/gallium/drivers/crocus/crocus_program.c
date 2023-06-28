@@ -257,7 +257,7 @@ get_aoa_deref_offset(nir_builder *b,
       nir_ssa_def *index = nir_ssa_for_src(b, deref->arr.index, 1);
       assert(deref->arr.index.ssa);
       offset = nir_iadd(b, offset,
-                        nir_imul(b, index, nir_imm_int(b, array_size)));
+                        nir_imul_imm(b, index, array_size));
 
       deref = nir_deref_instr_parent(deref);
       assert(glsl_type_is_array(deref->type));
@@ -279,8 +279,7 @@ crocus_lower_storage_image_derefs(nir_shader *nir)
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    nir_foreach_block(block, impl) {
       nir_foreach_instr_safe(instr, block) {
@@ -302,8 +301,8 @@ crocus_lower_storage_image_derefs(nir_shader *nir)
 
             b.cursor = nir_before_instr(&intrin->instr);
             nir_ssa_def *index =
-               nir_iadd(&b, nir_imm_int(&b, var->data.driver_location),
-                        get_aoa_deref_offset(&b, deref, 1));
+               nir_iadd_imm(&b, get_aoa_deref_offset(&b, deref, 1),
+                            var->data.driver_location);
             nir_rewrite_image_intrinsic(intrin, index, false);
             break;
          }
@@ -340,13 +339,11 @@ crocus_fix_edge_flags(nir_shader *nir)
    nir->info.inputs_read &= ~VERT_BIT_EDGEFLAG;
    nir_fixup_deref_modes(nir);
 
-   nir_foreach_function(f, nir) {
-      if (f->impl) {
-         nir_metadata_preserve(f->impl, nir_metadata_block_index |
-                               nir_metadata_dominance |
-                               nir_metadata_live_ssa_defs |
-                               nir_metadata_loop_analysis);
-      }
+   nir_foreach_function_impl(impl, nir) {
+      nir_metadata_preserve(impl, nir_metadata_block_index |
+                            nir_metadata_dominance |
+                            nir_metadata_live_ssa_defs |
+                            nir_metadata_loop_analysis);
    }
 
    return true;
@@ -451,8 +448,7 @@ crocus_setup_uniforms(ASSERTED const struct intel_device_info *devinfo,
 
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    b.cursor = nir_before_block(nir_start_block(impl));
    nir_ssa_def *temp_ubo_name = nir_ssa_undef(&b, 1, 32);
@@ -599,10 +595,10 @@ crocus_setup_uniforms(ASSERTED const struct intel_device_info *devinfo,
             }
 
             b.cursor = nir_before_instr(instr);
-            offset = nir_iadd(&b,
-                              get_aoa_deref_offset(&b, deref, BRW_IMAGE_PARAM_SIZE * 4),
-                              nir_imm_int(&b, img_idx[var->data.binding] * 4 +
-                                          nir_intrinsic_base(intrin) * 16));
+            offset = nir_iadd_imm(&b,
+                                  get_aoa_deref_offset(&b, deref, BRW_IMAGE_PARAM_SIZE * 4),
+                                  img_idx[var->data.binding] * 4 +
+                                  nir_intrinsic_base(intrin) * 16);
             break;
          }
          case nir_intrinsic_load_workgroup_size: {
@@ -969,8 +965,7 @@ crocus_setup_binding_table(const struct intel_device_info *devinfo,
     * to change those, as we haven't set any of the *_start entries in brw
     * binding_table.
     */
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    nir_foreach_block (block, impl) {
       nir_foreach_instr (instr, block) {
@@ -994,8 +989,8 @@ crocus_setup_binding_table(const struct intel_device_info *devinfo,
                nir_ssa_def *val = nir_fmul_imm(&b, &tex->dest.ssa, (1 << width) - 1);
                val = nir_f2u32(&b, val);
                if (wa & WA_SIGN) {
-                  val = nir_ishl(&b, val, nir_imm_int(&b, 32 - width));
-                  val = nir_ishr(&b, val, nir_imm_int(&b, 32 - width));
+                  val = nir_ishl_imm(&b, val, 32 - width);
+                  val = nir_ishr_imm(&b, val, 32 - width);
                }
                nir_ssa_def_rewrite_uses_after(&tex->dest.ssa, val, val->parent_instr);
             }
@@ -1148,8 +1143,7 @@ crocus_lower_default_edgeflags(struct nir_shader *nir)
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    b.cursor = nir_after_cf_list(&b.impl->body);
    nir_variable *var = nir_variable_create(nir, nir_var_shader_out,
@@ -2076,7 +2070,7 @@ crocus_update_compiled_clip(struct crocus_context *ice)
    else
       key.clip_mode = BRW_CLIP_MODE_NORMAL;
 
-   if (key.primitive == PIPE_PRIM_TRIANGLES) {
+   if (key.primitive == MESA_PRIM_TRIANGLES) {
       if (rs_state->cull_face == PIPE_FACE_FRONT_AND_BACK)
          key.clip_mode = BRW_CLIP_MODE_REJECT_ALL;
       else {
@@ -2211,17 +2205,17 @@ crocus_update_compiled_sf(struct crocus_context *ice)
    key.attrs = ice->shaders.last_vue_map->slots_valid;
 
    switch (ice->state.reduced_prim_mode) {
-   case PIPE_PRIM_TRIANGLES:
+   case MESA_PRIM_TRIANGLES:
    default:
       if (key.attrs & BITFIELD64_BIT(VARYING_SLOT_EDGE))
          key.primitive = BRW_SF_PRIM_UNFILLED_TRIS;
       else
          key.primitive = BRW_SF_PRIM_TRIANGLES;
       break;
-   case PIPE_PRIM_LINES:
+   case MESA_PRIM_LINES:
       key.primitive = BRW_SF_PRIM_LINES;
       break;
-   case PIPE_PRIM_POINTS:
+   case MESA_PRIM_POINTS:
       key.primitive = BRW_SF_PRIM_POINTS;
       break;
    }

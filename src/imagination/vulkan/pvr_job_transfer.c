@@ -163,7 +163,7 @@ struct pvr_transfer_3d_state {
 };
 
 struct pvr_transfer_prep_data {
-   uint32_t flags;
+   struct pvr_winsys_transfer_cmd_flags flags;
    struct pvr_transfer_3d_state state;
 };
 
@@ -2106,7 +2106,6 @@ pvr_pds_unitex(const struct pvr_device_info *dev_info,
       pvr_cmd_buffer_alloc_mem(transfer_cmd->cmd_buffer,
                                ctx->device->heaps.pds_heap,
                                PVR_DW_TO_BYTES(state->tex_state_data_size),
-                               PVR_BO_ALLOC_FLAG_CPU_MAPPED,
                                &pvr_bo);
    if (result != VK_SUCCESS)
       return result;
@@ -2812,7 +2811,6 @@ static VkResult pvr_3d_copy_blit_core(struct pvr_transfer_ctx *ctx,
       result = pvr_cmd_buffer_alloc_mem(transfer_cmd->cmd_buffer,
                                         device->heaps.general_heap,
                                         PVR_DW_TO_BYTES(tex_state_dma_size_dw),
-                                        PVR_BO_ALLOC_FLAG_CPU_MAPPED,
                                         &pvr_bo);
       if (result != VK_SUCCESS)
          return result;
@@ -3000,7 +2998,6 @@ pvr_pds_coeff_task(struct pvr_transfer_ctx *ctx,
       transfer_cmd->cmd_buffer,
       ctx->device->heaps.pds_heap,
       PVR_DW_TO_BYTES(program.data_size + program.code_size),
-      PVR_BO_ALLOC_FLAG_CPU_MAPPED,
       &pvr_bo);
    if (result != VK_SUCCESS)
       return result;
@@ -3504,7 +3501,7 @@ pvr_int32_to_isp_xy_vtx(const struct pvr_device_info *dev_info,
       return vk_error(NULL, VK_ERROR_UNKNOWN);
 
    pvr_csb_pack (word_out, IPF_ISP_VERTEX_XY, word) {
-      word.sign = val < 0U;
+      word.sign = val < 0;
       word.integer = val;
    }
 
@@ -3997,16 +3994,15 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
 
    /* Allocate space for IPF control stream. */
    result = pvr_cmd_buffer_alloc_mem(transfer_cmd->cmd_buffer,
-                                     ctx->device->heaps.transfer_3d_heap,
+                                     ctx->device->heaps.transfer_frag_heap,
                                      total_stream_size,
-                                     PVR_BO_ALLOC_FLAG_CPU_MAPPED,
                                      &pvr_cs_bo);
    if (result != VK_SUCCESS)
       return result;
 
    stream_base_vaddr =
       PVR_DEV_ADDR(pvr_cs_bo->dev_addr.addr -
-                   ctx->device->heaps.transfer_3d_heap->base_addr.addr);
+                   ctx->device->heaps.transfer_frag_heap->base_addr.addr);
 
    cs_ptr = pvr_bo_suballoc_get_map_addr(pvr_cs_bo);
    blk_cs_ptr = cs_ptr + region_arrays_size / sizeof(uint32_t);
@@ -4164,7 +4160,6 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
             result = pvr_cmd_buffer_alloc_mem(transfer_cmd->cmd_buffer,
                                               ctx->device->heaps.general_heap,
                                               tex_state_dma_size << 2U,
-                                              PVR_BO_ALLOC_FLAG_CPU_MAPPED,
                                               &pvr_bo);
             if (result != VK_SUCCESS)
                return result;
@@ -4421,7 +4416,7 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
    pvr_csb_pack (&regs->isp_mtile_base, CR_ISP_MTILE_BASE, reg) {
       reg.addr =
          PVR_DEV_ADDR(pvr_cs_bo->dev_addr.addr -
-                      ctx->device->heaps.transfer_3d_heap->base_addr.addr);
+                      ctx->device->heaps.transfer_frag_heap->base_addr.addr);
    }
 
    pvr_csb_pack (&regs->isp_render, CR_ISP_RENDER, reg) {
@@ -4820,72 +4815,61 @@ static void pvr_unwind_rects(uint32_t width,
                              bool input,
                              struct pvr_transfer_pass *pass)
 {
-   uint32_t num_mappings = pass->sources[0].mapping_count;
-   struct pvr_rect_mapping *mappings = pass->sources[0].mappings;
+   struct pvr_transfer_wa_source *const source = &pass->sources[0];
+   struct pvr_rect_mapping *const mappings = source->mappings;
+   const uint32_t num_mappings = source->mapping_count;
    VkRect2D rect_a, rect_b;
-   uint32_t new_mappings = 0;
-   uint32_t i;
 
    if (texel_unwind == 0)
       return;
 
    pvr_split_rect(width, height, texel_unwind, &rect_a, &rect_b);
 
-   for (i = 0; i < num_mappings; i++) {
-      VkRect2D *rect = input ? &mappings[i].src_rect : &mappings[i].dst_rect;
+   for (uint32_t i = 0; i < num_mappings; i++) {
+      VkRect2D *const old_rect = input ? &mappings[i].src_rect
+                                       : &mappings[i].dst_rect;
 
       if (height == 1) {
-         rect->offset.x += texel_unwind;
+         old_rect->offset.x += texel_unwind;
       } else if (width == 1) {
-         rect->offset.y += texel_unwind;
-      } else if (pvr_rect_width_covered_by(rect, &rect_a)) {
-         rect->offset.x += texel_unwind;
-      } else if (pvr_rect_width_covered_by(rect, &rect_b)) {
-         rect->offset.x = texel_unwind - width + rect->offset.x;
-         rect->offset.y++;
+         old_rect->offset.y += texel_unwind;
+      } else if (pvr_rect_width_covered_by(old_rect, &rect_a)) {
+         old_rect->offset.x += texel_unwind;
+      } else if (pvr_rect_width_covered_by(old_rect, &rect_b)) {
+         old_rect->offset.x = texel_unwind - width + old_rect->offset.x;
+         old_rect->offset.y++;
       } else {
          /* Mapping requires split. */
-         uint32_t new_mapping = num_mappings + new_mappings;
-         VkRect2D *new_rect = input ? &mappings[new_mapping].src_rect
-                                    : &mappings[new_mapping].dst_rect;
-         uint32_t split_point = width - texel_unwind;
-         uint32_t split_width;
+         const uint32_t new_mapping = source->mapping_count++;
 
-         assert(new_mapping < ARRAY_SIZE(pass->sources[0].mappings));
+         VkRect2D *const new_rect = input ? &mappings[new_mapping].src_rect
+                                          : &mappings[new_mapping].dst_rect;
 
+         VkRect2D *const new_rect_opp = input ? &mappings[new_mapping].dst_rect
+                                              : &mappings[new_mapping].src_rect;
+         VkRect2D *const old_rect_opp = input ? &mappings[i].dst_rect
+                                              : &mappings[i].src_rect;
+
+         const uint32_t split_point = width - texel_unwind;
+         const uint32_t split_width =
+            old_rect->offset.x + old_rect->extent.width - split_point;
+
+         assert(new_mapping < ARRAY_SIZE(source->mappings));
          mappings[new_mapping] = mappings[i];
 
-         rect->extent.width = split_point - rect->offset.x;
-         new_rect->offset.x = split_point;
+         old_rect_opp->extent.width -= split_width;
+         new_rect_opp->extent.width = split_width;
+         new_rect_opp->offset.x =
+            old_rect_opp->offset.x + old_rect_opp->extent.width;
 
-         split_width = (rect->offset.x + new_rect->extent.width) - split_point;
+         old_rect->offset.x += texel_unwind;
+         old_rect->extent.width = width - old_rect->offset.x;
 
-         if (input) {
-            mappings[i].dst_rect.extent.width -= split_width;
-            mappings[new_mapping].dst_rect.offset.x =
-               mappings[i].dst_rect.offset.x +
-               mappings[i].dst_rect.extent.width;
-            mappings[new_mapping].dst_rect.extent.width = split_width;
-         } else {
-            mappings[i].src_rect.extent.width -= split_width;
-            mappings[new_mapping].src_rect.offset.x =
-               mappings[i].src_rect.offset.x +
-               mappings[i].src_rect.extent.width;
-            mappings[new_mapping].src_rect.extent.width = split_width;
-         }
-
-         rect->offset.x += texel_unwind;
-         rect->extent.width = width - rect->offset.x;
-
-         new_rect->offset.x += (int32_t)texel_unwind - (int32_t)width;
+         new_rect->offset.x = 0;
          new_rect->offset.y++;
-         new_rect->extent.width += (int32_t)texel_unwind - (int32_t)width;
-
-         new_mappings++;
+         new_rect->extent.width = split_width;
       }
    }
-
-   pass->sources[0].mapping_count += new_mappings;
 }
 
 /**
@@ -5681,6 +5665,10 @@ pvr_submit_info_stream_init(struct pvr_transfer_ctx *ctx,
    const struct pvr_device_info *const dev_info = &pdevice->dev_info;
 
    uint32_t *stream_ptr = (uint32_t *)cmd->fw_stream;
+   uint32_t *stream_len_ptr = stream_ptr;
+
+   /* Leave space for stream header. */
+   stream_ptr += pvr_cmd_length(KMD_STREAM_HDR);
 
    *(uint64_t *)stream_ptr = regs->pds_bgnd0_base;
    stream_ptr += pvr_cmd_length(CR_PDS_BGRND0_BASE);
@@ -5749,19 +5737,21 @@ pvr_submit_info_stream_init(struct pvr_transfer_ctx *ctx,
       stream_ptr++;
    }
 
-   cmd->fw_stream_len = (uint8_t *)stream_ptr - cmd->fw_stream;
+   cmd->fw_stream_len = (uint8_t *)stream_ptr - (uint8_t *)cmd->fw_stream;
    assert(cmd->fw_stream_len <= ARRAY_SIZE(cmd->fw_stream));
+
+   pvr_csb_pack ((uint64_t *)stream_len_ptr, KMD_STREAM_HDR, value) {
+      value.length = cmd->fw_stream_len;
+   }
 }
 
 static void
 pvr_submit_info_flags_init(const struct pvr_device_info *const dev_info,
                            const struct pvr_transfer_prep_data *const prep_data,
-                           uint32_t *const flags)
+                           struct pvr_winsys_transfer_cmd_flags *flags)
 {
    *flags = prep_data->flags;
-
-   if (PVR_HAS_FEATURE(dev_info, gpu_multicore_support))
-      *flags |= PVR_WINSYS_TRANSFER_FLAG_SINGLE_CORE;
+   flags->use_single_core = PVR_HAS_FEATURE(dev_info, gpu_multicore_support);
 }
 
 static void pvr_transfer_job_ws_submit_info_init(
@@ -5888,7 +5878,7 @@ VkResult pvr_transfer_job_submit(struct pvr_transfer_ctx *ctx,
 {
    list_for_each_entry_safe (struct pvr_transfer_cmd,
                              transfer_cmd,
-                             &sub_cmd->transfer_cmds,
+                             sub_cmd->transfer_cmds,
                              link) {
       /* The fw guarantees that any kick on the same context will be
        * synchronized in submission order. This means only the first kick must
@@ -5898,13 +5888,13 @@ VkResult pvr_transfer_job_submit(struct pvr_transfer_ctx *ctx,
       struct vk_sync *last_cmd_signal_sync = NULL;
       VkResult result;
 
-      if (list_first_entry(&sub_cmd->transfer_cmds,
-                          struct pvr_transfer_cmd,
-                          link) == transfer_cmd) {
+      if (list_first_entry(sub_cmd->transfer_cmds,
+                           struct pvr_transfer_cmd,
+                           link) == transfer_cmd) {
          first_cmd_wait_sync = wait_sync;
       }
 
-      if (list_last_entry(&sub_cmd->transfer_cmds,
+      if (list_last_entry(sub_cmd->transfer_cmds,
                           struct pvr_transfer_cmd,
                           link) == transfer_cmd) {
          last_cmd_signal_sync = signal_sync;

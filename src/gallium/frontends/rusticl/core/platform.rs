@@ -17,10 +17,13 @@ pub struct Platform {
 }
 
 pub struct PlatformDebug {
+    pub allow_invalid_spirv: bool,
+    pub clc: bool,
     pub program: bool,
 }
 
 pub struct PlatformFeatures {
+    pub fp16: bool,
     pub fp64: bool,
 }
 
@@ -43,22 +46,34 @@ macro_rules! gen_cl_exts {
 }
 gen_cl_exts!([
     (1, 0, 0, "cl_khr_byte_addressable_store"),
+    (1, 0, 0, "cl_khr_create_command_queue"),
+    (1, 0, 0, "cl_khr_extended_versioning"),
     (1, 0, 0, "cl_khr_icd"),
     (1, 0, 0, "cl_khr_il_program"),
+    (1, 0, 0, "cl_khr_spirv_no_integer_wrap_decoration"),
 ]);
 
 static mut PLATFORM: Platform = Platform {
     dispatch: &DISPATCH,
     devs: Vec::new(),
 };
-static mut PLATFORM_DBG: PlatformDebug = PlatformDebug { program: false };
-static mut PLATFORM_FEATURES: PlatformFeatures = PlatformFeatures { fp64: false };
+static mut PLATFORM_DBG: PlatformDebug = PlatformDebug {
+    allow_invalid_spirv: false,
+    clc: false,
+    program: false,
+};
+static mut PLATFORM_FEATURES: PlatformFeatures = PlatformFeatures {
+    fp16: false,
+    fp64: false,
+};
 
 fn load_env() {
     let debug = unsafe { &mut PLATFORM_DBG };
     if let Ok(debug_flags) = env::var("RUSTICL_DEBUG") {
         for flag in debug_flags.split(',') {
             match flag {
+                "allow_invalid_spirv" => debug.allow_invalid_spirv = true,
+                "clc" => debug.clc = true,
                 "program" => debug.program = true,
                 _ => eprintln!("Unknown RUSTICL_DEBUG flag found: {}", flag),
             }
@@ -69,6 +84,7 @@ fn load_env() {
     if let Ok(feature_flags) = env::var("RUSTICL_FEATURES") {
         for flag in feature_flags.split(',') {
             match flag {
+                "fp16" => features.fp16 = true,
                 "fp64" => features.fp64 = true,
                 _ => eprintln!("Unknown RUSTICL_FEATURES flag found: {}", flag),
             }

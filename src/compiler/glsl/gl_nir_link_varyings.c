@@ -1259,15 +1259,6 @@ varying_matches_compute_packing_order(const nir_variable *var)
 }
 
 /**
- * Built-in / reserved GL variables names start with "gl_"
- */
-static bool
-is_gl_identifier(const char *s)
-{
-   return s && s[0] == 'g' && s[1] == 'l' && s[2] == '_';
-}
-
-/**
  * Record the given producer/consumer variable pair in the list of variables
  * that should later be assigned locations.
  *
@@ -2048,11 +2039,8 @@ get_num_components(nir_variable *var)
 static void
 tcs_add_output_reads(nir_shader *shader, BITSET_WORD **read)
 {
-   nir_foreach_function(function, shader) {
-      if (!function->impl)
-         continue;
-
-      nir_foreach_block(block, function->impl) {
+   nir_foreach_function_impl(impl, shader) {
+      nir_foreach_block(block, impl) {
          nir_foreach_instr(instr, block) {
             if (instr->type != nir_instr_type_intrinsic)
                continue;

@@ -442,7 +442,7 @@ render_texture(struct gl_context *ctx,
    assert(pt);
 
    /* point renderbuffer at texobject */
-   rb->is_rtt = TRUE;
+   rb->is_rtt = true;
    rb->rtt_face = att->CubeMapFace;
    rb->rtt_slice = att->Zoffset;
    rb->rtt_layered = att->Layered;
@@ -468,7 +468,7 @@ render_texture(struct gl_context *ctx,
 static void
 finish_render_texture(struct gl_context *ctx, struct gl_renderbuffer *rb)
 {
-   rb->is_rtt = FALSE;
+   rb->is_rtt = false;
 
    /* restore previous framebuffer state */
    st_invalidate_buffers(st_context(ctx));
@@ -1186,7 +1186,7 @@ do_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
          &fb->Attachment[BUFFER_STENCIL];
    GLuint i;
    enum pipe_format first_format = PIPE_FORMAT_NONE;
-   boolean mixed_formats =
+   bool mixed_formats =
          screen->get_param(screen, PIPE_CAP_MIXED_COLORBUFFER_FORMATS) != 0;
 
    if (depth->Type && stencil->Type && depth->Type != stencil->Type) {

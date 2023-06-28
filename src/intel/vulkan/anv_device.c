@@ -77,6 +77,7 @@ static const driOptionDescription anv_dri_options[] = {
       DRI_CONF_ANV_GENERATED_INDIRECT_THRESHOLD(4)
       DRI_CONF_NO_16BIT(false)
       DRI_CONF_ANV_QUERY_CLEAR_WITH_BLORP_THRESHOLD(6)
+      DRI_CONF_ANV_QUERY_COPY_WITH_SHADER_THRESHOLD(6)
       DRI_CONF_ANV_FORCE_INDIRECT_DESCRIPTORS(false)
    DRI_CONF_SECTION_END
 
@@ -301,6 +302,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .EXT_conditional_rendering             = true,
       .EXT_conservative_rasterization        = true,
       .EXT_custom_border_color               = true,
+      .EXT_depth_bias_control                = true,
       .EXT_depth_clamp_zero_one              = true,
       .EXT_depth_clip_control                = true,
       .EXT_depth_clip_enable                 = true,
@@ -814,6 +816,12 @@ get_features(const struct anv_physical_device *pdevice,
 
       /* VK_EXT_dynamic_rendering_unused_attachments */
       .dynamicRenderingUnusedAttachments = true,
+
+      /* VK_EXT_depth_bias_control */
+      .depthBiasControl = true,
+      .floatRepresentation = true,
+      .leastRepresentableValueForceUnormRepresentation = false,
+      .depthBiasExact = true,
    };
 
    /* The new DOOM and Wolfenstein games require depthBounds without
@@ -1506,6 +1514,8 @@ anv_init_dri_options(struct anv_instance *instance)
             driQueryOptioni(&instance->dri_options, "generated_indirect_threshold");
     instance->query_clear_with_blorp_threshold =
        driQueryOptioni(&instance->dri_options, "query_clear_with_blorp_threshold");
+    instance->query_copy_with_shader_threshold =
+       driQueryOptioni(&instance->dri_options, "query_copy_with_shader_threshold");
     instance->force_vk_vendor =
        driQueryOptioni(&instance->dri_options, "force_vk_vendor");
 }
@@ -1839,7 +1849,7 @@ anv_get_physical_device_properties_1_2(struct anv_physical_device *pdevice,
    p->conformanceVersion = (VkConformanceVersion) {
       .major = 1,
       .minor = 3,
-      .subminor = 0,
+      .subminor = 6,
       .patch = 0,
    };
 
@@ -2871,18 +2881,37 @@ decode_get_bo(void *v_batch, bool ppgtt, uint64_t address)
    if (!device->cmd_buffer_being_decoded)
       return (struct intel_batch_decode_bo) { };
 
-   struct anv_batch_bo **bo;
-
-   u_vector_foreach(bo, &device->cmd_buffer_being_decoded->seen_bbos) {
+   struct anv_batch_bo **bbo;
+   u_vector_foreach(bbo, &device->cmd_buffer_being_decoded->seen_bbos) {
       /* The decoder zeroes out the top 16 bits, so we need to as well */
-      uint64_t bo_address = (*bo)->bo->offset & (~0ull >> 16);
+      uint64_t bo_address = (*bbo)->bo->offset & (~0ull >> 16);
 
-      if (address >= bo_address && address < bo_address + (*bo)->bo->size) {
+      if (address >= bo_address && address < bo_address + (*bbo)->bo->size) {
          return (struct intel_batch_decode_bo) {
             .addr = bo_address,
-            .size = (*bo)->bo->size,
-            .map = (*bo)->bo->map,
+            .size = (*bbo)->bo->size,
+            .map = (*bbo)->bo->map,
          };
+      }
+
+      uint32_t dep_words = (*bbo)->relocs.dep_words;
+      BITSET_WORD *deps = (*bbo)->relocs.deps;
+      for (uint32_t w = 0; w < dep_words; w++) {
+         BITSET_WORD mask = deps[w];
+         while (mask) {
+            int i = u_bit_scan(&mask);
+            uint32_t gem_handle = w * BITSET_WORDBITS + i;
+            struct anv_bo *bo = anv_device_lookup_bo(device, gem_handle);
+            assert(bo->refcount > 0);
+            bo_address = bo->offset & (~0ull >> 16);
+            if (address >= bo_address && address < bo_address + bo->size) {
+               return (struct intel_batch_decode_bo) {
+                  .addr = bo_address,
+                  .size = bo->size,
+                  .map = bo->map,
+               };
+            }
+         }
       }
    }
 
@@ -3423,7 +3452,7 @@ VkResult anv_CreateDevice(
 
    anv_device_init_border_colors(device);
 
-   anv_device_init_generated_indirect_draws(device);
+   anv_device_init_internal_kernels(device);
 
    anv_device_perf_init(device);
 
@@ -3518,7 +3547,7 @@ void anv_DestroyDevice(
 
    anv_device_finish_rt_shaders(device);
 
-   anv_device_finish_generated_indirect_draws(device);
+   anv_device_finish_internal_kernels(device);
 
    vk_pipeline_cache_destroy(device->internal_cache, NULL);
    vk_pipeline_cache_destroy(device->default_pipeline_cache, NULL);
@@ -4343,11 +4372,11 @@ anv_get_buffer_memory_requirements(struct anv_device *device,
     */
    uint32_t memory_types = (1ull << device->physical->memory.type_count) - 1;
 
-   /* Base alignment requirement of a cache line */
-   uint32_t alignment = 16;
-
-   if (usage & VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)
-      alignment = MAX2(alignment, ANV_UBO_ALIGNMENT);
+   /* The GPU appears to write back to main memory in cachelines. Writes to a
+    * buffers should not clobber with writes to another buffers so make sure
+    * those are in different cachelines.
+    */
+   uint32_t alignment = 64;
 
    pMemoryRequirements->memoryRequirements.size = size;
    pMemoryRequirements->memoryRequirements.alignment = alignment;

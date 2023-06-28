@@ -247,7 +247,7 @@ validate_alu_src(nir_alu_instr *instr, unsigned index, validate_state *state)
 }
 
 static void
-validate_reg_dest(nir_reg_dest *dest, validate_state *state,
+validate_reg_dest(nir_register_dest *dest, validate_state *state,
                   unsigned bit_sizes, unsigned num_components)
 {
    validate_assert(state, dest->reg != NULL);
@@ -930,6 +930,14 @@ validate_tex_instr(nir_tex_instr *instr, validate_state *state)
       }
    }
 
+   bool msaa = (instr->sampler_dim == GLSL_SAMPLER_DIM_MS ||
+                instr->sampler_dim == GLSL_SAMPLER_DIM_SUBPASS_MS);
+
+   if (msaa)
+      validate_assert(state, instr->op != nir_texop_txf);
+   else
+      validate_assert(state, instr->op != nir_texop_txf_ms);
+
    if (instr->op != nir_texop_tg4)
       validate_assert(state, instr->component == 0);
 
@@ -963,7 +971,7 @@ validate_call_instr(nir_call_instr *instr, validate_state *state)
 
 static void
 validate_const_value(nir_const_value *val, unsigned bit_size,
-                     validate_state *state)
+                     bool is_null_constant, validate_state *state)
 {
    /* In order for block copies to work properly for things like instruction
     * comparisons and [de]serialization, we require the unused bits of the
@@ -971,24 +979,26 @@ validate_const_value(nir_const_value *val, unsigned bit_size,
     */
    nir_const_value cmp_val;
    memset(&cmp_val, 0, sizeof(cmp_val));
-   switch (bit_size) {
-   case 1:
-      cmp_val.b = val->b;
-      break;
-   case 8:
-      cmp_val.u8 = val->u8;
-      break;
-   case 16:
-      cmp_val.u16 = val->u16;
-      break;
-   case 32:
-      cmp_val.u32 = val->u32;
-      break;
-   case 64:
-      cmp_val.u64 = val->u64;
-      break;
-   default:
-      validate_assert(state, !"Invalid load_const bit size");
+   if (!is_null_constant) {
+      switch (bit_size) {
+      case 1:
+         cmp_val.b = val->b;
+         break;
+      case 8:
+         cmp_val.u8 = val->u8;
+         break;
+      case 16:
+         cmp_val.u16 = val->u16;
+         break;
+      case 32:
+         cmp_val.u32 = val->u32;
+         break;
+      case 64:
+         cmp_val.u64 = val->u64;
+         break;
+      default:
+         validate_assert(state, !"Invalid load_const bit size");
+      }
    }
    validate_assert(state, memcmp(val, &cmp_val, sizeof(cmp_val)) == 0);
 }
@@ -999,7 +1009,7 @@ validate_load_const_instr(nir_load_const_instr *instr, validate_state *state)
    validate_ssa_def(&instr->def, state);
 
    for (unsigned i = 0; i < instr->def.num_components; i++)
-      validate_const_value(&instr->value[i], instr->def.bit_size, state);
+      validate_const_value(&instr->value[i], instr->def.bit_size, false, state);
 }
 
 static void
@@ -1483,7 +1493,7 @@ validate_constant(nir_constant *c, const struct glsl_type *type,
       unsigned num_components = glsl_get_vector_elements(type);
       unsigned bit_size = glsl_get_bit_size(type);
       for (unsigned i = 0; i < num_components; i++)
-         validate_const_value(&c->values[i], bit_size, state);
+         validate_const_value(&c->values[i], bit_size, c->is_null_constant, state);
       for (unsigned i = num_components; i < NIR_MAX_VEC_COMPONENTS; i++)
          validate_assert(state, c->values[i].u64 == 0);
    } else {
@@ -1492,11 +1502,14 @@ validate_constant(nir_constant *c, const struct glsl_type *type,
          for (unsigned i = 0; i < c->num_elements; i++) {
             const struct glsl_type *elem_type = glsl_get_struct_field(type, i);
             validate_constant(c->elements[i], elem_type, state);
+            validate_assert(state, !c->is_null_constant || c->elements[i]->is_null_constant);
          }
       } else if (glsl_type_is_array_or_matrix(type)) {
          const struct glsl_type *elem_type = glsl_get_array_element(type);
-         for (unsigned i = 0; i < c->num_elements; i++)
+         for (unsigned i = 0; i < c->num_elements; i++) {
             validate_constant(c->elements[i], elem_type, state);
+            validate_assert(state, !c->is_null_constant || c->elements[i]->is_null_constant);
+         }
       } else {
          validate_assert(state, !"Invalid type for nir_constant");
       }
@@ -1547,6 +1560,9 @@ validate_var_decl(nir_variable *var, nir_variable_mode valid_modes,
       validate_assert(state, !var->data.bindless);
       validate_assert(state, glsl_type_is_image(glsl_without_array(var->type)));
    }
+
+   if (var->data.per_vertex)
+      validate_assert(state, state->shader->info.stage == MESA_SHADER_FRAGMENT);
 
    /*
     * TODO validate some things ir_validate.cpp does (requires more GLSL type
@@ -1832,18 +1848,15 @@ nir_validate_ssa_dominance(nir_shader *shader, const char *when)
 
    state.shader = shader;
 
-   nir_foreach_function(func, shader) {
-      if (func->impl == NULL)
-         continue;
-
+   nir_foreach_function_impl(impl, shader) {
       state.ssa_defs_found = reralloc(state.mem_ctx, state.ssa_defs_found,
                                       BITSET_WORD,
-                                      BITSET_WORDS(func->impl->ssa_alloc));
-      memset(state.ssa_defs_found, 0, BITSET_WORDS(func->impl->ssa_alloc) *
+                                      BITSET_WORDS(impl->ssa_alloc));
+      memset(state.ssa_defs_found, 0, BITSET_WORDS(impl->ssa_alloc) *
                                       sizeof(BITSET_WORD));
 
-      state.impl = func->impl;
-      validate_ssa_dominance(func->impl, &state);
+      state.impl = impl;
+      validate_ssa_dominance(impl, &state);
    }
 
    if (_mesa_hash_table_num_entries(state.errors) > 0)

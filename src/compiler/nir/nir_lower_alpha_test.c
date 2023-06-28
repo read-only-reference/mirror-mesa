@@ -43,10 +43,8 @@ nir_lower_alpha_test(nir_shader *shader, enum compare_func func,
    assert(alpha_ref_state_tokens);
    assert(shader->info.stage == MESA_SHADER_FRAGMENT);
 
-   nir_foreach_function(function, shader) {
-      nir_function_impl *impl = function->impl;
-      nir_builder b;
-      nir_builder_init(&b, impl);
+   nir_foreach_function_impl(impl, shader) {
+      nir_builder b = nir_builder_create(impl);
       b.cursor = nir_before_cf_list(&impl->body);
 
       nir_foreach_block(block, impl) {
@@ -95,15 +93,9 @@ nir_lower_alpha_test(nir_shader *shader, enum compare_func func,
                                       3);
                }
 
-               nir_variable *var = nir_variable_create(shader,
-                                                       nir_var_uniform,
-                                                       glsl_float_type(),
-                                                       "gl_AlphaRefMESA");
-               var->num_state_slots = 1;
-               var->state_slots = rzalloc_array(var, nir_state_slot, 1);
-               memcpy(var->state_slots[0].tokens,
-                      alpha_ref_state_tokens,
-                      sizeof(var->state_slots[0].tokens));
+               nir_variable *var = nir_state_variable_create(shader, glsl_float_type(),
+                                                             "gl_AlphaRefMESA",
+                                                             alpha_ref_state_tokens);
                nir_ssa_def *alpha_ref = nir_load_var(&b, var);
 
                nir_ssa_def *condition =

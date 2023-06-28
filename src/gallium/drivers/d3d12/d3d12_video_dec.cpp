@@ -420,7 +420,7 @@ d3d12_video_decoder_end_frame(struct pipe_video_codec *codec,
    assert(pUploadGPUCompletionFence);
    debug_printf("[d3d12_video_decoder] d3d12_video_decoder_end_frame - Waiting on GPU completion fence for "
                   "buffer_subdata to upload compressed bitstream.\n");
-   pD3D12Screen->base.fence_finish(&pD3D12Screen->base, NULL, pUploadGPUCompletionFence, PIPE_TIMEOUT_INFINITE);
+   pD3D12Screen->base.fence_finish(&pD3D12Screen->base, NULL, pUploadGPUCompletionFence, OS_TIMEOUT_INFINITE);
    pD3D12Screen->base.fence_reference(&pD3D12Screen->base, &pUploadGPUCompletionFence, NULL);
    pipe_resource_reference(&pPipeCompressedBufferObj, NULL);
 
@@ -539,7 +539,7 @@ d3d12_video_decoder_end_frame(struct pipe_video_codec *codec,
    bool fReferenceOnly = (pD3D12Dec->m_ConfigDecoderSpecificFlags &
                           d3d12_video_decode_config_specific_flag_reference_only_textures_required) != 0;
    if (fReferenceOnly) {
-      d3d12OutputArguments.ConversionArguments.Enable = TRUE;
+      d3d12OutputArguments.ConversionArguments.Enable = true;
 
       assert(pRefOnlyOutputD3D12Texture);
       d3d12OutputArguments.ConversionArguments.pReferenceTexture2D = pRefOnlyOutputD3D12Texture;
@@ -565,7 +565,7 @@ d3d12_video_decoder_end_frame(struct pipe_video_codec *codec,
       d3d12OutputArguments.ConversionArguments.OutputWidth = HeapDesc.DecodeWidth;
       d3d12OutputArguments.ConversionArguments.OutputHeight = HeapDesc.DecodeHeight;
    } else {
-      d3d12OutputArguments.ConversionArguments.Enable = FALSE;
+      d3d12OutputArguments.ConversionArguments.Enable = false;
    }
 
    CD3DX12_RESOURCE_DESC outputDesc(GetDesc(d3d12OutputArguments.pOutputTexture2D));
@@ -661,7 +661,7 @@ d3d12_video_decoder_end_frame(struct pipe_video_codec *codec,
       assert(completion_fence);
       debug_printf("[d3d12_video_decoder] d3d12_video_decoder_end_frame - Waiting on GPU completion fence for "
                      "resource_copy_region on decoded frame.\n");
-      pD3D12Screen->base.fence_finish(&pD3D12Screen->base, NULL, completion_fence, PIPE_TIMEOUT_INFINITE);
+      pD3D12Screen->base.fence_finish(&pD3D12Screen->base, NULL, completion_fence, OS_TIMEOUT_INFINITE);
       pD3D12Screen->base.fence_reference(&pD3D12Screen->base, &completion_fence, NULL);
       pipe_resource_reference(&pPipeSrc, NULL);
    }

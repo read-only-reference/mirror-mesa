@@ -136,8 +136,7 @@ visit_cf_list(nir_builder *b, struct exec_list *list, bool *repair_ssa)
 static bool
 lower_continue_constructs_impl(nir_function_impl *impl)
 {
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
    bool repair_ssa = false;
    bool progress = visit_cf_list(&b, &impl->body, &repair_ssa);
 
@@ -165,8 +164,8 @@ nir_lower_continue_constructs(nir_shader *shader)
 {
    bool progress = false;
 
-   nir_foreach_function(function, shader) {
-      if (function->impl && lower_continue_constructs_impl(function->impl))
+   nir_foreach_function_impl(impl, shader) {
+      if (lower_continue_constructs_impl(impl))
          progress = true;
    }
 

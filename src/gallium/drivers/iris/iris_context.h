@@ -358,6 +358,7 @@ enum pipe_control_flags
    PIPE_CONTROL_PSS_STALL_SYNC                  = (1 << 27),
    PIPE_CONTROL_L3_READ_ONLY_CACHE_INVALIDATE   = (1 << 28),
    PIPE_CONTROL_UNTYPED_DATAPORT_CACHE_FLUSH    = (1 << 29),
+   PIPE_CONTROL_CCS_CACHE_FLUSH                 = (1 << 30),
 };
 
 #define PIPE_CONTROL_CACHE_FLUSH_BITS \
@@ -776,7 +777,7 @@ struct iris_context {
       uint8_t patch_vertices;
       bool primitive_restart;
       unsigned cut_index;
-      enum pipe_prim_type prim_mode:8;
+      enum mesa_prim prim_mode:8;
       bool prim_is_points_or_lines;
       uint8_t vertices_per_patch;
 

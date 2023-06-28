@@ -112,7 +112,7 @@ void nir_inline_function_impl(struct nir_builder *b,
    nir_cf_list_extract(&body, &copy->body);
 
    if (nest_if) {
-      nir_if *cf = nir_push_if(b, nir_imm_bool(b, true));
+      nir_if *cf = nir_push_if(b, nir_imm_true(b));
       nir_cf_reinsert(&body, nir_after_cf_list(&cf->then_list));
       nir_pop_if(b, cf);
    } else {
@@ -177,8 +177,7 @@ inline_function_impl(nir_function_impl *impl, struct set *inlined)
    if (_mesa_set_search(inlined, impl))
       return false; /* Already inlined */
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    bool progress = false;
    nir_foreach_block_safe(block, impl) {
@@ -276,9 +275,8 @@ nir_inline_functions(nir_shader *shader)
    struct set *inlined = _mesa_pointer_set_create(NULL);
    bool progress = false;
 
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         progress = inline_function_impl(function->impl, inlined) || progress;
+   nir_foreach_function_impl(impl, shader) {
+      progress = inline_function_impl(impl, inlined) || progress;
    }
 
    _mesa_set_destroy(inlined, NULL);

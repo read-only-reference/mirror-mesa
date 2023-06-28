@@ -28,7 +28,7 @@
 #ifndef P_TILE_H
 #define P_TILE_H
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "util/format/u_formats.h"
 #include "pipe/p_state.h"
 
@@ -42,18 +42,18 @@ struct pipe_transfer;
  *
  * \return TRUE if tile is totally clipped, FALSE otherwise
  */
-static inline boolean
+static inline bool
 u_clip_tile(uint x, uint y, uint *w, uint *h, const struct pipe_box *box)
 {
    if ((int) x >= box->width)
-      return TRUE;
+      return true;
    if ((int) y >= box->height)
-      return TRUE;
+      return true;
    if ((int) (x + *w) > box->width)
       *w = box->width - x;
    if ((int) (y + *h) > box->height)
       *h = box->height - y;
-   return FALSE;
+   return false;
 }
 
 #ifdef __cplusplus

@@ -40,9 +40,13 @@ static mut DISK_CACHE: Option<DiskCache> = None;
 static DISK_CACHE_ONCE: Once = Once::new();
 
 fn get_disk_cache() -> &'static Option<DiskCache> {
+    let func_ptrs = [
+        // ourselves
+        get_disk_cache as _,
+    ];
     unsafe {
         DISK_CACHE_ONCE.call_once(|| {
-            DISK_CACHE = DiskCache::new("rusticl", "rusticl", 0);
+            DISK_CACHE = DiskCache::new("rusticl", &func_ptrs, 0);
         });
         &DISK_CACHE
     }
@@ -55,7 +59,6 @@ pub enum ProgramSourceType {
     Il(spirv::SPIRVBin),
 }
 
-#[repr(C)]
 pub struct Program {
     pub base: CLObjectBase<CL_INVALID_PROGRAM>,
     pub context: Arc<Context>,
@@ -522,6 +525,16 @@ impl Program {
         }
 
         let mut d = info.dev_build_mut(dev);
+
+        // skip compilation if we already have the right thing.
+        if self.is_bin() {
+            if d.bin_type == CL_PROGRAM_BINARY_TYPE_EXECUTABLE && !lib
+                || d.bin_type == CL_PROGRAM_BINARY_TYPE_LIBRARY && lib
+            {
+                return true;
+            }
+        }
+
         let spirvs = [d.spirv.as_ref().unwrap()];
         let (spirv, log) = spirv::SPIRVBin::link(&spirvs, lib);
 
@@ -555,9 +568,30 @@ impl Program {
         let mut d = info.dev_build_mut(dev);
 
         let (spirv, log) = match &self.src {
-            ProgramSourceType::Il(spirv) => spirv.clone_on_validate(),
+            ProgramSourceType::Il(spirv) => {
+                let options = clc_validator_options {
+                    // has to match CL_DEVICE_MAX_PARAMETER_SIZE
+                    limit_max_function_arg: dev.param_max_size() as u32,
+                };
+                if Platform::dbg().allow_invalid_spirv {
+                    (Some(spirv.clone()), String::new())
+                } else {
+                    spirv.clone_on_validate(&options)
+                }
+            }
             ProgramSourceType::Src(src) => {
                 let args = prepare_options(&options, dev);
+
+                if Platform::dbg().clc {
+                    let src = src.to_string_lossy();
+                    eprintln!("dumping compilation inputs:");
+                    eprintln!("compilation arguments: {args:?}");
+                    if !headers.is_empty() {
+                        eprintln!("headers: {headers:#?}");
+                    }
+                    eprintln!("source code:\n{src}");
+                }
+
                 spirv::SPIRVBin::from_clc(
                     src,
                     &args,
@@ -664,6 +698,10 @@ impl Program {
             kernel_count: AtomicU32::new(0),
             build: Mutex::new(build),
         })
+    }
+
+    pub fn is_bin(&self) -> bool {
+        matches!(self.src, ProgramSourceType::Binary)
     }
 
     pub fn is_il(&self) -> bool {

@@ -333,6 +333,7 @@ d3d12_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_FENCE_SIGNAL:
    case PIPE_CAP_TIMELINE_SEMAPHORE_IMPORT:
    case PIPE_CAP_CLIP_HALFZ:
+   case PIPE_CAP_VS_LAYER_VIEWPORT:
       return 1;
 
    case PIPE_CAP_MAX_VERTEX_STREAMS:
@@ -399,6 +400,10 @@ d3d12_get_shader_param(struct pipe_screen *pscreen,
 {
    struct d3d12_screen *screen = d3d12_screen(pscreen);
 
+   if (shader == PIPE_SHADER_TASK ||
+       shader == PIPE_SHADER_MESH)
+      return 0;
+
    switch (param) {
    case PIPE_SHADER_CAP_MAX_INSTRUCTIONS:
    case PIPE_SHADER_CAP_MAX_ALU_INSTRUCTIONS:
@@ -459,9 +464,6 @@ d3d12_get_shader_param(struct pipe_screen *pscreen,
    case PIPE_SHADER_CAP_INT64_ATOMICS:
    case PIPE_SHADER_CAP_FP16:
       return 0; /* not implemented */
-
-   case PIPE_SHADER_CAP_PREFERRED_IR:
-      return PIPE_SHADER_IR_NIR;
 
    case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
       return 0; /* not implemented */
@@ -780,9 +782,9 @@ d3d12_flush_frontbuffer(struct pipe_screen * pscreen,
                                         u_minify(pres->height0, level),
                                         &transfer);
       if (res_map) {
-         util_copy_rect((ubyte*)map, pres->format, res->dt_stride, 0, 0,
+         util_copy_rect((uint8_t*)map, pres->format, res->dt_stride, 0, 0,
                         transfer->box.width, transfer->box.height,
-                        (const ubyte*)res_map, transfer->stride, 0, 0);
+                        (const uint8_t*)res_map, transfer->stride, 0, 0);
          pipe_texture_unmap(pctx, transfer);
       }
       winsys->displaytarget_unmap(winsys, res->dt);

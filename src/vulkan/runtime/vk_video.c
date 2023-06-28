@@ -456,19 +456,20 @@ h265_pred_weight_table(struct vk_video_h265_slice_params *params,
 
    for (i = 0; i < params->num_ref_idx_l0_active; ++i) {
       if (params->luma_weight_l0_flag[i]) {
-         unsigned delta_luma_weight_l0 = vl_rbsp_se(rbsp);
-         params->luma_weight_l0[i] = (1 << params->luma_log2_weight_denom) + delta_luma_weight_l0;
+         params->delta_luma_weight_l0[i] = vl_rbsp_se(rbsp);
+         params->luma_weight_l0[i] = (1 << params->luma_log2_weight_denom) + params->delta_luma_weight_l0[i];
          params->luma_offset_l0[i] = vl_rbsp_se(rbsp);
       }
 
       if (params->chroma_weight_l0_flag[i]) {
          for (j = 0; j < 2; j++) {
-            unsigned delta_chroma_weight_l0 = vl_rbsp_se(rbsp);
-            unsigned delta_chroma_offset_l0 = vl_rbsp_se(rbsp);
+            params->delta_chroma_weight_l0[i][j] = vl_rbsp_se(rbsp);
+            params->delta_chroma_offset_l0[i][j] = vl_rbsp_se(rbsp);
 
-            params->chroma_weight_l0[i][j] = (1 << params->chroma_log2_weight_denom) + delta_chroma_weight_l0;
-            params->chroma_offset_l0[i][j] = delta_chroma_offset_l0 -
-               ((128 * params->chroma_weight_l0[i][j]) >> params->chroma_log2_weight_denom) + 128;
+            params->chroma_weight_l0[i][j] =
+               (1 << params->chroma_log2_weight_denom) + params->delta_chroma_weight_l0[i][j];
+            params->chroma_offset_l0[i][j] = CLAMP(params->delta_chroma_offset_l0[i][j] -
+               ((128 * params->chroma_weight_l0[i][j]) >> params->chroma_log2_weight_denom) + 128, -128, 127);
          }
       } else {
          for (j = 0; j < 2; j++) {
@@ -497,19 +498,21 @@ h265_pred_weight_table(struct vk_video_h265_slice_params *params,
 
       for (i = 0; i < params->num_ref_idx_l1_active; ++i) {
          if (params->luma_weight_l1_flag[i]) {
-            unsigned delta_luma_weight_l1 = vl_rbsp_se(rbsp);
-            params->luma_weight_l1[i] = (1 << params->luma_log2_weight_denom) + delta_luma_weight_l1;
+            params->delta_luma_weight_l1[i] = vl_rbsp_se(rbsp);
+            params->luma_weight_l1[i] =
+               (1 << params->luma_log2_weight_denom) + params->delta_luma_weight_l1[i];
             params->luma_offset_l1[i] = vl_rbsp_se(rbsp);
          }
 
          if (params->chroma_weight_l1_flag[i]) {
             for (j = 0; j < 2; j++) {
-               unsigned delta_chroma_weight_l1 = vl_rbsp_se(rbsp);
-               unsigned delta_chroma_offset_l1 = vl_rbsp_se(rbsp);
+               params->delta_chroma_weight_l1[i][j] = vl_rbsp_se(rbsp);
+               params->delta_chroma_offset_l1[i][j] = vl_rbsp_se(rbsp);
 
-               params->chroma_weight_l1[i][j] = (1 << params->chroma_log2_weight_denom) + delta_chroma_weight_l1;
-               params->chroma_offset_l1[i][j] = delta_chroma_offset_l1 -
-                  ((128 * params->chroma_weight_l1[i][j]) >> params->chroma_log2_weight_denom) + 128;
+               params->chroma_weight_l1[i][j] =
+                  (1 << params->chroma_log2_weight_denom) + params->delta_chroma_weight_l1[i][j];
+               params->chroma_offset_l1[i][j] = CLAMP(params->delta_chroma_offset_l1[i][j] -
+                  ((128 * params->chroma_weight_l1[i][j]) >> params->chroma_log2_weight_denom) + 128, -128, 127);
             }
          } else {
             for (j = 0; j < 2; j++) {
@@ -647,35 +650,6 @@ vk_video_parse_h265_slice_header(const struct VkVideoDecodeInfoKHR *frame_info,
             }
          }
 
-         if (sps->flags.long_term_ref_pics_present_flag) {
-            unsigned num_lt_sps = 0;
-
-            if (sps->num_long_term_ref_pics_sps > 0)
-               num_lt_sps = vl_rbsp_ue(&rbsp);
-
-            unsigned num_lt_pics = vl_rbsp_ue(&rbsp);
-            unsigned num_refs = num_lt_pics + num_lt_sps;
-
-            for (unsigned i = 0; i < num_refs; i++) {
-               if (i < num_lt_sps) {
-                  if (sps->num_long_term_ref_pics_sps > 1)
-                     /* lt_idx_sps */
-                     vl_rbsp_u(&rbsp,
-                           util_logbase2_ceil(sps->num_long_term_ref_pics_sps));
-               } else {
-                  /* poc_lsb_lt */
-                  vl_rbsp_u(&rbsp, sps->log2_max_pic_order_cnt_lsb_minus4 + 4);
-                  /* used_by_curr_pic_lt_flag */
-                  vl_rbsp_u(&rbsp, 1);
-               }
-
-               /* poc_msb_present */
-               if (vl_rbsp_u(&rbsp, 1)) {
-                  /* delta_poc_msb_cycle_lt */
-                  vl_rbsp_ue(&rbsp);
-               }
-            }
-         }
       } else {
          unsigned num_st_rps = sps->num_short_term_ref_pic_sets;
 
@@ -685,6 +659,35 @@ vk_video_parse_h265_slice_header(const struct VkVideoDecodeInfoKHR *frame_info,
             vl_rbsp_u(&rbsp, numbits);
       }
 
+      if (sps->flags.long_term_ref_pics_present_flag) {
+         unsigned num_lt_sps = 0;
+
+         if (sps->num_long_term_ref_pics_sps > 0)
+            num_lt_sps = vl_rbsp_ue(&rbsp);
+
+         unsigned num_lt_pics = vl_rbsp_ue(&rbsp);
+         unsigned num_refs = num_lt_pics + num_lt_sps;
+
+         for (unsigned i = 0; i < num_refs; i++) {
+            if (i < num_lt_sps) {
+               if (sps->num_long_term_ref_pics_sps > 1)
+                  /* lt_idx_sps */
+                  vl_rbsp_u(&rbsp,
+                        util_logbase2_ceil(sps->num_long_term_ref_pics_sps));
+            } else {
+               /* poc_lsb_lt */
+               vl_rbsp_u(&rbsp, sps->log2_max_pic_order_cnt_lsb_minus4 + 4);
+               /* used_by_curr_pic_lt_flag */
+               vl_rbsp_u(&rbsp, 1);
+            }
+
+            /* poc_msb_present */
+            if (vl_rbsp_u(&rbsp, 1)) {
+               /* delta_poc_msb_cycle_lt */
+               vl_rbsp_ue(&rbsp);
+            }
+         }
+      }
 
       if (sps->flags.sps_temporal_mvp_enabled_flag)
          params->temporal_mvp_enable = vl_rbsp_u(&rbsp, 1);
@@ -792,7 +795,9 @@ vk_video_parse_h265_slice_header(const struct VkVideoDecodeInfoKHR *frame_info,
       }
    }
 
-   if (pps->flags.pps_loop_filter_across_slices_enabled_flag)
+   if (pps->flags.pps_loop_filter_across_slices_enabled_flag &&
+         (params->sao_luma_flag || params->sao_chroma_flag ||
+          !params->disable_deblocking_filter_idc))
       params->loop_filter_across_slices_enable = vl_rbsp_u(&rbsp, 1);
 
    if (pps->flags.tiles_enabled_flag || pps->flags.entropy_coding_sync_enabled_flag) {
@@ -814,7 +819,8 @@ vk_video_parse_h265_slice_header(const struct VkVideoDecodeInfoKHR *frame_info,
          vl_rbsp_u(&rbsp, 1);
    }
 
-   unsigned header_bits = (slice_size * 8 - 24 /* start code */) - vl_vlc_bits_left(&rbsp.nal);
+   unsigned header_bits =
+      (slice_size * 8 - 24 /* start code */) - vl_vlc_bits_left(&rbsp.nal) - rbsp.removed;
    params->slice_data_bytes_offset = (header_bits + 8) / 8;
 }
 

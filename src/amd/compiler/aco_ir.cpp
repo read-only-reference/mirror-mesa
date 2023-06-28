@@ -98,8 +98,9 @@ init_program(Program* program, Stage stage, const struct aco_shader_info* info,
    program->wave_size = info->wave_size;
    program->lane_mask = program->wave_size == 32 ? s1 : s2;
 
-   program->dev.lds_encoding_granule = gfx_level >= GFX11 && stage == fragment_fs ? 1024 :
-                                       gfx_level >= GFX7 ? 512 : 256;
+   program->dev.lds_encoding_granule = gfx_level >= GFX11 && stage == fragment_fs ? 1024
+                                       : gfx_level >= GFX7                        ? 512
+                                                                                  : 256;
    program->dev.lds_alloc_granule = gfx_level >= GFX10_3 ? 1024 : program->dev.lds_encoding_granule;
 
    /* GFX6: There is 64KB LDS per CU, but a single workgroup can only use 32KB. */
@@ -222,6 +223,17 @@ init_program(Program* program, Stage stage, const struct aco_shader_info* info,
 memory_sync_info
 get_sync_info(const Instruction* instr)
 {
+   /* Primitive Ordered Pixel Shading barriers necessary for accesses to memory shared between
+    * overlapping waves in the queue family.
+    */
+   if (instr->opcode == aco_opcode::p_pops_gfx9_overlapped_wave_wait_done ||
+       (instr->opcode == aco_opcode::s_wait_event &&
+        !(instr->sopp().imm & wait_event_imm_dont_wait_export_ready))) {
+      return memory_sync_info(storage_buffer | storage_image, semantic_acquire, scope_queuefamily);
+   } else if (instr->opcode == aco_opcode::p_pops_gfx9_ordered_section_done) {
+      return memory_sync_info(storage_buffer | storage_image, semantic_release, scope_queuefamily);
+   }
+
    switch (instr->format) {
    case Format::SMEM: return instr->smem().sync;
    case Format::MUBUF: return instr->mubuf().sync;
@@ -849,6 +861,7 @@ needs_exec_mask(const Instruction* instr)
       case aco_opcode::p_logical_end:
       case aco_opcode::p_startpgm:
       case aco_opcode::p_init_scratch: return instr->reads_exec();
+      case aco_opcode::p_start_linear_vgpr: return instr->operands.size();
       default: break;
       }
    }
@@ -1275,6 +1288,9 @@ wait_imm::empty() const
 bool
 should_form_clause(const Instruction* a, const Instruction* b)
 {
+   if (a->definitions.empty() != b->definitions.empty())
+      return false;
+
    if (a->format != b->format)
       return false;
 

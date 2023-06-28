@@ -194,7 +194,7 @@ util_draw_fullscreen_quad(struct cso_context *cso)
       1, -1, 0, 1,   1, 0, 0, 0
    };
    util_set_interleaved_vertex_elements(cso, 2);
-   util_draw_user_vertex_buffer(cso, vertices, PIPE_PRIM_QUADS, 4, 2);
+   util_draw_user_vertex_buffer(cso, vertices, MESA_PRIM_QUADS, 4, 2);
 }
 
 static void
@@ -208,7 +208,7 @@ util_draw_fullscreen_quad_fill(struct cso_context *cso,
       1, -1, 0, 1,   r, g, b, a,
    };
    util_set_interleaved_vertex_elements(cso, 2);
-   util_draw_user_vertex_buffer(cso, vertices, PIPE_PRIM_QUADS, 4, 2);
+   util_draw_user_vertex_buffer(cso, vertices, MESA_PRIM_QUADS, 4, 2);
 }
 
 /**
@@ -334,7 +334,7 @@ tgsi_vs_window_space_position(struct pipe_context *ctx)
 
    /* Fragment shader. */
    fs = util_make_fragment_passthrough_shader(ctx, TGSI_SEMANTIC_GENERIC,
-                                       TGSI_INTERPOLATE_LINEAR, TRUE);
+                                       TGSI_INTERPOLATE_LINEAR, true);
    cso_set_fragment_shader_handle(cso, fs);
 
    /* Vertex shader. */
@@ -349,7 +349,7 @@ tgsi_vs_window_space_position(struct pipe_context *ctx)
         256,   0, 0, 0,   1,  0, 0, 1,
       };
       util_set_interleaved_vertex_elements(cso, 2);
-      util_draw_user_vertex_buffer(cso, vertices, PIPE_PRIM_QUADS, 4, 2);
+      util_draw_user_vertex_buffer(cso, vertices, MESA_PRIM_QUADS, 4, 2);
    }
 
    /* Probe pixels. */
@@ -653,7 +653,7 @@ test_texture_barrier(struct pipe_context *ctx, bool use_fbfetch,
    if (num_samples > 1) {
       void *fs =
          util_make_fragment_passthrough_shader(ctx, TGSI_SEMANTIC_GENERIC,
-                                               TGSI_INTERPOLATE_LINEAR, TRUE);
+                                               TGSI_INTERPOLATE_LINEAR, true);
       cso_set_fragment_shader_handle(cso, fs);
 
       /* Vertex shader. */

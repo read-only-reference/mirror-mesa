@@ -62,13 +62,13 @@ u_surface_default_template(struct pipe_surface *surf,
  * Position and sizes are in pixels.
  */
 void
-util_copy_box(ubyte * dst,
+util_copy_box(uint8_t * dst,
               enum pipe_format format,
-              unsigned dst_stride, unsigned dst_slice_stride,
+              unsigned dst_stride, uint64_t dst_slice_stride,
               unsigned dst_x, unsigned dst_y, unsigned dst_z,
               unsigned width, unsigned height, unsigned depth,
-              const ubyte * src,
-              int src_stride, unsigned src_slice_stride,
+              const uint8_t * src,
+              int src_stride, uint64_t src_slice_stride,
               unsigned src_x, unsigned src_y, unsigned src_z)
 {
    unsigned z;
@@ -91,7 +91,7 @@ util_copy_box(ubyte * dst,
 
 
 void
-util_fill_rect(ubyte * dst,
+util_fill_rect(uint8_t * dst,
                enum pipe_format format,
                unsigned dst_stride,
                unsigned dst_x,
@@ -117,7 +117,7 @@ util_fill_rect(ubyte * dst,
    height = (height + blockheight - 1)/blockheight;
 
    dst += dst_x * blocksize;
-   dst += dst_y * dst_stride;
+   dst += (uint64_t)dst_y * dst_stride;
    width_size = width * blocksize;
 
    switch (blocksize) {
@@ -153,7 +153,7 @@ util_fill_rect(ubyte * dst,
       break;
    default:
       for (i = 0; i < height; i++) {
-         ubyte *row = dst;
+         uint8_t *row = dst;
          for (j = 0; j < width; j++) {
             memcpy(row, uc, blocksize);
             row += blocksize;
@@ -166,10 +166,10 @@ util_fill_rect(ubyte * dst,
 
 
 void
-util_fill_box(ubyte * dst,
+util_fill_box(uint8_t * dst,
               enum pipe_format format,
               unsigned stride,
-              unsigned layer_stride,
+              uintptr_t layer_stride,
               unsigned x,
               unsigned y,
               unsigned z,
@@ -360,7 +360,7 @@ util_resource_copy_region(struct pipe_context *pipe,
 
 static void
 util_clear_color_texture_helper(struct pipe_transfer *dst_trans,
-                                ubyte *dst_map,
+                                uint8_t *dst_map,
                                 enum pipe_format format,
                                 const union pipe_color_union *color,
                                 unsigned width, unsigned height, unsigned depth)
@@ -386,7 +386,7 @@ util_clear_color_texture(struct pipe_context *pipe,
                          unsigned width, unsigned height, unsigned depth)
 {
    struct pipe_transfer *dst_trans;
-   ubyte *dst_map;
+   uint8_t *dst_map;
 
    dst_map = pipe_texture_map_3d(pipe,
                                   texture,
@@ -425,7 +425,7 @@ util_clear_render_target(struct pipe_context *pipe,
                          unsigned width, unsigned height)
 {
    struct pipe_transfer *dst_trans;
-   ubyte *dst_map;
+   uint8_t *dst_map;
 
    assert(dst->texture);
    if (!dst->texture)
@@ -461,7 +461,7 @@ util_clear_render_target(struct pipe_context *pipe,
 }
 
 static void
-util_fill_zs_rect(ubyte *dst_map,
+util_fill_zs_rect(uint8_t *dst_map,
                   enum pipe_format format,
                   bool need_rmw,
                   unsigned clear_flags,
@@ -475,7 +475,7 @@ util_fill_zs_rect(ubyte *dst_map,
    case 1:
       assert(format == PIPE_FORMAT_S8_UINT);
       if(dst_stride == width)
-         memset(dst_map, (uint8_t) zstencil, height * width);
+         memset(dst_map, (uint8_t) zstencil, (uint64_t)height * width);
       else {
          for (i = 0; i < height; i++) {
             memset(dst_map, (uint8_t) zstencil, width);
@@ -551,7 +551,7 @@ util_fill_zs_rect(ubyte *dst_map,
 }
 
 void
-util_fill_zs_box(ubyte *dst,
+util_fill_zs_box(uint8_t *dst,
                  enum pipe_format format,
                  bool need_rmw,
                  unsigned clear_flags,
@@ -581,13 +581,13 @@ util_clear_depth_stencil_texture(struct pipe_context *pipe,
                                  unsigned width, unsigned height, unsigned depth)
 {
    struct pipe_transfer *dst_trans;
-   ubyte *dst_map;
-   boolean need_rmw = FALSE;
+   uint8_t *dst_map;
+   bool need_rmw = false;
 
    if ((clear_flags & PIPE_CLEAR_DEPTHSTENCIL) &&
        ((clear_flags & PIPE_CLEAR_DEPTHSTENCIL) != PIPE_CLEAR_DEPTHSTENCIL) &&
        util_format_is_depth_and_stencil(format))
-      need_rmw = TRUE;
+      need_rmw = true;
 
    dst_map = pipe_texture_map_3d(pipe,
                                   texture,
@@ -690,7 +690,7 @@ util_clear_depth_stencil(struct pipe_context *pipe,
 
 /* Return if the box is totally inside the resource.
  */
-static boolean
+static bool
 is_box_inside_resource(const struct pipe_resource *res,
                        const struct pipe_box *box,
                        unsigned level)
@@ -778,7 +778,7 @@ util_can_blit_via_copy_region(const struct pipe_blit_info *blit,
    if (tight_format_check) {
       /* no format conversions allowed */
       if (blit->src.format != blit->dst.format) {
-         return FALSE;
+         return false;
       }
    }
    else {
@@ -788,7 +788,7 @@ util_can_blit_via_copy_region(const struct pipe_blit_info *blit,
           (blit->src.resource->format != blit->src.format ||
            blit->dst.resource->format != blit->dst.format ||
            !util_is_format_compatible(src_desc, dst_desc))) {
-         return FALSE;
+         return false;
       }
    }
 
@@ -801,7 +801,7 @@ util_can_blit_via_copy_region(const struct pipe_blit_info *blit,
        blit->num_window_rectangles > 0 ||
        blit->alpha_blend ||
        (blit->render_condition_enable && render_condition_bound)) {
-      return FALSE;
+      return false;
    }
 
    /* Only the src box can have negative dims for flipping */
@@ -813,7 +813,7 @@ util_can_blit_via_copy_region(const struct pipe_blit_info *blit,
    if (blit->src.box.width != blit->dst.box.width ||
        blit->src.box.height != blit->dst.box.height ||
        blit->src.box.depth != blit->dst.box.depth) {
-      return FALSE;
+      return false;
    }
 
    /* No out-of-bounds access. */
@@ -821,16 +821,16 @@ util_can_blit_via_copy_region(const struct pipe_blit_info *blit,
                                blit->src.level) ||
        !is_box_inside_resource(blit->dst.resource, &blit->dst.box,
                                blit->dst.level)) {
-      return FALSE;
+      return false;
    }
 
    /* Sample counts must match. */
    if (get_sample_count(blit->src.resource) !=
        get_sample_count(blit->dst.resource)) {
-      return FALSE;
+      return false;
    }
 
-   return TRUE;
+   return true;
 }
 
 
@@ -848,15 +848,15 @@ util_try_blit_via_copy_region(struct pipe_context *ctx,
                               const struct pipe_blit_info *blit,
                               bool render_condition_bound)
 {
-   if (util_can_blit_via_copy_region(blit, FALSE, render_condition_bound)) {
+   if (util_can_blit_via_copy_region(blit, false, render_condition_bound)) {
       ctx->resource_copy_region(ctx, blit->dst.resource, blit->dst.level,
                                 blit->dst.box.x, blit->dst.box.y,
                                 blit->dst.box.z,
                                 blit->src.resource, blit->src.level,
                                 &blit->src.box);
-      return TRUE;
+      return true;
    }
    else {
-      return FALSE;
+      return false;
    }
 }

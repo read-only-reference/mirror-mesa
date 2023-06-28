@@ -59,6 +59,7 @@ gl_nir_opts(nir_shader *nir)
                nir_var_mem_shared,
                NULL);
 
+      NIR_PASS(progress, nir, nir_opt_find_array_copies);
       NIR_PASS(progress, nir, nir_opt_copy_prop_vars);
       NIR_PASS(progress, nir, nir_opt_dead_write_vars);
 
@@ -120,6 +121,8 @@ gl_nir_opts(nir_shader *nir)
          NIR_PASS(progress, nir, nir_opt_loop_unroll);
       }
    } while (progress);
+
+   NIR_PASS_V(nir, nir_lower_var_copies);
 }
 
 static void
@@ -196,15 +199,6 @@ can_remove_uniform(nir_variable *var, UNUSED void *data)
       return false;
 
    return true;
-}
-
-/**
- * Built-in / reserved GL variables names start with "gl_"
- */
-static inline bool
-is_gl_identifier(const char *s)
-{
-   return s && s[0] == 'g' && s[1] == 'l' && s[2] == '_';
 }
 
 static bool
@@ -880,8 +874,8 @@ validate_sampler_array_indexing(const struct gl_constants *consts,
          consts->ShaderCompilerOptions[i].NirOptions->force_indirect_unrolling_sampler;
 
       bool uses_indirect_sampler_array_indexing = false;
-      nir_foreach_function(function, prog->_LinkedShaders[i]->Program->nir) {
-         nir_foreach_block(block, function->impl) {
+      nir_foreach_function_impl(impl, prog->_LinkedShaders[i]->Program->nir) {
+         nir_foreach_block(block, impl) {
             nir_foreach_instr(instr, block) {
                /* Check if a sampler array is accessed indirectly */
                if (instr->type == nir_instr_type_tex) {

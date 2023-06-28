@@ -75,33 +75,6 @@ struct pvr_free_list {
    struct pvr_winsys_free_list *ws_free_list;
 };
 
-/* Macrotile information. */
-struct pvr_rt_mtile_info {
-   uint32_t tile_size_x;
-   uint32_t tile_size_y;
-
-   uint32_t num_tiles_x;
-   uint32_t num_tiles_y;
-
-   uint32_t tiles_per_mtile_x;
-   uint32_t tiles_per_mtile_y;
-
-   uint32_t x_tile_max;
-   uint32_t y_tile_max;
-
-   uint32_t mtiles_x;
-   uint32_t mtiles_y;
-
-   uint32_t mtile_x1;
-   uint32_t mtile_y1;
-   uint32_t mtile_x2;
-   uint32_t mtile_y2;
-   uint32_t mtile_x3;
-   uint32_t mtile_y3;
-
-   uint32_t mtile_stride;
-};
-
 struct pvr_rt_dataset {
    struct pvr_device *device;
 
@@ -310,13 +283,12 @@ static inline void pvr_get_samples_in_xy(uint32_t samples,
    }
 }
 
-static void pvr_rt_mtile_info_init(struct pvr_device *device,
-                                   struct pvr_rt_mtile_info *info,
-                                   uint32_t width,
-                                   uint32_t height,
-                                   uint32_t samples)
+void pvr_rt_mtile_info_init(const struct pvr_device_info *dev_info,
+                            struct pvr_rt_mtile_info *info,
+                            uint32_t width,
+                            uint32_t height,
+                            uint32_t samples)
 {
-   const struct pvr_device_info *dev_info = &device->pdevice->dev_info;
    uint32_t samples_in_x;
    uint32_t samples_in_y;
 
@@ -359,8 +331,6 @@ static void pvr_rt_mtile_info_init(struct pvr_device *device,
 
    info->tiles_per_mtile_x = info->mtile_x1 * samples_in_x;
    info->tiles_per_mtile_y = info->mtile_y1 * samples_in_y;
-
-   info->mtile_stride = info->mtile_x1 * info->mtile_y1;
 }
 
 /* Note that the unit of the return value depends on the GPU. For cores with the
@@ -766,174 +736,6 @@ static void pvr_rt_datas_fini(struct pvr_rt_dataset *rt_dataset)
    pvr_rt_mta_mlist_data_fini(rt_dataset);
 }
 
-static uint32_t
-pvr_rogue_get_cr_isp_mtile_size_val(const struct pvr_device_info *dev_info,
-                                    uint32_t samples,
-                                    const struct pvr_rt_mtile_info *mtile_info)
-{
-   uint32_t samples_per_pixel =
-      PVR_GET_FEATURE_VALUE(dev_info, isp_samples_per_pixel, 0);
-   uint32_t isp_mtile_size;
-
-   pvr_csb_pack (&isp_mtile_size, CR_ISP_MTILE_SIZE, value) {
-      value.x = mtile_info->mtile_x1;
-      value.y = mtile_info->mtile_y1;
-
-      if (samples_per_pixel == 1) {
-         if (samples >= 4)
-            value.x <<= 1;
-
-         if (samples >= 2)
-            value.y <<= 1;
-      } else if (samples_per_pixel == 2) {
-         if (samples >= 8)
-            value.x <<= 1;
-
-         if (samples >= 4)
-            value.y <<= 1;
-      } else if (samples_per_pixel == 4) {
-         if (samples >= 8)
-            value.y <<= 1;
-      } else {
-         assert(!"Unsupported ISP samples per pixel value");
-      }
-   }
-
-   return isp_mtile_size;
-}
-
-static uint64_t pvr_rogue_get_cr_multisamplectl_val(uint32_t samples,
-                                                    bool y_flip)
-{
-   static const struct {
-      uint8_t x[8];
-      uint8_t y[8];
-   } sample_positions[4] = {
-      /* 1 sample */
-      {
-         .x = { 8 },
-         .y = { 8 },
-      },
-      /* 2 samples */
-      {
-         .x = { 12, 4 },
-         .y = { 12, 4 },
-      },
-      /* 4 samples */
-      {
-         .x = { 6, 14, 2, 10 },
-         .y = { 2, 6, 10, 14 },
-      },
-      /* 8 samples */
-      {
-         .x = { 9, 7, 13, 5, 3, 1, 11, 15 },
-         .y = { 5, 11, 9, 3, 13, 7, 15, 1 },
-      },
-   };
-   uint64_t multisamplectl;
-   uint8_t idx;
-
-   idx = util_fast_log2(samples);
-   assert(idx < ARRAY_SIZE(sample_positions));
-
-   pvr_csb_pack (&multisamplectl, CR_PPP_MULTISAMPLECTL, value) {
-      switch (samples) {
-      case 8:
-         value.msaa_x7 = sample_positions[idx].x[7];
-         value.msaa_x6 = sample_positions[idx].x[6];
-         value.msaa_x5 = sample_positions[idx].x[5];
-         value.msaa_x4 = sample_positions[idx].x[4];
-
-         if (y_flip) {
-            value.msaa_y7 = 16U - sample_positions[idx].y[7];
-            value.msaa_y6 = 16U - sample_positions[idx].y[6];
-            value.msaa_y5 = 16U - sample_positions[idx].y[5];
-            value.msaa_y4 = 16U - sample_positions[idx].y[4];
-         } else {
-            value.msaa_y7 = sample_positions[idx].y[7];
-            value.msaa_y6 = sample_positions[idx].y[6];
-            value.msaa_y5 = sample_positions[idx].y[5];
-            value.msaa_y4 = sample_positions[idx].y[4];
-         }
-
-         FALLTHROUGH;
-      case 4:
-         value.msaa_x3 = sample_positions[idx].x[3];
-         value.msaa_x2 = sample_positions[idx].x[2];
-
-         if (y_flip) {
-            value.msaa_y3 = 16U - sample_positions[idx].y[3];
-            value.msaa_y2 = 16U - sample_positions[idx].y[2];
-         } else {
-            value.msaa_y3 = sample_positions[idx].y[3];
-            value.msaa_y2 = sample_positions[idx].y[2];
-         }
-
-         FALLTHROUGH;
-      case 2:
-         value.msaa_x1 = sample_positions[idx].x[1];
-
-         if (y_flip) {
-            value.msaa_y1 = 16U - sample_positions[idx].y[1];
-         } else {
-            value.msaa_y1 = sample_positions[idx].y[1];
-         }
-
-         FALLTHROUGH;
-      case 1:
-         value.msaa_x0 = sample_positions[idx].x[0];
-
-         if (y_flip) {
-            value.msaa_y0 = 16U - sample_positions[idx].y[0];
-         } else {
-            value.msaa_y0 = sample_positions[idx].y[0];
-         }
-
-         break;
-      default:
-         unreachable("Unsupported number of samples");
-      }
-   }
-
-   return multisamplectl;
-}
-
-static uint32_t
-pvr_rogue_get_cr_te_aa_val(const struct pvr_device_info *dev_info,
-                           uint32_t samples)
-{
-   uint32_t samples_per_pixel =
-      PVR_GET_FEATURE_VALUE(dev_info, isp_samples_per_pixel, 0);
-   uint32_t te_aa;
-
-   pvr_csb_pack (&te_aa, CR_TE_AA, value) {
-      if (samples_per_pixel == 1) {
-         if (samples >= 2)
-            value.y = true;
-         if (samples >= 4)
-            value.x = true;
-      } else if (samples_per_pixel == 2) {
-         if (samples >= 2)
-            value.x2 = true;
-         if (samples >= 4)
-            value.y = true;
-         if (samples >= 8)
-            value.x = true;
-      } else if (samples_per_pixel == 4) {
-         if (samples >= 2)
-            value.x2 = true;
-         if (samples >= 4)
-            value.y2 = true;
-         if (samples >= 8)
-            value.y = true;
-      } else {
-         assert(!"Unsupported ISP samples per pixel value");
-      }
-   }
-
-   return te_aa;
-}
-
 static void pvr_rt_dataset_ws_create_info_init(
    struct pvr_rt_dataset *rt_dataset,
    const struct pvr_rt_mtile_info *mtile_info,
@@ -946,6 +748,11 @@ static void pvr_rt_dataset_ws_create_info_init(
 
    /* Local freelist. */
    create_info->local_free_list = rt_dataset->local_free_list->ws_free_list;
+
+   create_info->width = rt_dataset->width;
+   create_info->height = rt_dataset->height;
+   create_info->samples = rt_dataset->samples;
+   create_info->layers = rt_dataset->layers;
 
    /* ISP register values. */
    if (PVR_HAS_ERN(dev_info, 42307) &&
@@ -983,47 +790,6 @@ static void pvr_rt_dataset_ws_create_info_init(
       create_info->isp_merge_scale_y = fui(value);
    }
 
-   create_info->isp_mtile_size =
-      pvr_rogue_get_cr_isp_mtile_size_val(dev_info,
-                                          rt_dataset->samples,
-                                          mtile_info);
-
-   /* PPP register values. */
-   create_info->ppp_multi_sample_ctl =
-      pvr_rogue_get_cr_multisamplectl_val(rt_dataset->samples, false);
-   create_info->ppp_multi_sample_ctl_y_flipped =
-      pvr_rogue_get_cr_multisamplectl_val(rt_dataset->samples, true);
-
-   pvr_csb_pack (&create_info->ppp_screen, CR_PPP_SCREEN, value) {
-      value.pixxmax = rt_dataset->width - 1;
-      value.pixymax = rt_dataset->height - 1;
-   }
-
-   /* TE register values. */
-   create_info->te_aa =
-      pvr_rogue_get_cr_te_aa_val(dev_info, rt_dataset->samples);
-
-   pvr_csb_pack (&create_info->te_mtile1, CR_TE_MTILE1, value) {
-      value.x1 = mtile_info->mtile_x1;
-      if (!PVR_HAS_FEATURE(dev_info, simple_internal_parameter_format)) {
-         value.x2 = mtile_info->mtile_x2;
-         value.x3 = mtile_info->mtile_x3;
-      }
-   }
-
-   pvr_csb_pack (&create_info->te_mtile2, CR_TE_MTILE2, value) {
-      value.y1 = mtile_info->mtile_y1;
-      if (!PVR_HAS_FEATURE(dev_info, simple_internal_parameter_format)) {
-         value.y2 = mtile_info->mtile_y2;
-         value.y3 = mtile_info->mtile_y3;
-      }
-   }
-
-   pvr_csb_pack (&create_info->te_screen, CR_TE_SCREEN, value) {
-      value.xmax = mtile_info->x_tile_max;
-      value.ymax = mtile_info->y_tile_max;
-   }
-
    /* Allocations and associated information. */
    create_info->vheap_table_dev_addr = rt_dataset->vheap_dev_addr;
    create_info->rtc_dev_addr = rt_dataset->rtc_dev_addr;
@@ -1045,10 +811,6 @@ static void pvr_rt_dataset_ws_create_info_init(
 
    create_info->rgn_header_size =
       pvr_rt_get_isp_region_size(device, mtile_info);
-
-   /* Miscellaneous. */
-   create_info->mtile_stride = mtile_info->mtile_stride;
-   create_info->max_rts = rt_dataset->layers;
 }
 
 VkResult
@@ -1072,7 +834,7 @@ pvr_render_target_dataset_create(struct pvr_device *device,
    assert(height <= rogue_get_render_size_max_y(dev_info));
    assert(layers > 0 && layers <= PVR_MAX_FRAMEBUFFER_LAYERS);
 
-   pvr_rt_mtile_info_init(device, &mtile_info, width, height, samples);
+   pvr_rt_mtile_info_init(dev_info, &mtile_info, width, height, samples);
 
    rt_dataset = vk_zalloc(&device->vk.alloc,
                           sizeof(*rt_dataset),
@@ -1130,6 +892,7 @@ pvr_render_target_dataset_create(struct pvr_device *device,
    result =
       device->ws->ops->render_target_dataset_create(device->ws,
                                                     &rt_dataset_create_info,
+                                                    dev_info,
                                                     &rt_dataset->ws_rt_dataset);
    if (result != VK_SUCCESS)
       goto err_pvr_rt_datas_fini;
@@ -1175,9 +938,14 @@ static void pvr_geom_state_stream_init(struct pvr_render_ctx *ctx,
                                        struct pvr_render_job *job,
                                        struct pvr_winsys_geometry_state *state)
 {
-   const struct pvr_device_info *dev_info = &ctx->device->pdevice->dev_info;
+   const struct pvr_device *const device = ctx->device;
+   const struct pvr_device_info *const dev_info = &device->pdevice->dev_info;
 
    uint32_t *stream_ptr = (uint32_t *)state->fw_stream;
+   uint32_t *stream_len_ptr = stream_ptr;
+
+   /* Leave space for stream header. */
+   stream_ptr += pvr_cmd_length(KMD_STREAM_HDR);
 
    pvr_csb_pack ((uint64_t *)stream_ptr, CR_VDM_CTRL_STREAM_BASE, value) {
       value.addr = job->ctrl_stream_addr;
@@ -1187,7 +955,8 @@ static void pvr_geom_state_stream_init(struct pvr_render_ctx *ctx,
    pvr_csb_pack ((uint64_t *)stream_ptr,
                  CR_TPU_BORDER_COLOUR_TABLE_VDM,
                  value) {
-      value.border_colour_table_address = job->border_colour_table_addr;
+      value.border_colour_table_address =
+         device->border_color_table.table->vma->dev_addr;
    }
    stream_ptr += pvr_cmd_length(CR_TPU_BORDER_COLOUR_TABLE_VDM);
 
@@ -1225,8 +994,12 @@ static void pvr_geom_state_stream_init(struct pvr_render_ctx *ctx,
    *stream_ptr = 0;
    stream_ptr++;
 
-   state->fw_stream_len = (uint8_t *)stream_ptr - state->fw_stream;
+   state->fw_stream_len = (uint8_t *)stream_ptr - (uint8_t *)state->fw_stream;
    assert(state->fw_stream_len <= ARRAY_SIZE(state->fw_stream));
+
+   pvr_csb_pack ((uint64_t *)stream_len_ptr, KMD_STREAM_HDR, value) {
+      value.length = state->fw_stream_len;
+   }
 }
 
 static void
@@ -1236,13 +1009,16 @@ pvr_geom_state_stream_ext_init(struct pvr_render_ctx *ctx,
 {
    const struct pvr_device_info *dev_info = &ctx->device->pdevice->dev_info;
 
-   uint32_t *ext_stream_ptr = (uint32_t *)state->fw_ext_stream;
+   uint32_t main_stream_len =
+      pvr_csb_unpack((uint64_t *)state->fw_stream, KMD_STREAM_HDR).length;
+   uint32_t *ext_stream_ptr =
+      (uint32_t *)((uint8_t *)state->fw_stream + main_stream_len);
    uint32_t *header0_ptr;
 
    header0_ptr = ext_stream_ptr;
-   ext_stream_ptr += pvr_cmd_length(FW_STREAM_EXTHDR_GEOM0);
+   ext_stream_ptr += pvr_cmd_length(KMD_STREAM_EXTHDR_GEOM0);
 
-   pvr_csb_pack (header0_ptr, FW_STREAM_EXTHDR_GEOM0, header0) {
+   pvr_csb_pack (header0_ptr, KMD_STREAM_EXTHDR_GEOM0, header0) {
       if (PVR_HAS_QUIRK(dev_info, 49927)) {
          header0.has_brn49927 = true;
 
@@ -1256,26 +1032,22 @@ pvr_geom_state_stream_ext_init(struct pvr_render_ctx *ctx,
       }
    }
 
-   state->fw_ext_stream_len = (uint8_t *)ext_stream_ptr - state->fw_ext_stream;
-   assert(state->fw_ext_stream_len <= ARRAY_SIZE(state->fw_ext_stream));
-
-   if ((*header0_ptr & PVRX(FW_STREAM_EXTHDR_DATA_MASK)) == 0)
-      state->fw_ext_stream_len = 0;
+   if ((*header0_ptr & PVRX(KMD_STREAM_EXTHDR_DATA_MASK)) != 0) {
+      state->fw_stream_len =
+         (uint8_t *)ext_stream_ptr - (uint8_t *)state->fw_stream;
+      assert(state->fw_stream_len <= ARRAY_SIZE(state->fw_stream));
+   }
 }
 
-static void pvr_geom_state_flags_init(const struct pvr_render_job *const job,
-                                      uint32_t *const flags)
+static void
+pvr_geom_state_flags_init(const struct pvr_render_job *const job,
+                          struct pvr_winsys_geometry_state_flags *flags)
 {
-   *flags = 0;
-
-   if (!job->rt_dataset->need_frag)
-      *flags |= PVR_WINSYS_GEOM_FLAG_FIRST_GEOMETRY;
-
-   if (job->geometry_terminate)
-      *flags |= PVR_WINSYS_GEOM_FLAG_LAST_GEOMETRY;
-
-   if (job->frag_uses_atomic_ops)
-      *flags |= PVR_WINSYS_GEOM_FLAG_SINGLE_CORE;
+   *flags = (struct pvr_winsys_geometry_state_flags){
+      .is_first_geometry = !job->rt_dataset->need_frag,
+      .is_last_geometry = job->geometry_terminate,
+      .use_single_core = job->frag_uses_atomic_ops,
+   };
 }
 
 static void
@@ -1291,73 +1063,26 @@ pvr_render_job_ws_geometry_state_init(struct pvr_render_ctx *ctx,
    pvr_geom_state_flags_init(job, &state->flags);
 }
 
-static inline void
-pvr_get_isp_num_tiles_xy(const struct pvr_device_info *dev_info,
-                         uint32_t samples,
-                         uint32_t width,
-                         uint32_t height,
-                         uint32_t *const x_out,
-                         uint32_t *const y_out)
-{
-   uint32_t tile_samples_x;
-   uint32_t tile_samples_y;
-   uint32_t scale_x;
-   uint32_t scale_y;
-
-   rogue_get_isp_samples_per_tile_xy(dev_info,
-                                     samples,
-                                     &tile_samples_x,
-                                     &tile_samples_y);
-
-   switch (samples) {
-   case 1:
-      scale_x = 1;
-      scale_y = 1;
-      break;
-   case 2:
-      scale_x = 1;
-      scale_y = 2;
-      break;
-   case 4:
-      scale_x = 2;
-      scale_y = 2;
-      break;
-   case 8:
-      scale_x = 2;
-      scale_y = 4;
-      break;
-   default:
-      unreachable("Unsupported number of samples");
-   }
-
-   *x_out = DIV_ROUND_UP(width * scale_x, tile_samples_x);
-   *y_out = DIV_ROUND_UP(height * scale_y, tile_samples_y);
-
-   if (PVR_HAS_FEATURE(dev_info, simple_internal_parameter_format)) {
-      assert(PVR_GET_FEATURE_VALUE(dev_info,
-                                   simple_parameter_format_version,
-                                   0U) == 2U);
-      /* Align to a 2x2 tile block. */
-      *x_out = ALIGN_POT(*x_out, 2);
-      *y_out = ALIGN_POT(*y_out, 2);
-   }
-}
-
 static void pvr_frag_state_stream_init(struct pvr_render_ctx *ctx,
                                        struct pvr_render_job *job,
                                        struct pvr_winsys_fragment_state *state)
 {
-   const struct pvr_physical_device *const pdevice = ctx->device->pdevice;
+   const struct pvr_device *const device = ctx->device;
+   const struct pvr_physical_device *const pdevice = device->pdevice;
    const struct pvr_device_runtime_info *dev_runtime_info =
       &pdevice->dev_runtime_info;
    const struct pvr_device_info *dev_info = &pdevice->dev_info;
    const enum PVRX(CR_ISP_AA_MODE_TYPE)
       isp_aa_mode = pvr_cr_isp_aa_mode_type(job->samples);
 
+   enum PVRX(CR_ZLS_FORMAT_TYPE) zload_format = PVRX(CR_ZLS_FORMAT_TYPE_F32Z);
    uint32_t *stream_ptr = (uint32_t *)state->fw_stream;
-   enum PVRX(CR_ZLOADFORMAT_TYPE) zload_format;
+   uint32_t *stream_len_ptr = stream_ptr;
    uint32_t pixel_ctl;
    uint32_t isp_ctl;
+
+   /* Leave space for stream header. */
+   stream_ptr += pvr_cmd_length(KMD_STREAM_HDR);
 
    /* FIXME: pass in the number of samples rather than isp_aa_mode? */
    pvr_setup_tiles_in_flight(dev_info,
@@ -1391,64 +1116,52 @@ static void pvr_frag_state_stream_init(struct pvr_render_ctx *ctx,
    stream_ptr += pvr_cmd_length(CR_ISP_OCLQRY_BASE);
 
    pvr_csb_pack ((uint64_t *)stream_ptr, CR_ISP_ZLSCTL, value) {
-      if (job->has_depth_attachment) {
-         uint32_t aligned_width =
-            ALIGN_POT(job->ds.physical_width, ROGUE_IPF_TILE_SIZE_PIXELS);
-         uint32_t aligned_height =
-            ALIGN_POT(job->ds.physical_height, ROGUE_IPF_TILE_SIZE_PIXELS);
+      if (job->has_depth_attachment || job->has_stencil_attachment) {
+         uint32_t alignment_x;
+         uint32_t alignment_y;
 
-         pvr_get_isp_num_tiles_xy(dev_info,
-                                  job->samples,
-                                  aligned_width,
-                                  aligned_height,
-                                  &value.zlsextent_x_z,
-                                  &value.zlsextent_y_z);
+         if (job->ds.has_alignment_transfers) {
+            rogue_get_zls_tile_size_xy(dev_info, &alignment_x, &alignment_y);
+         } else {
+            alignment_x = ROGUE_IPF_TILE_SIZE_PIXELS;
+            alignment_y = ROGUE_IPF_TILE_SIZE_PIXELS;
+         }
+
+         rogue_get_isp_num_tiles_xy(
+            dev_info,
+            job->samples,
+            ALIGN_POT(job->ds.physical_extent.width, alignment_x),
+            ALIGN_POT(job->ds.physical_extent.height, alignment_y),
+            &value.zlsextent_x_z,
+            &value.zlsextent_y_z);
+
          value.zlsextent_x_z -= 1;
          value.zlsextent_y_z -= 1;
 
-         if (job->ds.memlayout == PVR_MEMLAYOUT_TWIDDLED) {
+         if (job->ds.memlayout == PVR_MEMLAYOUT_TWIDDLED &&
+             !job->ds.has_alignment_transfers) {
             value.loadtwiddled = true;
             value.storetwiddled = true;
          }
 
-         switch (job->ds.vk_format) {
-         case VK_FORMAT_D16_UNORM:
-            value.zloadformat = PVRX(CR_ZLOADFORMAT_TYPE_16BITINT);
-            value.zstoreformat = PVRX(CR_ZSTOREFORMAT_TYPE_16BITINT);
-            break;
-
-         case VK_FORMAT_D32_SFLOAT:
-            value.zloadformat = PVRX(CR_ZLOADFORMAT_TYPE_F32Z);
-            value.zstoreformat = PVRX(CR_ZSTOREFORMAT_TYPE_F32Z);
-            break;
-
-         case VK_FORMAT_D24_UNORM_S8_UINT:
-            value.zloadformat = PVRX(CR_ZLOADFORMAT_TYPE_24BITINT);
-            value.zstoreformat = PVRX(CR_ZSTOREFORMAT_TYPE_24BITINT);
-            break;
-
-         default:
-            unreachable("Unsupported depth format");
-         }
-
-         value.zloaden = job->ds.load;
-         value.forcezload = job->ds.load;
-
-         value.zstoreen = job->ds.store;
-         value.forcezstore = job->ds.store;
+         value.zloadformat = job->ds.zls_format;
+         value.zstoreformat = job->ds.zls_format;
 
          zload_format = value.zloadformat;
-      } else {
-         zload_format = PVRX(CR_ZLOADFORMAT_TYPE_F32Z);
+      }
+
+      if (job->has_depth_attachment) {
+         value.zloaden = job->ds.load.d;
+         value.zstoreen = job->ds.store.d;
       }
 
       if (job->has_stencil_attachment) {
-         value.sstoreen = job->ds.store;
-         value.forcezstore = job->ds.store;
-
-         value.sloaden = job->ds.load;
-         value.forcezload = job->ds.load;
+         value.sloaden = job->ds.load.s;
+         value.sstoreen = job->ds.store.s;
       }
+
+      value.forcezload = value.zloaden || value.sloaden;
+      value.forcezstore = value.zstoreen || value.sstoreen;
    }
    stream_ptr += pvr_cmd_length(CR_ISP_ZLSCTL);
 
@@ -1466,14 +1179,22 @@ static void pvr_frag_state_stream_init(struct pvr_render_ctx *ctx,
           * in CR_ISP_STENCIL_LOAD_BASE does not contain a depth component.
           */
          assert(job->has_depth_attachment ||
-                job->ds.vk_format == VK_FORMAT_S8_UINT);
+                !pvr_zls_format_type_is_packed(job->ds.zls_format));
          value.enable = !job->has_depth_attachment;
       }
    }
    stream_ptr += pvr_cmd_length(CR_ISP_STENCIL_LOAD_BASE);
 
-   *(uint64_t *)stream_ptr = 0;
-   stream_ptr += 2U;
+   if (PVR_HAS_FEATURE(dev_info, requires_fb_cdc_zls_setup)) {
+      /* Currently no support for FBC, so just go ahead and set the default
+       * values.
+       */
+      pvr_csb_pack ((uint64_t *)stream_ptr, CR_FB_CDC_ZLS, value) {
+         value.fbdc_depth_fmt = PVRX(TEXSTATE_FORMAT_F32);
+         value.fbdc_stencil_fmt = PVRX(TEXSTATE_FORMAT_U8);
+      }
+      stream_ptr += pvr_cmd_length(CR_FB_CDC_ZLS);
+   }
 
    STATIC_ASSERT(ARRAY_SIZE(job->pbe_reg_words) == 8U);
    STATIC_ASSERT(ARRAY_SIZE(job->pbe_reg_words[0]) == 3U);
@@ -1484,7 +1205,8 @@ static void pvr_frag_state_stream_init(struct pvr_render_ctx *ctx,
    pvr_csb_pack ((uint64_t *)stream_ptr,
                  CR_TPU_BORDER_COLOUR_TABLE_PDM,
                  value) {
-      value.border_colour_table_address = job->border_colour_table_addr;
+      value.border_colour_table_address =
+         device->border_color_table.table->vma->dev_addr;
    }
    stream_ptr += pvr_cmd_length(CR_TPU_BORDER_COLOUR_TABLE_PDM);
 
@@ -1517,15 +1239,15 @@ static void pvr_frag_state_stream_init(struct pvr_render_ctx *ctx,
        *  - job->depth_clear_value is set to a sensible default in that case.
        */
       switch (zload_format) {
-      case PVRX(CR_ZLOADFORMAT_TYPE_F32Z):
+      case PVRX(CR_ZLS_FORMAT_TYPE_F32Z):
          value.value = fui(depth_clear);
          break;
 
-      case PVRX(CR_ZLOADFORMAT_TYPE_16BITINT):
+      case PVRX(CR_ZLS_FORMAT_TYPE_16BITINT):
          value.value = _mesa_float_to_unorm(depth_clear, 16);
          break;
 
-      case PVRX(CR_ZLOADFORMAT_TYPE_24BITINT):
+      case PVRX(CR_ZLS_FORMAT_TYPE_24BITINT):
          value.value = _mesa_float_to_unorm(depth_clear, 24);
          break;
 
@@ -1539,11 +1261,6 @@ static void pvr_frag_state_stream_init(struct pvr_render_ctx *ctx,
       value.enablebgtag = job->enable_bg_tag;
 
       value.mask = true;
-
-      if (job->has_stencil_attachment &&
-          job->ds.vk_format != VK_FORMAT_D24_UNORM_S8_UINT) {
-         unreachable("Unsupported stencil format");
-      }
 
       value.stencil = job->ds_clear_value.stencil & 0xFF;
    }
@@ -1563,8 +1280,7 @@ static void pvr_frag_state_stream_init(struct pvr_render_ctx *ctx,
        * bias factor of 1.0 equates to 1 ULP of increase to the depth value.
        */
       value.dbias_is_int = PVR_HAS_ERN(dev_info, 42307) &&
-                           (job->ds.vk_format == VK_FORMAT_D16_UNORM ||
-                            job->ds.vk_format == VK_FORMAT_D24_UNORM_S8_UINT);
+                           pvr_zls_format_type_is_int(job->ds.zls_format);
    }
    /* FIXME: When pvr_setup_tiles_in_flight() is refactored it might be
     * possible to fully pack CR_ISP_CTL above rather than having to OR in part
@@ -1622,8 +1338,13 @@ static void pvr_frag_state_stream_init(struct pvr_render_ctx *ctx,
    if (PVR_HAS_FEATURE(dev_info, zls_subtile)) {
       pvr_csb_pack (stream_ptr, CR_ISP_ZLS_PIXELS, value) {
          if (job->has_depth_attachment) {
-            value.x = job->ds.stride - 1;
-            value.y = job->ds.height - 1;
+            if (job->ds.has_alignment_transfers) {
+               value.x = job->ds.physical_extent.width - 1;
+               value.y = job->ds.physical_extent.height - 1;
+            } else {
+               value.x = job->ds.stride - 1;
+               value.y = job->ds.height - 1;
+            }
          }
       }
       stream_ptr += pvr_cmd_length(CR_ISP_ZLS_PIXELS);
@@ -1644,8 +1365,12 @@ static void pvr_frag_state_stream_init(struct pvr_render_ctx *ctx,
       stream_ptr++;
    }
 
-   state->fw_stream_len = (uint8_t *)stream_ptr - state->fw_stream;
+   state->fw_stream_len = (uint8_t *)stream_ptr - (uint8_t *)state->fw_stream;
    assert(state->fw_stream_len <= ARRAY_SIZE(state->fw_stream));
+
+   pvr_csb_pack ((uint64_t *)stream_len_ptr, KMD_STREAM_HDR, value) {
+      value.length = state->fw_stream_len;
+   }
 }
 
 static void
@@ -1655,13 +1380,16 @@ pvr_frag_state_stream_ext_init(struct pvr_render_ctx *ctx,
 {
    const struct pvr_device_info *dev_info = &ctx->device->pdevice->dev_info;
 
-   uint32_t *ext_stream_ptr = (uint32_t *)state->fw_ext_stream;
+   uint32_t main_stream_len =
+      pvr_csb_unpack((uint64_t *)state->fw_stream, KMD_STREAM_HDR).length;
+   uint32_t *ext_stream_ptr =
+      (uint32_t *)((uint8_t *)state->fw_stream + main_stream_len);
    uint32_t *header0_ptr;
 
    header0_ptr = ext_stream_ptr;
-   ext_stream_ptr += pvr_cmd_length(FW_STREAM_EXTHDR_FRAG0);
+   ext_stream_ptr += pvr_cmd_length(KMD_STREAM_EXTHDR_FRAG0);
 
-   pvr_csb_pack (header0_ptr, FW_STREAM_EXTHDR_FRAG0, header0) {
+   pvr_csb_pack (header0_ptr, KMD_STREAM_EXTHDR_FRAG0, header0) {
       if (PVR_HAS_QUIRK(dev_info, 49927)) {
          header0.has_brn49927 = true;
 
@@ -1675,35 +1403,25 @@ pvr_frag_state_stream_ext_init(struct pvr_render_ctx *ctx,
       }
    }
 
-   state->fw_ext_stream_len = (uint8_t *)ext_stream_ptr - state->fw_ext_stream;
-   assert(state->fw_ext_stream_len <= ARRAY_SIZE(state->fw_ext_stream));
-
-   if ((*header0_ptr & PVRX(FW_STREAM_EXTHDR_DATA_MASK)) == 0)
-      state->fw_ext_stream_len = 0;
+   if ((*header0_ptr & PVRX(KMD_STREAM_EXTHDR_DATA_MASK)) != 0) {
+      state->fw_stream_len =
+         (uint8_t *)ext_stream_ptr - (uint8_t *)state->fw_stream;
+      assert(state->fw_stream_len <= ARRAY_SIZE(state->fw_stream));
+   }
 }
 
-static void pvr_frag_state_flags_init(const struct pvr_render_job *const job,
-                                      uint32_t *const flags)
+static void
+pvr_frag_state_flags_init(const struct pvr_render_job *const job,
+                          struct pvr_winsys_fragment_state_flags *flags)
 {
-   *flags = 0;
-
-   if (job->has_depth_attachment)
-      *flags |= PVR_WINSYS_FRAG_FLAG_DEPTH_BUFFER_PRESENT;
-
-   if (job->has_stencil_attachment)
-      *flags |= PVR_WINSYS_FRAG_FLAG_STENCIL_BUFFER_PRESENT;
-
-   if (job->disable_compute_overlap)
-      *flags |= PVR_WINSYS_FRAG_FLAG_PREVENT_CDM_OVERLAP;
-
-   if (job->frag_uses_atomic_ops)
-      *flags |= PVR_WINSYS_FRAG_FLAG_SINGLE_CORE;
-
-   if (job->get_vis_results)
-      *flags |= PVR_WINSYS_FRAG_FLAG_GET_VIS_RESULTS;
-
-   if (job->requires_spm_scratch_buffer)
-      *flags |= PVR_WINSYS_FRAG_FLAG_SPMSCRATCHBUFFER;
+   *flags = (struct pvr_winsys_fragment_state_flags){
+      .has_depth_buffer = job->has_depth_attachment,
+      .has_stencil_buffer = job->has_stencil_attachment,
+      .prevent_cdm_overlap = job->disable_compute_overlap,
+      .use_single_core = job->frag_uses_atomic_ops,
+      .get_vis_results = job->get_vis_results,
+      .has_spm_scratch_buffer = job->requires_spm_scratch_buffer,
+   };
 }
 
 static void

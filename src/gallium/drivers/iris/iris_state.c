@@ -184,27 +184,27 @@ UNUSED static void pipe_asserts()
 }
 
 static unsigned
-translate_prim_type(enum pipe_prim_type prim, uint8_t verts_per_patch)
+translate_prim_type(enum mesa_prim prim, uint8_t verts_per_patch)
 {
    static const unsigned map[] = {
-      [PIPE_PRIM_POINTS]                   = _3DPRIM_POINTLIST,
-      [PIPE_PRIM_LINES]                    = _3DPRIM_LINELIST,
-      [PIPE_PRIM_LINE_LOOP]                = _3DPRIM_LINELOOP,
-      [PIPE_PRIM_LINE_STRIP]               = _3DPRIM_LINESTRIP,
-      [PIPE_PRIM_TRIANGLES]                = _3DPRIM_TRILIST,
-      [PIPE_PRIM_TRIANGLE_STRIP]           = _3DPRIM_TRISTRIP,
-      [PIPE_PRIM_TRIANGLE_FAN]             = _3DPRIM_TRIFAN,
-      [PIPE_PRIM_QUADS]                    = _3DPRIM_QUADLIST,
-      [PIPE_PRIM_QUAD_STRIP]               = _3DPRIM_QUADSTRIP,
-      [PIPE_PRIM_POLYGON]                  = _3DPRIM_POLYGON,
-      [PIPE_PRIM_LINES_ADJACENCY]          = _3DPRIM_LINELIST_ADJ,
-      [PIPE_PRIM_LINE_STRIP_ADJACENCY]     = _3DPRIM_LINESTRIP_ADJ,
-      [PIPE_PRIM_TRIANGLES_ADJACENCY]      = _3DPRIM_TRILIST_ADJ,
-      [PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY] = _3DPRIM_TRISTRIP_ADJ,
-      [PIPE_PRIM_PATCHES]                  = _3DPRIM_PATCHLIST_1 - 1,
+      [MESA_PRIM_POINTS]                   = _3DPRIM_POINTLIST,
+      [MESA_PRIM_LINES]                    = _3DPRIM_LINELIST,
+      [MESA_PRIM_LINE_LOOP]                = _3DPRIM_LINELOOP,
+      [MESA_PRIM_LINE_STRIP]               = _3DPRIM_LINESTRIP,
+      [MESA_PRIM_TRIANGLES]                = _3DPRIM_TRILIST,
+      [MESA_PRIM_TRIANGLE_STRIP]           = _3DPRIM_TRISTRIP,
+      [MESA_PRIM_TRIANGLE_FAN]             = _3DPRIM_TRIFAN,
+      [MESA_PRIM_QUADS]                    = _3DPRIM_QUADLIST,
+      [MESA_PRIM_QUAD_STRIP]               = _3DPRIM_QUADSTRIP,
+      [MESA_PRIM_POLYGON]                  = _3DPRIM_POLYGON,
+      [MESA_PRIM_LINES_ADJACENCY]          = _3DPRIM_LINELIST_ADJ,
+      [MESA_PRIM_LINE_STRIP_ADJACENCY]     = _3DPRIM_LINESTRIP_ADJ,
+      [MESA_PRIM_TRIANGLES_ADJACENCY]      = _3DPRIM_TRILIST_ADJ,
+      [MESA_PRIM_TRIANGLE_STRIP_ADJACENCY] = _3DPRIM_TRISTRIP_ADJ,
+      [MESA_PRIM_PATCHES]                  = _3DPRIM_PATCHLIST_1 - 1,
    };
 
-   return map[prim] + (prim == PIPE_PRIM_PATCHES ? verts_per_patch : 0);
+   return map[prim] + (prim == MESA_PRIM_PATCHES ? verts_per_patch : 0);
 }
 
 static unsigned
@@ -1078,6 +1078,7 @@ init_aux_map_state(struct iris_batch *batch);
 static void
 iris_disable_rhwo_optimization(struct iris_batch *batch, bool disable)
 {
+   assert(batch->screen->devinfo->verx10 == 120);
 #if GFX_VERx10 == 120
    iris_emit_reg(batch, GENX(COMMON_SLICE_CHICKEN1), c1) {
       c1.RCCRHWOOptimizationDisable = disable;
@@ -1121,6 +1122,21 @@ iris_init_common_context(struct iris_batch *batch)
 #define IRIS_BT_OFFSET_SHIFT 3
 #else
 #define IRIS_BT_OFFSET_SHIFT 0
+#endif
+
+#if GFX_VERx10 == 125
+   /* Even though L3 partial write merging is supposed to be enabled
+    * by default on Gfx12.5 according to the hardware spec, i915
+    * appears to accidentally clear the enables during context
+    * initialization, so make sure to enable them here since partial
+    * write merging has a large impact on rendering performance.
+    */
+   iris_emit_reg(batch, GENX(L3SQCREG5), reg) {
+      reg.L3CachePartialWriteMergeTimerInitialValue = 0x7f;
+      reg.CompressiblePartialWriteMergeEnable = true;
+      reg.CoherentPartialWriteMergeEnable = true;
+      reg.CrossTilePartialWriteMergeEnable = true;
+   }
 #endif
 }
 
@@ -1228,8 +1244,37 @@ iris_init_render_context(struct iris_batch *batch)
    }
 #endif
 
-#if GFX_VERx10 == 120
-   /* Wa_1508744258
+#if GFX_VER == 12
+   iris_emit_reg(batch, GENX(FF_MODE2), reg) {
+      /* On Alchemist, the FF_MODE2 docs for the GS timer say:
+       *
+       *    "The timer value must be set to 224."
+       *
+       * and Wa_16011163337 indicates this is the case for all Gfx12 parts,
+       * and that this is necessary to avoid hanging the HS/DS units.  It
+       * also clarifies that 224 is literally 0xE0 in the bits, not 7*32=224.
+       *
+       * The HS timer docs also have the same quote for Alchemist.  I am
+       * unaware of a reason it needs to be set to 224 on Tigerlake, but
+       * we do so for consistency if nothing else.
+       *
+       * For the TDS timer value, the docs say:
+       *
+       *    "For best performance, a value of 4 should be programmed."
+       *
+       * i915 also sets it this way on Tigerlake due to workarounds.
+       *
+       * The default VS timer appears to be 0, so we leave it at that.
+       */
+      reg.GSTimerValue  = 224;
+      reg.HSTimerValue  = 224;
+      reg.TDSTimerValue = 4;
+      reg.VSTimerValue  = 0;
+   }
+#endif
+
+#if INTEL_NEEDS_WORKAROUND_1508744258
+   /* The suggested workaround is:
     *
     *    Disable RHWO by setting 0x7010[14] by default except during resolve
     *    pass.
@@ -1244,7 +1289,9 @@ iris_init_render_context(struct iris_batch *batch)
     * field in the 3DSTATE_PS instruction).
     */
    iris_disable_rhwo_optimization(batch, true);
+#endif
 
+#if GFX_VERx10 == 120
    /* Wa_1806527549 says to disable the following HiZ optimization when the
     * depth buffer is D16_UNORM. We've found the WA to help with more depth
     * buffer configurations however, so we always disable it just to be safe.
@@ -1360,7 +1407,7 @@ struct iris_depth_buffer_state {
                     GENX(3DSTATE_CLEAR_PARAMS_length)];
 };
 
-#if GFX_VERx10 == 120
+#if INTEL_NEEDS_WA_1808121037
 enum iris_depth_reg_mode {
    IRIS_DEPTH_REG_MODE_HW_DEFAULT = 0,
    IRIS_DEPTH_REG_MODE_D16_1X_MSAA,
@@ -1389,7 +1436,7 @@ struct iris_genx_state {
    /* Is object level preemption enabled? */
    bool object_preemption;
 
-#if GFX_VERx10 == 120
+#if INTEL_NEEDS_WA_1808121037
    enum iris_depth_reg_mode depth_reg_mode;
 #endif
 
@@ -2736,7 +2783,7 @@ iris_create_sampler_view(struct pipe_context *ctx,
 
    if ((isv->res->aux.usage == ISL_AUX_USAGE_CCS_D ||
         isv->res->aux.usage == ISL_AUX_USAGE_CCS_E ||
-        isv->res->aux.usage == ISL_AUX_USAGE_GFX12_CCS_E) &&
+        isv->res->aux.usage == ISL_AUX_USAGE_FCV_CCS_E) &&
        !isl_format_supports_ccs_e(devinfo, isv->view.format)) {
       aux_usages = 1 << ISL_AUX_USAGE_NONE;
    } else if (isl_aux_usage_has_hiz(isv->res->aux.usage) &&
@@ -2976,7 +3023,7 @@ iris_create_surface(struct pipe_context *ctx,
    unsigned aux_usages = 0;
 
    if ((res->aux.usage == ISL_AUX_USAGE_CCS_E ||
-        res->aux.usage == ISL_AUX_USAGE_GFX12_CCS_E) &&
+        res->aux.usage == ISL_AUX_USAGE_FCV_CCS_E) &&
        !isl_format_supports_ccs_e(devinfo, view->format)) {
       aux_usages = 1 << ISL_AUX_USAGE_NONE;
    } else {
@@ -3071,8 +3118,8 @@ iris_set_shader_images(struct pipe_context *ctx,
          unsigned aux_usages = 1 << ISL_AUX_USAGE_NONE;
 
          /* Gfx12+ supports render compression for images */
-         if (GFX_VER >= 12)
-            aux_usages |= 1 << res->aux.usage;
+         if (GFX_VER >= 12 && isl_aux_usage_has_ccs_e(res->aux.usage))
+            aux_usages |= 1 << ISL_AUX_USAGE_CCS_E;
 
          alloc_surface_states(&iv->surface_state, aux_usages);
          iv->surface_state.bo_address = res->bo->address;
@@ -4520,7 +4567,7 @@ iris_is_drawing_points(const struct iris_context *ice)
          (void *) ice->shaders.prog[MESA_SHADER_TESS_EVAL]->prog_data;
       return tes_data->output_topology == BRW_TESS_OUTPUT_TOPOLOGY_POINT;
    } else {
-      return ice->state.prim_mode == PIPE_PRIM_POINTS;
+      return ice->state.prim_mode == MESA_PRIM_POINTS;
    }
 }
 
@@ -5839,15 +5886,13 @@ iris_viewport_zmin_zmax(const struct pipe_viewport_state *vp, bool halfz,
 }
 
 #if GFX_VER >= 12
-void
-genX(invalidate_aux_map_state)(struct iris_batch *batch)
+static void
+invalidate_aux_map_state_per_engine(struct iris_batch *batch)
 {
-   struct iris_screen *screen = batch->screen;
-   void *aux_map_ctx = iris_bufmgr_get_aux_map_context(screen->bufmgr);
-   if (!aux_map_ctx)
-      return;
-   uint32_t aux_map_state_num = intel_aux_map_get_state_num(aux_map_ctx);
-   if (batch->last_aux_map_state != aux_map_state_num) {
+   uint64_t register_addr = 0;
+
+   switch (batch->name) {
+   case IRIS_BATCH_RENDER: {
       /* HSD 1209978178: docs say that before programming the aux table:
        *
        *    "Driver must ensure that the engine is IDLE but ensure it doesn't
@@ -5872,18 +5917,94 @@ genX(invalidate_aux_map_state)(struct iris_batch *batch)
        *     enabled."
        *
        * Therefore setting L3 Fabric Flush here would be redundant.
+       *
+       * From Bspec 43904 (Register_CCSAuxiliaryTableInvalidate):
+       * RCS engine idle sequence:
+       *
+       *    Gfx125+:
+       *       PIPE_CONTROL:- DC Flush + L3 Fabric Flush + CS Stall + Render
+       *                      Target Cache Flush + Depth Cache + CCS flush
+       *
        */
       iris_emit_end_of_pipe_sync(batch, "Invalidate aux map table",
                                  PIPE_CONTROL_CS_STALL |
                                  PIPE_CONTROL_RENDER_TARGET_FLUSH |
-                                 PIPE_CONTROL_STATE_CACHE_INVALIDATE);
+                                 PIPE_CONTROL_STATE_CACHE_INVALIDATE |
+                                 (GFX_VERx10 == 125 ?
+                                  PIPE_CONTROL_CCS_CACHE_FLUSH : 0));
 
+      register_addr = GENX(GFX_CCS_AUX_INV_num);
+      break;
+   }
+   case IRIS_BATCH_COMPUTE: {
+      /*
+       * Notice we don't set the L3 Fabric Flush here, because we have
+       * PIPE_CONTROL_CS_STALL. The PIPE_CONTROL::L3 Fabric Flush
+       * documentation says :
+       *
+       *    "L3 Fabric Flush will ensure all the pending transactions in the
+       *     L3 Fabric are flushed to global observation point. HW does
+       *     implicit L3 Fabric Flush on all stalling flushes (both explicit
+       *     and implicit) and on PIPECONTROL having Post Sync Operation
+       *     enabled."
+       *
+       * Therefore setting L3 Fabric Flush here would be redundant.
+       *
+       * From Bspec 43904 (Register_CCSAuxiliaryTableInvalidate):
+       * Compute engine idle sequence:
+       *
+       *    Gfx125+:
+       *       PIPE_CONTROL:- DC Flush + L3 Fabric Flush + CS Stall + CCS flush
+       */
+      iris_emit_end_of_pipe_sync(batch, "Invalidate aux map table",
+                                 PIPE_CONTROL_DATA_CACHE_FLUSH |
+                                 PIPE_CONTROL_CS_STALL |
+                                 (GFX_VERx10 == 125 ?
+                                  PIPE_CONTROL_CCS_CACHE_FLUSH : 0));
+
+      register_addr = GENX(CCS_CCS_AUX_INV_num);
+      break;
+   }
+   case IRIS_BATCH_BLITTER: {
+#if GFX_VERx10 >= 125
+      /*
+       * Notice we don't set the L3 Fabric Flush here, because we have
+       * PIPE_CONTROL_CS_STALL. The PIPE_CONTROL::L3 Fabric Flush
+       * documentation says :
+       *
+       *    "L3 Fabric Flush will ensure all the pending transactions in the
+       *     L3 Fabric are flushed to global observation point. HW does
+       *     implicit L3 Fabric Flush on all stalling flushes (both explicit
+       *     and implicit) and on PIPECONTROL having Post Sync Operation
+       *     enabled."
+       *
+       * Therefore setting L3 Fabric Flush here would be redundant.
+       *
+       * From Bspec 43904 (Register_CCSAuxiliaryTableInvalidate):
+       * Blitter engine idle sequence:
+       *
+       *    Gfx125+:
+       *       MI_FLUSH_DW (dw0;b16 – flush CCS)
+       */
+      iris_emit_cmd(batch, GENX(MI_FLUSH_DW), fd) {
+         fd.FlushCCS = true;
+      }
+      register_addr = GENX(BCS_CCS_AUX_INV_num);
+#endif
+      break;
+   }
+   default:
+      unreachable("Invalid batch for aux map invalidation");
+      break;
+   }
+
+   if (register_addr != 0) {
       /* If the aux-map state number increased, then we need to rewrite the
        * register. Rewriting the register is used to both set the aux-map
        * translation table address, and also to invalidate any previously
        * cached translations.
        */
-      iris_load_register_imm32(batch, GENX(GFX_CCS_AUX_INV_num), 1);
+      iris_load_register_imm32(batch, register_addr, 1);
 
       /* HSD 22012751911: SW Programming sequence when issuing aux invalidation:
        *
@@ -5895,9 +6016,21 @@ genX(invalidate_aux_map_state)(struct iris_batch *batch)
          sem.WaitMode = PollingMode;
          sem.RegisterPollMode = true;
          sem.SemaphoreDataDword = 0x0;
-         sem.SemaphoreAddress = ro_bo(NULL, GENX(GFX_CCS_AUX_INV_num));
+         sem.SemaphoreAddress = ro_bo(NULL, register_addr);
       }
+   }
+}
 
+void
+genX(invalidate_aux_map_state)(struct iris_batch *batch)
+{
+   struct iris_screen *screen = batch->screen;
+   void *aux_map_ctx = iris_bufmgr_get_aux_map_context(screen->bufmgr);
+   if (!aux_map_ctx)
+      return;
+   uint32_t aux_map_state_num = intel_aux_map_get_state_num(aux_map_ctx);
+   if (batch->last_aux_map_state != aux_map_state_num) {
+      invalidate_aux_map_state_per_engine(batch);
       batch->last_aux_map_state = aux_map_state_num;
    }
 }
@@ -6069,7 +6202,7 @@ genX(emit_depth_state_workarounds)(struct iris_context *ice,
                                    struct iris_batch *batch,
                                    const struct isl_surf *surf)
 {
-#if GFX_VERx10 == 120
+#if INTEL_NEEDS_WA_1808121037
    const bool is_d16_1x_msaa = surf->format == ISL_FORMAT_R16_UNORM &&
                                surf->samples == 1;
 
@@ -6091,11 +6224,11 @@ genX(emit_depth_state_workarounds)(struct iris_context *ice,
     * settings while we change the registers.
     */
    iris_emit_end_of_pipe_sync(batch,
-                              "Workaround: Stop pipeline for 14010455700",
+                              "Workaround: Stop pipeline for Wa_1808121037",
                               PIPE_CONTROL_DEPTH_STALL |
                               PIPE_CONTROL_DEPTH_CACHE_FLUSH);
 
-   /* Wa_14010455700
+   /* Wa_1808121037
     *
     * To avoid sporadic corruptions “Set 0x7010[9] when Depth Buffer
     * Surface Format is D16_UNORM , surface type is not NULL & 1X_MSAA”.
@@ -6721,10 +6854,8 @@ iris_upload_dirty_render_state(struct iris_context *ice,
 
 #if GFX_VERx10 >= 120
          /* Wa_16013994831 - Disable preemption. */
-         if (batch->screen->devinfo->verx10 == 120 ||
-             intel_device_info_is_dg2(batch->screen->devinfo)) {
+         if (intel_needs_workaround(batch->screen->devinfo, 16013994831))
             iris_preemption_streamout_wa(ice, batch, false);
-         }
 #endif
 
          uint32_t dynamic_sol[GENX(3DSTATE_STREAMOUT_length)];
@@ -7001,7 +7132,8 @@ iris_upload_dirty_render_state(struct iris_context *ice,
       if (zres)
          genX(emit_depth_state_workarounds)(ice, batch, &zres->surf);
 
-      if (GFX_VER >= 11) {
+      if (intel_needs_workaround(batch->screen->devinfo, 1408224581) ||
+          intel_needs_workaround(batch->screen->devinfo, 14014097488)) {
          /* Wa_1408224581
           *
           * Workaround: Gfx12LP Astep only An additional pipe control with
@@ -7353,15 +7485,15 @@ flush_vbos(struct iris_context *ice, struct iris_batch *batch)
 }
 
 static bool
-point_or_line_list(enum pipe_prim_type prim_type)
+point_or_line_list(enum mesa_prim prim_type)
 {
    switch (prim_type) {
-   case PIPE_PRIM_POINTS:
-   case PIPE_PRIM_LINES:
-   case PIPE_PRIM_LINE_STRIP:
-   case PIPE_PRIM_LINES_ADJACENCY:
-   case PIPE_PRIM_LINE_STRIP_ADJACENCY:
-   case PIPE_PRIM_LINE_LOOP:
+   case MESA_PRIM_POINTS:
+   case MESA_PRIM_LINES:
+   case MESA_PRIM_LINE_STRIP:
+   case MESA_PRIM_LINES_ADJACENCY:
+   case MESA_PRIM_LINE_STRIP_ADJACENCY:
+   case MESA_PRIM_LINE_LOOP:
       return true;
    default:
       return false;
@@ -8544,8 +8676,9 @@ iris_emit_raw_pipe_control(struct iris_batch *batch,
    /* "GPGPU specific workarounds" (both post-sync and flush) ------------ */
 
    if (IS_COMPUTE_PIPELINE(batch)) {
-      if (GFX_VER >= 9 && (flags & PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE)) {
-         /* Project: SKL+ / Argument: Tex Invalidate
+      if ((GFX_VER == 9 || GFX_VER == 11) &&
+          (flags & PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE)) {
+         /* Project: SKL, ICL / Argument: Tex Invalidate
           * "Requires stall bit ([20] of DW) set for all GPGPU Workloads."
           */
          flags |= PIPE_CONTROL_CS_STALL;
@@ -8641,7 +8774,7 @@ iris_emit_raw_pipe_control(struct iris_batch *batch,
 
    if (INTEL_DEBUG(DEBUG_PIPE_CONTROL)) {
       fprintf(stderr,
-              "  PC [%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%"PRIx64"]: %s\n",
+              "  PC [%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%"PRIx64"]: %s\n",
               (flags & PIPE_CONTROL_FLUSH_ENABLE) ? "PipeCon " : "",
               (flags & PIPE_CONTROL_CS_STALL) ? "CS " : "",
               (flags & PIPE_CONTROL_STALL_AT_SCOREBOARD) ? "Scoreboard " : "",
@@ -8652,6 +8785,7 @@ iris_emit_raw_pipe_control(struct iris_batch *batch,
               (flags & PIPE_CONTROL_DATA_CACHE_FLUSH) ? "DC " : "",
               (flags & PIPE_CONTROL_DEPTH_CACHE_FLUSH) ? "ZFlush " : "",
               (flags & PIPE_CONTROL_TILE_CACHE_FLUSH) ? "Tile " : "",
+              (flags & PIPE_CONTROL_CCS_CACHE_FLUSH) ? "CCS " : "",
               (flags & PIPE_CONTROL_DEPTH_STALL) ? "ZStall " : "",
               (flags & PIPE_CONTROL_STATE_CACHE_INVALIDATE) ? "State " : "",
               (flags & PIPE_CONTROL_TLB_INVALIDATE) ? "TLB " : "",
@@ -8692,9 +8826,12 @@ iris_emit_raw_pipe_control(struct iris_batch *batch,
 #endif
 #if GFX_VERx10 >= 125
       pc.UntypedDataPortCacheFlushEnable =
-         (flags & PIPE_CONTROL_UNTYPED_DATAPORT_CACHE_FLUSH) &&
+         (flags & (PIPE_CONTROL_UNTYPED_DATAPORT_CACHE_FLUSH |
+                   PIPE_CONTROL_FLUSH_HDC |
+                   PIPE_CONTROL_DATA_CACHE_FLUSH)) &&
          IS_COMPUTE_PIPELINE(batch);
       pc.HDCPipelineFlushEnable |= pc.UntypedDataPortCacheFlushEnable;
+      pc.CCSFlushEnable |= flags & PIPE_CONTROL_CCS_CACHE_FLUSH;
 #endif
       pc.LRIPostSyncOperation = NoLRIOperation;
       pc.PipeControlFlushEnable = flags & PIPE_CONTROL_FLUSH_ENABLE;
@@ -8767,7 +8904,7 @@ gfx9_toggle_preemption(struct iris_context *ice,
     *    "WA: Disable mid-draw preemption when draw-call is a linestrip_adj
     *     and GS is enabled."
     */
-   if (draw->mode == PIPE_PRIM_LINE_STRIP_ADJACENCY &&
+   if (draw->mode == MESA_PRIM_LINE_STRIP_ADJACENCY &&
        ice->shaders.prog[MESA_SHADER_GEOMETRY])
       object_preemption = false;
 
@@ -8780,7 +8917,7 @@ gfx9_toggle_preemption(struct iris_context *ice,
     *
     *     WA: Disable mid-draw preemption when draw-call has a tri-fan."
     */
-   if (draw->mode == PIPE_PRIM_TRIANGLE_FAN)
+   if (draw->mode == MESA_PRIM_TRIANGLE_FAN)
       object_preemption = false;
 
    /* WaDisableMidObjectPreemptionForLineLoop
@@ -8790,7 +8927,7 @@ gfx9_toggle_preemption(struct iris_context *ice,
     *     WA: Disable mid-draw preemption when the draw uses a lineloop
     *     topology."
     */
-   if (draw->mode == PIPE_PRIM_LINE_LOOP)
+   if (draw->mode == MESA_PRIM_LINE_LOOP)
       object_preemption = false;
 
    /* WA#0798
@@ -8815,7 +8952,7 @@ iris_lost_genx_state(struct iris_context *ice, struct iris_batch *batch)
 {
    struct iris_genx_state *genx = ice->state.genx;
 
-#if GFX_VERx10 == 120
+#if INTEL_NEEDS_WA_1808121037
    genx->depth_reg_mode = IRIS_DEPTH_REG_MODE_UNKNOWN;
 #endif
 
@@ -9036,7 +9173,7 @@ genX(init_state)(struct iris_context *ice)
 
    ice->state.sample_mask = 0xffff;
    ice->state.num_viewports = 1;
-   ice->state.prim_mode = PIPE_PRIM_MAX;
+   ice->state.prim_mode = MESA_PRIM_COUNT;
    ice->state.genx = calloc(1, sizeof(struct iris_genx_state));
    ice->draw.derived_params.drawid = -1;
 

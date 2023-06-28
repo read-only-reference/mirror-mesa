@@ -1152,7 +1152,7 @@ lower_sampler_logical_send_gfx7(const fs_builder &bld, fs_inst *inst, opcode op,
          const fs_builder ubld = bld.group(1, 0).exec_all();
          fs_reg desc = ubld.vgrf(BRW_REGISTER_TYPE_UD);
          ubld.SHL(desc, sampler, brw_imm_ud(8));
-         inst->src[0] = desc;
+         inst->src[0] = component(desc, 0);
       }
 
       /* We assume that the driver provided the handle in the top 20 bits so
@@ -2602,7 +2602,7 @@ lower_interpolator_logical_send(const fs_builder &bld, fs_inst *inst,
    inst->send_is_volatile = false;
 
    inst->resize_sources(3);
-   inst->src[0] = desc;
+   inst->src[0] = component(desc, 0);
    inst->src[1] = brw_imm_ud(0); /* ex_desc */
    inst->src[2] = payload;
 }
@@ -3086,6 +3086,7 @@ fs_visitor::lower_uniform_pull_constant_loads()
 
          invalidate_analysis(DEPENDENCY_INSTRUCTIONS | DEPENDENCY_VARIABLES);
       } else {
+         assert(surface_handle.file == BAD_FILE);
          /* Before register allocation, we didn't tell the scheduler about the
           * MRF we use.  We know it's safe to use this MRF because nothing
           * else does except for register spill/unspill, which generates and

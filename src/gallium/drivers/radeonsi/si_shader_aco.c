@@ -46,6 +46,7 @@ si_fill_aco_options(struct si_shader *shader, struct aco_compiler_options *optio
       si_can_dump_shader(sel->screen, sel->stage, SI_DUMP_ASM);
    options->dump_preoptir = si_can_dump_shader(sel->screen, sel->stage, SI_DUMP_INIT_ACO_IR);
    options->record_ir = sel->screen->record_llvm_ir;
+   options->is_opengl = true;
 
    options->load_grid_size_from_user_sgpr = true;
    options->family = sel->screen->info.family;
@@ -56,10 +57,45 @@ si_fill_aco_options(struct si_shader *shader, struct aco_compiler_options *optio
    options->debug.private_data = debug;
 }
 
+static enum ac_hw_stage
+si_select_hw_stage(const gl_shader_stage stage, const union si_shader_key *const key,
+                   const enum amd_gfx_level gfx_level)
+{
+   switch (stage) {
+   case MESA_SHADER_VERTEX:
+   case MESA_SHADER_TESS_EVAL:
+      if (key->ge.as_ngg)
+         return AC_HW_NEXT_GEN_GEOMETRY_SHADER;
+      else if (key->ge.as_es)
+         return gfx_level >= GFX9 ? AC_HW_LEGACY_GEOMETRY_SHADER : AC_HW_EXPORT_SHADER;
+      else if (key->ge.as_ls)
+         return gfx_level >= GFX9 ? AC_HW_HULL_SHADER : AC_HW_LOCAL_SHADER;
+      else
+         return AC_HW_VERTEX_SHADER;
+   case MESA_SHADER_TESS_CTRL:
+      return AC_HW_HULL_SHADER;
+   case MESA_SHADER_GEOMETRY:
+      if (key->ge.as_ngg)
+         return AC_HW_NEXT_GEN_GEOMETRY_SHADER;
+      else
+         return AC_HW_LEGACY_GEOMETRY_SHADER;
+   case MESA_SHADER_FRAGMENT:
+      return AC_HW_PIXEL_SHADER;
+   case MESA_SHADER_COMPUTE:
+   case MESA_SHADER_KERNEL:
+      return AC_HW_COMPUTE_SHADER;
+   default:
+      unreachable("Unsupported HW stage");
+   }
+}
+
 static void
 si_fill_aco_shader_info(struct si_shader *shader, struct aco_shader_info *info)
 {
    const struct si_shader_selector *sel = shader->selector;
+   const union si_shader_key *key = &shader->key;
+   const enum amd_gfx_level gfx_level = sel->screen->info.gfx_level;
+   gl_shader_stage stage = shader->is_gs_copy_shader ? MESA_SHADER_VERTEX : sel->stage;
 
    info->wave_size = shader->wave_size;
    info->workgroup_size = si_get_max_workgroup_size(shader);
@@ -67,9 +103,15 @@ si_fill_aco_shader_info(struct si_shader *shader, struct aco_shader_info *info)
    if (!info->workgroup_size)
       info->workgroup_size = info->wave_size;
 
-   info->image_2d_view_of_3d = sel->screen->info.gfx_level == GFX9;
+   info->image_2d_view_of_3d = gfx_level == GFX9;
+   info->hw_stage = si_select_hw_stage(stage, key, gfx_level);
 
-   switch (sel->stage) {
+   if (stage <= MESA_SHADER_GEOMETRY && key->ge.as_ngg && !key->ge.as_es) {
+      info->has_ngg_culling = key->ge.opt.ngg_culling;
+      info->has_ngg_early_prim_export = gfx10_ngg_export_prim_early(shader);
+   }
+
+   switch (stage) {
    case MESA_SHADER_FRAGMENT:
       info->ps.num_interp = si_get_ps_num_interp(shader);
       info->ps.spi_ps_input = shader->config.spi_ps_input_ena;
@@ -140,6 +182,8 @@ void
 si_aco_resolve_symbols(struct si_shader *shader, uint32_t *code, uint64_t scratch_va)
 {
    const struct aco_symbol *symbols = (struct aco_symbol *)shader->binary.symbols;
+   const struct si_shader_selector *sel = shader->selector;
+   const union si_shader_key *key = &shader->key;
 
    for (int i = 0; i < shader->binary.num_symbols; i++) {
       uint32_t value = 0;
@@ -151,10 +195,21 @@ si_aco_resolve_symbols(struct si_shader *shader, uint32_t *code, uint64_t scratc
       case aco_symbol_scratch_addr_hi:
          value = S_008F04_BASE_ADDRESS_HI(scratch_va >> 32);
 
-         if (shader->selector->screen->info.gfx_level >= GFX11)
+         if (sel->screen->info.gfx_level >= GFX11)
             value |= S_008F04_SWIZZLE_ENABLE_GFX11(1);
          else
             value |= S_008F04_SWIZZLE_ENABLE_GFX6(1);
+         break;
+      case aco_symbol_lds_ngg_scratch_base:
+         assert(sel->stage <= MESA_SHADER_GEOMETRY && key->ge.as_ngg);
+         value = shader->gs_info.esgs_ring_size * 4;
+         if (sel->stage == MESA_SHADER_GEOMETRY)
+            value += shader->ngg.ngg_emit_size * 4;
+         value = ALIGN(value, 8);
+         break;
+      case aco_symbol_lds_ngg_gs_out_vertex_base:
+         assert(sel->stage == MESA_SHADER_GEOMETRY && key->ge.as_ngg);
+         value = shader->gs_info.esgs_ring_size * 4;
          break;
       default:
          unreachable("invalid aco symbol");

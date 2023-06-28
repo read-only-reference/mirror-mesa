@@ -33,17 +33,17 @@ vtn_handle_amd_gcn_shader_instruction(struct vtn_builder *b, SpvOp ext_opcode,
    nir_ssa_def *def;
    switch ((enum GcnShaderAMD)ext_opcode) {
    case CubeFaceIndexAMD:
-      def = nir_cube_face_index_amd(&b->nb, vtn_get_nir_ssa(b, w[5]));
+      def = nir_channel(&b->nb, nir_cube_amd(&b->nb, vtn_get_nir_ssa(b, w[5])), 3);
       break;
    case CubeFaceCoordAMD: {
-      def = nir_cube_face_coord_amd(&b->nb, vtn_get_nir_ssa(b, w[5]));
-      nir_ssa_def *st = nir_channels(&b->nb, def, 0x3);
+      def = nir_cube_amd(&b->nb, vtn_get_nir_ssa(b, w[5]));
+      nir_ssa_def *st = nir_swizzle(&b->nb, def, (unsigned[]){1, 0}, 2);
       nir_ssa_def *invma = nir_frcp(&b->nb, nir_channel(&b->nb, def, 2));
       def = nir_ffma_imm2(&b->nb, st, invma, 0.5);
       break;
    }
    case TimeAMD: {
-      def = nir_pack_64_2x32(&b->nb, nir_shader_clock(&b->nb, NIR_SCOPE_SUBGROUP));
+      def = nir_pack_64_2x32(&b->nb, nir_shader_clock(&b->nb, SCOPE_SUBGROUP));
       break;
    }
    default:

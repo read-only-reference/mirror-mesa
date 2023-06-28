@@ -24,6 +24,7 @@
 #include "brw_kernel.h"
 #include "brw_nir.h"
 
+#include "nir_clc_helpers.h"
 #include "compiler/nir/nir_builder.h"
 #include "compiler/spirv/nir_spirv.h"
 #include "dev/intel_debug.h"
@@ -38,7 +39,8 @@ load_clc_shader(struct brw_compiler *compiler, struct disk_cache *disk_cache,
       return compiler->clc_shader;
 
    nir_shader *nir =  nir_load_libclc_shader(64, disk_cache,
-                                             spirv_options, nir_options);
+                                             spirv_options, nir_options,
+                                             disk_cache != NULL);
    if (nir == NULL)
       return NULL;
 
@@ -167,8 +169,7 @@ lower_kernel_intrinsics(nir_shader *nir)
    unsigned kernel_arg_start = sizeof(struct brw_kernel_sysvals);
    nir->num_uniforms += kernel_arg_start;
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    nir_foreach_block(block, impl) {
       nir_foreach_instr_safe(instr, block) {
@@ -311,9 +312,8 @@ brw_kernel_from_spirv(struct brw_compiler *compiler,
 
    if (INTEL_DEBUG(DEBUG_CS)) {
       /* Re-index SSA defs so we print more sensible numbers. */
-      nir_foreach_function(function, nir) {
-         if (function->impl)
-            nir_index_ssa_defs(function->impl);
+      nir_foreach_function_impl(impl, nir) {
+         nir_index_ssa_defs(impl);
       }
 
       fprintf(stderr, "NIR (from SPIR-V) for kernel\n");
@@ -412,9 +412,8 @@ brw_kernel_from_spirv(struct brw_compiler *compiler,
 
    if (INTEL_DEBUG(DEBUG_CS)) {
       /* Re-index SSA defs so we print more sensible numbers. */
-      nir_foreach_function(function, nir) {
-         if (function->impl)
-            nir_index_ssa_defs(function->impl);
+      nir_foreach_function_impl(impl, nir) {
+         nir_index_ssa_defs(impl);
       }
 
       fprintf(stderr, "NIR (before I/O lowering) for kernel\n");

@@ -63,15 +63,14 @@ nir_lower_texcoord_replace_impl(nir_function_impl *impl,
                                 bool point_coord_is_sysval,
                                 bool yinvert)
 {
-   nir_builder b;
-
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
    b.cursor = nir_before_cf_list(&impl->body);
 
    nir_ssa_def *new_coord;
    if (point_coord_is_sysval) {
       new_coord = nir_load_system_value(&b, nir_intrinsic_load_point_coord,
                                         0, 2, 32);
+      BITSET_SET(b.shader->info.system_values_read, SYSTEM_VALUE_POINT_COORD);
    } else {
       /* find or create pntc */
       nir_variable *pntc = nir_get_variable_with_location(b.shader, nir_var_shader_in,
@@ -136,9 +135,8 @@ nir_lower_texcoord_replace(nir_shader *s, unsigned coord_replace,
    assert(s->info.stage == MESA_SHADER_FRAGMENT);
    assert(coord_replace != 0);
 
-   nir_foreach_function(function, s) {
-      if (function->impl)
-         nir_lower_texcoord_replace_impl(function->impl, coord_replace,
-                                         point_coord_is_sysval, yinvert);
+   nir_foreach_function_impl(impl, s) {
+      nir_lower_texcoord_replace_impl(impl, coord_replace,
+                                      point_coord_is_sysval, yinvert);
    }
 }

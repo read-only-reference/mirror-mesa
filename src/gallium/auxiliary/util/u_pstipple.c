@@ -65,7 +65,7 @@ util_pstipple_update_stipple_texture(struct pipe_context *pipe,
 {
    static const uint bit31 = 1u << 31;
    struct pipe_transfer *transfer;
-   ubyte *data;
+   uint8_t *data;
    int i, j;
 
    /* map texture memory */
@@ -354,7 +354,7 @@ pstip_transform_prolog(struct tgsi_transform_context *ctx)
    /* KILL_IF -texTemp;   # if -texTemp < 0, kill fragment */
    tgsi_transform_kill_inst(ctx,
                             TGSI_FILE_TEMPORARY, texTemp,
-                            TGSI_SWIZZLE_W, TRUE);
+                            TGSI_SWIZZLE_W, true);
 }
 
 

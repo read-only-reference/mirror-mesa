@@ -527,7 +527,7 @@ blorp_clear_supports_compute(struct blorp_context *blorp,
    if (color_write_disable != 0 || blend_enabled)
       return false;
    if (blorp->isl_dev->info->ver >= 12) {
-      return aux_usage == ISL_AUX_USAGE_GFX12_CCS_E ||
+      return aux_usage == ISL_AUX_USAGE_FCV_CCS_E ||
              aux_usage == ISL_AUX_USAGE_CCS_E ||
              aux_usage == ISL_AUX_USAGE_NONE;
    } else {
@@ -1311,8 +1311,7 @@ blorp_ccs_resolve(struct blorp_batch *batch,
 static nir_ssa_def *
 blorp_nir_bit(nir_builder *b, nir_ssa_def *src, unsigned bit)
 {
-   return nir_iand(b, nir_ushr(b, src, nir_imm_int(b, bit)),
-                      nir_imm_int(b, 1));
+   return nir_iand_imm(b, nir_ushr_imm(b, src, bit), 1);
 }
 
 #pragma pack(push, 1)

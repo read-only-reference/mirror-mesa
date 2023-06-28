@@ -80,11 +80,8 @@ get_num_components(nir_variable *var)
 static void
 tcs_add_output_reads(nir_shader *shader, uint64_t *read, uint64_t *patches_read)
 {
-   nir_foreach_function(function, shader) {
-      if (!function->impl)
-         continue;
-
-      nir_foreach_block(block, function->impl) {
+   nir_foreach_function_impl(impl, shader) {
+      nir_foreach_block(block, impl) {
          nir_foreach_instr(instr, block) {
             if (instr->type != nir_instr_type_intrinsic)
                continue;
@@ -598,6 +595,12 @@ gather_varying_component_info(nir_shader *producer, nir_shader *consumer,
          if (in_var->data.location < VARYING_SLOT_VAR0)
             continue;
 
+         /* Do not remap per-vertex shader inputs because it's an array of
+          * 3-elements and this isn't supported.
+          */
+         if (in_var->data.per_vertex)
+            continue;
+
          unsigned location = in_var->data.location - VARYING_SLOT_VAR0;
          if (location >= MAX_VARYINGS_INCL_PATCH)
             continue;
@@ -1043,8 +1046,7 @@ replace_varying_input_by_constant_load(nir_shader *shader,
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    nir_variable *out_var =
       nir_deref_instr_get_variable(nir_src_as_deref(store_intr->src[0]));
@@ -1095,8 +1097,7 @@ replace_duplicate_input(nir_shader *shader, nir_variable *input_var,
 
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    nir_variable *dup_out_var =
       nir_deref_instr_get_variable(nir_src_as_deref(dup_store_intr->src[0]));
@@ -1119,7 +1120,8 @@ replace_duplicate_input(nir_shader *shader, nir_variable *input_var,
 
          if (!does_varying_match(dup_out_var, in_var) ||
              in_var->data.interpolation != input_var->data.interpolation ||
-             get_interp_loc(in_var) != get_interp_loc(input_var))
+             get_interp_loc(in_var) != get_interp_loc(input_var) ||
+             in_var->data.per_vertex)
             continue;
 
          b.cursor = nir_before_instr(instr);
@@ -1230,8 +1232,7 @@ replace_varying_input_by_uniform_load(nir_shader *shader,
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    nir_variable *out_var =
       nir_deref_instr_get_variable(nir_src_as_deref(store_intr->src[0]));

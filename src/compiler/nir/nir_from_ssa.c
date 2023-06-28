@@ -856,7 +856,7 @@ nir_convert_from_ssa_impl(nir_function_impl *impl, bool phi_webs_only)
 
    struct from_ssa_state state;
 
-   nir_builder_init(&state.builder, impl);
+   state.builder = nir_builder_create(impl);
    state.dead_ctx = ralloc_context(NULL);
    state.phi_webs_only = phi_webs_only;
    state.merge_node_table = _mesa_pointer_hash_table_create(NULL);
@@ -910,9 +910,8 @@ nir_convert_from_ssa(nir_shader *shader, bool phi_webs_only)
 {
    bool progress = false;
 
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         progress |= nir_convert_from_ssa_impl(function->impl, phi_webs_only);
+   nir_foreach_function_impl(impl, shader) {
+      progress |= nir_convert_from_ssa_impl(impl, phi_webs_only);
    }
 
    return progress;
@@ -951,7 +950,7 @@ place_phi_read(nir_builder *b, nir_register *reg,
    }
 
    b->cursor = nir_after_block_before_jump(block);
-   nir_store_reg(b, reg, def, ~0);
+   nir_store_register(b, reg, def, ~0);
 }
 
 /** Lower all of the phi nodes in a block to movs to and from a register
@@ -986,8 +985,7 @@ place_phi_read(nir_builder *b, nir_register *reg,
 bool
 nir_lower_phis_to_regs_block(nir_block *block)
 {
-   nir_builder b;
-   nir_builder_init(&b, nir_cf_node_get_function(&block->cf_node));
+   nir_builder b = nir_builder_create(nir_cf_node_get_function(&block->cf_node));
    struct set *visited_blocks = _mesa_set_create(NULL, _mesa_hash_pointer,
                                                  _mesa_key_pointer_equal);
 
@@ -997,7 +995,7 @@ nir_lower_phis_to_regs_block(nir_block *block)
       nir_register *reg = create_reg_for_ssa_def(&phi->dest.ssa, b.impl);
 
       b.cursor = nir_after_instr(&phi->instr);
-      nir_ssa_def *def = nir_load_reg(&b, reg);
+      nir_ssa_def *def = nir_load_register(&b, reg);
 
       nir_ssa_def_rewrite_uses(&phi->dest.ssa, def);
 
@@ -1010,7 +1008,7 @@ nir_lower_phis_to_regs_block(nir_block *block)
             b.cursor = nir_after_block_before_jump(src->pred);
             nir_ssa_def *src_ssa =
                nir_ssa_for_src(&b, src->src, phi->dest.ssa.num_components);
-            nir_store_reg(&b, reg, src_ssa, ~0);
+            nir_store_register(&b, reg, src_ssa, ~0);
          }
       }
 

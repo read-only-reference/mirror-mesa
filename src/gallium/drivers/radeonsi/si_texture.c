@@ -110,9 +110,9 @@ static void si_copy_from_staging_texture(struct pipe_context *ctx, struct si_tra
                            transfer->box.z, src, 0, &sbox);
 }
 
-static unsigned si_texture_get_offset(struct si_screen *sscreen, struct si_texture *tex,
+static uint64_t si_texture_get_offset(struct si_screen *sscreen, struct si_texture *tex,
                                       unsigned level, const struct pipe_box *box, unsigned *stride,
-                                      unsigned *layer_stride)
+                                      uintptr_t *layer_stride)
 {
    if (sscreen->info.gfx_level >= GFX9) {
       unsigned pitch;
@@ -932,6 +932,7 @@ static struct si_texture *si_texture_create_object(struct pipe_screen *screen,
    tex->surface = *surface;
 
    if (!ac_surface_override_offset_stride(&sscreen->info, &tex->surface,
+                                          tex->buffer.b.b.array_size,
                                           tex->buffer.b.b.last_level + 1,
                                           offset, pitch_in_bytes / tex->surface.bpe))
       goto error;
@@ -1823,7 +1824,7 @@ static void *si_texture_transfer_map(struct pipe_context *ctx, struct pipe_resou
    struct si_texture *tex = (struct si_texture *)texture;
    struct si_transfer *trans;
    struct si_resource *buf;
-   unsigned offset = 0;
+   uint64_t offset = 0;
    char *map;
    bool use_staging_texture = tex->buffer.flags & RADEON_FLAG_ENCRYPTED;
    unsigned real_level = texture->nr_samples > 1 ? 0 : level;

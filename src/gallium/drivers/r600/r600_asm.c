@@ -591,7 +591,7 @@ static int check_and_set_bank_swizzle(const struct r600_bytecode *bc,
 	struct alu_bank_swizzle bs;
 	int bank_swizzle[5];
 	int i, r = 0, forced = 1;
-	boolean scalar_only = bc->gfx_level == CAYMAN ? false : true;
+	bool scalar_only = bc->gfx_level == CAYMAN ? false : true;
 	int max_slots = bc->gfx_level == CAYMAN ? 4 : 5;
 	int max_checks = max_slots * 1000;
 
@@ -1443,7 +1443,7 @@ static unsigned r600_bytecode_num_tex_and_vtx_instructions(const struct r600_byt
 	}
 }
 
-static inline boolean last_inst_was_not_vtx_fetch(struct r600_bytecode *bc, bool use_tc)
+static inline bool last_inst_was_not_vtx_fetch(struct r600_bytecode *bc, bool use_tc)
 {
 	return !((r600_isa_cf(bc->cf_last->op)->flags & CF_FETCH) &&
 		 bc->cf_last->op != CF_OP_GDS &&
@@ -1539,12 +1539,21 @@ int r600_bytecode_add_tex(struct r600_bytecode *bc, const struct r600_bytecode_t
 	if (bc->cf_last != NULL &&
 		bc->cf_last->op == CF_OP_TEX) {
 		struct r600_bytecode_tex *ttex;
+                uint8_t use_mask = ((1 << ntex->src_sel_x) |
+                                    (1 << ntex->src_sel_y) |
+                                    (1 << ntex->src_sel_z) |
+                                    (1 << ntex->src_sel_w)) & 0xf;
+
 		LIST_FOR_EACH_ENTRY(ttex, &bc->cf_last->tex, list) {
-			if (ttex->dst_gpr == ntex->src_gpr &&
-                            (ttex->dst_sel_x < 4 || ttex->dst_sel_y < 4 ||
-                             ttex->dst_sel_z < 4 || ttex->dst_sel_w < 4)) {
-				bc->force_add_cf = 1;
-				break;
+			if (ttex->dst_gpr == ntex->src_gpr) {
+                           uint8_t write_mask = (ttex->dst_sel_x < 6 ? 1 : 0) |
+                                                (ttex->dst_sel_y < 6 ? 2 : 0) |
+                                                (ttex->dst_sel_z < 6 ? 4 : 0) |
+                                                (ttex->dst_sel_w < 6 ? 8 : 0);
+                           if (use_mask & write_mask) {
+                              bc->force_add_cf = 1;
+                              break;
+                           }
 			}
 		}
 		/* vtx instrs get inserted after tex, so make sure we aren't moving the tex

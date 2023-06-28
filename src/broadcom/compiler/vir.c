@@ -619,6 +619,7 @@ v3d_lower_nir(struct v3d_compile *c)
 {
         struct nir_lower_tex_options tex_options = {
                 .lower_txd = true,
+                .lower_tg4_offsets = true,
                 .lower_tg4_broadcom_swizzle = true,
 
                 .lower_rect = false, /* XXX: Use this on V3D 3.x */
@@ -659,7 +660,7 @@ v3d_lower_nir(struct v3d_compile *c)
                  */
                 const unsigned chunk_size = 16; /* max single store size */
                 NIR_PASS(_, c->s, nir_zero_initialize_shared_memory,
-                         ALIGN(c->s->info.shared_size, chunk_size), chunk_size);
+                         align(c->s->info.shared_size, chunk_size), chunk_size);
         }
 
         NIR_PASS(_, c->s, nir_lower_compute_system_values, NULL);
@@ -1507,8 +1508,7 @@ v3d_nir_lower_subgroup_intrinsics(nir_shader *s, struct v3d_compile *c)
         bool progress = false;
         nir_foreach_function(function, s) {
                 if (function->impl) {
-                        nir_builder b;
-                        nir_builder_init(&b, function->impl);
+                        nir_builder b = nir_builder_create(function->impl);
 
                         nir_foreach_block(block, function->impl)
                                 progress |= lower_subgroup_intrinsics(c, block, &b);
@@ -1581,8 +1581,9 @@ v3d_attempt_compile(struct v3d_compile *c)
         NIR_PASS(_, c->s, nir_lower_idiv, &idiv_options);
         NIR_PASS(_, c->s, nir_lower_alu);
 
-        if (c->key->robust_uniform_access || c->key->robust_storage_access) {
-                /* v3d_nir_lower_robust_buffer_access assumes constant buffer
+        if (c->key->robust_uniform_access || c->key->robust_storage_access ||
+            c->key->robust_image_access) {
+                /* nir_lower_robust_access assumes constant buffer
                  * indices on ubo/ssbo intrinsics so run copy propagation and
                  * constant folding passes before we run the lowering to warrant
                  * this. We also want to run the lowering before v3d_optimize to
@@ -1590,11 +1591,16 @@ v3d_attempt_compile(struct v3d_compile *c)
                  */
                 NIR_PASS(_, c->s, nir_copy_prop);
                 NIR_PASS(_, c->s, nir_opt_constant_folding);
-                NIR_PASS(_, c->s, v3d_nir_lower_robust_buffer_access, c);
-        }
 
-        if (c->key->robust_image_access)
-                NIR_PASS(_, c->s, v3d_nir_lower_robust_image_access, c);
+                nir_lower_robust_access_options opts = {
+                   .lower_image = c->key->robust_image_access,
+                   .lower_ssbo = c->key->robust_storage_access,
+                   .lower_ubo = c->key->robust_uniform_access,
+                   .skip_ubo_0 = c->key->environment == V3D_ENVIRONMENT_VULKAN,
+                };
+
+                NIR_PASS(_, c->s, nir_lower_robust_access, &opts);
+        }
 
         NIR_PASS(_, c->s, nir_lower_wrmasks, should_split_wrmask, c->s);
 

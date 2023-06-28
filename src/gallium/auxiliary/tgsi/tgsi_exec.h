@@ -29,7 +29,7 @@
 #ifndef TGSI_EXEC_H
 #define TGSI_EXEC_H
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "pipe/p_state.h"
 #include "pipe/p_shader_tokens.h"
 
@@ -255,6 +255,11 @@ struct tgsi_call_record
    uint ReturnAddr;
 };
 
+/* should match draw_buffer_info */
+struct tgsi_exec_consts_info {
+   const void *ptr;
+   unsigned size;
+};
 
 /* Switch-case block state. */
 struct tgsi_switch_record {
@@ -397,7 +402,7 @@ struct tgsi_exec_machine
    struct tgsi_declaration_sampler_view
       SamplerViews[PIPE_MAX_SHADER_SAMPLER_VIEWS];
 
-   boolean UsedGeometryShader;
+   bool UsedGeometryShader;
 
    int pc;
 };
@@ -425,8 +430,7 @@ tgsi_exec_machine_run(
 extern void
 tgsi_exec_set_constant_buffers(struct tgsi_exec_machine *mach,
                                unsigned num_bufs,
-                               const void **bufs,
-                               const unsigned *buf_sizes);
+                               const struct tgsi_exec_consts_info *bufs);
 
 
 static inline int
@@ -472,8 +476,6 @@ tgsi_exec_get_shader_param(enum pipe_shader_cap param)
       return PIPE_MAX_SAMPLERS;
    case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
       return PIPE_MAX_SHADER_SAMPLER_VIEWS;
-   case PIPE_SHADER_CAP_PREFERRED_IR:
-      return PIPE_SHADER_IR_TGSI;
    case PIPE_SHADER_CAP_SUPPORTED_IRS:
       return 1 << PIPE_SHADER_IR_TGSI;
    case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:

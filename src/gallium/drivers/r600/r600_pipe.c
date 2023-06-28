@@ -224,7 +224,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen,
 	rctx->b.gfx.flush = r600_context_gfx_flush;
 
 	u_suballocator_init(&rctx->allocator_fetch_shader, &rctx->b.b, 64 * 1024,
-                            0, PIPE_USAGE_DEFAULT, 0, FALSE);
+                            0, PIPE_USAGE_DEFAULT, 0, false);
 
 	rctx->isa = calloc(1, sizeof(struct r600_isa));
 	if (!rctx->isa || r600_isa_init(rctx, rctx->isa))
@@ -496,6 +496,10 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_QUERY_TIMESTAMP:
 		return rscreen->b.info.clock_crystal_freq != 0;
 
+	case PIPE_CAP_TIMER_RESOLUTION:
+		/* Conversion to nanos from cycles per millisecond */
+		return DIV_ROUND_UP(1000000, rscreen->b.info.clock_crystal_freq);
+
 	case PIPE_CAP_MIN_TEXTURE_GATHER_OFFSET:
 	case PIPE_CAP_MIN_TEXEL_OFFSET:
 		return -8;
@@ -623,8 +627,6 @@ static int r600_get_shader_param(struct pipe_screen* pscreen,
 	case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
 	case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
 		return 16;
-	case PIPE_SHADER_CAP_PREFERRED_IR:
-		return PIPE_SHADER_IR_NIR;
 	case PIPE_SHADER_CAP_SUPPORTED_IRS: {
 		int ir = 0;
 		if (shader == PIPE_SHADER_COMPUTE)
@@ -713,11 +715,11 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws,
 	}
 
 	rscreen->b.debug_flags |= debug_get_flags_option("R600_DEBUG", r600_debug_options, 0);
-	if (debug_get_bool_option("R600_DEBUG_COMPUTE", FALSE))
+	if (debug_get_bool_option("R600_DEBUG_COMPUTE", false))
 		rscreen->b.debug_flags |= DBG_COMPUTE;
-	if (debug_get_bool_option("R600_DUMP_SHADERS", FALSE))
+	if (debug_get_bool_option("R600_DUMP_SHADERS", false))
 		rscreen->b.debug_flags |= DBG_ALL_SHADERS | DBG_FS;
-	if (!debug_get_bool_option("R600_HYPERZ", TRUE))
+	if (!debug_get_bool_option("R600_HYPERZ", true))
 		rscreen->b.debug_flags |= DBG_NO_HYPERZ;
 
 	if (rscreen->b.family == CHIP_UNKNOWN) {

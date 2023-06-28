@@ -738,40 +738,10 @@ threaded_context_flush(struct pipe_context *_pipe,
    }
 }
 
-/* Must be called before TC binds, maps, invalidates, or adds a buffer to a buffer list. */
-static void tc_touch_buffer(struct threaded_context *tc, struct threaded_resource *buf)
-{
-   const struct threaded_context *first_user = buf->first_user;
-
-   /* Fast path exit to avoid additional branches */
-   if (likely(first_user == tc))
-      return;
-
-   if (!first_user)
-      first_user = p_atomic_cmpxchg_ptr(&buf->first_user, NULL, tc);
-
-   /* The NULL check might seem unnecessary here but it's actually critical:
-    * p_atomic_cmpxchg will return NULL if it succeeds, meaning that NULL is
-    * equivalent to "we're the first user" here. (It's equally important not
-    * to ignore the result of the cmpxchg above, since it might fail.)
-    * Without the NULL check, we'd set the flag unconditionally, which is bad.
-    */
-   if (first_user && first_user != tc && !buf->used_by_multiple_contexts)
-      buf->used_by_multiple_contexts = true;
-}
-
-static bool tc_is_buffer_shared(struct threaded_resource *buf)
-{
-   return buf->is_shared || buf->used_by_multiple_contexts;
-}
-
 static void
 tc_add_to_buffer_list(struct threaded_context *tc, struct tc_buffer_list *next, struct pipe_resource *buf)
 {
-   struct threaded_resource *tbuf = threaded_resource(buf);
-   tc_touch_buffer(tc, tbuf);
-
-   uint32_t id = tbuf->buffer_id_unique;
+   uint32_t id = threaded_resource(buf)->buffer_id_unique;
    BITSET_SET(next->buffer_list, id & TC_BUFFER_ID_MASK);
 }
 
@@ -779,10 +749,7 @@ tc_add_to_buffer_list(struct threaded_context *tc, struct tc_buffer_list *next, 
 static void
 tc_bind_buffer(struct threaded_context *tc, uint32_t *binding, struct tc_buffer_list *next, struct pipe_resource *buf)
 {
-   struct threaded_resource *tbuf = threaded_resource(buf);
-   tc_touch_buffer(tc, tbuf);
-
-   uint32_t id = tbuf->buffer_id_unique;
+   uint32_t id = threaded_resource(buf)->buffer_id_unique;
    *binding = id;
    BITSET_SET(next->buffer_list, id & TC_BUFFER_ID_MASK);
 }
@@ -1040,8 +1007,6 @@ threaded_resource_init(struct pipe_resource *res, bool allow_cpu_storage)
 {
    struct threaded_resource *tres = threaded_resource(res);
 
-   tres->first_user = NULL;
-   tres->used_by_multiple_contexts = false;
    tres->latest = &tres->b;
    tres->cpu_storage = NULL;
    util_range_init(&tres->valid_buffer_range);
@@ -1415,7 +1380,7 @@ tc_create_vertex_elements_state(struct pipe_context *_pipe, unsigned count,
 
 struct tc_sampler_states {
    struct tc_call_base base;
-   ubyte shader, start, count;
+   uint8_t shader, start, count;
    void *slot[0]; /* more will be allocated if needed */
 };
 
@@ -1568,7 +1533,7 @@ tc_set_tess_state(struct pipe_context *_pipe,
 
 struct tc_patch_vertices {
    struct tc_call_base base;
-   ubyte patch_vertices;
+   uint8_t patch_vertices;
 };
 
 static uint16_t
@@ -1591,7 +1556,7 @@ tc_set_patch_vertices(struct pipe_context *_pipe, uint8_t patch_vertices)
 
 struct tc_constant_buffer_base {
    struct tc_call_base base;
-   ubyte shader, index;
+   uint8_t shader, index;
    bool is_null;
 };
 
@@ -1674,8 +1639,8 @@ tc_set_constant_buffer(struct pipe_context *_pipe,
 
 struct tc_inlinable_constants {
    struct tc_call_base base;
-   ubyte shader;
-   ubyte num_values;
+   uint8_t shader;
+   uint8_t num_values;
    uint32_t values[MAX_INLINABLE_UNIFORMS];
 };
 
@@ -1731,7 +1696,7 @@ tc_set_sample_locations(struct pipe_context *_pipe, size_t size, const uint8_t *
 
 struct tc_scissors {
    struct tc_call_base base;
-   ubyte start, count;
+   uint8_t start, count;
    struct pipe_scissor_state slot[0]; /* more will be allocated if needed */
 };
 
@@ -1760,7 +1725,7 @@ tc_set_scissor_states(struct pipe_context *_pipe,
 
 struct tc_viewports {
    struct tc_call_base base;
-   ubyte start, count;
+   uint8_t start, count;
    struct pipe_viewport_state slot[0]; /* more will be allocated if needed */
 };
 
@@ -1793,7 +1758,7 @@ tc_set_viewport_states(struct pipe_context *_pipe,
 struct tc_window_rects {
    struct tc_call_base base;
    bool include;
-   ubyte count;
+   uint8_t count;
    struct pipe_scissor_state slot[0]; /* more will be allocated if needed */
 };
 
@@ -1822,7 +1787,7 @@ tc_set_window_rectangles(struct pipe_context *_pipe, bool include,
 
 struct tc_sampler_views {
    struct tc_call_base base;
-   ubyte shader, start, count, unbind_num_trailing_slots;
+   uint8_t shader, start, count, unbind_num_trailing_slots;
    struct pipe_sampler_view *slot[0]; /* more will be allocated if needed */
 };
 
@@ -1899,8 +1864,8 @@ tc_set_sampler_views(struct pipe_context *_pipe,
 
 struct tc_shader_images {
    struct tc_call_base base;
-   ubyte shader, start, count;
-   ubyte unbind_num_trailing_slots;
+   uint8_t shader, start, count;
+   uint8_t unbind_num_trailing_slots;
    struct pipe_image_view slot[0]; /* more will be allocated if needed */
 };
 
@@ -1990,7 +1955,7 @@ tc_set_shader_images(struct pipe_context *_pipe,
 
 struct tc_shader_buffers {
    struct tc_call_base base;
-   ubyte shader, start, count;
+   uint8_t shader, start, count;
    bool unbind;
    unsigned writable_bitmask;
    struct pipe_shader_buffer slot[0]; /* more will be allocated if needed */
@@ -2074,8 +2039,8 @@ tc_set_shader_buffers(struct pipe_context *_pipe,
 
 struct tc_vertex_buffers {
    struct tc_call_base base;
-   ubyte start, count;
-   ubyte unbind_num_trailing_slots;
+   uint8_t start, count;
+   uint8_t unbind_num_trailing_slots;
    struct pipe_vertex_buffer slot[0]; /* more will be allocated if needed */
 };
 
@@ -2436,9 +2401,7 @@ tc_call_replace_buffer_storage(struct pipe_context *pipe, void *call, uint64_t *
    return call_size(tc_replace_buffer_storage);
 }
 
-/* Return true if the buffer has been invalidated or is idle.
- * Note that callers must've called tc_touch_buffer before calling
- * this function. */
+/* Return true if the buffer has been invalidated or is idle. */
 static bool
 tc_invalidate_buffer(struct threaded_context *tc,
                      struct threaded_resource *tbuf)
@@ -2459,7 +2422,7 @@ tc_invalidate_buffer(struct threaded_context *tc,
    struct pipe_resource *new_buf;
 
    /* Shared, pinned, and sparse buffers can't be reallocated. */
-   if (tc_is_buffer_shared(tbuf) ||
+   if (tbuf->is_shared ||
        tbuf->is_user_ptr ||
        tbuf->b.flags & (PIPE_RESOURCE_FLAG_SPARSE | PIPE_RESOURCE_FLAG_UNMAPPABLE))
       return false;
@@ -2504,8 +2467,6 @@ tc_invalidate_buffer(struct threaded_context *tc,
    return true;
 }
 
-/* Note that callers must've called tc_touch_buffer first before
- * calling tc_improve_map_buffer_flags. */
 static unsigned
 tc_improve_map_buffer_flags(struct threaded_context *tc,
                             struct threaded_resource *tres, unsigned usage,
@@ -2618,14 +2579,6 @@ tc_buffer_map(struct pipe_context *_pipe,
     * this shouldn't normally be necessary because glthread only uses large buffers.
     */
    if (usage & PIPE_MAP_THREAD_SAFE)
-      tc_buffer_disable_cpu_storage(resource);
-
-   tc_touch_buffer(tc, tres);
-
-   /* CPU storage relies on buffer invalidation never failing. With shared buffers,
-    * invalidation might not always be possible, so CPU storage can't be used.
-    */
-   if (tc_is_buffer_shared(tres))
       tc_buffer_disable_cpu_storage(resource);
 
    usage = tc_improve_map_buffer_flags(tc, tres, usage, box->x, box->width);
@@ -2930,10 +2883,7 @@ tc_buffer_unmap(struct pipe_context *_pipe, struct pipe_transfer *transfer)
       assert(tres->cpu_storage);
 
       if (tres->cpu_storage) {
-         /* Invalidations shouldn't fail as long as CPU storage is allowed. */
-         ASSERTED bool invalidated = tc_invalidate_buffer(tc, tres);
-         assert(invalidated);
-
+         tc_invalidate_buffer(tc, tres);
          tc_buffer_subdata(&tc->base, &tres->b,
                            PIPE_MAP_UNSYNCHRONIZED |
                            TC_TRANSFER_MAP_UPLOAD_CPU_STORAGE,
@@ -3061,8 +3011,6 @@ tc_buffer_subdata(struct pipe_context *_pipe,
    if (!size)
       return;
 
-   tc_touch_buffer(tc, tres);
-
    usage |= PIPE_MAP_WRITE;
 
    /* PIPE_MAP_DIRECTLY supresses implicit DISCARD_RANGE. */
@@ -3145,9 +3093,10 @@ tc_buffer_subdata(struct pipe_context *_pipe,
 
 struct tc_texture_subdata {
    struct tc_call_base base;
-   unsigned level, usage, stride, layer_stride;
+   unsigned level, usage, stride;
    struct pipe_box box;
    struct pipe_resource *resource;
+   uintptr_t layer_stride;
    char slot[0]; /* more will be allocated if needed */
 };
 
@@ -3168,16 +3117,16 @@ tc_texture_subdata(struct pipe_context *_pipe,
                    unsigned level, unsigned usage,
                    const struct pipe_box *box,
                    const void *data, unsigned stride,
-                   unsigned layer_stride)
+                   uintptr_t layer_stride)
 {
    struct threaded_context *tc = threaded_context(_pipe);
-   unsigned size;
+   uint64_t size;
 
    assert(box->height >= 1);
    assert(box->depth >= 1);
 
    size = (box->depth - 1) * layer_stride +
-          (box->height - 1) * stride +
+          (box->height - 1) * (uint64_t)stride +
           box->width * util_format_get_blocksize(resource->format);
    if (!size)
       return;
@@ -3204,8 +3153,11 @@ tc_texture_subdata(struct pipe_context *_pipe,
             format = util_format_get_depth_only(format);
          else if (usage & PIPE_MAP_STENCIL_ONLY)
             format = PIPE_FORMAT_S8_UINT;
+
          unsigned stride = util_format_get_stride(format, box->width);
-         unsigned layer_stride = util_format_get_2d_size(format, stride, box->height);
+         uint64_t layer_stride = util_format_get_2d_size(format, stride, box->height);
+         assert(layer_stride * box->depth <= UINT32_MAX);
+
          struct pipe_resource *pres = pipe_buffer_create_with_data(pipe, 0, PIPE_USAGE_STREAM, layer_stride * box->depth, data);
          struct pipe_box src_box = *box;
          src_box.x = src_box.y = src_box.z = 0;
@@ -4415,10 +4367,7 @@ tc_invalidate_resource(struct pipe_context *_pipe,
    struct threaded_context *tc = threaded_context(_pipe);
 
    if (resource->target == PIPE_BUFFER) {
-      /* This can fail, in which case we simply ignore the invalidation request. */
-      struct threaded_resource *tbuf = threaded_resource(resource);
-      tc_touch_buffer(tc, tbuf);
-      tc_invalidate_buffer(tc, tbuf);
+      tc_invalidate_buffer(tc, threaded_resource(resource));
       return;
    }
 

@@ -345,7 +345,7 @@ d3d12_create_blend_state(struct pipe_context *pctx,
       return NULL;
 
    if (blend_state->logicop_enable) {
-      state->desc.RenderTarget[0].LogicOpEnable = TRUE;
+      state->desc.RenderTarget[0].LogicOpEnable = true;
       state->desc.RenderTarget[0].LogicOp = logic_op((pipe_logicop) blend_state->logicop_func);
    }
 
@@ -355,7 +355,7 @@ d3d12_create_blend_state(struct pipe_context *pctx,
 
    int num_targets = 1;
    if (blend_state->independent_blend_enable) {
-      state->desc.IndependentBlendEnable = TRUE;
+      state->desc.IndependentBlendEnable = true;
       num_targets = PIPE_MAX_COLOR_BUFS;
    }
 
@@ -363,7 +363,7 @@ d3d12_create_blend_state(struct pipe_context *pctx,
       const struct pipe_rt_blend_state *rt = blend_state->rt + i;
 
       if (rt->blend_enable) {
-         state->desc.RenderTarget[i].BlendEnable = TRUE;
+         state->desc.RenderTarget[i].BlendEnable = true;
          state->desc.RenderTarget[i].SrcBlend = blend_factor_rgb((pipe_blendfactor) rt->rgb_src_factor);
          state->desc.RenderTarget[i].DestBlend = blend_factor_rgb((pipe_blendfactor) rt->rgb_dst_factor);
          state->desc.RenderTarget[i].BlendOp = blend_op((pipe_blend_func) rt->rgb_func);
@@ -458,21 +458,21 @@ d3d12_create_depth_stencil_alpha_state(struct pipe_context *pctx,
       return NULL;
 
    if (depth_stencil_alpha->depth_enabled) {
-      dsa->desc.DepthEnable = TRUE;
+      dsa->desc.DepthEnable = true;
       dsa->desc.DepthFunc = compare_op((pipe_compare_func) depth_stencil_alpha->depth_func);
    }
 
    /* TODO Add support for GL_depth_bound_tests */
    #if 0
    if (depth_stencil_alpha->depth.bounds_test) {
-      dsa->desc.DepthBoundsTestEnable = TRUE;
+      dsa->desc.DepthBoundsTestEnable = true;
       dsa->min_depth_bounds = depth_stencil_alpha->depth.bounds_min;
       dsa->max_depth_bounds = depth_stencil_alpha->depth.bounds_max;
    }
    #endif
 
    if (depth_stencil_alpha->stencil[0].enabled) {
-      dsa->desc.StencilEnable = TRUE;
+      dsa->desc.StencilEnable = true;
       dsa->desc.FrontFace = stencil_op_state(depth_stencil_alpha->stencil);
    }
 
@@ -2002,9 +2002,9 @@ d3d12_flush_cmdlist_and_wait(struct d3d12_context *ctx)
    struct d3d12_batch *batch = d3d12_current_batch(ctx);
 
    d3d12_foreach_submitted_batch(ctx, old_batch)
-      d3d12_reset_batch(ctx, old_batch, PIPE_TIMEOUT_INFINITE);
+      d3d12_reset_batch(ctx, old_batch, OS_TIMEOUT_INFINITE);
    d3d12_flush_cmdlist(ctx);
-   d3d12_reset_batch(ctx, batch, PIPE_TIMEOUT_INFINITE);
+   d3d12_reset_batch(ctx, batch, OS_TIMEOUT_INFINITE);
 }
 
 static void
@@ -2497,11 +2497,11 @@ d3d12_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
                        0, false);
 
    struct primconvert_config cfg = {};
-   cfg.primtypes_mask = 1 << PIPE_PRIM_POINTS |
-                        1 << PIPE_PRIM_LINES |
-                        1 << PIPE_PRIM_LINE_STRIP |
-                        1 << PIPE_PRIM_TRIANGLES |
-                        1 << PIPE_PRIM_TRIANGLE_STRIP;
+   cfg.primtypes_mask = 1 << MESA_PRIM_POINTS |
+                        1 << MESA_PRIM_LINES |
+                        1 << MESA_PRIM_LINE_STRIP |
+                        1 << MESA_PRIM_TRIANGLES |
+                        1 << MESA_PRIM_TRIANGLE_STRIP;
    cfg.restart_primtypes_mask = cfg.primtypes_mask;
    cfg.fixed_prim_restart = true;
    ctx->primconvert = util_primconvert_create_config(&ctx->base, &cfg);

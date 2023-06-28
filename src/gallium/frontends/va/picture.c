@@ -677,6 +677,12 @@ handleVAEncSliceParameterBufferType(vlVaDriver *drv, vlVaContext *context, vlVaB
       status = vlVaHandleVAEncSliceParameterBufferTypeHEVC(drv, context, buf);
       break;
 
+#if VA_CHECK_VERSION(1, 16, 0)
+   case PIPE_VIDEO_FORMAT_AV1:
+      status = vlVaHandleVAEncSliceParameterBufferTypeAV1(drv, context, buf);
+      break;
+#endif
+
    default:
       break;
    }
@@ -925,8 +931,10 @@ vlVaEndPicture(VADriverContextP ctx, VAContextID context_id)
 
    mtx_lock(&drv->mutex);
    surf = handle_table_get(drv->htab, output_id);
-   if (!surf || !surf->buffer)
+   if (!surf || !surf->buffer) {
+      mtx_unlock(&drv->mutex);
       return VA_STATUS_ERROR_INVALID_SURFACE;
+   }
 
    if (apply_av1_fg) {
       surf->ctx = context_id;

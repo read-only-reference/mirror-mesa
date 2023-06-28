@@ -1456,30 +1456,14 @@ bi_emit_atomic_i32_to(bi_builder *b, bi_index dst, bi_index addr, bi_index arg,
    }
 }
 
-/* gl_FragCoord.xy = u16_to_f32(R59.xy) + 0.5
- * gl_FragCoord.z = ld_vary(fragz)
- * gl_FragCoord.w = ld_vary(fragw)
- */
-
 static void
-bi_emit_load_frag_coord(bi_builder *b, nir_intrinsic_instr *instr)
+bi_emit_load_frag_coord_zw(bi_builder *b, bi_index dst, unsigned channel)
 {
-   bi_index src[4] = {};
-
-   for (unsigned i = 0; i < 2; ++i) {
-      src[i] = bi_fadd_f32(b, bi_u16_to_f32(b, bi_half(bi_preload(b, 59), i)),
-                           bi_imm_f32(0.5f));
-   }
-
-   for (unsigned i = 0; i < 2; ++i) {
-      src[2 + i] = bi_ld_var_special(
-         b, bi_zero(), BI_REGISTER_FORMAT_F32, BI_SAMPLE_CENTER,
-         BI_UPDATE_CLOBBER,
-         (i == 0) ? BI_VARYING_NAME_FRAG_Z : BI_VARYING_NAME_FRAG_W,
-         BI_VECSIZE_NONE);
-   }
-
-   bi_make_vec_to(b, bi_dest_index(&instr->dest), src, NULL, 4, 32);
+   bi_ld_var_special_to(
+      b, dst, bi_zero(), BI_REGISTER_FORMAT_F32, BI_SAMPLE_CENTER,
+      BI_UPDATE_CLOBBER,
+      (channel == 2) ? BI_VARYING_NAME_FRAG_Z : BI_VARYING_NAME_FRAG_W,
+      BI_VECSIZE_NONE);
 }
 
 static void
@@ -1578,9 +1562,9 @@ bi_emit_intrinsic(bi_builder *b, nir_intrinsic_instr *instr)
       break;
 
    case nir_intrinsic_scoped_barrier:
-      if (nir_intrinsic_execution_scope(instr) != NIR_SCOPE_NONE) {
+      if (nir_intrinsic_execution_scope(instr) != SCOPE_NONE) {
          assert(b->shader->stage != MESA_SHADER_FRAGMENT);
-         assert(nir_intrinsic_execution_scope(instr) > NIR_SCOPE_SUBGROUP &&
+         assert(nir_intrinsic_execution_scope(instr) > SCOPE_SUBGROUP &&
                 "todo: subgroup barriers (different divergence rules)");
          bi_barrier(b);
       }
@@ -1657,8 +1641,13 @@ bi_emit_intrinsic(bi_builder *b, nir_intrinsic_instr *instr)
       bi_split_dest(b, instr->dest);
       break;
 
-   case nir_intrinsic_load_frag_coord:
-      bi_emit_load_frag_coord(b, instr);
+   case nir_intrinsic_load_pixel_coord:
+      /* Vectorized load of the preloaded i16vec2 */
+      bi_mov_i32_to(b, dst, bi_preload(b, 59));
+      break;
+
+   case nir_intrinsic_load_frag_coord_zw:
+      bi_emit_load_frag_coord_zw(b, dst, nir_intrinsic_component(instr));
       break;
 
    case nir_intrinsic_load_converted_output_pan:
@@ -4330,7 +4319,8 @@ bifrost_nir_lower_blend_components(struct nir_builder *b, nir_instr *instr,
 }
 
 static nir_mem_access_size_align
-mem_access_size_align_cb(nir_intrinsic_op intrin, uint8_t bytes, uint32_t align,
+mem_access_size_align_cb(nir_intrinsic_op intrin, uint8_t bytes,
+                         uint8_t input_bit_size, uint32_t align,
                          uint32_t align_offset, bool offset_is_const,
                          const void *cb_data)
 {
@@ -4725,12 +4715,13 @@ bifrost_preprocess_nir(nir_shader *nir, unsigned gpu_id)
       NIR_PASS_V(nir, pan_nir_lower_store_component);
    }
 
-   NIR_PASS_V(nir, nir_lower_mem_access_bit_sizes,
-              nir_var_mem_ubo | nir_var_mem_ssbo | nir_var_mem_constant |
-                 nir_var_mem_task_payload | nir_var_shader_temp |
-                 nir_var_function_temp | nir_var_mem_global |
-                 nir_var_mem_shared,
-              mem_access_size_align_cb, NULL);
+   nir_lower_mem_access_bit_sizes_options mem_size_options = {
+      .modes = nir_var_mem_ubo | nir_var_mem_ssbo | nir_var_mem_constant |
+               nir_var_mem_task_payload | nir_var_shader_temp |
+               nir_var_function_temp | nir_var_mem_global | nir_var_mem_shared,
+      .callback = mem_access_size_align_cb,
+   };
+   NIR_PASS_V(nir, nir_lower_mem_access_bit_sizes, &mem_size_options);
 
    NIR_PASS_V(nir, nir_lower_ssbo);
    NIR_PASS_V(nir, pan_lower_sample_pos);
@@ -4761,6 +4752,7 @@ bifrost_preprocess_nir(nir_shader *nir, unsigned gpu_id)
    NIR_PASS_V(nir, nir_lower_flrp, 16 | 32 | 64, false /* always_precise */);
    NIR_PASS_V(nir, nir_lower_var_copies);
    NIR_PASS_V(nir, nir_lower_alu);
+   NIR_PASS_V(nir, nir_lower_frag_coord_to_pixel_coord);
 }
 
 static bi_context *

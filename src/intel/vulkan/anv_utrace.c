@@ -151,9 +151,18 @@ anv_device_utrace_flush_cmd_buffers(struct anv_queue *queue,
       if (result != VK_SUCCESS)
          goto error_trace_buf;
 
+      uint32_t batch_size = 512; /* 128 dwords of setup */
+      if (intel_needs_workaround(device->info, 16013994831)) {
+         /* Enable/Disable preemption at the begin/end */
+         batch_size += 2 * (250 /* 250 MI_NOOPs*/ +
+                            6   /* PIPE_CONTROL */ +
+                            3   /* MI_LRI */) * 4 /* dwords */;
+      }
+      batch_size += 256 * utrace_copies; /* 64 dwords per copy */
+      batch_size = align(batch_size + 4, 8); /* MI_BATCH_BUFFER_END */
+
       result = anv_bo_pool_alloc(&device->utrace_bo_pool,
-                                 /* 128 dwords of setup + 64 dwords per copy */
-                                 align(512 + 64 * utrace_copies, 4096),
+                                 align(batch_size, 4096),
                                  &submit->batch_bo);
       if (result != VK_SUCCESS)
          goto error_batch_buf;
@@ -237,7 +246,10 @@ anv_utrace_create_ts_buffer(struct u_trace_context *utctx, uint32_t size_b)
    assert(result == VK_SUCCESS);
 
    memset(bo->map, 0, bo->size);
-   intel_clflush_range(bo->map, bo->size);
+#ifdef SUPPORT_INTEL_INTEGRATED_GPUS
+   if (device->physical->memory.need_clflush)
+         intel_clflush_range(bo->map, bo->size);
+#endif
 
    return bo;
 }
@@ -386,6 +398,7 @@ anv_pipe_flush_bit_to_ds_stall_flag(enum anv_pipe_bits bits)
       { .anv = ANV_PIPE_UNTYPED_DATAPORT_CACHE_FLUSH_BIT, .ds = INTEL_DS_UNTYPED_DATAPORT_CACHE_FLUSH_BIT, },
       { .anv = ANV_PIPE_PSS_STALL_SYNC_BIT,               .ds = INTEL_DS_PSS_STALL_SYNC_BIT, },
       { .anv = ANV_PIPE_END_OF_PIPE_SYNC_BIT,             .ds = INTEL_DS_END_OF_PIPE_BIT, },
+      { .anv = ANV_PIPE_CCS_CACHE_FLUSH_BIT,              .ds = INTEL_DS_CCS_CACHE_FLUSH_BIT, },
    };
 
    enum intel_ds_stall_flag ret = 0;

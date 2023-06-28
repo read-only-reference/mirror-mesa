@@ -938,8 +938,7 @@ nv50_blitter_make_fp(struct pipe_context *pipe,
 
    const int chipset = nouveau_screen(pipe->screen)->device->chipset;
    const nir_shader_compiler_options *options =
-      nv50_ir_nir_shader_compiler_options(chipset, PIPE_SHADER_FRAGMENT,
-                                          true);
+      nv50_ir_nir_shader_compiler_options(chipset, PIPE_SHADER_FRAGMENT);
 
    struct nir_builder b =
       nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT, options,
@@ -1749,7 +1748,7 @@ nv50_blit(struct pipe_context *pipe, const struct pipe_blit_info *info)
 {
    struct nv50_context *nv50 = nv50_context(pipe);
    struct nouveau_pushbuf *push = nv50->base.pushbuf;
-   bool eng3d = FALSE;
+   bool eng3d = false;
 
    if (info->src.box.width == 0 || info->src.box.height == 0 ||
        info->dst.box.width == 0 || info->dst.box.height == 0) {

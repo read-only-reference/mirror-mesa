@@ -36,9 +36,9 @@
 #include "compiler/brw_nir.h"
 #include "compiler/brw_nir_rt.h"
 #include "anv_nir.h"
-#include "nir/nir_vulkan.h"
 #include "nir/nir_xfb_info.h"
 #include "spirv/nir_spirv.h"
+#include "vk_nir_convert_ycbcr.h"
 #include "vk_nir.h"
 #include "vk_pipeline.h"
 #include "vk_render_pass.h"
@@ -62,10 +62,9 @@ anv_nir_prim_count_store(nir_builder *b, nir_ssa_def *val)
    primitive_count->data.location = VARYING_SLOT_PRIMITIVE_COUNT;
    primitive_count->data.interpolation = INTERP_MODE_NONE;
 
-   nir_ssa_def *local_invocation_index = nir_build_load_local_invocation_index(b);
+   nir_ssa_def *local_invocation_index = nir_load_local_invocation_index(b);
 
-   nir_ssa_def *cmp = nir_ieq(b, local_invocation_index,
-                                  nir_imm_int(b, 0));
+   nir_ssa_def *cmp = nir_ieq_imm(b, local_invocation_index, 0);
    nir_if *if_stmt = nir_push_if(b, cmp);
    {
       nir_deref_instr *prim_count_deref = nir_build_deref_var(b, primitive_count);
@@ -123,7 +122,7 @@ anv_nir_lower_set_vtx_and_prim_count(nir_shader *nir)
    if (state.primitive_count == NULL) {
       nir_builder b;
       nir_function_impl *entrypoint = nir_shader_get_entrypoint(nir);
-      nir_builder_init(&b, entrypoint);
+      b = nir_builder_create(entrypoint);
       b.cursor = nir_before_block(nir_start_block(entrypoint));
       nir_ssa_def *zero = nir_imm_int(&b, 0);
       state.primitive_count = anv_nir_prim_count_store(&b, zero);
@@ -4224,7 +4223,11 @@ VkResult anv_GetPipelineExecutableStatisticsKHR(
       WRITE_STR(stat->description,
                 "Largest SIMD dispatch width.");
       stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.max_dispatch_width;
+      /* Report the max dispatch width only on the smallest SIMD variant */
+      if (exe->stage != MESA_SHADER_FRAGMENT || exe->stats.dispatch_width == 8)
+         stat->value.u64 = exe->stats.max_dispatch_width;
+      else
+         stat->value.u64 = 0;
    }
 
    vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
@@ -4235,15 +4238,16 @@ VkResult anv_GetPipelineExecutableStatisticsKHR(
       stat->value.u64 = exe->stats.max_live_registers;
    }
 
-   if (gl_shader_stage_uses_workgroup(exe->stage)) {
-      vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-         WRITE_STR(stat->name, "Workgroup Memory Size");
-         WRITE_STR(stat->description,
-                   "Number of bytes of workgroup shared memory used by this "
-                   "shader including any padding.");
-         stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
+   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
+      WRITE_STR(stat->name, "Workgroup Memory Size");
+      WRITE_STR(stat->description,
+                "Number of bytes of workgroup shared memory used by this "
+                "shader including any padding.");
+      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
+      if (gl_shader_stage_uses_workgroup(exe->stage))
          stat->value.u64 = prog_data->total_shared;
-      }
+      else
+         stat->value.u64 = 0;
    }
 
    return vk_outarray_status(&out);

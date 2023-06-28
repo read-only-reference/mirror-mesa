@@ -203,8 +203,7 @@ nir_lower_multiview(nir_shader *shader, uint32_t view_mask)
    nir_cf_list body;
    nir_cf_list_extract(&body, &entrypoint->body);
 
-   nir_builder b;
-   nir_builder_init(&b, entrypoint);
+   nir_builder b = nir_builder_create(entrypoint);
    b.cursor = nir_after_cf_list(&entrypoint->body);
 
    /* Loop Index will go from 0 to view_count. */
@@ -251,7 +250,7 @@ nir_lower_multiview(nir_shader *shader, uint32_t view_mask)
    nir_loop* loop = nir_push_loop(&b);
 
    nir_ssa_def *loop_index = nir_load_deref(&b, loop_index_deref);
-   nir_ssa_def *cmp = nir_ige(&b, loop_index, nir_imm_int(&b, view_count));
+   nir_ssa_def *cmp = nir_ige_imm(&b, loop_index, view_count);
    nir_if *loop_check = nir_push_if(&b, cmp);
    nir_jump(&b, nir_jump_break);
    nir_pop_if(&b, loop_check);

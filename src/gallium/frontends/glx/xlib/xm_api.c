@@ -398,8 +398,8 @@ xmesa_get_window_size(Display *dpy, XMesaBuffer b,
 static GLuint
 choose_pixel_format(XMesaVisual v)
 {
-   boolean native_byte_order = (host_byte_order() ==
-                                ImageByteOrder(v->display));
+   bool native_byte_order = (host_byte_order() ==
+                             ImageByteOrder(v->display));
 
    if (   GET_REDMASK(v)   == 0x0000ff
        && GET_GREENMASK(v) == 0x00ff00
@@ -1351,7 +1351,7 @@ void XMesaSwapBuffers( XMesaBuffer b )
          XMesaDisplay xmdpy = xmesa_init_display(b->xm_visual->display);
          struct pipe_screen *screen = xmdpy->screen;
          xmdpy->screen->fence_finish(screen, NULL, fence,
-                                     PIPE_TIMEOUT_INFINITE);
+                                     OS_TIMEOUT_INFINITE);
          xmdpy->screen->fence_reference(screen, &fence, NULL);
       }
    }
@@ -1389,7 +1389,7 @@ void XMesaFlush( XMesaContext c )
       st_context_flush(c->st, ST_FLUSH_FRONT, &fence, NULL, NULL);
       if (fence) {
          xmdpy->screen->fence_finish(xmdpy->screen, NULL, fence,
-                                     PIPE_TIMEOUT_INFINITE);
+                                     OS_TIMEOUT_INFINITE);
          xmdpy->screen->fence_reference(xmdpy->screen, &fence, NULL);
       }
       XFlush( c->xm_visual->display );
@@ -1534,7 +1534,7 @@ XMesaBindTexImage(Display *dpy, XMesaBuffer drawable, int buffer,
       pipe_texture_unmap(pipe, tex_xfer);
 
       st_context_teximage(st, GL_TEXTURE_2D, 0 /* level */, internal_format,
-                          res, FALSE /* no mipmap */);
+                          res, false /* no mipmap */);
 
    }
 }

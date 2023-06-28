@@ -39,8 +39,8 @@ build_leaf_is_procedural(nir_builder *b, struct brw_nir_rt_mem_hit_defs *hit)
       return nir_imm_true(b);
 
    default:
-      return nir_ieq(b, hit->leaf_type,
-                        nir_imm_int(b, BRW_RT_BVH_NODE_TYPE_PROCEDURAL));
+      return nir_ieq_imm(b, hit->leaf_type,
+                            BRW_RT_BVH_NODE_TYPE_PROCEDURAL);
    }
 }
 
@@ -50,8 +50,7 @@ lower_rt_intrinsics_impl(nir_function_impl *impl,
 {
    bool progress = false;
 
-   nir_builder build;
-   nir_builder_init(&build, impl);
+   nir_builder build = nir_builder_create(impl);
    nir_builder *b = &build;
 
    b->cursor = nir_before_block(nir_start_block(b->impl));
@@ -383,8 +382,7 @@ void
 brw_nir_lower_rt_intrinsics(nir_shader *nir,
                             const struct intel_device_info *devinfo)
 {
-   nir_foreach_function(function, nir) {
-      if (function->impl)
-         lower_rt_intrinsics_impl(function->impl, devinfo);
+   nir_foreach_function_impl(impl, nir) {
+      lower_rt_intrinsics_impl(impl, devinfo);
    }
 }

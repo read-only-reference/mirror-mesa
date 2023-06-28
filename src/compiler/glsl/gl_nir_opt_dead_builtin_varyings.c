@@ -92,15 +92,6 @@ initialise_varying_info(struct varying_info *info, nir_variable_mode mode,
    memset(info->backcolor, 0, sizeof(info->backcolor));
 }
 
-/**
- * Built-in / reserved GL variables names start with "gl_"
- */
-static bool
-is_gl_identifier(const char *s)
-{
-   return s && s[0] == 'g' && s[1] == 'l' && s[2] == '_';
-}
-
 static void
 gather_info_on_varying_deref(struct varying_info *info, nir_deref_instr *deref)
 {
@@ -412,8 +403,7 @@ replace_varyings(const struct gl_constants *consts,
    }
 
    nir_function_impl *impl = nir_shader_get_entrypoint(shader->Program->nir);
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    /* assert that functions have been inlined before packing is called */
    nir_foreach_function(f, shader->Program->nir) {

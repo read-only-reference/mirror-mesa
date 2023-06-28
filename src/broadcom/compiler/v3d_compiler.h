@@ -99,6 +99,8 @@ enum qfile {
         /**
          * VPM reads use this with an index value to say what part of the VPM
          * is being read.
+         *
+         * Used only for ver < 40. For ver >= 40 we use ldvpm.
          */
         QFILE_VPM,
 
@@ -1180,8 +1182,6 @@ bool vir_opt_constant_alu(struct v3d_compile *c);
 bool v3d_nir_lower_io(nir_shader *s, struct v3d_compile *c);
 bool v3d_nir_lower_line_smooth(nir_shader *shader);
 bool v3d_nir_lower_logic_ops(nir_shader *s, struct v3d_compile *c);
-bool v3d_nir_lower_robust_buffer_access(nir_shader *s, struct v3d_compile *c);
-bool v3d_nir_lower_robust_image_access(nir_shader *s, struct v3d_compile *c);
 bool v3d_nir_lower_scratch(nir_shader *s);
 bool v3d_nir_lower_txf_ms(nir_shader *s);
 bool v3d_nir_lower_image_load_store(nir_shader *s);

@@ -179,20 +179,36 @@ init_common_queue_state(struct anv_queue *queue, struct anv_batch *batch)
    device->l3_config = cfg;
 #endif
 
+#if GFX_VERx10 == 125
+   /* Even though L3 partial write merging is supposed to be enabled
+    * by default on Gfx12.5 according to the hardware spec, i915
+    * appears to accidentally clear the enables during context
+    * initialization, so make sure to enable them here since partial
+    * write merging has a large impact on rendering performance.
+    */
+   anv_batch_write_reg(batch, GENX(L3SQCREG5), reg) {
+      reg.L3CachePartialWriteMergeTimerInitialValue = 0x7f;
+      reg.CompressiblePartialWriteMergeEnable = true;
+      reg.CoherentPartialWriteMergeEnable = true;
+      reg.CrossTilePartialWriteMergeEnable = true;
+   }
+#endif
+
 #if GFX_VER >= 125
    /* Wa_14014427904 - We need additional invalidate/flush when
     * emitting NP state commands with ATS-M in compute mode.
     */
    if (intel_device_info_is_atsm(device->info) &&
        queue->family->engine_class == INTEL_ENGINE_CLASS_COMPUTE) {
-      anv_batch_emit(batch, GENX(PIPE_CONTROL), pc) {
-         pc.CommandStreamerStallEnable = true;
-         pc.StateCacheInvalidationEnable = true;
-         pc.ConstantCacheInvalidationEnable = true;
-         pc.UntypedDataPortCacheFlushEnable = true;
-         pc.TextureCacheInvalidationEnable = true;
-         pc.InstructionCacheInvalidateEnable = true;
-         pc.HDCPipelineFlushEnable = true;
+      genX(batch_emit_pipe_control)
+         (batch, device->info,
+          ANV_PIPE_CS_STALL_BIT |
+          ANV_PIPE_STATE_CACHE_INVALIDATE_BIT |
+          ANV_PIPE_CONSTANT_CACHE_INVALIDATE_BIT |
+          ANV_PIPE_UNTYPED_DATAPORT_CACHE_FLUSH_BIT |
+          ANV_PIPE_TEXTURE_CACHE_INVALIDATE_BIT |
+          ANV_PIPE_INSTRUCTION_CACHE_INVALIDATE_BIT |
+          ANV_PIPE_HDC_PIPELINE_FLUSH_BIT);
       }
    }
 #endif
@@ -203,16 +219,15 @@ init_common_queue_state(struct anv_queue *queue, struct anv_batch *batch)
 #if GFX_VER >= 12
 
 #if GFX_VERx10 >= 125
-   anv_batch_emit(batch, GENX(PIPE_CONTROL), pc) {
-      /* Wa_14016407139:
-       *
-       * "On Surface state base address modification, for 3D workloads, SW must
-       *  always program PIPE_CONTROL either with CS Stall or PS sync stall. In
-       *  both the cases set Render Target Cache Flush Enable".
-       */
-      pc.RenderTargetCacheFlushEnable = true;
-      pc.CommandStreamerStallEnable = true;
-   }
+   /* Wa_14016407139:
+    *
+    * "On Surface state base address modification, for 3D workloads, SW must
+    *  always program PIPE_CONTROL either with CS Stall or PS sync stall. In
+    *  both the cases set Render Target Cache Flush Enable".
+    */
+   genX(batch_emit_pipe_control)
+      (batch, device->info, ANV_PIPE_CS_STALL_BIT |
+                            ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT);
 #endif
 
    /* GEN:BUG:1607854226:
@@ -467,10 +482,39 @@ init_render_queue_state(struct anv_queue *queue)
       reg.HZDepthTestLEGEOptimizationDisable = true;
       reg.HZDepthTestLEGEOptimizationDisableMask = true;
    }
+#endif
 
-   /* Wa_1508744258
-    *
-    *    Disable RHWO by setting 0x7010[14] by default except during resolve
+#if GFX_VER == 12
+   anv_batch_write_reg(&batch, GENX(FF_MODE2), reg) {
+      /* On Alchemist, the FF_MODE2 docs for the GS timer say:
+       *
+       *    "The timer value must be set to 224."
+       *
+       * and Wa_16011163337 indicates this is the case for all Gfx12 parts,
+       * and that this is necessary to avoid hanging the HS/DS units.  It
+       * also clarifies that 224 is literally 0xE0 in the bits, not 7*32=224.
+       *
+       * The HS timer docs also have the same quote for Alchemist.  I am
+       * unaware of a reason it needs to be set to 224 on Tigerlake, but
+       * we do so for consistency if nothing else.
+       *
+       * For the TDS timer value, the docs say:
+       *
+       *    "For best performance, a value of 4 should be programmed."
+       *
+       * i915 also sets it this way on Tigerlake due to workarounds.
+       *
+       * The default VS timer appears to be 0, so we leave it at that.
+       */
+      reg.GSTimerValue  = 224;
+      reg.HSTimerValue  = 224;
+      reg.TDSTimerValue = 4;
+      reg.VSTimerValue  = 0;
+   }
+#endif
+
+#if INTEL_NEEDS_WA_1508744258
+   /*    Disable RHWO by setting 0x7010[14] by default except during resolve
     *    pass.
     *
     * We implement global disabling of the optimization here and we toggle it
@@ -1115,9 +1159,8 @@ genX(apply_task_urb_workaround)(struct anv_cmd_buffer *cmd_buffer)
    anv_batch_emit(&cmd_buffer->batch, GENX(3DSTATE_URB_ALLOC_TASK), zero);
 
    /* Issue 'nullprim' to commit the state. */
-   anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
-      pc.PostSyncOperation = WriteImmediateData;
-      pc.Address = cmd_buffer->device->workaround_address;
-   }
+   genX(batch_emit_pipe_control_write)
+      (&cmd_buffer->batch, cmd_buffer->device->info,
+       WriteImmediateData, cmd_buffer->device->workaround_address, 0, 0);
 #endif
 }

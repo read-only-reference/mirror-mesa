@@ -85,8 +85,8 @@ static const struct debug_named_value nir_debug_control[] = {
      "Dump resulting callable shader after each successful lowering/optimization call" },
    { "print_ks", NIR_DEBUG_PRINT_KS,
      "Dump resulting kernel shader after each successful lowering/optimization call" },
-   { "print_consts", NIR_DEBUG_PRINT_CONSTS,
-     "Print const value near each use of const SSA variable" },
+   { "print_no_inline_consts", NIR_DEBUG_PRINT_NO_INLINE_CONSTS,
+     "Do not print const value near each use of const SSA variable" },
    { "print_internal", NIR_DEBUG_PRINT_INTERNAL,
      "Print shaders even if they are marked as internal" },
    DEBUG_NAMED_VALUE_END
@@ -320,6 +320,21 @@ nir_local_variable_create(nir_function_impl *impl,
 
    nir_function_impl_add_variable(impl, var);
 
+   return var;
+}
+
+nir_variable *
+nir_state_variable_create(nir_shader *shader,
+                          const struct glsl_type *type,
+                          const char *name,
+                          const gl_state_index16 tokens[STATE_LENGTH])
+{
+   nir_variable *var = nir_variable_create(shader, nir_var_uniform, type, name);
+   var->num_state_slots = 1;
+   var->state_slots = rzalloc_array(var, nir_state_slot, 1);
+   memcpy(var->state_slots[0].tokens, tokens,
+          sizeof(var->state_slots[0].tokens));
+   shader->num_uniforms++;
    return var;
 }
 
@@ -652,10 +667,7 @@ nir_function_impl_create(nir_function *function)
    assert(function->impl == NULL);
 
    nir_function_impl *impl = nir_function_impl_create_bare(function->shader);
-
-   function->impl = impl;
-   impl->function = function;
-
+   nir_function_set_impl(function, impl);
    return impl;
 }
 
@@ -2252,6 +2264,18 @@ nir_index_instrs(nir_function_impl *impl)
    return index;
 }
 
+void
+nir_shader_clear_pass_flags(nir_shader *shader)
+{
+   nir_foreach_function_impl(impl, shader) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            instr->pass_flags = 0;
+         }
+      }
+   }
+}
+
 unsigned
 nir_shader_index_vars(nir_shader *shader, nir_variable_mode modes)
 {
@@ -2319,8 +2343,7 @@ nir_function_impl_lower_instructions(nir_function_impl *impl,
                                      nir_lower_instr_cb lower,
                                      void *cb_data)
 {
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    nir_metadata preserved = nir_metadata_block_index |
                             nir_metadata_dominance;
@@ -2411,10 +2434,8 @@ nir_shader_lower_instructions(nir_shader *shader,
 {
    bool progress = false;
 
-   nir_foreach_function(function, shader) {
-      if (function->impl &&
-          nir_function_impl_lower_instructions(function->impl,
-                                               filter, lower, cb_data))
+   nir_foreach_function_impl(impl, shader) {
+      if (nir_function_impl_lower_instructions(impl, filter, lower, cb_data))
          progress = true;
    }
 
@@ -3218,6 +3239,8 @@ nir_alu_instr_is_comparison(const nir_alu_instr *instr)
    CASE_ALL_SIZES(nir_op_uge)
    CASE_ALL_SIZES(nir_op_ieq)
    CASE_ALL_SIZES(nir_op_ine)
+   CASE_ALL_SIZES(nir_op_bitz)
+   CASE_ALL_SIZES(nir_op_bitnz)
    case nir_op_inot:
       return true;
    default:
@@ -3250,6 +3273,73 @@ nir_intrinsic_dest_components(nir_intrinsic_instr *intr)
       return info->dest_components;
    else
       return intr->num_components;
+}
+
+nir_alu_type
+nir_intrinsic_instr_src_type(const nir_intrinsic_instr *intrin, unsigned src)
+{
+   /* We could go nuts here, but we'll just handle a few simple
+    * cases and let everything else be untyped.
+    */
+   switch (intrin->intrinsic) {
+   case nir_intrinsic_store_deref: {
+      nir_deref_instr *deref = nir_src_as_deref(intrin->src[0]);
+      if (src == 1 && intrin->src[1].is_ssa)
+         return nir_get_nir_type_for_glsl_type(deref->type);
+      break;
+   }
+
+   case nir_intrinsic_store_output:
+      if (src == 0 && intrin->src[0].is_ssa)
+         return nir_intrinsic_src_type(intrin);
+      break;
+
+   default:
+      break;
+   }
+
+   /* For the most part, we leave other intrinsics alone.  Most
+    * of them don't matter in OpenGL ES 2.0 drivers anyway.
+    * However, we should at least check if this is some sort of
+    * IO intrinsic and flag it's offset and index sources.
+    */
+   {
+      int offset_src_idx = nir_get_io_offset_src_number(intrin);
+      if (src == offset_src_idx) {
+         const nir_src *offset_src = offset_src_idx >= 0 ? &intrin->src[offset_src_idx] : NULL;
+         if (offset_src && offset_src->is_ssa)
+            return nir_type_int;
+      }
+   }
+
+   return nir_type_invalid;
+}
+
+nir_alu_type
+nir_intrinsic_instr_dest_type(const nir_intrinsic_instr *intrin)
+{
+   /* We could go nuts here, but we'll just handle a few simple
+    * cases and let everything else be untyped.
+    */
+   switch (intrin->intrinsic) {
+   case nir_intrinsic_load_deref: {
+      nir_deref_instr *deref = nir_src_as_deref(intrin->src[0]);
+      if (intrin->dest.is_ssa)
+         return nir_get_nir_type_for_glsl_type(deref->type);
+      break;
+   }
+
+   case nir_intrinsic_load_input:
+   case nir_intrinsic_load_uniform:
+      if (intrin->dest.is_ssa)
+         return nir_intrinsic_dest_type(intrin);
+      break;
+
+   default:
+      break;
+   }
+
+   return nir_type_invalid;
 }
 
 /**

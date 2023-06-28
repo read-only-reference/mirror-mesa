@@ -8,7 +8,7 @@
 #include "spirv/nir_spirv.h"
 #include "util/mesa-sha1.h"
 #include "nir/nir_xfb_info.h"
-#include "nir/nir_vulkan.h"
+#include "vk_nir_convert_ycbcr.h"
 #include "vk_pipeline.h"
 #include "vk_util.h"
 
@@ -156,7 +156,7 @@ lower_load_push_constant(struct tu_device *dev,
    nir_ssa_def *load =
       nir_load_uniform(b, instr->num_components,
             instr->dest.ssa.bit_size,
-            nir_ushr(b, instr->src[0].ssa, nir_imm_int(b, 2)),
+            nir_ushr_imm(b, instr->src[0].ssa, 2),
             .base = base);
 
    nir_ssa_def_rewrite_uses(&instr->dest.ssa, load);
@@ -283,7 +283,7 @@ lower_ssbo_ubo_intrinsic(struct tu_device *dev,
        intrin->intrinsic == nir_intrinsic_load_ssbo &&
        (nir_intrinsic_access(intrin) & ACCESS_CAN_REORDER) &&
        intrin->dest.ssa.bit_size > 16) {
-      descriptor_idx = nir_iadd(b, descriptor_idx, nir_imm_int(b, 1));
+      descriptor_idx = nir_iadd_imm(b, descriptor_idx, 1);
    }
 
    nir_ssa_def *results[MAX_SETS + 1] = { NULL };
@@ -374,8 +374,7 @@ build_bindless(struct tu_device *dev, nir_builder *b,
          return nir_imm_int(b, idx);
 
       nir_ssa_def *arr_index = nir_ssa_for_src(b, deref->arr.index, 1);
-      return nir_iadd(b, nir_imm_int(b, idx),
-                      nir_imul_imm(b, arr_index, 2));
+      return nir_iadd_imm(b, nir_imul_imm(b, arr_index, 2), idx);
    }
 
    shader->active_desc_sets |= 1u << set;
@@ -881,7 +880,7 @@ lower_fdm_instr(struct nir_builder *b, nir_instr *instr, void *data)
       nir_ssa_def *frag_offset =
          nir_load_frag_offset_ir3(b, view, .range = options->num_views);
       nir_ssa_def *unscaled_coord = nir_load_frag_coord_unscaled_ir3(b);
-      nir_ssa_def *xy = nir_channels(b, unscaled_coord, 0x3);
+      nir_ssa_def *xy = nir_trim_vector(b, unscaled_coord, 2);
       xy = nir_fmul(b, nir_fsub(b, xy, frag_offset), nir_i2f32(b, frag_size));
       return nir_vec4(b,
                       nir_channel(b, xy, 0),

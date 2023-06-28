@@ -260,7 +260,7 @@ lower_to_shuffle(nir_builder *b, nir_intrinsic_instr *intrin,
       break;
    case nir_intrinsic_quad_broadcast:
       assert(intrin->src[1].is_ssa);
-      index = nir_ior(b, nir_iand(b, index, nir_imm_int(b, ~0x3)),
+      index = nir_ior(b, nir_iand_imm(b, index, ~0x3),
                          intrin->src[1].ssa);
       break;
    case nir_intrinsic_quad_swap_horizontal:
@@ -548,7 +548,7 @@ vec_find_lsb(nir_builder *b, nir_ssa_def *value)
    for (int i = value->num_components - 1; i >= 0; i--) {
       nir_ssa_def *channel = nir_channel(b, vec_result, i);
       /* result = channel >= 0 ? (i * bitsize + channel) : result */
-      result = nir_bcsel(b, nir_ige(b, channel, nir_imm_int(b, 0)),
+      result = nir_bcsel(b, nir_ige_imm(b, channel, 0),
                          nir_iadd_imm(b, channel, i * value->bit_size),
                          result);
    }
@@ -563,7 +563,7 @@ vec_find_msb(nir_builder *b, nir_ssa_def *value)
    for (unsigned i = 0; i < value->num_components; i++) {
       nir_ssa_def *channel = nir_channel(b, vec_result, i);
       /* result = channel >= 0 ? (i * bitsize + channel) : result */
-      result = nir_bcsel(b, nir_ige(b, channel, nir_imm_int(b, 0)),
+      result = nir_bcsel(b, nir_ige_imm(b, channel, 0),
                          nir_iadd_imm(b, channel, i * value->bit_size),
                          result);
    }
@@ -600,8 +600,7 @@ lower_dynamic_quad_broadcast(nir_builder *b, nir_intrinsic_instr *intrin,
       }
 
       if (i)
-         dst = nir_bcsel(b, nir_ieq(b, intrin->src[1].ssa,
-                                    nir_src_for_ssa(nir_imm_int(b, i)).ssa),
+         dst = nir_bcsel(b, nir_ieq_imm(b, intrin->src[1].ssa, i),
                          qbcst_dst, dst);
       else
          dst = qbcst_dst;
@@ -856,7 +855,7 @@ lower_subgroups_instr(nir_builder *b, nir_instr *instr, void *_options)
       break;
 
    case nir_intrinsic_rotate:
-      if (nir_intrinsic_execution_scope(intrin) == NIR_SCOPE_SUBGROUP) {
+      if (nir_intrinsic_execution_scope(intrin) == SCOPE_SUBGROUP) {
          if (options->lower_rotate_to_shuffle)
             return lower_to_shuffle(b, intrin, options);
          else if (options->lower_to_scalar && intrin->num_components > 1)

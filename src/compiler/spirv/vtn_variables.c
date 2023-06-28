@@ -1186,6 +1186,14 @@ vtn_get_builtin_location(struct vtn_builder *b,
       *location = SYSTEM_VALUE_RAY_TRIANGLE_VERTEX_POSITIONS;
       set_mode_system_value(b, mode);
       break;
+   case SpvBuiltInBaryCoordKHR:
+      *location = SYSTEM_VALUE_BARYCENTRIC_PERSP_COORD;
+      set_mode_system_value(b, mode);
+      break;
+   case SpvBuiltInBaryCoordNoPerspKHR:
+      *location = SYSTEM_VALUE_BARYCENTRIC_LINEAR_COORD;
+      set_mode_system_value(b, mode);
+      break;
 
    default:
       vtn_fail("Unsupported builtin: %s (%u)",
@@ -1375,6 +1383,12 @@ apply_var_decoration(struct vtn_builder *b,
       vtn_fail_if(b->shader->info.stage != MESA_SHADER_MESH,
                   "PerViewNV decoration only allowed in Mesh shaders");
       var_data->per_view = true;
+      break;
+
+   case SpvDecorationPerVertexKHR:
+      vtn_fail_if(b->shader->info.stage != MESA_SHADER_FRAGMENT,
+                  "PerVertexKHR decoration only allowed in Fragment shaders");
+      var_data->per_vertex = true;
       break;
 
    default:
@@ -2657,7 +2671,7 @@ vtn_handle_variables(struct vtn_builder *b, SpvOp opcode,
                   "OpArrayLength must take a pointer to a structure type");
       vtn_fail_if(field != ptr->type->length - 1 ||
                   ptr->type->members[field]->base_type != vtn_base_type_array,
-                  "OpArrayLength must reference the last memeber of the "
+                  "OpArrayLength must reference the last member of the "
                   "structure and that must be an array");
 
       struct vtn_access_chain chain = {
@@ -2669,9 +2683,9 @@ vtn_handle_variables(struct vtn_builder *b, SpvOp opcode,
       struct vtn_pointer *array = vtn_pointer_dereference(b, ptr, &chain);
 
       nir_ssa_def *array_length =
-         nir_build_deref_buffer_array_length(&b->nb, 32,
-                                             vtn_pointer_to_ssa(b, array),
-                                             .access=ptr->access | ptr->type->access);
+         nir_deref_buffer_array_length(&b->nb, 32,
+                                       vtn_pointer_to_ssa(b, array),
+                                       .access=ptr->access | ptr->type->access);
 
       vtn_push_nir_ssa(b, w[2], array_length);
       break;

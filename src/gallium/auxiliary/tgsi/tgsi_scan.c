@@ -191,26 +191,26 @@ scan_src_operand(struct tgsi_shader_info *info,
             case TGSI_INTERPOLATE_PERSPECTIVE:
                switch (info->input_interpolate_loc[input]) {
                case TGSI_INTERPOLATE_LOC_CENTER:
-                  info->uses_persp_center = TRUE;
+                  info->uses_persp_center = true;
                   break;
                case TGSI_INTERPOLATE_LOC_CENTROID:
-                  info->uses_persp_centroid = TRUE;
+                  info->uses_persp_centroid = true;
                   break;
                case TGSI_INTERPOLATE_LOC_SAMPLE:
-                  info->uses_persp_sample = TRUE;
+                  info->uses_persp_sample = true;
                   break;
                }
                break;
             case TGSI_INTERPOLATE_LINEAR:
                switch (info->input_interpolate_loc[input]) {
                case TGSI_INTERPOLATE_LOC_CENTER:
-                  info->uses_linear_center = TRUE;
+                  info->uses_linear_center = true;
                   break;
                case TGSI_INTERPOLATE_LOC_CENTROID:
-                  info->uses_linear_centroid = TRUE;
+                  info->uses_linear_centroid = true;
                   break;
                case TGSI_INTERPOLATE_LOC_SAMPLE:
-                  info->uses_linear_sample = TRUE;
+                  info->uses_linear_sample = true;
                   break;
                }
                break;
@@ -303,7 +303,7 @@ scan_src_operand(struct tgsi_shader_info *info,
       }
 
       if (tgsi_get_opcode_info(fullinst->Instruction.Opcode)->is_store) {
-         info->writes_memory = TRUE;
+         info->writes_memory = true;
 
          if (src->Register.File == TGSI_FILE_IMAGE) {
             if (src->Register.Indirect)
@@ -451,13 +451,13 @@ scan_instruction(struct tgsi_shader_info *info,
       case TGSI_INTERPOLATE_PERSPECTIVE:
          switch (fullinst->Instruction.Opcode) {
          case TGSI_OPCODE_INTERP_CENTROID:
-            info->uses_persp_opcode_interp_centroid = TRUE;
+            info->uses_persp_opcode_interp_centroid = true;
             break;
          case TGSI_OPCODE_INTERP_OFFSET:
-            info->uses_persp_opcode_interp_offset = TRUE;
+            info->uses_persp_opcode_interp_offset = true;
             break;
          case TGSI_OPCODE_INTERP_SAMPLE:
-            info->uses_persp_opcode_interp_sample = TRUE;
+            info->uses_persp_opcode_interp_sample = true;
             break;
          }
          break;
@@ -465,13 +465,13 @@ scan_instruction(struct tgsi_shader_info *info,
       case TGSI_INTERPOLATE_LINEAR:
          switch (fullinst->Instruction.Opcode) {
          case TGSI_OPCODE_INTERP_CENTROID:
-            info->uses_linear_opcode_interp_centroid = TRUE;
+            info->uses_linear_opcode_interp_centroid = true;
             break;
          case TGSI_OPCODE_INTERP_OFFSET:
-            info->uses_linear_opcode_interp_offset = TRUE;
+            info->uses_linear_opcode_interp_offset = true;
             break;
          case TGSI_OPCODE_INTERP_SAMPLE:
-            info->uses_linear_opcode_interp_sample = TRUE;
+            info->uses_linear_opcode_interp_sample = true;
             break;
          }
          break;
@@ -486,7 +486,7 @@ scan_instruction(struct tgsi_shader_info *info,
        fullinst->Instruction.Opcode == TGSI_OPCODE_D2I64 ||
        fullinst->Instruction.Opcode == TGSI_OPCODE_U642D ||
        fullinst->Instruction.Opcode == TGSI_OPCODE_I642D)
-      info->uses_doubles = TRUE;
+      info->uses_doubles = true;
 
    for (i = 0; i < fullinst->Instruction.NumSrcRegs; i++) {
       scan_src_operand(info, fullinst, &fullinst->Src[i], i,
@@ -566,7 +566,7 @@ scan_instruction(struct tgsi_shader_info *info,
          assert(fullinst->Instruction.Opcode == TGSI_OPCODE_STORE);
 
          is_mem_inst = true;
-         info->writes_memory = TRUE;
+         info->writes_memory = true;
 
          if (dst->Register.File == TGSI_FILE_IMAGE) {
             if (fullinst->Memory.Texture == TGSI_TEXTURE_2D_MSAA ||
@@ -666,10 +666,10 @@ scan_declaration(struct tgsi_shader_info *info,
          break;
 
       case TGSI_FILE_INPUT:
-         info->input_semantic_name[reg] = (ubyte) semName;
-         info->input_semantic_index[reg] = (ubyte) semIndex;
-         info->input_interpolate[reg] = (ubyte)fulldecl->Interp.Interpolate;
-         info->input_interpolate_loc[reg] = (ubyte)fulldecl->Interp.Location;
+         info->input_semantic_name[reg] = (uint8_t) semName;
+         info->input_semantic_index[reg] = (uint8_t) semIndex;
+         info->input_interpolate[reg] = (uint8_t)fulldecl->Interp.Interpolate;
+         info->input_interpolate_loc[reg] = (uint8_t)fulldecl->Interp.Location;
 
          /* Vertex shaders can have inputs with holes between them. */
          info->num_inputs = MAX2(info->num_inputs, reg + 1);
@@ -695,34 +695,34 @@ scan_declaration(struct tgsi_shader_info *info,
 
          switch (semName) {
          case TGSI_SEMANTIC_INSTANCEID:
-            info->uses_instanceid = TRUE;
+            info->uses_instanceid = true;
             break;
          case TGSI_SEMANTIC_VERTEXID:
-            info->uses_vertexid = TRUE;
+            info->uses_vertexid = true;
             break;
          case TGSI_SEMANTIC_VERTEXID_NOBASE:
-            info->uses_vertexid_nobase = TRUE;
+            info->uses_vertexid_nobase = true;
             break;
          case TGSI_SEMANTIC_BASEVERTEX:
-            info->uses_basevertex = TRUE;
+            info->uses_basevertex = true;
             break;
          case TGSI_SEMANTIC_DRAWID:
-            info->uses_drawid = TRUE;
+            info->uses_drawid = true;
             break;
          case TGSI_SEMANTIC_PRIMID:
-            info->uses_primid = TRUE;
+            info->uses_primid = true;
             break;
          case TGSI_SEMANTIC_INVOCATIONID:
-            info->uses_invocationid = TRUE;
+            info->uses_invocationid = true;
             break;
          case TGSI_SEMANTIC_POSITION:
-            info->reads_position = TRUE;
+            info->reads_position = true;
             break;
          case TGSI_SEMANTIC_FACE:
-            info->uses_frontface = TRUE;
+            info->uses_frontface = true;
             break;
          case TGSI_SEMANTIC_SAMPLEMASK:
-            info->reads_samplemask = TRUE;
+            info->reads_samplemask = true;
             break;
          case TGSI_SEMANTIC_TESSINNER:
          case TGSI_SEMANTIC_TESSOUTER:
@@ -732,25 +732,25 @@ scan_declaration(struct tgsi_shader_info *info,
          break;
 
       case TGSI_FILE_OUTPUT:
-         info->output_semantic_name[reg] = (ubyte) semName;
-         info->output_semantic_index[reg] = (ubyte) semIndex;
+         info->output_semantic_name[reg] = (uint8_t) semName;
+         info->output_semantic_index[reg] = (uint8_t) semIndex;
          info->output_usagemask[reg] |= fulldecl->Declaration.UsageMask;
          info->num_outputs = MAX2(info->num_outputs, reg + 1);
 
          if (fulldecl->Declaration.UsageMask & TGSI_WRITEMASK_X) {
-            info->output_streams[reg] |= (ubyte)fulldecl->Semantic.StreamX;
+            info->output_streams[reg] |= (uint8_t)fulldecl->Semantic.StreamX;
             info->num_stream_output_components[fulldecl->Semantic.StreamX]++;
          }
          if (fulldecl->Declaration.UsageMask & TGSI_WRITEMASK_Y) {
-            info->output_streams[reg] |= (ubyte)fulldecl->Semantic.StreamY << 2;
+            info->output_streams[reg] |= (uint8_t)fulldecl->Semantic.StreamY << 2;
             info->num_stream_output_components[fulldecl->Semantic.StreamY]++;
          }
          if (fulldecl->Declaration.UsageMask & TGSI_WRITEMASK_Z) {
-            info->output_streams[reg] |= (ubyte)fulldecl->Semantic.StreamZ << 4;
+            info->output_streams[reg] |= (uint8_t)fulldecl->Semantic.StreamZ << 4;
             info->num_stream_output_components[fulldecl->Semantic.StreamZ]++;
          }
          if (fulldecl->Declaration.UsageMask & TGSI_WRITEMASK_W) {
-            info->output_streams[reg] |= (ubyte)fulldecl->Semantic.StreamW << 6;
+            info->output_streams[reg] |= (uint8_t)fulldecl->Semantic.StreamW << 6;
             info->num_stream_output_components[fulldecl->Semantic.StreamW]++;
          }
 
@@ -939,226 +939,3 @@ tgsi_scan_shader(const struct tgsi_token *tokens,
    tgsi_parse_free(&parse);
 }
 
-/**
- * Collect information about the arrays of a given register file.
- *
- * @param tokens TGSI shader
- * @param file the register file to scan through
- * @param max_array_id number of entries in @p arrays; should be equal to the
- *                     highest array id, i.e. tgsi_shader_info::array_max[file].
- * @param arrays info for array of each ID will be written to arrays[ID - 1].
- */
-void
-tgsi_scan_arrays(const struct tgsi_token *tokens,
-                 unsigned file,
-                 unsigned max_array_id,
-                 struct tgsi_array_info *arrays)
-{
-   struct tgsi_parse_context parse;
-
-   if (tgsi_parse_init(&parse, tokens) != TGSI_PARSE_OK) {
-      debug_printf("tgsi_parse_init() failed in tgsi_scan_arrays()!\n");
-      return;
-   }
-
-   memset(arrays, 0, sizeof(arrays[0]) * max_array_id);
-
-   while (!tgsi_parse_end_of_tokens(&parse)) {
-      struct tgsi_full_instruction *inst;
-
-      tgsi_parse_token(&parse);
-
-      if (parse.FullToken.Token.Type == TGSI_TOKEN_TYPE_DECLARATION) {
-         struct tgsi_full_declaration *decl = &parse.FullToken.FullDeclaration;
-
-         if (decl->Declaration.Array && decl->Declaration.File == file &&
-             decl->Array.ArrayID > 0 && decl->Array.ArrayID <= max_array_id) {
-            struct tgsi_array_info *array = &arrays[decl->Array.ArrayID - 1];
-            assert(!array->declared);
-            array->declared = true;
-            array->range = decl->Range;
-         }
-      }
-
-      if (parse.FullToken.Token.Type != TGSI_TOKEN_TYPE_INSTRUCTION)
-         continue;
-
-      inst = &parse.FullToken.FullInstruction;
-      for (unsigned i = 0; i < inst->Instruction.NumDstRegs; i++) {
-         const struct tgsi_full_dst_register *dst = &inst->Dst[i];
-         if (dst->Register.File != file)
-            continue;
-
-         if (dst->Register.Indirect) {
-            if (dst->Indirect.ArrayID > 0 &&
-                dst->Indirect.ArrayID <= max_array_id) {
-               arrays[dst->Indirect.ArrayID - 1].writemask |= dst->Register.WriteMask;
-            } else {
-               /* Indirect writes without an ArrayID can write anywhere. */
-               for (unsigned j = 0; j < max_array_id; ++j)
-                  arrays[j].writemask |= dst->Register.WriteMask;
-            }
-         } else {
-            /* Check whether the write falls into any of the arrays anyway. */
-            for (unsigned j = 0; j < max_array_id; ++j) {
-               struct tgsi_array_info *array = &arrays[j];
-               if (array->declared &&
-                   dst->Register.Index >= array->range.First &&
-                   dst->Register.Index <= array->range.Last)
-                  array->writemask |= dst->Register.WriteMask;
-            }
-         }
-      }
-   }
-
-   tgsi_parse_free(&parse);
-
-   return;
-}
-
-static void
-check_no_subroutines(const struct tgsi_full_instruction *inst)
-{
-   switch (inst->Instruction.Opcode) {
-   case TGSI_OPCODE_BGNSUB:
-   case TGSI_OPCODE_ENDSUB:
-   case TGSI_OPCODE_CAL:
-      unreachable("subroutines unhandled");
-   }
-}
-
-static unsigned
-get_inst_tessfactor_writemask(const struct tgsi_shader_info *info,
-                              const struct tgsi_full_instruction *inst)
-{
-   unsigned writemask = 0;
-
-   for (unsigned i = 0; i < inst->Instruction.NumDstRegs; i++) {
-      const struct tgsi_full_dst_register *dst = &inst->Dst[i];
-
-      if (dst->Register.File == TGSI_FILE_OUTPUT &&
-          !dst->Register.Indirect) {
-         unsigned name = info->output_semantic_name[dst->Register.Index];
-
-         if (name == TGSI_SEMANTIC_TESSINNER)
-            writemask |= dst->Register.WriteMask;
-         else if (name == TGSI_SEMANTIC_TESSOUTER)
-            writemask |= dst->Register.WriteMask << 4;
-      }
-   }
-   return writemask;
-}
-
-static unsigned
-get_block_tessfactor_writemask(const struct tgsi_shader_info *info,
-                               struct tgsi_parse_context *parse,
-                               unsigned end_opcode)
-{
-   struct tgsi_full_instruction *inst;
-   unsigned writemask = 0;
-
-   tgsi_parse_token(parse);
-   assert(parse->FullToken.Token.Type == TGSI_TOKEN_TYPE_INSTRUCTION);
-   inst = &parse->FullToken.FullInstruction;
-   check_no_subroutines(inst);
-
-   while (inst->Instruction.Opcode != end_opcode) {
-
-      /* Recursively process nested blocks. */
-      switch (inst->Instruction.Opcode) {
-      case TGSI_OPCODE_IF:
-      case TGSI_OPCODE_UIF:
-         writemask |=
-            get_block_tessfactor_writemask(info, parse, TGSI_OPCODE_ENDIF);
-         break;
-
-      case TGSI_OPCODE_BGNLOOP:
-         writemask |=
-            get_block_tessfactor_writemask(info, parse, TGSI_OPCODE_ENDLOOP);
-         break;
-
-      case TGSI_OPCODE_BARRIER:
-         unreachable("nested BARRIER is illegal");
-         break;
-
-      default:
-         writemask |= get_inst_tessfactor_writemask(info, inst);
-      }
-
-      tgsi_parse_token(parse);
-      assert(parse->FullToken.Token.Type == TGSI_TOKEN_TYPE_INSTRUCTION);
-      inst = &parse->FullToken.FullInstruction;
-      check_no_subroutines(inst);
-   }
-
-   return writemask;
-}
-
-static void
-get_if_block_tessfactor_writemask(const struct tgsi_shader_info *info,
-                                  struct tgsi_parse_context *parse,
-                                  unsigned *upper_block_tf_writemask,
-                                  unsigned *cond_block_tf_writemask)
-{
-   struct tgsi_full_instruction *inst;
-   unsigned then_tessfactor_writemask = 0;
-   unsigned else_tessfactor_writemask = 0;
-   unsigned writemask;
-   bool is_then = true;
-
-   tgsi_parse_token(parse);
-   assert(parse->FullToken.Token.Type == TGSI_TOKEN_TYPE_INSTRUCTION);
-   inst = &parse->FullToken.FullInstruction;
-   check_no_subroutines(inst);
-
-   while (inst->Instruction.Opcode != TGSI_OPCODE_ENDIF) {
-
-      switch (inst->Instruction.Opcode) {
-      case TGSI_OPCODE_ELSE:
-         is_then = false;
-         break;
-
-      /* Recursively process nested blocks. */
-      case TGSI_OPCODE_IF:
-      case TGSI_OPCODE_UIF:
-         get_if_block_tessfactor_writemask(info, parse,
-                                           is_then ? &then_tessfactor_writemask :
-                                                     &else_tessfactor_writemask,
-                                           cond_block_tf_writemask);
-         break;
-
-      case TGSI_OPCODE_BGNLOOP:
-         *cond_block_tf_writemask |=
-            get_block_tessfactor_writemask(info, parse, TGSI_OPCODE_ENDLOOP);
-         break;
-
-      case TGSI_OPCODE_BARRIER:
-         unreachable("nested BARRIER is illegal");
-         break;
-      default:
-         /* Process an instruction in the current block. */
-         writemask = get_inst_tessfactor_writemask(info, inst);
-
-         if (writemask) {
-            if (is_then)
-               then_tessfactor_writemask |= writemask;
-            else
-               else_tessfactor_writemask |= writemask;
-         }
-      }
-
-      tgsi_parse_token(parse);
-      assert(parse->FullToken.Token.Type == TGSI_TOKEN_TYPE_INSTRUCTION);
-      inst = &parse->FullToken.FullInstruction;
-      check_no_subroutines(inst);
-   }
-
-   if (then_tessfactor_writemask || else_tessfactor_writemask) {
-      /* If both statements write the same tess factor channels,
-       * we can say that the upper block writes them too. */
-      *upper_block_tf_writemask |= then_tessfactor_writemask &
-                                   else_tessfactor_writemask;
-      *cond_block_tf_writemask |= then_tessfactor_writemask |
-                                  else_tessfactor_writemask;
-   }
-}

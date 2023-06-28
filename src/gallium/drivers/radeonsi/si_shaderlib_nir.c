@@ -51,14 +51,14 @@ static nir_ssa_def *get_global_ids(nir_builder *b, unsigned num_components)
 
 static void unpack_2x16(nir_builder *b, nir_ssa_def *src, nir_ssa_def **x, nir_ssa_def **y)
 {
-   *x = nir_iand(b, src, nir_imm_int(b, 0xffff));
-   *y = nir_ushr(b, src, nir_imm_int(b, 16));
+   *x = nir_iand_imm(b, src, 0xffff);
+   *y = nir_ushr_imm(b, src, 16);
 }
 
 static void unpack_2x16_signed(nir_builder *b, nir_ssa_def *src, nir_ssa_def **x, nir_ssa_def **y)
 {
    *x = nir_i2i32(b, nir_u2u16(b, src));
-   *y = nir_ishr(b, src, nir_imm_int(b, 16));
+   *y = nir_ishr_imm(b, src, 16);
 }
 
 static nir_ssa_def *
@@ -199,9 +199,9 @@ void *gfx9_create_clear_dcc_msaa_cs(struct si_context *sctx, struct si_texture *
 
    /* Multiply the coordinates by the DCC block size (they are DCC block coordinates). */
    coord = nir_imul(&b, coord,
-                    nir_channels(&b, nir_imm_ivec4(&b, tex->surface.u.gfx9.color.dcc_block_width,
-                                                   tex->surface.u.gfx9.color.dcc_block_height,
-                                                   tex->surface.u.gfx9.color.dcc_block_depth, 0), 0x7));
+                    nir_imm_ivec3(&b, tex->surface.u.gfx9.color.dcc_block_width,
+                                      tex->surface.u.gfx9.color.dcc_block_height,
+                                      tex->surface.u.gfx9.color.dcc_block_depth));
 
    nir_ssa_def *offset =
       ac_nir_dcc_addr_from_coord(&b, &sctx->screen->info, tex->surface.bpe,
@@ -238,7 +238,7 @@ void *si_create_clear_buffer_rmw_cs(struct si_context *sctx)
    nir_ssa_def *address = get_global_ids(&b, 1);
 
    /* address = address * 16; (byte offset, loading one vec4 per thread) */
-   address = nir_ishl(&b, address, nir_imm_int(&b, 4));
+   address = nir_ishl_imm(&b, address, 4);
    
    nir_ssa_def *zero = nir_imm_int(&b, 0);
    nir_ssa_def *data = nir_load_ssbo(&b, 4, 32, zero, address, .align_mul = 4);
@@ -474,7 +474,7 @@ void *si_create_blit_cs(struct si_context *sctx, const union si_compute_blit_sha
 
    /* Add box.xyz. */
    nir_ssa_def *coord_src = NULL, *coord_dst = NULL;
-   unpack_2x16_signed(&b, nir_channels(&b, nir_load_user_data_amd(&b), 0x7),
+   unpack_2x16_signed(&b, nir_trim_vector(&b, nir_load_user_data_amd(&b), 3),
                       &coord_src, &coord_dst);
    coord_dst = nir_iadd(&b, coord_dst, dst_xyz);
    coord_src = nir_iadd(&b, coord_src, src_xyz);

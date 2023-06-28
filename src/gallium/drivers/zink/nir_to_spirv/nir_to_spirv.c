@@ -54,8 +54,8 @@ struct ntv_context {
    gl_shader_stage stage;
    const struct zink_shader_info *sinfo;
 
-   SpvId ubos[2][5]; //8, 16, 32, unused, 64
-   nir_variable *ubo_vars[2];
+   SpvId ubos[PIPE_MAX_CONSTANT_BUFFERS][5]; //8, 16, 32, unused, 64
+   nir_variable *ubo_vars[PIPE_MAX_CONSTANT_BUFFERS];
 
    SpvId ssbos[5]; //8, 16, 32, unused, 64
    nir_variable *ssbo_vars;
@@ -307,16 +307,16 @@ find_image_type(struct ntv_context *ctx, nir_variable *var)
 }
 
 static SpvScope
-get_scope(nir_scope scope)
+get_scope(mesa_scope scope)
 {
    SpvScope conv[] = {
-      [NIR_SCOPE_NONE] = 0,
-      [NIR_SCOPE_INVOCATION] = SpvScopeInvocation,
-      [NIR_SCOPE_SUBGROUP] = SpvScopeSubgroup,
-      [NIR_SCOPE_SHADER_CALL] = SpvScopeShaderCallKHR,
-      [NIR_SCOPE_WORKGROUP] = SpvScopeWorkgroup,
-      [NIR_SCOPE_QUEUE_FAMILY] = SpvScopeQueueFamily,
-      [NIR_SCOPE_DEVICE] = SpvScopeDevice,
+      [SCOPE_NONE] = 0,
+      [SCOPE_INVOCATION] = SpvScopeInvocation,
+      [SCOPE_SUBGROUP] = SpvScopeSubgroup,
+      [SCOPE_SHADER_CALL] = SpvScopeShaderCallKHR,
+      [SCOPE_WORKGROUP] = SpvScopeWorkgroup,
+      [SCOPE_QUEUE_FAMILY] = SpvScopeQueueFamily,
+      [SCOPE_DEVICE] = SpvScopeDevice,
    };
    return conv[scope];
 }
@@ -790,7 +790,6 @@ emit_input(struct ntv_context *ctx, struct nir_variable *var)
    else if (ctx->stage == MESA_SHADER_FRAGMENT) {
       switch (var->data.location) {
       HANDLE_EMIT_BUILTIN(POS, FragCoord);
-      HANDLE_EMIT_BUILTIN(PNTC, PointCoord);
       HANDLE_EMIT_BUILTIN(LAYER, Layer);
       HANDLE_EMIT_BUILTIN(PRIMITIVE_ID, PrimitiveId);
       HANDLE_EMIT_BUILTIN(CLIP_DIST0, ClipDistance);
@@ -1223,11 +1222,15 @@ emit_image(struct ntv_context *ctx, struct nir_variable *var, SpvId image_type)
 
    _mesa_hash_table_insert(ctx->vars, var, (void *)(intptr_t)var_id);
    if (is_sampler) {
-      if (var->data.descriptor_set == ctx->bindless_set_idx)
+      if (var->data.descriptor_set == ctx->bindless_set_idx) {
+         assert(!ctx->bindless_samplers[index]);
          ctx->bindless_samplers[index] = var_id;
-      else
+      } else {
+         assert(!ctx->samplers[index]);
          ctx->samplers[index] = var_id;
+      }
    } else {
+      assert(!ctx->images[index]);
       ctx->images[index] = var_id;
       emit_access_decorations(ctx, var, var_id);
    }
@@ -1425,7 +1428,7 @@ get_var_from_reg(struct ntv_context *ctx, nir_register *reg, nir_alu_type *atype
 }
 
 static SpvId
-get_src_reg(struct ntv_context *ctx, const nir_reg_src *reg, nir_alu_type *atype)
+get_src_reg(struct ntv_context *ctx, const nir_register_src *reg, nir_alu_type *atype)
 {
    assert(reg->reg);
    assert(!reg->indirect);
@@ -1570,7 +1573,7 @@ cast_src_to_type(struct ntv_context *ctx, SpvId value, nir_src src, nir_alu_type
 }
 
 static void
-store_reg_def(struct ntv_context *ctx, nir_reg_dest *reg, SpvId result, nir_alu_type atype)
+store_reg_def(struct ntv_context *ctx, nir_register_dest *reg, SpvId result, nir_alu_type atype)
 {
    atype = nir_alu_type_get_base_type(atype);
    init_reg(ctx, reg->reg, atype);
@@ -3533,7 +3536,7 @@ emit_barrier(struct ntv_context *ctx, nir_intrinsic_instr *intr)
    SpvScope mem_scope = get_scope(nir_intrinsic_memory_scope(intr));
    SpvMemorySemanticsMask semantics = 0;
 
-   if (nir_intrinsic_memory_scope(intr) != NIR_SCOPE_NONE) {
+   if (nir_intrinsic_memory_scope(intr) != SCOPE_NONE) {
       nir_variable_mode modes = nir_intrinsic_memory_modes(intr);
 
       if (modes & nir_var_image)
@@ -3554,7 +3557,7 @@ emit_barrier(struct ntv_context *ctx, nir_intrinsic_instr *intr)
       semantics |= SpvMemorySemanticsAcquireReleaseMask;
    }
 
-   if (nir_intrinsic_execution_scope(intr) != NIR_SCOPE_NONE)
+   if (nir_intrinsic_execution_scope(intr) != SCOPE_NONE)
       spirv_builder_emit_control_barrier(&ctx->builder, scope, mem_scope, semantics);
    else
       spirv_builder_emit_memory_barrier(&ctx->builder, mem_scope, semantics);
@@ -4162,9 +4165,14 @@ emit_tex(struct ntv_context *ctx, nir_tex_instr *tex)
                                                  load, coord, emit_uint_const(ctx, 32, tex->component),
                                                  lod, sample, const_offset, offset, dref, tex->is_sparse);
          actual_dest_type = dest_type;
-      } else
+      } else {
+         assert(tex->op == nir_texop_txf_ms || !sample);
+         bool is_ms;
+         type_to_dim(glsl_get_sampler_dim(glsl_without_array(var->type)), &is_ms);
+         assert(is_ms || !sample);
          result = spirv_builder_emit_image_fetch(&ctx->builder, actual_dest_type,
                                                  image, coord, lod, sample, const_offset, offset, tex->is_sparse);
+      }
    } else {
       if (tex->op == nir_texop_txl)
          min_lod = 0;
@@ -4530,31 +4538,31 @@ emit_cf_list(struct ntv_context *ctx, struct exec_list *list)
 }
 
 static SpvExecutionMode
-get_input_prim_type_mode(enum shader_prim type)
+get_input_prim_type_mode(enum mesa_prim type)
 {
    switch (type) {
-   case SHADER_PRIM_POINTS:
+   case MESA_PRIM_POINTS:
       return SpvExecutionModeInputPoints;
-   case SHADER_PRIM_LINES:
-   case SHADER_PRIM_LINE_LOOP:
-   case SHADER_PRIM_LINE_STRIP:
+   case MESA_PRIM_LINES:
+   case MESA_PRIM_LINE_LOOP:
+   case MESA_PRIM_LINE_STRIP:
       return SpvExecutionModeInputLines;
-   case SHADER_PRIM_TRIANGLE_STRIP:
-   case SHADER_PRIM_TRIANGLES:
-   case SHADER_PRIM_TRIANGLE_FAN:
+   case MESA_PRIM_TRIANGLE_STRIP:
+   case MESA_PRIM_TRIANGLES:
+   case MESA_PRIM_TRIANGLE_FAN:
       return SpvExecutionModeTriangles;
-   case SHADER_PRIM_QUADS:
-   case SHADER_PRIM_QUAD_STRIP:
+   case MESA_PRIM_QUADS:
+   case MESA_PRIM_QUAD_STRIP:
       return SpvExecutionModeQuads;
       break;
-   case SHADER_PRIM_POLYGON:
+   case MESA_PRIM_POLYGON:
       unreachable("handle polygons in gs");
       break;
-   case SHADER_PRIM_LINES_ADJACENCY:
-   case SHADER_PRIM_LINE_STRIP_ADJACENCY:
+   case MESA_PRIM_LINES_ADJACENCY:
+   case MESA_PRIM_LINE_STRIP_ADJACENCY:
       return SpvExecutionModeInputLinesAdjacency;
-   case SHADER_PRIM_TRIANGLES_ADJACENCY:
-   case SHADER_PRIM_TRIANGLE_STRIP_ADJACENCY:
+   case MESA_PRIM_TRIANGLES_ADJACENCY:
+   case MESA_PRIM_TRIANGLE_STRIP_ADJACENCY:
       return SpvExecutionModeInputTrianglesAdjacency;
       break;
    default:
@@ -4566,34 +4574,34 @@ get_input_prim_type_mode(enum shader_prim type)
    return 0;
 }
 static SpvExecutionMode
-get_output_prim_type_mode(enum shader_prim type)
+get_output_prim_type_mode(enum mesa_prim type)
 {
    switch (type) {
-   case SHADER_PRIM_POINTS:
+   case MESA_PRIM_POINTS:
       return SpvExecutionModeOutputPoints;
-   case SHADER_PRIM_LINES:
-   case SHADER_PRIM_LINE_LOOP:
-      unreachable("SHADER_PRIM_LINES/LINE_LOOP passed as gs output");
+   case MESA_PRIM_LINES:
+   case MESA_PRIM_LINE_LOOP:
+      unreachable("MESA_PRIM_LINES/LINE_LOOP passed as gs output");
       break;
-   case SHADER_PRIM_LINE_STRIP:
+   case MESA_PRIM_LINE_STRIP:
       return SpvExecutionModeOutputLineStrip;
-   case SHADER_PRIM_TRIANGLE_STRIP:
+   case MESA_PRIM_TRIANGLE_STRIP:
       return SpvExecutionModeOutputTriangleStrip;
-   case SHADER_PRIM_TRIANGLES:
-   case SHADER_PRIM_TRIANGLE_FAN: //FIXME: not sure if right for output
+   case MESA_PRIM_TRIANGLES:
+   case MESA_PRIM_TRIANGLE_FAN: //FIXME: not sure if right for output
       return SpvExecutionModeTriangles;
-   case SHADER_PRIM_QUADS:
-   case SHADER_PRIM_QUAD_STRIP:
+   case MESA_PRIM_QUADS:
+   case MESA_PRIM_QUAD_STRIP:
       return SpvExecutionModeQuads;
-   case SHADER_PRIM_POLYGON:
+   case MESA_PRIM_POLYGON:
       unreachable("handle polygons in gs");
       break;
-   case SHADER_PRIM_LINES_ADJACENCY:
-   case SHADER_PRIM_LINE_STRIP_ADJACENCY:
+   case MESA_PRIM_LINES_ADJACENCY:
+   case MESA_PRIM_LINE_STRIP_ADJACENCY:
       unreachable("handle line adjacency in gs");
       break;
-   case SHADER_PRIM_TRIANGLES_ADJACENCY:
-   case SHADER_PRIM_TRIANGLE_STRIP_ADJACENCY:
+   case MESA_PRIM_TRIANGLES_ADJACENCY:
+   case MESA_PRIM_TRIANGLE_STRIP_ADJACENCY:
       unreachable("handle triangle adjacency in gs");
       break;
    default:
