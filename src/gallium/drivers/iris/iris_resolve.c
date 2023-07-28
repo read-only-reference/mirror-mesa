@@ -213,7 +213,8 @@ iris_predraw_resolve_framebuffer(struct iris_context *ice,
             zs_surf->u.tex.last_layer - zs_surf->u.tex.first_layer + 1;
 
          if (z_res) {
-            iris_resource_prepare_render(ice, z_res, zs_surf->u.tex.level,
+            iris_resource_prepare_render(ice, z_res, z_res->surf.format,
+                                         zs_surf->u.tex.level,
                                          zs_surf->u.tex.first_layer,
                                          num_layers, ice->state.hiz_usage);
             iris_emit_buffer_barrier_for(batch, z_res->bo,
@@ -250,8 +251,8 @@ iris_predraw_resolve_framebuffer(struct iris_context *ice,
          struct iris_resource *res = (void *) surf->base.texture;
 
          enum isl_aux_usage aux_usage =
-            iris_resource_render_aux_usage(ice, res, surf->view.base_level,
-                                           surf->view.format,
+            iris_resource_render_aux_usage(ice, res, surf->view.format,
+                                           surf->view.base_level,
                                            draw_aux_buffer_disabled[i]);
 
          if (ice->state.draw_aux_usage[i] != aux_usage) {
@@ -261,7 +262,8 @@ iris_predraw_resolve_framebuffer(struct iris_context *ice,
             ice->state.stage_dirty |= IRIS_ALL_STAGE_DIRTY_BINDINGS;
          }
 
-         iris_resource_prepare_render(ice, res, surf->view.base_level,
+         iris_resource_prepare_render(ice, res, surf->view.format,
+                                      surf->view.base_level,
                                       surf->view.base_array_layer,
                                       surf->view.array_len,
                                       aux_usage);
@@ -709,9 +711,9 @@ iris_hiz_exec(struct iris_context *ice,
    blorp_hiz_op(&blorp_batch, &surf, level, start_layer, num_layers, op);
    blorp_batch_finish(&blorp_batch);
 
-   /* The following stalls and flushes are only documented to be required
-    * for HiZ clear operations.  However, they also seem to be required for
-    * resolve operations.
+   /* For gfx8-11, the following stalls and flushes are only documented to be
+    * required for HiZ clear operations.  However, they also seem to be
+    * required for resolve operations.
     *
     * From the Broadwell PRM, volume 7, "Depth Buffer Clear":
     *
@@ -724,11 +726,20 @@ iris_hiz_exec(struct iris_context *ice,
     *     'full_surf_clear' bit set in the 3DSTATE_WM_HZ_OP."
     *
     * TODO: Such as the spec says, this could be conditional.
+    *
+    * From Bspec 46959, a programming note applicable to Gfx12+:
+    *
+    *    " Since HZ_OP has to be sent twice (first time set the clear/resolve
+    *    state and 2nd time to clear the state), and HW internally flushes the
+    *    depth cache on HZ_OP, there is no need to explicitly send a Depth
+    *    Cache flush after Clear or Resolve."
     */
-   iris_emit_pipe_control_flush(batch,
-                                "hiz op: post flush",
-                                PIPE_CONTROL_DEPTH_CACHE_FLUSH |
-                                PIPE_CONTROL_DEPTH_STALL);
+   if (devinfo->verx10 < 120) {
+      iris_emit_pipe_control_flush(batch,
+                                   "hiz op: post flush",
+                                   PIPE_CONTROL_DEPTH_CACHE_FLUSH |
+                                   PIPE_CONTROL_DEPTH_STALL);
+   }
 
    iris_batch_sync_region_end(batch);
 }
@@ -966,7 +977,7 @@ iris_resource_set_aux_state(struct iris_context *ice,
    }
 
    if (res->mod_info && !res->mod_info->supports_clear_color) {
-      assert(res->mod_info->aux_usage != ISL_AUX_USAGE_NONE);
+      assert(isl_drm_modifier_has_aux(res->mod_info->modifier));
       if (aux_state == ISL_AUX_STATE_CLEAR ||
           aux_state == ISL_AUX_STATE_COMPRESSED_CLEAR ||
           aux_state == ISL_AUX_STATE_PARTIAL_CLEAR) {
@@ -1174,8 +1185,8 @@ iris_render_formats_color_compatible(enum isl_format a, enum isl_format b,
 
 enum isl_aux_usage
 iris_resource_render_aux_usage(struct iris_context *ice,
-                               struct iris_resource *res, uint32_t level,
-                               enum isl_format render_format,
+                               struct iris_resource *res,
+                               enum isl_format render_format, uint32_t level,
                                bool draw_aux_disabled)
 {
    struct iris_screen *screen = (void *) ice->ctx.screen;
@@ -1198,31 +1209,11 @@ iris_resource_render_aux_usage(struct iris_context *ice,
 
    case ISL_AUX_USAGE_MCS:
    case ISL_AUX_USAGE_MCS_CCS:
+   case ISL_AUX_USAGE_CCS_D:
       return res->aux.usage;
 
-   case ISL_AUX_USAGE_CCS_D:
    case ISL_AUX_USAGE_CCS_E:
    case ISL_AUX_USAGE_FCV_CCS_E:
-      /* Disable CCS for some cases of texture-view rendering. On gfx12, HW
-       * may convert some subregions of shader output to fast-cleared blocks
-       * if CCS is enabled and the shader output matches the clear color.
-       * Existing fast-cleared blocks are correctly interpreted by the clear
-       * color and the resource format (see can_fast_clear_color). To avoid
-       * gaining new fast-cleared blocks that can't be interpreted by the
-       * resource format (and to avoid misinterpreting existing ones), shut
-       * off CCS when the interpretation of the clear color differs between
-       * the render_format and the resource format.
-       */
-      if (!iris_render_formats_color_compatible(render_format,
-                                                res->surf.format,
-                                                res->aux.clear_color,
-                                                res->aux.clear_color_unknown)) {
-         return ISL_AUX_USAGE_NONE;
-      }
-
-      if (res->aux.usage == ISL_AUX_USAGE_CCS_D)
-         return ISL_AUX_USAGE_CCS_D;
-
       if (isl_formats_are_ccs_e_compatible(devinfo, res->surf.format,
                                            render_format)) {
          return res->aux.usage;
@@ -1236,13 +1227,62 @@ iris_resource_render_aux_usage(struct iris_context *ice,
 
 void
 iris_resource_prepare_render(struct iris_context *ice,
-                             struct iris_resource *res, uint32_t level,
+                             struct iris_resource *res,
+                             enum isl_format render_format, uint32_t level,
                              uint32_t start_layer, uint32_t layer_count,
                              enum isl_aux_usage aux_usage)
 {
    iris_resource_prepare_access(ice, res, level, 1, start_layer,
                                 layer_count, aux_usage,
                                 isl_aux_usage_has_fast_clears(aux_usage));
+
+   /* If the resource's clear color is incompatible with render_format,
+    * replace it with one that is. This process keeps the aux buffer
+    * compatible with render_format and the resource's format.
+    */
+   if (!iris_render_formats_color_compatible(render_format,
+                                             res->surf.format,
+                                             res->aux.clear_color,
+                                             res->aux.clear_color_unknown)) {
+
+      /* Remove references to the clear color with resolves. */
+      iris_resource_prepare_access(ice, res, 0, INTEL_REMAINING_LEVELS, 0,
+                                   INTEL_REMAINING_LAYERS, res->aux.usage,
+                                   false);
+
+      /* The clear color is no longer in use; replace it now. */
+      const union isl_color_value zero = { .u32 = { 0, } };
+      iris_resource_set_clear_color(ice, res, zero);
+
+      if (res->aux.clear_color_bo) {
+         /* Update dwords used for rendering and sampling. */
+         iris_emit_pipe_control_write(&ice->batches[IRIS_BATCH_RENDER],
+                                      "zero fast clear color (RG____)",
+                                      PIPE_CONTROL_WRITE_IMMEDIATE,
+                                      res->aux.clear_color_bo,
+                                      res->aux.clear_color_offset, 0);
+
+         iris_emit_pipe_control_write(&ice->batches[IRIS_BATCH_RENDER],
+                                      "zero fast clear color (__BA__)",
+                                      PIPE_CONTROL_WRITE_IMMEDIATE,
+                                      res->aux.clear_color_bo,
+                                      res->aux.clear_color_offset + 8, 0);
+
+         iris_emit_pipe_control_write(&ice->batches[IRIS_BATCH_RENDER],
+                                      "zero fast clear color (____PX)",
+                                      PIPE_CONTROL_WRITE_IMMEDIATE,
+                                      res->aux.clear_color_bo,
+                                      res->aux.clear_color_offset + 16, 0);
+
+         iris_emit_pipe_control_flush(&ice->batches[IRIS_BATCH_RENDER],
+                                      "new clear color affects state cache",
+                                      PIPE_CONTROL_FLUSH_ENABLE |
+                                      PIPE_CONTROL_STATE_CACHE_INVALIDATE);
+      } else {
+         /* Flag surface states with inline clear colors as dirty. */
+         ice->state.stage_dirty |= IRIS_ALL_STAGE_DIRTY_BINDINGS;
+      }
+   }
 }
 
 void

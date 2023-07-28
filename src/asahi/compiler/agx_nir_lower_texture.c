@@ -10,32 +10,55 @@
 #include "compiler/nir/nir_builtin_builder.h"
 #include "agx_compiler.h"
 #include "agx_internal_formats.h"
+#include "agx_nir.h"
+#include "nir_builder_opcodes.h"
+#include "nir_intrinsics.h"
+#include "nir_intrinsics_indices.h"
 
 #define AGX_TEXTURE_DESC_STRIDE   24
 #define AGX_FORMAT_RGB32_EMULATED 0x36
 #define AGX_LAYOUT_LINEAR         0x0
 
 static nir_ssa_def *
+texture_descriptor_ptr_for_handle(nir_builder *b, nir_ssa_def *handle)
+{
+   /* Bindless handles are a vec2, where the first source is the (constant)
+    * uniform register number and the second source is the byte offset.
+    */
+   nir_ssa_scalar uniform = nir_ssa_scalar_resolved(handle, 0);
+   unsigned uniform_idx = nir_ssa_scalar_as_uint(uniform);
+
+   nir_ssa_def *base = nir_load_preamble(b, 1, 64, uniform_idx);
+   nir_ssa_def *offset = nir_u2u64(b, nir_channel(b, handle, 1));
+
+   return nir_iadd(b, base, offset);
+}
+
+static nir_ssa_def *
+texture_descriptor_ptr_for_index(nir_builder *b, nir_ssa_def *index)
+{
+   return nir_iadd(
+      b, nir_load_texture_base_agx(b),
+      nir_u2u64(b, nir_imul_imm(b, index, AGX_TEXTURE_DESC_STRIDE)));
+}
+
+static nir_ssa_def *
 texture_descriptor_ptr(nir_builder *b, nir_tex_instr *tex)
 {
-   /* For bindless, we store the descriptor pointer in the texture handle */
    int handle_idx = nir_tex_instr_src_index(tex, nir_tex_src_texture_handle);
    if (handle_idx >= 0)
-      return tex->src[handle_idx].src.ssa;
+      return texture_descriptor_ptr_for_handle(b, tex->src[handle_idx].src.ssa);
 
    /* For non-bindless, compute from the texture index */
-   nir_ssa_def *offs;
+   nir_ssa_def *index;
 
    int offs_idx = nir_tex_instr_src_index(tex, nir_tex_src_texture_offset);
-   if (offs_idx >= 0) {
-      nir_ssa_def *offset_src = tex->src[offs_idx].src.ssa;
-      offs = nir_imul_imm(b, offset_src, AGX_TEXTURE_DESC_STRIDE);
-   } else {
-      unsigned base_B = tex->texture_index * AGX_TEXTURE_DESC_STRIDE;
-      offs = nir_imm_int(b, base_B);
-   }
+   if (offs_idx >= 0)
+      index = tex->src[offs_idx].src.ssa;
+   else
+      index = nir_imm_int(b, tex->texture_index);
 
-   return nir_iadd(b, nir_load_texture_base_agx(b), nir_u2u64(b, offs));
+   return texture_descriptor_ptr_for_index(b, index);
 }
 
 /* Implement txs for buffer textures. There is no mipmapping to worry about, so
@@ -199,6 +222,17 @@ load_rgb32(nir_builder *b, nir_tex_instr *tex, nir_ssa_def *coordinate)
 }
 
 /*
+ * Given a 1D buffer texture coordinate, calculate the 2D coordinate vector that
+ * will be used to access the linear 2D texture bound to the buffer.
+ */
+static nir_ssa_def *
+coords_for_buffer_texture(nir_builder *b, nir_ssa_def *coord)
+{
+   return nir_vec2(b, nir_iand_imm(b, coord, BITFIELD_MASK(10)),
+                   nir_ushr_imm(b, coord, 10));
+}
+
+/*
  * Buffer textures are lowered to 2D (1024xN) textures in the driver to access
  * more storage. When lowering, we need to fix up the coordinate accordingly.
  *
@@ -235,8 +269,8 @@ lower_buffer_texture(nir_builder *b, nir_tex_instr *tex)
    /* Otherwise, lower the texture instruction to read from 2D */
    assert(coord->num_components == 1 && "buffer textures are 1D");
    tex->sampler_dim = GLSL_SAMPLER_DIM_2D;
-   nir_ssa_def *coord2d = nir_vec2(b, nir_iand_imm(b, coord, BITFIELD_MASK(10)),
-                                   nir_ushr_imm(b, coord, 10));
+
+   nir_ssa_def *coord2d = coords_for_buffer_texture(b, coord);
    nir_instr_remove(&tex->instr);
    nir_builder_instr_insert(b, &tex->instr);
    nir_tex_instr_add_src(tex, nir_tex_src_backend1, nir_src_for_ssa(coord2d));
@@ -457,6 +491,281 @@ lower_sampler_bias(nir_builder *b, nir_instr *instr, UNUSED void *data)
    }
 }
 
+static bool
+legalize_image_lod(nir_builder *b, nir_instr *instr, UNUSED void *data)
+{
+   if (instr->type != nir_instr_type_intrinsic)
+      return false;
+
+   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+   nir_src *src;
+
+#define CASE(op, idx)                                                          \
+   case nir_intrinsic_##op:                                                    \
+   case nir_intrinsic_bindless_##op:                                           \
+      src = &intr->src[idx];                                                   \
+      break;
+
+   switch (intr->intrinsic) {
+      CASE(image_load, 3)
+      CASE(image_store, 4)
+      CASE(image_size, 1)
+   default:
+      return false;
+   }
+
+#undef CASE
+
+   if (src->ssa->bit_size == 16)
+      return false;
+
+   b->cursor = nir_before_instr(instr);
+   nir_src_rewrite_ssa(src, nir_i2i16(b, src->ssa));
+   return true;
+}
+
+static nir_ssa_def *
+txs_for_image(nir_builder *b, nir_intrinsic_instr *intr,
+              unsigned num_components, unsigned bit_size)
+{
+   bool bindless = intr->intrinsic == nir_intrinsic_bindless_image_size;
+
+   nir_tex_instr *tex = nir_tex_instr_create(b->shader, 1 + (int)bindless);
+   tex->op = nir_texop_txs;
+   tex->is_array = nir_intrinsic_image_array(intr);
+   tex->dest_type = nir_type_uint32;
+   tex->sampler_dim = nir_intrinsic_image_dim(intr);
+
+   unsigned s = 0;
+   tex->src[s++] = nir_tex_src_for_ssa(nir_tex_src_lod, intr->src[1].ssa);
+
+   if (bindless) {
+      tex->src[s++] =
+         nir_tex_src_for_ssa(nir_tex_src_texture_handle, intr->src[0].ssa);
+   } else if (nir_src_is_const(intr->src[0])) {
+      tex->texture_index = nir_src_as_uint(intr->src[0]);
+   } else {
+      tex->src[s++] =
+         nir_tex_src_for_ssa(nir_tex_src_texture_offset, intr->src[0].ssa);
+   }
+
+   nir_ssa_dest_init(&tex->instr, &tex->dest, num_components, bit_size);
+   nir_builder_instr_insert(b, &tex->instr);
+   return &tex->dest.ssa;
+}
+
+static nir_ssa_def *
+nir_bitfield_mask(nir_builder *b, nir_ssa_def *x)
+{
+   nir_ssa_def *one = nir_imm_intN_t(b, 1, x->bit_size);
+   return nir_iadd_imm(b, nir_ishl(b, one, nir_u2u32(b, x)), -1);
+}
+
+static nir_ssa_def *
+calculate_twiddled_coordinates(nir_builder *b, nir_ssa_def *coord,
+                               nir_ssa_def *tile_w_px_log2,
+                               nir_ssa_def *tile_h_px_log2,
+                               nir_ssa_def *width_tl,
+                               nir_ssa_def *layer_stride_el)
+{
+   /* SIMD-within-a-register */
+   nir_ssa_def *coord_px = nir_pack_32_2x16(b, nir_u2u16(b, coord));
+   nir_ssa_def *tile_mask =
+      nir_pack_32_2x16_split(b, nir_bitfield_mask(b, tile_w_px_log2),
+                             nir_bitfield_mask(b, tile_h_px_log2));
+
+   /* Modulo by the tile width/height to get the offsets within the tile */
+   nir_ssa_def *offs_xy_px = nir_iand(b, coord_px, tile_mask);
+
+   /* Get the coordinates of the corner of the tile */
+   nir_ssa_def *tile_xy_px = nir_isub(b, coord_px, offs_xy_px);
+
+   /* Unpack SIMD-within-a-register */
+   nir_ssa_def *offs_x_px = nir_unpack_32_2x16_split_x(b, offs_xy_px);
+   nir_ssa_def *offs_y_px = nir_unpack_32_2x16_split_y(b, offs_xy_px);
+   nir_ssa_def *tile_x_px =
+      nir_u2u32(b, nir_unpack_32_2x16_split_x(b, tile_xy_px));
+   nir_ssa_def *tile_y_px =
+      nir_u2u32(b, nir_unpack_32_2x16_split_y(b, tile_xy_px));
+
+   /* Get the tile size */
+   nir_ssa_def *one_32 = nir_imm_int(b, 1);
+   nir_ssa_def *tile_w_px = nir_ishl(b, one_32, nir_u2u32(b, tile_w_px_log2));
+   nir_ssa_def *tile_h_px = nir_ishl(b, one_32, nir_u2u32(b, tile_h_px_log2));
+
+   /* tile row start (px) =
+    *   (y // tile height) * (# of tiles/row) * (# of pix/tile) =
+    *   align_down(y, tile height) / tile height * width_tl *tile width *
+    *        tile height =
+    *   align_down(y, tile height) * width_tl * tile width
+    */
+   nir_ssa_def *tile_row_start_px =
+      nir_imul(b, nir_u2u32(b, tile_y_px), nir_imul(b, width_tl, tile_w_px));
+
+   /* tile column start (px) =
+    *   (x // tile width) * (# of pix/tile) =
+    *   align(x, tile width) / tile width * tile width * tile height =
+    *   align(x, tile width) * tile height
+    */
+   nir_ssa_def *tile_col_start_px = nir_imul(b, tile_x_px, tile_h_px);
+
+   /* The pixel at which the tile starts is thus... */
+   nir_ssa_def *tile_offset_px =
+      nir_iadd(b, tile_row_start_px, tile_col_start_px);
+
+   /* Get the total offset */
+   nir_ssa_def *offs_px = nir_interleave_agx(b, offs_x_px, offs_y_px);
+   nir_ssa_def *total_px = nir_iadd(b, tile_offset_px, nir_u2u32(b, offs_px));
+
+   if (layer_stride_el) {
+      nir_ssa_def *layer = nir_channel(b, coord, 2);
+      nir_ssa_def *layer_offset_px = nir_imul(b, layer, layer_stride_el);
+      total_px = nir_iadd(b, total_px, layer_offset_px);
+   }
+
+   return total_px;
+}
+
+static nir_ssa_def *
+image_texel_address(nir_builder *b, nir_intrinsic_instr *intr,
+                    bool return_index)
+{
+   /* First, calculate the address of the PBE descriptor */
+   nir_ssa_def *desc_address;
+   if (intr->intrinsic == nir_intrinsic_bindless_image_texel_address ||
+       intr->intrinsic == nir_intrinsic_bindless_image_store)
+      desc_address = texture_descriptor_ptr_for_handle(b, intr->src[0].ssa);
+   else
+      desc_address = texture_descriptor_ptr_for_index(b, intr->src[0].ssa);
+
+   nir_ssa_def *coord = intr->src[1].ssa;
+
+   enum glsl_sampler_dim dim = nir_intrinsic_image_dim(intr);
+   bool layered = nir_intrinsic_image_array(intr) ||
+                  (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_CUBE) ||
+                  (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_3D);
+
+   /* The last 8 bytes of the 24-byte PBE descriptor contain either the
+    * software-defined atomic descriptor, or (if array image) a pointer to the
+    * descriptor. Grab it.
+    */
+   nir_ssa_def *meta_ptr = nir_iadd_imm(b, desc_address, 16);
+   nir_ssa_def *meta = nir_load_global_constant(b, meta_ptr, 8, 1, 64);
+   nir_ssa_def *layer_stride_el = NULL;
+
+   if (layered) {
+      nir_ssa_def *desc = nir_load_global_constant(b, meta, 8, 3, 32);
+      meta = nir_pack_64_2x32(b, nir_trim_vector(b, desc, 2));
+      layer_stride_el = nir_channel(b, desc, 2);
+   }
+
+   nir_ssa_def *meta_hi = nir_unpack_64_2x32_split_y(b, meta);
+
+   /* See the GenXML definitions of the software-defined atomic descriptors */
+   nir_ssa_def *base;
+
+   if (dim == GLSL_SAMPLER_DIM_BUF)
+      base = meta;
+   else
+      base = nir_ishl_imm(b, nir_iand_imm(b, meta, BITFIELD64_MASK(33)), 7);
+
+   nir_ssa_def *tile_w_px_log2 =
+      nir_u2u16(b, nir_ubitfield_extract_imm(b, meta_hi, 33 - 32, 3));
+   nir_ssa_def *tile_h_px_log2 =
+      nir_u2u16(b, nir_ubitfield_extract_imm(b, meta_hi, 36 - 32, 3));
+   nir_ssa_def *width_tl = nir_ubitfield_extract_imm(b, meta_hi, 39 - 32, 14);
+
+   /* We do not allow atomics on linear 2D or linear 2D arrays, as there are no
+    * known use cases. So, we're linear if buffer or 1D, and twiddled otherwise.
+    */
+   nir_ssa_def *total_px;
+   if (dim == GLSL_SAMPLER_DIM_BUF || dim == GLSL_SAMPLER_DIM_1D) {
+      /* 1D linear is indexed directly */
+      total_px = nir_channel(b, coord, 0);
+   } else {
+      total_px = calculate_twiddled_coordinates(
+         b, coord, tile_w_px_log2, tile_h_px_log2, width_tl, layer_stride_el);
+   }
+
+   nir_ssa_def *total_sa;
+
+   if (dim == GLSL_SAMPLER_DIM_MS) {
+      nir_ssa_def *sample_idx = intr->src[2].ssa;
+      nir_ssa_def *samples_log2 =
+         nir_ubitfield_extract_imm(b, meta_hi, 54 - 32, 2);
+
+      total_sa = nir_iadd(b, nir_ishl(b, total_px, samples_log2), sample_idx);
+   } else {
+      total_sa = total_px /* * 1 sa/px */;
+   }
+
+   /* Early return if we just want a linearized texel index */
+   if (return_index)
+      return total_sa;
+
+   /* Calculate the full texel address. This sequence is written carefully to
+    * ensure it will be entirely folded into the atomic's addressing arithmetic.
+    */
+   enum pipe_format format = nir_intrinsic_format(intr);
+   unsigned bytes_per_sample_B = util_format_get_blocksize(format);
+
+   nir_ssa_def *total_B = nir_imul_imm(b, total_sa, bytes_per_sample_B);
+   return nir_iadd(b, base, nir_u2u64(b, total_B));
+}
+
+static bool
+lower_buffer_image(nir_builder *b, nir_intrinsic_instr *intr)
+{
+   if (nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_BUF)
+      return false;
+
+   nir_ssa_def *coord_vector = intr->src[1].ssa;
+   nir_ssa_def *coord = nir_channel(b, coord_vector, 0);
+
+   /* Lower the buffer load/store to a 2D image load/store, matching the 2D
+    * texture/PBE descriptor the driver supplies for buffer images.
+    */
+   nir_ssa_def *coord2d = coords_for_buffer_texture(b, coord);
+   nir_src_rewrite_ssa(&intr->src[1], nir_pad_vector(b, coord2d, 4));
+   nir_intrinsic_set_image_dim(intr, GLSL_SAMPLER_DIM_2D);
+   return true;
+}
+
+static bool
+lower_images(nir_builder *b, nir_instr *instr, UNUSED void *data)
+{
+   if (instr->type != nir_instr_type_intrinsic)
+      return false;
+
+   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+   b->cursor = nir_before_instr(instr);
+
+   switch (intr->intrinsic) {
+   case nir_intrinsic_image_load:
+   case nir_intrinsic_image_store:
+   case nir_intrinsic_bindless_image_load:
+   case nir_intrinsic_bindless_image_store:
+      return lower_buffer_image(b, intr);
+
+   case nir_intrinsic_image_size:
+   case nir_intrinsic_bindless_image_size:
+      nir_ssa_def_rewrite_uses(
+         &intr->dest.ssa,
+         txs_for_image(b, intr, nir_dest_num_components(intr->dest),
+                       nir_dest_bit_size(intr->dest)));
+      return true;
+
+   case nir_intrinsic_image_texel_address:
+   case nir_intrinsic_bindless_image_texel_address:
+      nir_ssa_def_rewrite_uses(&intr->dest.ssa,
+                               image_texel_address(b, intr, false));
+      return true;
+
+   default:
+      return false;
+   }
+}
+
 bool
 agx_nir_lower_texture(nir_shader *s, bool support_lod_bias)
 {
@@ -484,6 +793,13 @@ agx_nir_lower_texture(nir_shader *s, bool support_lod_bias)
 
    NIR_PASS(progress, s, nir_lower_tex, &lower_tex_options);
 
+   /* Insert fences before lowering image atomics, since image atomics need
+    * different fencing than other image operations.
+    */
+   NIR_PASS(progress, s, agx_nir_fence_images);
+
+   NIR_PASS(progress, s, nir_lower_image_atomics_to_global);
+
    /* Lower bias after nir_lower_tex (to get rid of txd) but before
     * lower_regular_texture (which will shuffle around the sources)
     */
@@ -492,6 +808,10 @@ agx_nir_lower_texture(nir_shader *s, bool support_lod_bias)
                nir_metadata_block_index | nir_metadata_dominance, NULL);
    }
 
+   NIR_PASS(progress, s, nir_shader_instructions_pass, legalize_image_lod,
+            nir_metadata_block_index | nir_metadata_dominance, NULL);
+   NIR_PASS(progress, s, nir_shader_instructions_pass, lower_images,
+            nir_metadata_block_index | nir_metadata_dominance, NULL);
    NIR_PASS(progress, s, nir_legalize_16bit_sampler_srcs, tex_constraints);
 
    /* Lower texture sources after legalizing types (as the lowering depends on
@@ -504,4 +824,36 @@ agx_nir_lower_texture(nir_shader *s, bool support_lod_bias)
             nir_metadata_block_index | nir_metadata_dominance, NULL);
 
    return progress;
+}
+
+static bool
+lower_multisampled_store(nir_builder *b, nir_instr *instr, UNUSED void *data)
+{
+   if (instr->type != nir_instr_type_intrinsic)
+      return false;
+
+   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+   b->cursor = nir_before_instr(instr);
+
+   if (intr->intrinsic != nir_intrinsic_image_store &&
+       intr->intrinsic != nir_intrinsic_bindless_image_store)
+      return false;
+
+   if (nir_intrinsic_image_dim(intr) != GLSL_SAMPLER_DIM_MS)
+      return false;
+
+   nir_ssa_def *index_px = image_texel_address(b, intr, true);
+   nir_ssa_def *coord2d = coords_for_buffer_texture(b, index_px);
+
+   nir_src_rewrite_ssa(&intr->src[1], nir_pad_vector(b, coord2d, 4));
+   nir_intrinsic_set_image_dim(intr, GLSL_SAMPLER_DIM_2D);
+   return true;
+}
+
+bool
+agx_nir_lower_multisampled_image_store(nir_shader *s)
+{
+   return nir_shader_instructions_pass(
+      s, lower_multisampled_store,
+      nir_metadata_block_index | nir_metadata_dominance, NULL);
 }

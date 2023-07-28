@@ -644,7 +644,6 @@ generate_compute(struct llvmpipe_context *lp,
       alloced_ptr = LLVMBuildGEP2(gallivm->builder, mem_ptr_type, alloced_ptr, &coro_entry, 1, "");
       LLVMValueRef coro_hdl = lp_build_coro_begin(gallivm, coro_id, alloced_ptr);
       LLVMValueRef has_partials = LLVMBuildICmp(gallivm->builder, LLVMIntNE, partials, lp_build_const_int32(gallivm, 0), "");
-      LLVMValueRef tid_vals[3];
       LLVMValueRef tids_x[LP_MAX_VECTOR_LENGTH], tids_y[LP_MAX_VECTOR_LENGTH], tids_z[LP_MAX_VECTOR_LENGTH];
       LLVMValueRef base_val = LLVMBuildMul(gallivm->builder, x_size_arg, vec_length, "");
       for (i = 0; i < cs_type.length; i++) {
@@ -652,22 +651,17 @@ generate_compute(struct llvmpipe_context *lp,
          tids_y[i] = y_size_arg;
          tids_z[i] = z_size_arg;
       }
-      tid_vals[0] = lp_build_gather_values(gallivm, tids_x, cs_type.length);
-      tid_vals[1] = lp_build_gather_values(gallivm, tids_y, cs_type.length);
-      tid_vals[2] = lp_build_gather_values(gallivm, tids_z, cs_type.length);
-      system_values.thread_id = LLVMGetUndef(LLVMArrayType(LLVMVectorType(int32_type, cs_type.length), 3));
-      for (i = 0; i < 3; i++)
-         system_values.thread_id = LLVMBuildInsertValue(builder, system_values.thread_id, tid_vals[i], i, "");
+      system_values.thread_id[0] = lp_build_gather_values(gallivm, tids_x, cs_type.length);
+      system_values.thread_id[1] = lp_build_gather_values(gallivm, tids_y, cs_type.length);
+      system_values.thread_id[2] = lp_build_gather_values(gallivm, tids_z, cs_type.length);
 
-      LLVMValueRef gtids[3] = { grid_x_arg, grid_y_arg, grid_z_arg };
-      system_values.block_id = LLVMGetUndef(LLVMVectorType(int32_type, 3));
-      for (i = 0; i < 3; i++)
-         system_values.block_id = LLVMBuildInsertElement(builder, system_values.block_id, gtids[i], lp_build_const_int32(gallivm, i), "");
+      system_values.block_id[0] = grid_x_arg;
+      system_values.block_id[1] = grid_y_arg;
+      system_values.block_id[2] = grid_z_arg;
 
-      LLVMValueRef gstids[3] = { grid_size_x_arg, grid_size_y_arg, grid_size_z_arg };
-      system_values.grid_size = LLVMGetUndef(LLVMVectorType(int32_type, 3));
-      for (i = 0; i < 3; i++)
-         system_values.grid_size = LLVMBuildInsertElement(builder, system_values.grid_size, gstids[i], lp_build_const_int32(gallivm, i), "");
+      system_values.grid_size[0] = grid_size_x_arg;
+      system_values.grid_size[1] = grid_size_y_arg;
+      system_values.grid_size[2] = grid_size_z_arg;
 
       system_values.work_dim = work_dim_arg;
       system_values.draw_id = draw_id_arg;
@@ -698,10 +692,9 @@ generate_compute(struct llvmpipe_context *lp,
       LLVMValueRef subgroup_cmp = LLVMBuildICmp(gallivm->builder, LLVMIntEQ, num_subgroups, lp_build_const_int32(gallivm, 0), "");
       system_values.num_subgroups = LLVMBuildSelect(builder, subgroup_cmp, lp_build_const_int32(gallivm, 1), num_subgroups, "");
 
-      LLVMValueRef bsize[3] = { block_x_size_arg, block_y_size_arg, block_z_size_arg };
-      system_values.block_size = LLVMGetUndef(LLVMVectorType(int32_type, 3));
-      for (i = 0; i < 3; i++)
-         system_values.block_size = LLVMBuildInsertElement(builder, system_values.block_size, bsize[i], lp_build_const_int32(gallivm, i), "");
+      system_values.block_size[0] = block_x_size_arg;
+      system_values.block_size[1] = block_y_size_arg;
+      system_values.block_size[2] = block_z_size_arg;
 
       LLVMValueRef last_x_loop = LLVMBuildICmp(gallivm->builder, LLVMIntEQ, x_size_arg, LLVMBuildSub(gallivm->builder, num_x_loop, lp_build_const_int32(gallivm, 1), ""), "");
       LLVMValueRef use_partial_mask = LLVMBuildAnd(gallivm->builder, last_x_loop, has_partials, "");
@@ -929,7 +922,8 @@ llvmpipe_get_compute_state_info(struct pipe_context *pipe, void *cs,
    struct nir_shader* nir = shader->base.ir.nir;
 
    info->max_threads = 1024;
-   info->preferred_simd_size = 32;
+   info->simd_sizes = lp_native_vector_width / 32;
+   info->preferred_simd_size = info->simd_sizes;
    // TODO: this is a bad estimate, but not much we can do without actually compiling the shaders
    info->private_memory = nir->scratch_size;
 }

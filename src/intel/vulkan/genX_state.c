@@ -194,7 +194,7 @@ init_common_queue_state(struct anv_queue *queue, struct anv_batch *batch)
    }
 #endif
 
-#if GFX_VER >= 125
+#if GFX_VERx10 == 125
    /* Wa_14014427904 - We need additional invalidate/flush when
     * emitting NP state commands with ATS-M in compute mode.
     */
@@ -210,7 +210,6 @@ init_common_queue_state(struct anv_queue *queue, struct anv_batch *batch)
           ANV_PIPE_INSTRUCTION_CACHE_INVALIDATE_BIT |
           ANV_PIPE_HDC_PIPELINE_FLUSH_BIT);
       }
-   }
 #endif
 
    /* Emit STATE_BASE_ADDRESS on Gfx12+ because we set a default CPS_STATE and
@@ -344,6 +343,7 @@ static VkResult
 init_render_queue_state(struct anv_queue *queue)
 {
    struct anv_device *device = queue->device;
+   UNUSED const struct intel_device_info *devinfo = queue->device->info;
    uint32_t cmds[128];
    struct anv_batch batch = {
       .start = cmds,
@@ -473,7 +473,7 @@ init_render_queue_state(struct anv_queue *queue)
 #endif
    }
 
-#if GFX_VERx10 == 120
+#if INTEL_NEEDS_WA_1806527549
    /* Wa_1806527549 says to disable the following HiZ optimization when the
     * depth buffer is D16_UNORM. We've found the WA to help with more depth
     * buffer configurations however, so we always disable it just to be safe.
@@ -584,6 +584,25 @@ init_render_queue_state(struct anv_queue *queue)
    }
 #endif
 
+#if GFX_VERx10 >= 125
+   anv_batch_emit(&batch, GENX(3DSTATE_MESH_CONTROL), zero);
+   anv_batch_emit(&batch, GENX(3DSTATE_TASK_CONTROL), zero);
+   genX(batch_emit_pipe_control_write)(&batch, device->info, NoWrite,
+                                       ANV_NULL_ADDRESS,
+                                       0,
+                                       ANV_PIPE_FLUSH_BITS | ANV_PIPE_INVALIDATE_BITS);
+   genX(emit_pipeline_select)(&batch, GPGPU);
+   anv_batch_emit(&batch, GENX(CFE_STATE), cfe) {
+      cfe.MaximumNumberofThreads =
+         devinfo->max_cs_threads * devinfo->subslice_total;
+   }
+   genX(batch_emit_pipe_control_write)(&batch, device->info, NoWrite,
+                                       ANV_NULL_ADDRESS,
+                                       0,
+                                       ANV_PIPE_FLUSH_BITS | ANV_PIPE_INVALIDATE_BITS);
+   genX(emit_pipeline_select)(&batch, _3D);
+#endif
+
    anv_batch_emit(&batch, GENX(MI_BATCH_BUFFER_END), bbe);
 
    assert(batch.next <= batch.end);
@@ -595,6 +614,7 @@ static VkResult
 init_compute_queue_state(struct anv_queue *queue)
 {
    struct anv_batch batch;
+   UNUSED const struct intel_device_info *devinfo = queue->device->info;
 
    uint32_t cmds[64];
    batch.start = batch.next = cmds;
@@ -602,7 +622,32 @@ init_compute_queue_state(struct anv_queue *queue)
 
    genX(emit_pipeline_select)(&batch, GPGPU);
 
+#if GFX_VER == 12
+   if (queue->device->info->has_aux_map) {
+      uint64_t aux_base_addr =
+         intel_aux_map_get_base(queue->device->aux_map_ctx);
+      assert(aux_base_addr % (32 * 1024) == 0);
+      anv_batch_emit(&batch, GENX(MI_LOAD_REGISTER_IMM), lri) {
+         lri.RegisterOffset = GENX(COMPCS0_AUX_TABLE_BASE_ADDR_num);
+         lri.DataDWord = aux_base_addr & 0xffffffff;
+      }
+      anv_batch_emit(&batch, GENX(MI_LOAD_REGISTER_IMM), lri) {
+         lri.RegisterOffset = GENX(COMPCS0_AUX_TABLE_BASE_ADDR_num) + 4;
+         lri.DataDWord = aux_base_addr >> 32;
+      }
+   }
+#else
+   assert(!queue->device->info->has_aux_map);
+#endif
+
    init_common_queue_state(queue, &batch);
+
+#if GFX_VERx10 >= 125
+   anv_batch_emit(&batch, GENX(CFE_STATE), cfe) {
+      cfe.MaximumNumberofThreads =
+         devinfo->max_cs_threads * devinfo->subslice_total;
+   }
+#endif
 
    anv_batch_emit(&batch, GENX(MI_BATCH_BUFFER_END), bbe);
 
@@ -752,14 +797,14 @@ genX(emit_l3_config)(struct anv_batch *batch,
 #if GFX_VER < 11
          l3cr.SLMEnable = cfg->n[INTEL_L3P_SLM];
 #endif
-#if GFX_VER == 11
+#if INTEL_NEEDS_WA_1406697149
          /* Wa_1406697149: Bit 9 "Error Detection Behavior Control" must be
           * set in L3CNTLREG register. The default setting of the bit is not
           * the desirable behavior.
           */
          l3cr.ErrorDetectionBehaviorControl = true;
          l3cr.UseFullWays = true;
-#endif /* GFX_VER == 11 */
+#endif /* INTEL_NEEDS_WA_1406697149 */
          assert(cfg->n[INTEL_L3P_IS] == 0);
          assert(cfg->n[INTEL_L3P_C] == 0);
          assert(cfg->n[INTEL_L3P_T] == 0);
@@ -1133,9 +1178,7 @@ VkResult genX(CreateSampler)(
 void
 genX(apply_task_urb_workaround)(struct anv_cmd_buffer *cmd_buffer)
 {
-#if GFX_VERx10 != 125
-   return;
-#else
+#if INTEL_NEEDS_WA_16014390852
    if (cmd_buffer->state.current_pipeline != _3D ||
        !cmd_buffer->state.gfx.used_task_shader)
       return;

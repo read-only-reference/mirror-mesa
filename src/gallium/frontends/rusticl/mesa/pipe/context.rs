@@ -160,7 +160,12 @@ impl PipeContext {
 
     pub fn clear_texture(&self, res: &PipeResource, pattern: &[u32], bx: &pipe_box) {
         unsafe {
-            self.pipe.as_ref().clear_texture.unwrap()(
+            let clear_texture = self
+                .pipe
+                .as_ref()
+                .clear_texture
+                .unwrap_or(u_default_clear_texture);
+            clear_texture(
                 self.pipe.as_ptr(),
                 res.pipe(),
                 0,
@@ -327,6 +332,16 @@ impl PipeContext {
         info
     }
 
+    pub fn compute_state_subgroup_size(&self, state: *mut c_void, block: &[u32; 3]) -> u32 {
+        unsafe {
+            if let Some(cb) = self.pipe.as_ref().get_compute_state_subgroup_size {
+                cb(self.pipe.as_ptr(), state, block)
+            } else {
+                0
+            }
+        }
+    }
+
     pub fn create_sampler_state(&self, state: &pipe_sampler_state) -> *mut c_void {
         unsafe { self.pipe.as_ref().create_sampler_state.unwrap()(self.pipe.as_ptr(), state) }
     }
@@ -404,7 +419,7 @@ impl PipeContext {
         unsafe { self.pipe.as_ref().launch_grid.unwrap()(self.pipe.as_ptr(), &info) }
     }
 
-    pub fn set_global_binding(&self, res: &[Arc<PipeResource>], out: &mut [*mut u32]) {
+    pub fn set_global_binding(&self, res: &[&Arc<PipeResource>], out: &mut [*mut u32]) {
         let mut res: Vec<_> = res.iter().map(|r| r.pipe()).collect();
         unsafe {
             self.pipe.as_ref().set_global_binding.unwrap()(
@@ -506,6 +521,27 @@ impl PipeContext {
         }
     }
 
+    pub fn create_query(&self, query_type: c_uint, index: c_uint) -> *mut pipe_query {
+        unsafe { self.pipe.as_ref().create_query.unwrap()(self.pipe.as_ptr(), query_type, index) }
+    }
+
+    pub fn end_query(&self, pq: *mut pipe_query) -> bool {
+        unsafe { self.pipe.as_ref().end_query.unwrap()(self.pipe.as_ptr(), pq) }
+    }
+
+    pub fn get_query_result(
+        &self,
+        pq: *mut pipe_query,
+        wait: bool,
+        pqr: *mut pipe_query_result,
+    ) -> bool {
+        unsafe { self.pipe.as_ref().get_query_result.unwrap()(self.pipe.as_ptr(), pq, wait, pqr) }
+    }
+
+    pub fn destroy_query(&self, pq: *mut pipe_query) {
+        unsafe { self.pipe.as_ref().destroy_query.unwrap()(self.pipe.as_ptr(), pq) }
+    }
+
     pub fn memory_barrier(&self, barriers: u32) {
         unsafe { self.pipe.as_ref().memory_barrier.unwrap()(self.pipe.as_ptr(), barriers) }
     }
@@ -536,8 +572,6 @@ impl PipeContext {
                     to_device,
                     content_undefined,
                 );
-            } else {
-                panic!("svm_migrate not implemented but called!");
             }
         }
     }
@@ -561,10 +595,12 @@ fn has_required_cbs(context: &pipe_context) -> bool {
         & has_required_feature!(context, buffer_subdata)
         & has_required_feature!(context, buffer_unmap)
         & has_required_feature!(context, clear_buffer)
-        & has_required_feature!(context, clear_texture)
         & has_required_feature!(context, create_compute_state)
+        & has_required_feature!(context, create_query)
         & has_required_feature!(context, delete_compute_state)
         & has_required_feature!(context, delete_sampler_state)
+        & has_required_feature!(context, destroy_query)
+        & has_required_feature!(context, end_query)
         & has_required_feature!(context, flush)
         & has_required_feature!(context, get_compute_state_info)
         & has_required_feature!(context, launch_grid)

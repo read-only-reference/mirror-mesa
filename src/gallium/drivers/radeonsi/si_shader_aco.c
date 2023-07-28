@@ -24,6 +24,7 @@
 
 #include "si_shader_internal.h"
 #include "si_pipe.h"
+#include "ac_hw_stage.h"
 #include "aco_interface.h"
 
 static void
@@ -57,38 +58,6 @@ si_fill_aco_options(struct si_shader *shader, struct aco_compiler_options *optio
    options->debug.private_data = debug;
 }
 
-static enum ac_hw_stage
-si_select_hw_stage(const gl_shader_stage stage, const union si_shader_key *const key,
-                   const enum amd_gfx_level gfx_level)
-{
-   switch (stage) {
-   case MESA_SHADER_VERTEX:
-   case MESA_SHADER_TESS_EVAL:
-      if (key->ge.as_ngg)
-         return AC_HW_NEXT_GEN_GEOMETRY_SHADER;
-      else if (key->ge.as_es)
-         return gfx_level >= GFX9 ? AC_HW_LEGACY_GEOMETRY_SHADER : AC_HW_EXPORT_SHADER;
-      else if (key->ge.as_ls)
-         return gfx_level >= GFX9 ? AC_HW_HULL_SHADER : AC_HW_LOCAL_SHADER;
-      else
-         return AC_HW_VERTEX_SHADER;
-   case MESA_SHADER_TESS_CTRL:
-      return AC_HW_HULL_SHADER;
-   case MESA_SHADER_GEOMETRY:
-      if (key->ge.as_ngg)
-         return AC_HW_NEXT_GEN_GEOMETRY_SHADER;
-      else
-         return AC_HW_LEGACY_GEOMETRY_SHADER;
-   case MESA_SHADER_FRAGMENT:
-      return AC_HW_PIXEL_SHADER;
-   case MESA_SHADER_COMPUTE:
-   case MESA_SHADER_KERNEL:
-      return AC_HW_COMPUTE_SHADER;
-   default:
-      unreachable("Unsupported HW stage");
-   }
-}
-
 static void
 si_fill_aco_shader_info(struct si_shader *shader, struct aco_shader_info *info)
 {
@@ -112,6 +81,10 @@ si_fill_aco_shader_info(struct si_shader *shader, struct aco_shader_info *info)
    }
 
    switch (stage) {
+   case MESA_SHADER_TESS_CTRL:
+      info->vs.tcs_in_out_eq = key->ge.opt.same_patch_vertices;
+      info->vs.tcs_temp_only_input_mask = sel->info.tcs_vgpr_only_inputs;
+      break;
    case MESA_SHADER_FRAGMENT:
       info->ps.num_interp = si_get_ps_num_interp(shader);
       info->ps.spi_ps_input = shader->config.spi_ps_input_ena;
@@ -172,8 +145,32 @@ si_aco_compile_shader(struct si_shader *shader,
    struct aco_shader_info info = {0};
    si_fill_aco_shader_info(shader, &info);
 
-   aco_compile_shader(&options, &info, 1, &nir, &args->ac,
+   nir_shader *shaders[2];
+   unsigned num_shaders = 0;
+
+   bool free_nir = false;
+   struct si_shader prev_shader = {};
+   struct si_shader_args prev_args;
+
+   const struct si_shader_selector *sel = shader->selector;
+
+   /* For merged shader stage. */
+   if (shader->is_monolithic && sel->screen->info.gfx_level >= GFX9 &&
+       (sel->stage == MESA_SHADER_TESS_CTRL || sel->stage == MESA_SHADER_GEOMETRY)) {
+
+      shaders[num_shaders++] =
+         si_get_prev_stage_nir_shader(shader, &prev_shader, &prev_args, &free_nir);
+
+      args = &prev_args;
+   }
+
+   shaders[num_shaders++] = nir;
+
+   aco_compile_shader(&options, &info, num_shaders, shaders, &args->ac,
                       si_aco_build_shader_binary, (void **)shader);
+
+   if (free_nir)
+      ralloc_free(shaders[0]);
 
    return true;
 }

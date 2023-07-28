@@ -1120,6 +1120,7 @@ typedef uint64_t isl_surf_usage_flags_t;
 #define ISL_SURF_USAGE_CPB_BIT                 (1u << 15)
 #define ISL_SURF_USAGE_PROTECTED_BIT           (1u << 16)
 #define ISL_SURF_USAGE_VIDEO_DECODE_BIT        (1u << 17)
+#define ISL_SURF_USAGE_STREAM_OUT_BIT          (1u << 18)
 /** @} */
 
 /**
@@ -1292,12 +1293,25 @@ struct isl_device {
    struct {
       uint32_t internal;
       uint32_t external;
+      uint32_t uncached;
       uint32_t l1_hdc_l3_llc;
       uint32_t blitter_src;
       uint32_t blitter_dst;
       /* Protected is an additional bit on top of the existing entry index. */
       uint32_t protected_mask;
    } mocs;
+
+   /* Options to configure by the driver: */
+
+   /**
+    * Write buffer length in the upper dword of the
+    * RENDER_SURFACE_STATE::AuxilliarySurfaceBaseAddress field.
+    *
+    * This field is unused for buffer surfaces so we can reuse it store the
+    * buffer length. This is useful when you want to load a vec4 with (main
+    * address, size).
+    */
+   bool buffer_length_in_aux_addr;
 
    void (*surf_fill_state_s)(const struct isl_device *dev, void *state,
                              const struct isl_surf_fill_state_info *restrict info);
@@ -1440,8 +1454,9 @@ struct isl_drm_modifier_info {
    /** ISL tiling implied by this modifier */
    enum isl_tiling tiling;
 
-   /** ISL aux usage implied by this modifier */
-   enum isl_aux_usage aux_usage;
+   /** Compression types supported by this modifier */
+   bool supports_render_compression;
+   bool supports_media_compression;
 
    /** Whether or not this modifier supports clear color */
    bool supports_clear_color;
@@ -2250,7 +2265,8 @@ isl_drm_modifier_has_aux(uint64_t modifier)
    if (modifier == DRM_FORMAT_MOD_INVALID)
       return false;
 
-   return isl_drm_modifier_get_info(modifier)->aux_usage != ISL_AUX_USAGE_NONE;
+   return isl_drm_modifier_get_info(modifier)->supports_render_compression ||
+          isl_drm_modifier_get_info(modifier)->supports_media_compression;
 }
 
 /** Returns the default isl_aux_state for the given modifier.
@@ -2281,12 +2297,11 @@ isl_drm_modifier_get_default_aux_state(uint64_t modifier)
    const struct isl_drm_modifier_info *mod_info =
       isl_drm_modifier_get_info(modifier);
 
-   if (!mod_info || mod_info->aux_usage == ISL_AUX_USAGE_NONE)
+   if (!mod_info || !isl_drm_modifier_has_aux(modifier))
       return ISL_AUX_STATE_AUX_INVALID;
 
-   assert(mod_info->aux_usage == ISL_AUX_USAGE_CCS_E ||
-          mod_info->aux_usage == ISL_AUX_USAGE_FCV_CCS_E ||
-          mod_info->aux_usage == ISL_AUX_USAGE_MC);
+   assert(mod_info->supports_render_compression !=
+          mod_info->supports_media_compression);
    return mod_info->supports_clear_color ? ISL_AUX_STATE_COMPRESSED_CLEAR :
                                            ISL_AUX_STATE_COMPRESSED_NO_CLEAR;
 }
@@ -2302,6 +2317,12 @@ isl_drm_modifier_get_default_aux_state(uint64_t modifier)
 uint32_t
 isl_drm_modifier_get_score(const struct intel_device_info *devinfo,
                            uint64_t modifier);
+
+/* Return the number of planes used by an image with the given parameters. */
+uint32_t
+isl_drm_modifier_get_plane_count(const struct intel_device_info *devinfo,
+                                 uint64_t modifier,
+                                 uint32_t fmt_planes);
 
 struct isl_extent2d ATTRIBUTE_CONST
 isl_get_interleaved_msaa_px_size_sa(uint32_t samples);
@@ -3009,6 +3030,9 @@ isl_get_tile_masks(enum isl_tiling tiling, uint32_t cpp,
 
 const char *
 isl_aux_op_to_name(enum isl_aux_op op);
+
+const char *
+isl_tiling_to_name(enum isl_tiling tiling);
 
 #ifdef __cplusplus
 }

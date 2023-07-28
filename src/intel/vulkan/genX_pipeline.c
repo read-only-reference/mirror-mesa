@@ -333,8 +333,7 @@ genX(emit_urb_setup)(struct anv_device *device, struct anv_batch *batch,
       }
    }
 #if GFX_VERx10 >= 125
-   if (device->physical->vk.supported_extensions.NV_mesh_shader ||
-       device->physical->vk.supported_extensions.EXT_mesh_shader) {
+   if (device->physical->vk.supported_extensions.EXT_mesh_shader) {
       anv_batch_emit(batch, GENX(3DSTATE_URB_ALLOC_MESH), zero);
       anv_batch_emit(batch, GENX(3DSTATE_URB_ALLOC_TASK), zero);
    }
@@ -559,6 +558,11 @@ emit_3dstate_sbe(struct anv_graphics_pipeline *pipeline)
             sbe_mesh.PerVertexURBEntryOutputReadLength += 1;
          }
 
+         if (mue->user_data_in_vertex_header) {
+            sbe_mesh.PerVertexURBEntryOutputReadOffset -= 1;
+            sbe_mesh.PerVertexURBEntryOutputReadLength += 1;
+         }
+
          assert(mue->per_primitive_header_size_dw % 8 == 0);
          sbe_mesh.PerPrimitiveURBEntryOutputReadOffset = mue->per_primitive_header_size_dw / 8;
          sbe_mesh.PerPrimitiveURBEntryOutputReadLength = DIV_ROUND_UP(mue->per_primitive_data_size_dw, 8);
@@ -570,7 +574,8 @@ emit_3dstate_sbe(struct anv_graphics_pipeline *pipeline)
           */
          if (wm_prog_data->urb_setup[VARYING_SLOT_VIEWPORT] >= 0 ||
              wm_prog_data->urb_setup[VARYING_SLOT_PRIMITIVE_SHADING_RATE] >= 0 ||
-             wm_prog_data->urb_setup[VARYING_SLOT_LAYER] >= 0) {
+             wm_prog_data->urb_setup[VARYING_SLOT_LAYER] >= 0 ||
+             mue->user_data_in_primitive_header) {
             assert(sbe_mesh.PerPrimitiveURBEntryOutputReadOffset > 0);
             sbe_mesh.PerPrimitiveURBEntryOutputReadOffset -= 1;
             sbe_mesh.PerPrimitiveURBEntryOutputReadLength += 1;
@@ -789,10 +794,6 @@ emit_rs_state(struct anv_graphics_pipeline *pipeline,
    raster.ForceMultisampling = false;
 
    raster.ScissorRectangleEnable = true;
-
-   raster.ConservativeRasterizationEnable =
-      rs && rs->conservative_mode != VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT;
-   raster.APIMode = DX101;
 
    GENX(3DSTATE_SF_pack)(NULL, pipeline->gfx8.sf, &sf);
    GENX(3DSTATE_RASTER_pack)(NULL, pipeline->gfx8.raster, &raster);
@@ -1317,52 +1318,67 @@ emit_3dstate_hs_ds(struct anv_graphics_pipeline *pipeline,
    hs.DispatchMode = tcs_prog_data->base.dispatch_mode;
    hs.IncludePrimitiveID = tcs_prog_data->include_primitive_id;
 
+   STATIC_ASSERT(ARRAY_SIZE(pipeline->gfx8.hs) == GENX(3DSTATE_HS_length));
    GENX(3DSTATE_HS_pack)(&pipeline->base.base.batch, pipeline->gfx8.hs, &hs);
 
-   anv_batch_emit(batch, GENX(3DSTATE_DS), ds) {
-      ds.Enable = true;
-      ds.StatisticsEnable = true;
-      ds.KernelStartPointer = tes_bin->kernel.offset;
-      /* Wa_1606682166 */
-      ds.SamplerCount = GFX_VER == 11 ? 0 : get_sampler_count(tes_bin);
-      ds.BindingTableEntryCount = tes_bin->bind_map.surface_count;
-      ds.MaximumNumberofThreads = devinfo->max_tes_threads - 1;
+   struct GENX(3DSTATE_DS) ds = {
+      GENX(3DSTATE_DS_header),
+   };
 
-      ds.ComputeWCoordinateEnable =
-         tes_prog_data->domain == BRW_TESS_DOMAIN_TRI;
+   ds.Enable = true;
+   ds.StatisticsEnable = true;
+   ds.KernelStartPointer = tes_bin->kernel.offset;
+   /* Wa_1606682166 */
+   ds.SamplerCount = GFX_VER == 11 ? 0 : get_sampler_count(tes_bin);
+   ds.BindingTableEntryCount = tes_bin->bind_map.surface_count;
+   ds.MaximumNumberofThreads = devinfo->max_tes_threads - 1;
 
-      ds.PatchURBEntryReadLength = tes_prog_data->base.urb_read_length;
-      ds.PatchURBEntryReadOffset = 0;
-      ds.DispatchGRFStartRegisterForURBData =
-         tes_prog_data->base.base.dispatch_grf_start_reg;
+   ds.ComputeWCoordinateEnable =
+      tes_prog_data->domain == BRW_TESS_DOMAIN_TRI;
+
+   ds.PatchURBEntryReadLength = tes_prog_data->base.urb_read_length;
+   ds.PatchURBEntryReadOffset = 0;
+   ds.DispatchGRFStartRegisterForURBData =
+      tes_prog_data->base.base.dispatch_grf_start_reg;
 
 #if GFX_VER < 11
-      ds.DispatchMode =
-         tes_prog_data->base.dispatch_mode == DISPATCH_MODE_SIMD8 ?
-            DISPATCH_MODE_SIMD8_SINGLE_PATCH :
-            DISPATCH_MODE_SIMD4X2;
+   ds.DispatchMode =
+      tes_prog_data->base.dispatch_mode == DISPATCH_MODE_SIMD8 ?
+      DISPATCH_MODE_SIMD8_SINGLE_PATCH :
+      DISPATCH_MODE_SIMD4X2;
 #else
-      assert(tes_prog_data->base.dispatch_mode == DISPATCH_MODE_SIMD8);
-      ds.DispatchMode = DISPATCH_MODE_SIMD8_SINGLE_PATCH;
+   assert(tes_prog_data->base.dispatch_mode == DISPATCH_MODE_SIMD8);
+   ds.DispatchMode = DISPATCH_MODE_SIMD8_SINGLE_PATCH;
 #endif
 
-      ds.UserClipDistanceClipTestEnableBitmask =
-         tes_prog_data->base.clip_distance_mask;
-      ds.UserClipDistanceCullTestEnableBitmask =
-         tes_prog_data->base.cull_distance_mask;
+   ds.UserClipDistanceClipTestEnableBitmask =
+      tes_prog_data->base.clip_distance_mask;
+   ds.UserClipDistanceCullTestEnableBitmask =
+      tes_prog_data->base.cull_distance_mask;
 
 #if GFX_VER >= 12
-      ds.PrimitiveIDNotRequired = !tes_prog_data->include_primitive_id;
+   ds.PrimitiveIDNotRequired = !tes_prog_data->include_primitive_id;
 #endif
 #if GFX_VERx10 >= 125
-      ds.ScratchSpaceBuffer =
-         get_scratch_surf(&pipeline->base.base, MESA_SHADER_TESS_EVAL, tes_bin);
+   ds.ScratchSpaceBuffer =
+      get_scratch_surf(&pipeline->base.base, MESA_SHADER_TESS_EVAL, tes_bin);
 #else
-      ds.PerThreadScratchSpace = get_scratch_space(tes_bin);
-      ds.ScratchSpaceBasePointer =
-         get_scratch_address(&pipeline->base.base, MESA_SHADER_TESS_EVAL, tes_bin);
+   ds.PerThreadScratchSpace = get_scratch_space(tes_bin);
+   ds.ScratchSpaceBasePointer =
+      get_scratch_address(&pipeline->base.base, MESA_SHADER_TESS_EVAL, tes_bin);
 #endif
-   }
+
+   /* Wa_14019750404:
+    * See genX(emit_ds)().
+    * We need to both emit 3DSTATE_DS now, and before each 3DPRIMITIVE, so
+    * we pack it to have it later, and memcpy into the current batch.
+    */
+   STATIC_ASSERT(ARRAY_SIZE(pipeline->gfx8.ds) == GENX(3DSTATE_DS_length));
+   GENX(3DSTATE_DS_pack)(&pipeline->base.base.batch, pipeline->gfx8.ds, &ds);
+
+   uint32_t *dw =
+      anv_batch_emitn(batch, GENX(3DSTATE_DS_length), GENX(3DSTATE_DS));
+   memcpy(dw, &pipeline->gfx8.ds, sizeof(pipeline->gfx8.ds));
 }
 
 static void
@@ -1380,53 +1396,57 @@ emit_3dstate_gs(struct anv_graphics_pipeline *pipeline)
 
    const struct brw_gs_prog_data *gs_prog_data = get_gs_prog_data(pipeline);
 
-   anv_batch_emit(batch, GENX(3DSTATE_GS), gs) {
-      gs.Enable                  = true;
-      gs.StatisticsEnable        = true;
-      gs.KernelStartPointer      = gs_bin->kernel.offset;
-      gs.DispatchMode            = gs_prog_data->base.dispatch_mode;
+   struct GENX(3DSTATE_GS) gs = {
+      GENX(3DSTATE_GS_header),
+   };
 
-      gs.SingleProgramFlow       = false;
-      gs.VectorMaskEnable        = false;
-      /* Wa_1606682166 */
-      gs.SamplerCount            = GFX_VER == 11 ? 0 : get_sampler_count(gs_bin);
-      gs.BindingTableEntryCount  = gs_bin->bind_map.surface_count;
-      gs.IncludeVertexHandles    = gs_prog_data->base.include_vue_handles;
-      gs.IncludePrimitiveID      = gs_prog_data->include_primitive_id;
+   gs.Enable                  = true;
+   gs.StatisticsEnable        = true;
+   gs.KernelStartPointer      = gs_bin->kernel.offset;
+   gs.DispatchMode            = gs_prog_data->base.dispatch_mode;
 
-      gs.MaximumNumberofThreads = devinfo->max_gs_threads - 1;
+   gs.SingleProgramFlow       = false;
+   gs.VectorMaskEnable        = false;
+   /* Wa_1606682166 */
+   gs.SamplerCount            = GFX_VER == 11 ? 0 : get_sampler_count(gs_bin);
+   gs.BindingTableEntryCount  = gs_bin->bind_map.surface_count;
+   gs.IncludeVertexHandles    = gs_prog_data->base.include_vue_handles;
+   gs.IncludePrimitiveID      = gs_prog_data->include_primitive_id;
 
-      gs.OutputVertexSize        = gs_prog_data->output_vertex_size_hwords * 2 - 1;
-      gs.OutputTopology          = gs_prog_data->output_topology;
-      gs.ControlDataFormat       = gs_prog_data->control_data_format;
-      gs.ControlDataHeaderSize   = gs_prog_data->control_data_header_size_hwords;
-      gs.InstanceControl         = MAX2(gs_prog_data->invocations, 1) - 1;
-      gs.ReorderMode             = TRAILING;
+   gs.MaximumNumberofThreads = devinfo->max_gs_threads - 1;
 
-      gs.ExpectedVertexCount     = gs_prog_data->vertices_in;
-      gs.StaticOutput            = gs_prog_data->static_vertex_count >= 0;
-      gs.StaticOutputVertexCount = gs_prog_data->static_vertex_count >= 0 ?
-                                   gs_prog_data->static_vertex_count : 0;
+   gs.OutputVertexSize        = gs_prog_data->output_vertex_size_hwords * 2 - 1;
+   gs.OutputTopology          = gs_prog_data->output_topology;
+   gs.ControlDataFormat       = gs_prog_data->control_data_format;
+   gs.ControlDataHeaderSize   = gs_prog_data->control_data_header_size_hwords;
+   gs.InstanceControl         = MAX2(gs_prog_data->invocations, 1) - 1;
+   gs.ReorderMode             = LEADING;
 
-      gs.VertexURBEntryReadOffset = 0;
-      gs.VertexURBEntryReadLength = gs_prog_data->base.urb_read_length;
-      gs.DispatchGRFStartRegisterForURBData =
-         gs_prog_data->base.base.dispatch_grf_start_reg;
+   gs.ExpectedVertexCount     = gs_prog_data->vertices_in;
+   gs.StaticOutput            = gs_prog_data->static_vertex_count >= 0;
+   gs.StaticOutputVertexCount = gs_prog_data->static_vertex_count >= 0 ?
+      gs_prog_data->static_vertex_count : 0;
 
-      gs.UserClipDistanceClipTestEnableBitmask =
-         gs_prog_data->base.clip_distance_mask;
-      gs.UserClipDistanceCullTestEnableBitmask =
-         gs_prog_data->base.cull_distance_mask;
+   gs.VertexURBEntryReadOffset = 0;
+   gs.VertexURBEntryReadLength = gs_prog_data->base.urb_read_length;
+   gs.DispatchGRFStartRegisterForURBData =
+      gs_prog_data->base.base.dispatch_grf_start_reg;
+
+   gs.UserClipDistanceClipTestEnableBitmask =
+      gs_prog_data->base.clip_distance_mask;
+   gs.UserClipDistanceCullTestEnableBitmask =
+      gs_prog_data->base.cull_distance_mask;
 
 #if GFX_VERx10 >= 125
-      gs.ScratchSpaceBuffer =
-         get_scratch_surf(&pipeline->base.base, MESA_SHADER_GEOMETRY, gs_bin);
+   gs.ScratchSpaceBuffer =
+      get_scratch_surf(&pipeline->base.base, MESA_SHADER_GEOMETRY, gs_bin);
 #else
-      gs.PerThreadScratchSpace   = get_scratch_space(gs_bin);
-      gs.ScratchSpaceBasePointer =
-         get_scratch_address(&pipeline->base.base, MESA_SHADER_GEOMETRY, gs_bin);
+   gs.PerThreadScratchSpace   = get_scratch_space(gs_bin);
+   gs.ScratchSpaceBasePointer =
+      get_scratch_address(&pipeline->base.base, MESA_SHADER_GEOMETRY, gs_bin);
 #endif
-   }
+
+   GENX(3DSTATE_GS_pack)(&pipeline->base.base.batch, pipeline->gfx8.gs, &gs);
 }
 
 static bool
@@ -1870,8 +1890,7 @@ genX(graphics_pipeline_emit)(struct anv_graphics_pipeline *pipeline,
 #if GFX_VERx10 >= 125
       const struct anv_device *device = pipeline->base.base.device;
       /* Disable Mesh. */
-      if (device->vk.enabled_extensions.NV_mesh_shader ||
-          device->vk.enabled_extensions.EXT_mesh_shader) {
+      if (device->vk.enabled_extensions.EXT_mesh_shader) {
          struct anv_batch *batch = &pipeline->base.base.batch;
 
          anv_batch_emit(batch, GENX(3DSTATE_MESH_CONTROL), zero);

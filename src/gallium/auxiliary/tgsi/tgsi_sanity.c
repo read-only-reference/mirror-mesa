@@ -33,15 +33,16 @@
 #include "tgsi_info.h"
 #include "tgsi_iterate.h"
 
+#include <stdint.h>
 
 DEBUG_GET_ONCE_BOOL_OPTION(print_sanity, "TGSI_PRINT_SANITY", false)
 
 
 typedef struct {
-   uint file : 28;
+   uint32_t file : 28;
    /* max 2 dimensions */
-   uint dimensions : 4;
-   uint indices[2];
+   uint32_t dimensions : 4;
+   unsigned indices[2];
 } scan_register;
 
 struct sanity_check_ctx
@@ -51,14 +52,14 @@ struct sanity_check_ctx
    struct cso_hash regs_used;
    struct cso_hash regs_ind_used;
 
-   uint num_imms;
-   uint num_instructions;
-   uint index_of_END;
+   unsigned num_imms;
+   unsigned num_instructions;
+   unsigned index_of_END;
 
-   uint errors;
-   uint warnings;
-   uint implied_array_size;
-   uint implied_out_array_size;
+   unsigned errors;
+   unsigned warnings;
+   unsigned implied_array_size;
+   unsigned implied_out_array_size;
 
    bool print;
 };
@@ -75,7 +76,7 @@ scan_register_key(const scan_register *reg)
 
 static void
 fill_scan_register1d(scan_register *reg,
-                     uint file, uint index)
+                     enum tgsi_file_type file, unsigned index)
 {
    reg->file = file;
    reg->dimensions = 1;
@@ -85,7 +86,8 @@ fill_scan_register1d(scan_register *reg,
 
 static void
 fill_scan_register2d(scan_register *reg,
-                     uint file, uint index1, uint index2)
+                     enum tgsi_file_type file,
+                     unsigned index1, unsigned index2)
 {
    reg->file = file;
    reg->dimensions = 2;
@@ -188,7 +190,7 @@ report_warning(
 static bool
 check_file_name(
    struct sanity_check_ctx *ctx,
-   uint file )
+   enum tgsi_file_type file )
 {
    if (file <= TGSI_FILE_NULL || file >= TGSI_FILE_COUNT) {
       report_error( ctx, "(%u): Invalid register file name", file );
@@ -211,7 +213,7 @@ is_register_declared(
 static bool
 is_any_register_declared(
    struct sanity_check_ctx *ctx,
-   uint file )
+   enum tgsi_file_type file )
 {
    struct cso_hash_iter iter =
       cso_hash_first_node(&ctx->regs_decl);
@@ -310,7 +312,7 @@ iter_instruction(
 {
    struct sanity_check_ctx *ctx = (struct sanity_check_ctx *) iter;
    const struct tgsi_opcode_info *info;
-   uint i;
+   unsigned i;
 
    if (inst->Instruction.Opcode == TGSI_OPCODE_END) {
       if (ctx->index_of_END != ~0u) {
@@ -393,8 +395,8 @@ iter_declaration(
    struct tgsi_full_declaration *decl )
 {
    struct sanity_check_ctx *ctx = (struct sanity_check_ctx *) iter;
-   uint file;
-   uint i;
+   enum tgsi_file_type file;
+   unsigned i;
 
    /* No declarations allowed after the first instruction.
     */
@@ -410,15 +412,15 @@ iter_declaration(
    for (i = decl->Range.First; i <= decl->Range.Last; i++) {
       /* declared TGSI_FILE_INPUT's for geometry and tessellation
        * have an implied second dimension */
-      uint processor = ctx->iter.processor.Processor;
-      uint patch = decl->Semantic.Name == TGSI_SEMANTIC_PATCH ||
+      unsigned processor = ctx->iter.processor.Processor;
+      unsigned patch = decl->Semantic.Name == TGSI_SEMANTIC_PATCH ||
          decl->Semantic.Name == TGSI_SEMANTIC_TESSOUTER ||
          decl->Semantic.Name == TGSI_SEMANTIC_TESSINNER;
       if (file == TGSI_FILE_INPUT && !patch && (
                 processor == PIPE_SHADER_GEOMETRY ||
                 processor == PIPE_SHADER_TESS_CTRL ||
                 processor == PIPE_SHADER_TESS_EVAL)) {
-         uint vert;
+         unsigned vert;
          for (vert = 0; vert < ctx->implied_array_size; ++vert) {
             scan_register *reg = MALLOC(sizeof(scan_register));
             fill_scan_register2d(reg, file, i, vert);
@@ -426,7 +428,7 @@ iter_declaration(
          }
       } else if (file == TGSI_FILE_OUTPUT && !patch &&
                  processor == PIPE_SHADER_TESS_CTRL) {
-         uint vert;
+         unsigned vert;
          for (vert = 0; vert < ctx->implied_out_array_size; ++vert) {
             scan_register *reg = MALLOC(sizeof(scan_register));
             fill_scan_register2d(reg, file, i, vert);

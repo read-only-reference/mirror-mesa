@@ -24,15 +24,6 @@
 
 #include "nir_builder.h"
 
-void
-nir_builder_init(nir_builder *build, nir_function_impl *impl)
-{
-   memset(build, 0, sizeof(*build));
-   build->exact = false;
-   build->impl = impl;
-   build->shader = impl->function->shader;
-}
-
 nir_builder MUST_CHECK PRINTFLIKE(3, 4)
 nir_builder_init_simple_shader(gl_shader_stage stage,
                                const nir_shader_compiler_options *options,
@@ -58,6 +49,13 @@ nir_builder_init_simple_shader(gl_shader_stage stage,
 
    /* Simple shaders are typically internal, e.g. blit shaders */
    b.shader->info.internal = true;
+
+   /* Compute shaders on Vulkan require some workgroup size initialized, pick
+    * a safe default value. This relies on merging workgroups for efficiency.
+    */
+   b.shader->info.workgroup_size[0] = 1;
+   b.shader->info.workgroup_size[1] = 1;
+   b.shader->info.workgroup_size[2] = 1;
 
    return b;
 }
@@ -223,7 +221,8 @@ nir_build_tex_deref_instr(nir_builder *build, nir_texop op,
                           const nir_tex_src *extra_srcs)
 {
    assert(texture != NULL);
-   assert(glsl_type_is_texture(texture->type) ||
+   assert(glsl_type_is_image(texture->type) ||
+          glsl_type_is_texture(texture->type) ||
           glsl_type_is_sampler(texture->type));
 
    const unsigned num_srcs = 1 + (sampler != NULL) + num_extra_srcs;

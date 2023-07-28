@@ -3863,7 +3863,9 @@ generate_variant(struct llvmpipe_context *lp,
          !shader->info.base.uses_kill &&
          !key->blend.logicop_enable &&
          (key->cbuf_format[0] == PIPE_FORMAT_B8G8R8A8_UNORM ||
-          key->cbuf_format[0] == PIPE_FORMAT_B8G8R8X8_UNORM);
+          key->cbuf_format[0] == PIPE_FORMAT_B8G8R8X8_UNORM ||
+          key->cbuf_format[0] == PIPE_FORMAT_R8G8B8A8_UNORM ||
+          key->cbuf_format[0] == PIPE_FORMAT_R8G8B8X8_UNORM);
 
    memcpy(&variant->key, key, sizeof *key);
 
@@ -3992,6 +3994,7 @@ llvmpipe_create_fs_state(struct pipe_context *pipe,
       NIR_PASS_V(nir, nir_lower_fragcolor, nir->info.fs.color_is_dual_source ? 1 : 8);
 
       nir_tgsi_scan_shader(nir, &shader->info.base, true);
+      shader->info.num_texs = shader->info.base.opcode_count[TGSI_OPCODE_TEX];
    }
 
    shader->draw_data = draw_create_fragment_shader(llvmpipe->draw, templ);

@@ -32,10 +32,10 @@
 void
 etna_lower_io(nir_shader *shader, struct etna_shader_variant *v)
 {
-   nir_foreach_function(function, shader) {
-      nir_builder b = nir_builder_create(function->impl);
+   nir_foreach_function_impl(impl, shader) {
+      nir_builder b = nir_builder_create(impl);
 
-      nir_foreach_block(block, function->impl) {
+      nir_foreach_block(block, impl) {
          nir_foreach_instr_safe(instr, block) {
             if (instr->type == nir_instr_type_intrinsic) {
                nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
@@ -192,9 +192,6 @@ etna_lower_alu_impl(nir_function_impl *impl, bool has_new_transcendentals)
 
             ssa->num_components = 2;
 
-            mul->dest.saturate = alu->dest.saturate;
-            alu->dest.saturate = 0;
-
             nir_instr_insert_after(instr, &mul->instr);
 
             nir_ssa_def_rewrite_uses_after(ssa, &mul->dest.dest.ssa,
@@ -207,8 +204,7 @@ etna_lower_alu_impl(nir_function_impl *impl, bool has_new_transcendentals)
 void
 etna_lower_alu(nir_shader *shader, bool has_new_transcendentals)
 {
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         etna_lower_alu_impl(function->impl, has_new_transcendentals);
+   nir_foreach_function_impl(impl, shader) {
+      etna_lower_alu_impl(impl, has_new_transcendentals);
    }
 }

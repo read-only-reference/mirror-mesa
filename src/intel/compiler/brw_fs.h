@@ -191,16 +191,16 @@ struct brw_fs_bind_info {
 class fs_visitor : public backend_shader
 {
 public:
-   fs_visitor(const struct brw_compiler *compiler, void *log_data,
-              void *mem_ctx,
+   fs_visitor(const struct brw_compiler *compiler,
+              const struct brw_compile_params *params,
               const brw_base_prog_key *key,
               struct brw_stage_prog_data *prog_data,
               const nir_shader *shader,
               unsigned dispatch_width,
               bool needs_register_pressure,
               bool debug_enabled);
-   fs_visitor(const struct brw_compiler *compiler, void *log_data,
-              void *mem_ctx,
+   fs_visitor(const struct brw_compiler *compiler,
+              const struct brw_compile_params *params,
               struct brw_gs_compile *gs_compile,
               struct brw_gs_prog_data *prog_data,
               const nir_shader *shader,
@@ -386,6 +386,7 @@ public:
    fs_reg get_nir_src(const nir_src &src);
    fs_reg get_nir_src_imm(const nir_src &src);
    fs_reg get_nir_dest(const nir_dest &dest);
+   nir_component_mask_t get_nir_write_mask(const nir_alu_dest &dest);
    fs_reg get_resource_nir_src(const nir_src &src);
    fs_reg try_rebuild_resource(const brw::fs_builder &bld,
                                nir_ssa_def *resource_def);
@@ -438,7 +439,7 @@ public:
    fs_reg get_timestamp(const brw::fs_builder &bld);
 
    fs_reg interp_reg(int location, int channel);
-   fs_reg per_primitive_reg(int location);
+   fs_reg per_primitive_reg(int location, unsigned comp);
 
    virtual void dump_instruction_to_file(const backend_instruction *inst, FILE *file) const;
    virtual void dump_instructions_to_file(FILE *file) const;
@@ -475,7 +476,6 @@ public:
    /** Either BRW_MAX_GRF or GFX7_MRF_HACK_START */
    unsigned max_grf;
 
-   fs_reg *nir_locals;
    fs_reg *nir_ssa_values;
    fs_inst **nir_resource_insts;
    struct brw_fs_bind_info *nir_ssa_bind_infos;
@@ -594,8 +594,8 @@ sample_mask_flag_subreg(const fs_visitor *shader)
 class fs_generator
 {
 public:
-   fs_generator(const struct brw_compiler *compiler, void *log_data,
-                void *mem_ctx,
+   fs_generator(const struct brw_compiler *compiler,
+                const struct brw_compile_params *params,
                 struct brw_stage_prog_data *prog_data,
                 bool runtime_check_aads_emit,
                 gl_shader_stage stage);
@@ -670,7 +670,7 @@ private:
    bool patch_halt_jumps();
 
    const struct brw_compiler *compiler;
-   void *log_data; /* Passed to compiler->*_log functions */
+   const struct brw_compile_params *params;
 
    const struct intel_device_info *devinfo;
 

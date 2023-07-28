@@ -83,11 +83,18 @@ util_resource_copy_region(struct pipe_context *pipe,
                           const struct pipe_box *src_box);
 
 extern void
-util_clear_texture(struct pipe_context *pipe,
-                   struct pipe_resource *tex,
-                   unsigned level,
-                   const struct pipe_box *box,
-                   const void *data);
+u_default_clear_texture(struct pipe_context *pipe,
+                        struct pipe_resource *tex,
+                        unsigned level,
+                        const struct pipe_box *box,
+                        const void *data);
+
+extern void
+util_clear_texture_sw(struct pipe_context *pipe,
+                      struct pipe_resource *tex,
+                      unsigned level,
+                      const struct pipe_box *box,
+                      const void *data);
 
 extern void
 util_clear_render_target(struct pipe_context *pipe,

@@ -479,21 +479,19 @@ bool
 r600_lower_tess_io(nir_shader *shader, enum mesa_prim prim_type)
 {
    bool progress = false;
-   nir_foreach_function(function, shader)
+   nir_foreach_function_impl(impl, shader)
    {
-      if (function->impl) {
-         nir_builder b = nir_builder_create(function->impl);
+      nir_builder b = nir_builder_create(impl);
 
-         nir_foreach_block(block, function->impl)
+      nir_foreach_block(block, impl)
+      {
+         nir_foreach_instr_safe(instr, block)
          {
-            nir_foreach_instr_safe(instr, block)
-            {
-               if (instr->type != nir_instr_type_intrinsic)
-                  continue;
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
 
-               if (r600_lower_tess_io_filter(instr, shader->info.stage))
-                  progress |= r600_lower_tess_io_impl(&b, instr, prim_type);
-            }
+            if (r600_lower_tess_io_filter(instr, shader->info.stage))
+               progress |= r600_lower_tess_io_impl(&b, instr, prim_type);
          }
       }
    }
@@ -517,9 +515,9 @@ r600_append_tcs_TF_emission(nir_shader *shader, enum mesa_prim prim_type)
    if (shader->info.stage != MESA_SHADER_TESS_CTRL)
       return false;
 
-   nir_foreach_function(function, shader)
+   nir_foreach_function_impl(impl, shader)
    {
-      nir_foreach_block(block, function->impl)
+      nir_foreach_block(block, impl)
       {
          nir_foreach_instr_safe(instr, block)
          {
@@ -532,12 +530,11 @@ r600_append_tcs_TF_emission(nir_shader *shader, enum mesa_prim prim_type)
          }
       }
    }
-   nir_builder builder;
-   nir_builder *b = &builder;
 
    assert(exec_list_length(&shader->functions) == 1);
    nir_function *f = (nir_function *)shader->functions.get_head();
-   nir_builder_init(b, f->impl);
+   nir_builder builder = nir_builder_create(f->impl);
+   nir_builder *b = &builder;
 
    auto outer_comps = outer_tf_components(prim_type);
    if (!outer_comps)
@@ -642,41 +639,4 @@ r600_append_tcs_TF_emission(nir_shader *shader, enum mesa_prim prim_type)
    nir_metadata_preserve(f->impl, nir_metadata_none);
 
    return true;
-}
-
-static bool
-r600_lower_tess_coord_filter(const nir_instr *instr, UNUSED const void *_options)
-{
-   if (instr->type != nir_instr_type_intrinsic)
-      return false;
-   auto intr = nir_instr_as_intrinsic(instr);
-   return intr->intrinsic == nir_intrinsic_load_tess_coord;
-}
-
-static nir_ssa_def *
-r600_lower_tess_coord_impl(nir_builder *b, UNUSED nir_instr *instr, void *_options)
-{
-   mesa_prim prim_type = *(mesa_prim *)_options;
-
-   auto tc_xy = nir_load_tess_coord_r600(b);
-
-   auto tc_x = nir_channel(b, tc_xy, 0);
-   auto tc_y = nir_channel(b, tc_xy, 1);
-
-   if (prim_type == MESA_PRIM_TRIANGLES)
-      return nir_vec3(b,
-                      tc_x,
-                      tc_y,
-                      nir_fsub_imm(b, 1.0, nir_fadd(b, tc_x, tc_y)));
-   else
-      return nir_vec3(b, tc_x, tc_y, nir_imm_float(b, 0.0));
-}
-
-bool
-r600_lower_tess_coord(nir_shader *sh, enum mesa_prim prim_type)
-{
-   return nir_shader_lower_instructions(sh,
-                                        r600_lower_tess_coord_filter,
-                                        r600_lower_tess_coord_impl,
-                                        &prim_type);
 }

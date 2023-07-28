@@ -286,12 +286,8 @@ declare_ps_input_vgprs(const struct radv_shader_info *info, struct radv_shader_a
 }
 
 static void
-declare_ngg_sgprs(const struct radv_shader_info *info, struct radv_shader_args *args, bool has_ngg_query,
-                  bool has_ngg_provoking_vtx)
+declare_ngg_sgprs(const struct radv_shader_info *info, struct radv_shader_args *args, bool has_ngg_provoking_vtx)
 {
-   if (has_ngg_query)
-      add_ud_arg(args, 1, AC_ARG_INT, &args->ngg_query_state, AC_UD_NGG_QUERY_STATE);
-
    if (has_ngg_provoking_vtx)
       add_ud_arg(args, 1, AC_ARG_INT, &args->ngg_provoking_vtx, AC_UD_NGG_PROVOKING_VTX);
 
@@ -357,6 +353,20 @@ radv_declare_rt_shader_args(enum amd_gfx_level gfx_level, struct radv_shader_arg
 }
 
 static bool
+radv_tcs_needs_state_sgpr(const struct radv_shader_info *info, const struct radv_pipeline_key *key)
+{
+   /* When the number of patch control points/tessellation patches is 0, it's loaded from a SGPR. */
+   return !key->tcs.tess_input_vertices || !info->num_tess_patches;
+}
+
+static bool
+radv_tes_needs_state_sgpr(const struct radv_shader_info *info)
+{
+   /* When the number of tessellation patches/TCS vertices out is 0, it's loaded from a SGPR. */
+   return !info->num_tess_patches || !info->tes.tcs_vertices_out;
+}
+
+static bool
 radv_ps_needs_state_sgpr(const struct radv_shader_info *info, const struct radv_pipeline_key *key)
 {
    if (info->ps.needs_sample_positions && key->dynamic_rasterization_samples)
@@ -382,8 +392,8 @@ declare_shader_args(const struct radv_device *device, const struct radv_pipeline
 {
    const enum amd_gfx_level gfx_level = device->physical_device->rad_info.gfx_level;
    bool needs_view_index = info->uses_view_index;
-   bool has_ngg_query = info->has_ngg_prim_query || info->has_ngg_xfb_query ||
-                        (stage == MESA_SHADER_GEOMETRY && info->gs.has_ngg_pipeline_stat_query);
+   bool has_shader_query = info->has_prim_query || info->has_xfb_query ||
+                           (stage == MESA_SHADER_GEOMETRY && info->gs.has_pipeline_stat_query);
    bool has_ngg_provoking_vtx =
       (stage == MESA_SHADER_VERTEX || stage == MESA_SHADER_GEOMETRY) && key->dynamic_provoking_vtx_mode;
 
@@ -516,7 +526,7 @@ declare_shader_args(const struct radv_device *device, const struct radv_pipeline
             add_ud_arg(args, 1, AC_ARG_INT, &args->ac.view_index, AC_UD_VIEW_INDEX);
          }
 
-         if (key->dynamic_patch_control_points) {
+         if (radv_tcs_needs_state_sgpr(info, key)) {
             add_ud_arg(args, 1, AC_ARG_INT, &args->tcs_offchip_layout, AC_UD_TCS_OFFCHIP_LAYOUT);
          }
 
@@ -531,7 +541,7 @@ declare_shader_args(const struct radv_device *device, const struct radv_pipeline
             add_ud_arg(args, 1, AC_ARG_INT, &args->ac.view_index, AC_UD_VIEW_INDEX);
          }
 
-         if (key->dynamic_patch_control_points) {
+         if (radv_tcs_needs_state_sgpr(info, key)) {
             add_ud_arg(args, 1, AC_ARG_INT, &args->tcs_offchip_layout, AC_UD_TCS_OFFCHIP_LAYOUT);
          }
 
@@ -553,8 +563,8 @@ declare_shader_args(const struct radv_device *device, const struct radv_pipeline
       if (needs_view_index)
          add_ud_arg(args, 1, AC_ARG_INT, &args->ac.view_index, AC_UD_VIEW_INDEX);
 
-      if (key->dynamic_patch_control_points)
-         add_ud_arg(args, 1, AC_ARG_INT, &args->tes_num_patches, AC_UD_TES_NUM_PATCHES);
+      if (radv_tes_needs_state_sgpr(info))
+         add_ud_arg(args, 1, AC_ARG_INT, &args->tes_state, AC_UD_TES_STATE);
 
       if (info->tes.as_es) {
          ac_add_arg(&args->ac, AC_ARG_SGPR, 1, AC_ARG_INT, &args->ac.tess_offchip_offset);
@@ -602,8 +612,8 @@ declare_shader_args(const struct radv_device *device, const struct radv_pipeline
             add_ud_arg(args, 1, AC_ARG_INT, &args->ac.view_index, AC_UD_VIEW_INDEX);
          }
 
-         if (previous_stage == MESA_SHADER_TESS_EVAL && key->dynamic_patch_control_points)
-            add_ud_arg(args, 1, AC_ARG_INT, &args->tes_num_patches, AC_UD_TES_NUM_PATCHES);
+         if (previous_stage == MESA_SHADER_TESS_EVAL && radv_tes_needs_state_sgpr(info))
+            add_ud_arg(args, 1, AC_ARG_INT, &args->tes_state, AC_UD_TES_STATE);
 
          if (previous_stage == MESA_SHADER_VERTEX && info->vs.dynamic_num_verts_per_prim)
             add_ud_arg(args, 1, AC_ARG_INT, &args->num_verts_per_prim, AC_UD_NUM_VERTS_PER_PRIM);
@@ -613,8 +623,11 @@ declare_shader_args(const struct radv_device *device, const struct radv_pipeline
             add_ud_arg(args, 1, AC_ARG_INT, &args->ac.force_vrs_rates, AC_UD_FORCE_VRS_RATES);
          }
 
+         if (has_shader_query)
+            add_ud_arg(args, 1, AC_ARG_INT, &args->shader_query_state, AC_UD_SHADER_QUERY_STATE);
+
          if (info->is_ngg) {
-            declare_ngg_sgprs(info, args, has_ngg_query, has_ngg_provoking_vtx);
+            declare_ngg_sgprs(info, args, has_ngg_provoking_vtx);
          }
 
          ac_add_arg(&args->ac, AC_ARG_VGPR, 1, AC_ARG_INT, &args->ac.gs_vtx_offset[0]);

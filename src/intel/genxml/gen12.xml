@@ -1988,7 +1988,7 @@
       <value name="CENTER" value="0" />
       <value name="UL_CORNER" value="1" />
     </field>
-    <field name="Pixel Position Offset Enable" start="37" end="37" type="bool" />
+    <field name="Pixel Position Offset Enable" start="37" end="37" type="bool" default="0" />
   </instruction>
   <instruction name="3DSTATE_POLY_STIPPLE_OFFSET" bias="2" length="2" engine="render">
     <field name="DWord Length" start="0" end="7" type="uint" default="0" />
@@ -6912,9 +6912,6 @@
     <field name="Blend Optimization Fix Disable Mask" start="30" end="30" type="bool" />
     <field name="Color Compression Disable Mask" start="31" end="31" type="bool" />
   </register>
-  <register name="CCS_CCS_AUX_INV" length="1" num="0x42C0">
-    <field name="Aux Inv" start="0" end="0" type="bool" />
-  </register>
   <register name="CL_INVOCATION_COUNT" length="2" num="0x2338">
     <field name="CL Invocation Count Report" start="0" end="63" type="uint" />
   </register>
@@ -6934,6 +6931,12 @@
   <register name="COMMON_SLICE_CHICKEN4" length="1" num="0x7300">
     <field name="Enable Hardware Filtering in WM" start="5" end="5" type="bool" />
     <field name="Enable Hardware Filtering in WM Mask" start="21" end="21" type="bool" />
+  </register>
+  <register name="COMPCS0_AUX_TABLE_BASE_ADDR" length="2" num="0x42C0">
+    <field name="Address" start="0" end="63" type="uint" />
+  </register>
+  <register name="COMPCS0_CCS_AUX_INV" length="1" num="0x42C8">
+    <field name="Aux Inv" start="0" end="0" type="bool" />
   </register>
   <register name="CS_CHICKEN1" length="1" num="0x2580">
     <field name="Replay Mode" start="0" end="0" type="uint">

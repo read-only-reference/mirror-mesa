@@ -192,7 +192,7 @@ static void si_destroy_context(struct pipe_context *context)
    si_release_all_descriptors(sctx);
 
    if (sctx->gfx_level >= GFX10 && sctx->has_graphics)
-      gfx11_destroy_query(sctx);
+      si_gfx11_destroy_query(sctx);
 
    if (sctx->sqtt) {
       struct si_screen *sscreen = sctx->screen;
@@ -637,7 +637,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
    /* Initialize graphics-only context functions. */
    if (sctx->has_graphics) {
       if (sctx->gfx_level >= GFX10)
-         gfx11_init_query(sctx);
+         si_gfx11_init_query(sctx);
       si_init_msaa_functions(sctx);
       si_init_shader_functions(sctx);
       si_init_state_functions(sctx);
@@ -1110,7 +1110,7 @@ static void si_set_max_shader_compiler_threads(struct pipe_screen *screen, unsig
 
    /* This function doesn't allow a greater number of threads than
     * the queue had at its creation. */
-   util_queue_adjust_num_threads(&sscreen->shader_compiler_queue, max_threads);
+   util_queue_adjust_num_threads(&sscreen->shader_compiler_queue, max_threads, false);
    /* Don't change the number of threads on the low priority queue. */
 }
 
@@ -1161,8 +1161,13 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
    }
 
    if (sscreen->debug_flags & DBG(SHADOW_REGS) ||
-       sscreen->info.gfx_level >= GFX11)
+       sscreen->info.gfx_level >= GFX11) {
       sscreen->info.register_shadowing_required = true;
+      /* Recompute has_set_pairs_packets. */
+      sscreen->info.has_set_pairs_packets = sscreen->info.gfx_level >= GFX11 &&
+                                            sscreen->info.register_shadowing_required &&
+                                            sscreen->info.has_dedicated_vram;
+   }
 
    if (sscreen->debug_flags & DBG(NO_GFX))
       sscreen->info.has_graphics = false;
@@ -1285,7 +1290,6 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
    if (!util_queue_init(&sscreen->shader_compiler_queue, "sh", num_slots,
                         num_comp_hi_threads,
                         UTIL_QUEUE_INIT_RESIZE_IF_FULL |
-                           UTIL_QUEUE_INIT_SCALE_THREADS |
                            UTIL_QUEUE_INIT_SET_FULL_THREAD_AFFINITY, NULL)) {
       si_destroy_shader_cache(sscreen);
       FREE(sscreen->nir_options);
@@ -1297,7 +1301,6 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
    if (!util_queue_init(&sscreen->shader_compiler_queue_low_priority, "shlo", num_slots,
                         num_comp_lo_threads,
                         UTIL_QUEUE_INIT_RESIZE_IF_FULL |
-                           UTIL_QUEUE_INIT_SCALE_THREADS |
                            UTIL_QUEUE_INIT_SET_FULL_THREAD_AFFINITY |
                            UTIL_QUEUE_INIT_USE_MINIMUM_PRIORITY, NULL)) {
       si_destroy_shader_cache(sscreen);

@@ -218,6 +218,15 @@ visit_intrinsic(nir_shader *shader, nir_intrinsic_instr *instr)
       is_divergent = false;
       break;
 
+   case nir_intrinsic_load_reg:
+   case nir_intrinsic_load_reg_indirect: {
+      nir_intrinsic_instr *decl = nir_reg_get_decl(instr->src[0].ssa);
+      is_divergent = nir_intrinsic_divergent(decl);
+      if (instr->intrinsic == nir_intrinsic_load_reg_indirect)
+         is_divergent |= instr->src[1].ssa->divergent;
+      break;
+   }
+
    /* Intrinsics with divergence depending on shader stage and hardware */
    case nir_intrinsic_load_shader_record_ptr:
       is_divergent = !(options & nir_divergence_shader_record_ptr_uniform);
@@ -493,6 +502,7 @@ visit_intrinsic(nir_shader *shader, nir_intrinsic_instr *instr)
    case nir_intrinsic_interp_deref_at_centroid:
    case nir_intrinsic_interp_deref_at_vertex:
    case nir_intrinsic_load_tess_coord:
+   case nir_intrinsic_load_tess_coord_xy:
    case nir_intrinsic_load_point_coord:
    case nir_intrinsic_load_line_coord:
    case nir_intrinsic_load_frag_coord:

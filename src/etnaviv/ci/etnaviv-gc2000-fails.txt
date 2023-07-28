@@ -167,13 +167,17 @@ shaders@glsl-kwin-blur-2,Crash
 shaders@glsl-max-varyings,Crash
 shaders@glsl-max-varyings >max_varying_components,Crash
 shaders@glsl-novertexdata,Fail
-shaders@glsl-routing,Crash
 shaders@glsl-uniform-interstage-limits@subdivide 5- statechanges,Timeout
 shaders@glsl-uniform-interstage-limits@subdivide 5,Timeout
 shaders@glsl-vs-point-size,Fail
 shaders@glsl-vs-statechange-1,Fail
 
 spec@arb_arrays_of_arrays@execution@glsl-arrays-copy-size-mismatch,Fail
+# Expects DEPTH_COMPONENT_32F, which is given by ARB_depth_buffer_float.
+spec@arb_clear_texture@arb_clear_texture-depth,Fail
+# Expects that some format/internal_format combinations should be supported when they currently aren't.
+spec@arb_clear_texture@arb_clear_texture-sized-formats,Fail
+spec@arb_clear_texture@arb_clear_texture-supported-formats,Fail
 spec@arb_depth_texture@fbo-depth-gl_depth_component16-tex1d,Fail
 spec@arb_depth_texture@fbo-depth-gl_depth_component24-blit,Fail
 spec@arb_depth_texture@texwrap formats bordercolor,Fail
@@ -524,7 +528,9 @@ spec@glsl-1.20@execution@clipping@vs-clip-vertex-primitives,Fail
 spec@glsl-1.20@execution@const-builtin@glsl-const-builtin-normalize,Fail
 spec@glsl-1.20@execution@fs-nan-builtin-max,Fail
 spec@glsl-1.20@execution@fs-nan-builtin-min,Fail
-spec@glsl-1.20@execution@fs-vec4-const-array-indirect-access-256-elements,Crash
+spec@glsl-1.20@execution@fs-vec4-const-array-indirect-access-064-elements,Fail
+spec@glsl-1.20@execution@fs-vec4-const-array-indirect-access-128-elements,Fail
+spec@glsl-1.20@execution@fs-vec4-const-array-indirect-access-256-elements,Fail
 spec@glsl-1.20@execution@out-parameter-indexing@fs-inout-index-two-level,Fail
 spec@glsl-1.20@execution@tex-miplevel-selection gl2:texture(bias) 3d,Fail
 spec@glsl-1.20@execution@variable-indexing@fs-temp-array-mat4-col-rd,Fail

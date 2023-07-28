@@ -62,12 +62,14 @@ nir_${name}(nir_builder *build, ${src_decl_list(opcode.num_inputs)})
 % endfor
 
 % for name, opcode in sorted(INTR_OPCODES.items()):
+% if opcode.indices:
 struct _nir_${name}_indices {
    int _; /* exists to avoid empty initializers */
 % for index in opcode.indices:
    ${index.c_data_type} ${index.name};
 % endfor
 };
+% endif
 % endfor
 
 <%
@@ -223,6 +225,9 @@ build_prefixed_intrinsics = [
    "load_global",
    "load_global_constant",
    "store_global",
+
+   "load_reg",
+   "store_reg",
 
    "deref_mode_is",
 ]

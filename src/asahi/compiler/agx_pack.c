@@ -35,25 +35,43 @@ assert_register_is_aligned(agx_index reg)
 
 /* Texturing has its own operands */
 static unsigned
-agx_pack_sample_coords(agx_index index, bool *flag)
+agx_pack_sample_coords(agx_index index, bool *flag, bool *is_16)
 {
-   /* TODO: how to encode 16-bit coords? */
+   /* TODO: Do we have a use case for 16-bit coords? */
    assert(index.size == AGX_SIZE_32);
    assert(index.value < 0x100);
 
+   *is_16 = false;
    *flag = index.discard;
    return index.value;
 }
 
 static unsigned
-agx_pack_texture(agx_index index, unsigned *flag)
+agx_pack_texture(agx_index base, agx_index index, unsigned *packed_base,
+                 unsigned *flag)
 {
-   if (index.type == AGX_INDEX_REGISTER) {
-      assert(index.size == AGX_SIZE_16);
-      *flag = 1;
+   if (base.type == AGX_INDEX_IMMEDIATE) {
+      assert(base.value == 0);
+
+      /* Texture state registers */
+      *packed_base = 0;
+
+      if (index.type == AGX_INDEX_REGISTER) {
+         assert(index.size == AGX_SIZE_16);
+         *flag = 1;
+      } else {
+         assert(index.type == AGX_INDEX_IMMEDIATE);
+         *flag = 0;
+      }
    } else {
-      assert(index.type == AGX_INDEX_IMMEDIATE);
-      *flag = 0;
+      assert(base.type == AGX_INDEX_UNIFORM);
+      assert(base.size == AGX_SIZE_64);
+      assert((base.value & 3) == 0);
+      assert(index.size == AGX_SIZE_32);
+
+      /* Bindless */
+      *packed_base = base.value >> 2;
+      *flag = 3;
    }
 
    return index.value;
@@ -105,6 +123,31 @@ agx_pack_lod(agx_index index, unsigned *lod_mode)
       assert(index.type == AGX_INDEX_REGISTER);
       assert(index.value < 0x100);
    }
+
+   return index.value;
+}
+
+static unsigned
+agx_pack_pbe_source(agx_index index, bool *flag)
+{
+   assert(index.size == AGX_SIZE_16 || index.size == AGX_SIZE_32);
+   assert_register_is_aligned(index);
+
+   *flag = (index.size == AGX_SIZE_32);
+   return index.value;
+}
+
+static unsigned
+agx_pack_pbe_lod(agx_index index, bool *flag)
+{
+   assert(index.size == AGX_SIZE_16);
+
+   if (index.type == AGX_INDEX_IMMEDIATE)
+      *flag = true;
+   else if (index.type == AGX_INDEX_REGISTER)
+      *flag = false;
+   else
+      unreachable("Invalid PBE LOD type");
 
    return index.value;
 }
@@ -469,7 +512,7 @@ agx_pack_alu(struct util_dynarray *emission, agx_instr *I)
 
 static void
 agx_pack_instr(struct util_dynarray *emission, struct util_dynarray *fixups,
-               agx_instr *I)
+               agx_instr *I, bool needs_g13x_coherency)
 {
    switch (I->op) {
    case AGX_OPCODE_LD_TILE:
@@ -693,8 +736,10 @@ agx_pack_instr(struct util_dynarray *emission, struct util_dynarray *fixups,
          (I->scoreboard << 30) |
          (((uint64_t)((O >> 4) & BITFIELD_MASK(4))) << 32) |
          (((uint64_t)((A >> 4) & BITFIELD_MASK(4))) << 36) |
-         (((uint64_t)(R >> 6)) << 40) | (Rt ? BITFIELD64_BIT(47) : 0) |
-         (((uint64_t)S) << 48) | (((uint64_t)(O >> 8)) << 56);
+         (((uint64_t)(R >> 6)) << 40) |
+         (needs_g13x_coherency ? BITFIELD64_BIT(45) : 0) |
+         (Rt ? BITFIELD64_BIT(47) : 0) | (((uint64_t)S) << 48) |
+         (((uint64_t)(O >> 8)) << 56);
 
       memcpy(util_dynarray_grow_bytes(emission, 1, 8), &raw, 8);
       break;
@@ -729,26 +774,39 @@ agx_pack_instr(struct util_dynarray *emission, struct util_dynarray *fixups,
    }
 
    case AGX_OPCODE_TEXTURE_LOAD:
+   case AGX_OPCODE_IMAGE_LOAD:
    case AGX_OPCODE_TEXTURE_SAMPLE: {
       assert(I->mask != 0);
       assert(I->format <= 0x10);
 
-      bool Rt, Ct, St;
+      bool Rt, Ct, St, Cs;
       unsigned Tt;
+      unsigned U;
       enum agx_lod_mode lod_mode = I->lod_mode;
 
       unsigned R = agx_pack_memory_reg(I->dest[0], &Rt);
-      unsigned C = agx_pack_sample_coords(I->src[0], &Ct);
-      unsigned T = agx_pack_texture(I->src[2], &Tt);
-      unsigned S = agx_pack_sampler(I->src[3], &St);
-      unsigned O = agx_pack_sample_compare_offset(I->src[4]);
+      unsigned C = agx_pack_sample_coords(I->src[0], &Ct, &Cs);
+      unsigned T = agx_pack_texture(I->src[2], I->src[3], &U, &Tt);
+      unsigned S = agx_pack_sampler(I->src[4], &St);
+      unsigned O = agx_pack_sample_compare_offset(I->src[5]);
       unsigned D = agx_pack_lod(I->src[1], &lod_mode);
 
-      unsigned U = 0; // TODO: what is sampler ureg?
       unsigned q1 = I->shadow;
       unsigned q2 = 0;   // XXX
       unsigned q3 = 12;  // XXX
       unsigned kill = 0; // helper invocation kill bit
+
+      /* Set bit 43 for image loads. This seems to makes sure that image loads
+       * get the value written by the latest image store, not some other image
+       * store that was already in flight, fixing
+       *
+       *    KHR-GLES31.core.shader_image_load_store.basic-glsl-misc-fs
+       *
+       * Apple seems to set this bit unconditionally for read/write image loads
+       * and never for readonly image loads. Some sort of cache control.
+       */
+      if (I->op == AGX_OPCODE_IMAGE_LOAD)
+         q3 |= 1;
 
       uint32_t extend = ((U & BITFIELD_MASK(5)) << 0) | (kill << 5) |
                         ((I->dim >> 3) << 7) | ((R >> 6) << 8) |
@@ -759,7 +817,7 @@ agx_pack_instr(struct util_dynarray *emission, struct util_dynarray *fixups,
       bool L = (extend != 0);
 
       uint64_t raw =
-         0x31 | ((I->op == AGX_OPCODE_TEXTURE_LOAD) ? (1 << 6) : 0) |
+         0x31 | ((I->op != AGX_OPCODE_TEXTURE_SAMPLE) ? (1 << 6) : 0) |
          (Rt ? (1 << 8) : 0) | ((R & BITFIELD_MASK(6)) << 9) |
          (L ? (1 << 15) : 0) | ((C & BITFIELD_MASK(6)) << 16) |
          (Ct ? (1 << 22) : 0) | (q1 << 23) | ((D & BITFIELD_MASK(6)) << 24) |
@@ -778,6 +836,47 @@ agx_pack_instr(struct util_dynarray *emission, struct util_dynarray *fixups,
       break;
    }
 
+   case AGX_OPCODE_IMAGE_WRITE: {
+      bool Ct, Dt, Rt, Cs;
+      unsigned Tt;
+      unsigned U;
+
+      unsigned R = agx_pack_pbe_source(I->src[0], &Rt);
+      unsigned C = agx_pack_sample_coords(I->src[1], &Ct, &Cs);
+      unsigned D = agx_pack_pbe_lod(I->src[2], &Dt);
+      unsigned T = agx_pack_texture(I->src[3], I->src[4], &U, &Tt);
+      bool rtz = false;
+
+      assert(U < (1 << 5));
+      assert(D < (1 << 8));
+      assert(R < (1 << 8));
+      assert(C < (1 << 8));
+      assert(T < (1 << 8));
+      assert(Tt < (1 << 2));
+
+      uint64_t raw = agx_opcodes_info[I->op].encoding.exact |
+                     (Rt ? (1 << 8) : 0) | ((R & BITFIELD_MASK(6)) << 9) |
+                     ((C & BITFIELD_MASK(6)) << 16) | (Ct ? (1 << 22) : 0) |
+                     ((D & BITFIELD_MASK(6)) << 24) | (Dt ? (1u << 31) : 0) |
+                     (((uint64_t)(T & BITFIELD_MASK(6))) << 32) |
+                     (((uint64_t)Tt) << 38) |
+                     (((uint64_t)I->dim & BITFIELD_MASK(3)) << 40) |
+                     (Cs ? (1ull << 47) : 0) | (((uint64_t)U) << 48) |
+                     (rtz ? (1ull << 53) : 0) |
+                     ((I->dim & BITFIELD_BIT(4)) ? (1ull << 55) : 0) |
+                     (((uint64_t)R >> 6) << 56) | (((uint64_t)C >> 6) << 58) |
+                     (((uint64_t)D >> 6) << 60) | (((uint64_t)T >> 6) << 62);
+
+      if (raw >> 48) {
+         raw |= BITFIELD_BIT(15);
+         memcpy(util_dynarray_grow_bytes(emission, 1, 8), &raw, 8);
+      } else {
+         memcpy(util_dynarray_grow_bytes(emission, 1, 6), &raw, 6);
+      }
+
+      break;
+   }
+
    case AGX_OPCODE_BLOCK_IMAGE_STORE: {
       enum agx_format F = I->format;
       assert(F < 0x10);
@@ -785,7 +884,8 @@ agx_pack_instr(struct util_dynarray *emission, struct util_dynarray *fixups,
       unsigned Tt = 0;
       assert(Tt < 0x4);
 
-      unsigned T = agx_pack_texture(I->src[0], &Tt);
+      UNUSED unsigned U;
+      unsigned T = agx_pack_texture(agx_zero(), I->src[0], &U, &Tt);
       assert(T < 0x100);
 
       agx_index offset = I->src[1];
@@ -896,7 +996,7 @@ agx_pack_binary(agx_context *ctx, struct util_dynarray *emission)
       block->offset = emission->size;
 
       agx_foreach_instr_in_block(block, ins) {
-         agx_pack_instr(emission, &fixups, ins);
+         agx_pack_instr(emission, &fixups, ins, ctx->key->needs_g13x_coherency);
       }
    }
 

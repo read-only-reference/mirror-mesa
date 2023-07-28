@@ -114,7 +114,8 @@ remove_dynamic_indexes(struct tgsi_transform_context *ctx,
    int imm_index = dc->orig_num_imm;
    struct tgsi_full_instruction inst;
    unsigned INVALID_INDEX = 99999;
-   unsigned file = TGSI_FILE_NULL, index = INVALID_INDEX;
+   enum tgsi_file_type file = TGSI_FILE_NULL;
+   unsigned index = INVALID_INDEX;
    unsigned imm_swz_index = INVALID_INDEX;
 
    /* calculate dynamic array index store it in tmp_arrayIdx.x */
@@ -330,8 +331,8 @@ tgsi_remove_dynamic_indexing(const struct tgsi_token *tokens_in,
                              unsigned imm_count)
 {
    struct dIndexing_transform_context transform;
-   const uint num_new_tokens = 1000; /* should be enough */
-   const uint new_len = tgsi_num_tokens(tokens_in) + num_new_tokens;
+   const unsigned num_new_tokens = 1000; /* should be enough */
+   const unsigned new_len = tgsi_num_tokens(tokens_in) + num_new_tokens;
 
    /* setup transformation context */
    memset(&transform, 0, sizeof(transform));

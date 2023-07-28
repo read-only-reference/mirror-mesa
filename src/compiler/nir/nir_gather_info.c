@@ -210,10 +210,7 @@ mark_whole_variable(nir_shader *shader, nir_variable *var,
       type = glsl_get_array_element(type);
    }
 
-   const unsigned slots =
-      var->data.compact ? DIV_ROUND_UP(glsl_get_length(type), 4)
-                        : glsl_count_attribute_slots(type, false);
-
+   const unsigned slots = nir_variable_count_slots(var, type);
    set_io_mask(shader, var, 0, slots, deref, is_output_read);
 }
 
@@ -287,10 +284,7 @@ try_mask_partial_io(nir_shader *shader, nir_variable *var,
    if (offset == -1)
       return false;
 
-   const unsigned slots =
-      var->data.compact ? DIV_ROUND_UP(glsl_get_length(type), 4)
-                        : glsl_count_attribute_slots(type, false);
-
+   const unsigned slots = nir_variable_count_slots(var, type);
    if (offset >= slots) {
       /* Constant index outside the bounds of the matrix/array.  This could
        * arise as a result of constant folding of a legal GLSL program.
@@ -623,6 +617,7 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader,
    case nir_intrinsic_load_sample_mask_in:
    case nir_intrinsic_load_helper_invocation:
    case nir_intrinsic_load_tess_coord:
+   case nir_intrinsic_load_tess_coord_xy:
    case nir_intrinsic_load_patch_vertices_in:
    case nir_intrinsic_load_primitive_id:
    case nir_intrinsic_load_tess_level_outer:

@@ -167,6 +167,9 @@ zink_reset_batch_state(struct zink_context *ctx, struct zink_batch_state *bs)
    bs->unordered_write_access = 0;
    bs->unordered_write_stages = 0;
 
+   /* only increment batch generation if previously in-use to avoid false detection of batch completion */
+   if (bs->fence.submitted)
+      bs->usage.submit_count++;
    /* only reset submitted here so that tc fence desync can pick up the 'completed' flag
     * before the state is reused
     */
@@ -174,7 +177,6 @@ zink_reset_batch_state(struct zink_context *ctx, struct zink_batch_state *bs)
    bs->has_barriers = false;
    if (bs->fence.batch_id)
       zink_screen_update_last_finished(screen, bs->fence.batch_id);
-   bs->usage.submit_count++;
    bs->fence.batch_id = 0;
    bs->usage.usage = 0;
    bs->next = NULL;
@@ -508,8 +510,10 @@ zink_start_batch(struct zink_context *ctx, struct zink_batch *batch)
    if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_DB && !(ctx->flags & ZINK_CONTEXT_COPY_ONLY))
       zink_batch_bind_db(ctx);
    /* zero init for unordered blits */
-   if (screen->info.have_EXT_attachment_feedback_loop_dynamic_state)
+   if (screen->info.have_EXT_attachment_feedback_loop_dynamic_state) {
+      VKCTX(CmdSetAttachmentFeedbackLoopEnableEXT)(ctx->batch.state->cmdbuf, 0);
       VKCTX(CmdSetAttachmentFeedbackLoopEnableEXT)(ctx->batch.state->barrier_cmdbuf, 0);
+   }
 }
 
 /* common operations to run post submit; split out for clarity */

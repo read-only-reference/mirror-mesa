@@ -411,7 +411,9 @@
    DRI_CONF_OPT_B(mesa_no_error, def, \
                   "Disable GL driver error checking")
 
-
+#define DRI_CONF_SHADER_SPILLING_RATE(def) \
+   DRI_CONF_OPT_I(shader_spilling_rate, def, 0, 100, \
+                  "Speed up shader compilation by increasing number of spilled registers after ra_allocate failure")
 /**
  * \brief Miscellaneous configuration options
  */
@@ -636,10 +638,6 @@
 #define DRI_CONF_RADV_TEX_NON_UNIFORM(def) \
    DRI_CONF_OPT_B(radv_tex_non_uniform, def, \
                   "Always mark texture sample operations as non-uniform.")
-
-#define DRI_CONF_RADV_RT(def) \
-   DRI_CONF_OPT_B(radv_rt, def, \
-                  "Expose support for VK_KHR_ray_tracing_pipeline")
 
 #define DRI_CONF_RADV_FLUSH_BEFORE_TIMESTAMP_WRITE(def) \
    DRI_CONF_OPT_B(radv_flush_before_timestamp_write, def, \

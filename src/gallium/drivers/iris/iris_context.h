@@ -434,6 +434,9 @@ struct iris_uncompiled_shader {
    /* A SHA1 of the serialized NIR for the disk cache. */
    unsigned char nir_sha1[20];
 
+   /* Hash value based on shader source program */
+   unsigned source_hash;
+
    unsigned program_id;
 
    /** Bitfield of (1 << IRIS_NOS_*) flags. */
@@ -633,6 +636,9 @@ struct iris_context {
 
    /** Whether the context protected (through EGL_EXT_protected_content) */
    bool protected;
+
+   /** Whether a banned context was already signalled */
+   bool context_reset_signaled;
 
    /** A device reset status callback for notifying that the GPU is hosed. */
    struct pipe_device_reset_callback reset;

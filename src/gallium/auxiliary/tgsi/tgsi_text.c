@@ -178,7 +178,7 @@ static bool eat_white( const char **pcur )
 /* Parse unsigned integer.
  * No checks for overflow.
  */
-static bool parse_uint( const char **pcur, uint *val )
+static bool parse_uint( const char **pcur, unsigned *val )
 {
    const char *cur = *pcur;
 
@@ -200,7 +200,7 @@ static bool parse_int( const char **pcur, int *val )
    if (*cur == '+' || *cur == '-')
       cur++;
 
-   if (parse_uint(&cur, (uint *)val)) {
+   if (parse_uint(&cur, (unsigned *)val)) {
       *val *= sign;
       *pcur = cur;
       return true;
@@ -331,7 +331,7 @@ static void report_error( struct translate_ctx *ctx, const char *msg )
  */
 static bool parse_header( struct translate_ctx *ctx )
 {
-   uint processor;
+   enum pipe_shader_type processor;
 
    if (str_match_nocase_whole( &ctx->cur, "FRAG" ))
       processor = PIPE_SHADER_FRAGMENT;
@@ -363,7 +363,7 @@ static bool parse_header( struct translate_ctx *ctx )
    return true;
 }
 
-static bool parse_label( struct translate_ctx *ctx, uint *val )
+static bool parse_label( struct translate_ctx *ctx, unsigned *val )
 {
    const char *cur = ctx->cur;
 
@@ -379,9 +379,9 @@ static bool parse_label( struct translate_ctx *ctx, uint *val )
 }
 
 static bool
-parse_file( const char **pcur, uint *file )
+parse_file( const char **pcur, enum tgsi_file_type *file )
 {
-   uint i;
+   enum tgsi_file_type i;
 
    for (i = 0; i < TGSI_FILE_COUNT; i++) {
       const char *cur = *pcur;
@@ -398,7 +398,7 @@ parse_file( const char **pcur, uint *file )
 static bool
 parse_opt_writemask(
    struct translate_ctx *ctx,
-   uint *writemask )
+   unsigned *writemask )
 {
    const char *cur;
 
@@ -444,7 +444,7 @@ parse_opt_writemask(
 static bool
 parse_register_file_bracket(
    struct translate_ctx *ctx,
-   uint *file )
+   enum tgsi_file_type *file )
 {
    if (!parse_file( &ctx->cur, file )) {
       report_error( ctx, "Unknown register file" );
@@ -464,10 +464,10 @@ parse_register_file_bracket(
 static bool
 parse_register_file_bracket_index(
    struct translate_ctx *ctx,
-   uint *file,
+   enum tgsi_file_type *file,
    int *index )
 {
-   uint uindex;
+   unsigned uindex;
 
    if (!parse_register_file_bracket( ctx, file ))
       return false;
@@ -485,7 +485,7 @@ parse_register_file_bracket_index(
  */
 static bool
 parse_register_1d(struct translate_ctx *ctx,
-                  uint *file,
+                  enum tgsi_file_type *file,
                   int *index )
 {
    if (!parse_register_file_bracket_index( ctx, file, index ))
@@ -502,10 +502,10 @@ parse_register_1d(struct translate_ctx *ctx,
 struct parsed_bracket {
    int index;
 
-   uint ind_file;
+   enum tgsi_file_type ind_file;
    int ind_index;
-   uint ind_comp;
-   uint ind_array;
+   unsigned ind_comp;
+   unsigned ind_array;
 };
 
 
@@ -515,7 +515,7 @@ parse_register_bracket(
    struct parsed_bracket *brackets)
 {
    const char *cur;
-   uint uindex;
+   unsigned uindex;
 
    memset(brackets, 0, sizeof(struct parsed_bracket));
 
@@ -624,7 +624,7 @@ parse_opt_register_src_bracket(
 static bool
 parse_register_src(
    struct translate_ctx *ctx,
-   uint *file,
+   enum tgsi_file_type *file,
    struct parsed_bracket *brackets)
 {
    brackets->ind_comp = TGSI_SWIZZLE_X;
@@ -637,8 +637,8 @@ parse_register_src(
 }
 
 struct parsed_dcl_bracket {
-   uint first;
-   uint last;
+   unsigned first;
+   unsigned last;
 };
 
 static bool
@@ -646,7 +646,7 @@ parse_register_dcl_bracket(
    struct translate_ctx *ctx,
    struct parsed_dcl_bracket *bracket)
 {
-   uint uindex;
+   unsigned uindex;
    memset(bracket, 0, sizeof(struct parsed_dcl_bracket));
 
    eat_opt_white( &ctx->cur );
@@ -667,7 +667,7 @@ parse_register_dcl_bracket(
    eat_opt_white( &ctx->cur );
 
    if (ctx->cur[0] == '.' && ctx->cur[1] == '.') {
-      uint uindex;
+      unsigned uindex;
 
       ctx->cur += 2;
       eat_opt_white( &ctx->cur );
@@ -698,7 +698,7 @@ cleanup:
 static bool
 parse_register_dcl(
    struct translate_ctx *ctx,
-   uint *file,
+   enum tgsi_file_type *file,
    struct parsed_dcl_bracket *brackets,
    int *num_brackets)
 {
@@ -749,7 +749,7 @@ parse_register_dcl(
 static bool
 parse_register_dst(
    struct translate_ctx *ctx,
-   uint *file,
+   enum tgsi_file_type *file,
    struct parsed_bracket *brackets)
 {
    brackets->ind_comp = TGSI_SWIZZLE_X;
@@ -766,8 +766,8 @@ parse_dst_operand(
    struct translate_ctx *ctx,
    struct tgsi_full_dst_register *dst )
 {
-   uint file;
-   uint writemask;
+   enum tgsi_file_type file;
+   unsigned writemask;
    const char *cur;
    struct parsed_bracket bracket[2];
    int parsed_opt_brackets;
@@ -814,7 +814,7 @@ parse_dst_operand(
 static bool
 parse_optional_swizzle(
    struct translate_ctx *ctx,
-   uint *swizzle,
+   unsigned *swizzle,
    bool *parsed_swizzle,
    int components)
 {
@@ -854,8 +854,8 @@ parse_src_operand(
    struct translate_ctx *ctx,
    struct tgsi_full_src_register *src )
 {
-   uint file;
-   uint swizzle[4];
+   enum tgsi_file_type file;
+   unsigned swizzle[4];
    bool parsed_swizzle;
    struct parsed_bracket bracket[2];
    int parsed_opt_brackets;
@@ -930,8 +930,8 @@ parse_texoffset_operand(
    struct translate_ctx *ctx,
    struct tgsi_texture_offset *src )
 {
-   uint file;
-   uint swizzle[3];
+   enum tgsi_file_type file;
+   unsigned swizzle[3];
    bool parsed_swizzle;
    struct parsed_bracket bracket;
 
@@ -996,12 +996,12 @@ parse_instruction(
    bool has_label )
 {
    int i;
-   uint saturate = 0;
-   uint precise = 0;
+   unsigned saturate = 0;
+   unsigned precise = 0;
    const struct tgsi_opcode_info *info;
    struct tgsi_full_instruction inst;
    const char *cur;
-   uint advance;
+   unsigned advance;
 
    inst = tgsi_default_full_instruction();
 
@@ -1078,7 +1078,7 @@ parse_instruction(
             return false;
       }
       else {
-         uint j;
+         unsigned j;
 
          for (j = 0; j < TGSI_TEXTURE_COUNT; j++) {
             if (str_match_nocase_whole( &ctx->cur, tgsi_texture_names[j] )) {
@@ -1145,7 +1145,7 @@ parse_instruction(
    cur = ctx->cur;
    eat_opt_white( &cur );
    if (info->is_branch && *cur == ':') {
-      uint target;
+      unsigned target;
 
       cur++;
       eat_opt_white( &cur );
@@ -1162,7 +1162,7 @@ parse_instruction(
       &inst,
       ctx->tokens_cur,
       ctx->header,
-      (uint) (ctx->tokens_end - ctx->tokens_cur) );
+      (unsigned) (ctx->tokens_end - ctx->tokens_cur) );
    if (advance == 0)
       return false;
    ctx->tokens_cur += advance;
@@ -1241,12 +1241,12 @@ static bool parse_immediate_data(struct translate_ctx *ctx, unsigned type,
 static bool parse_declaration( struct translate_ctx *ctx )
 {
    struct tgsi_full_declaration decl;
-   uint file;
+   enum tgsi_file_type file;
    struct parsed_dcl_bracket brackets[2];
    int num_brackets;
-   uint writemask;
+   unsigned writemask;
    const char *cur, *cur2;
-   uint advance;
+   unsigned advance;
    bool is_vs_input;
 
    if (!eat_white( &ctx->cur )) {
@@ -1307,7 +1307,7 @@ static bool parse_declaration( struct translate_ctx *ctx )
    }
 
    if (*cur == ',' && !is_vs_input) {
-      uint i, j;
+      unsigned i, j;
 
       cur++;
       eat_opt_white( &cur );
@@ -1446,7 +1446,7 @@ static bool parse_declaration( struct translate_ctx *ctx )
 
             for (i = 0; i < TGSI_SEMANTIC_COUNT; i++) {
                if (str_match_nocase_whole(&cur, tgsi_semantic_names[i])) {
-                  uint index;
+                  unsigned index;
 
                   cur2 = cur;
                   eat_opt_white( &cur2 );
@@ -1487,7 +1487,7 @@ static bool parse_declaration( struct translate_ctx *ctx )
       cur++;
       eat_opt_white(&cur);
       if (str_match_nocase_whole(&cur, "STREAM")) {
-         uint stream[4];
+         unsigned stream[4];
 
          eat_opt_white(&cur);
          if (*cur != '(') {
@@ -1531,7 +1531,7 @@ static bool parse_declaration( struct translate_ctx *ctx )
    cur = ctx->cur;
    eat_opt_white( &cur );
    if (*cur == ',' && !is_vs_input) {
-      uint i;
+      unsigned i;
 
       cur++;
       eat_opt_white( &cur );
@@ -1549,7 +1549,7 @@ static bool parse_declaration( struct translate_ctx *ctx )
    cur = ctx->cur;
    eat_opt_white( &cur );
    if (*cur == ',' && !is_vs_input) {
-      uint i;
+      unsigned i;
 
       cur++;
       eat_opt_white( &cur );
@@ -1581,7 +1581,7 @@ static bool parse_declaration( struct translate_ctx *ctx )
       &decl,
       ctx->tokens_cur,
       ctx->header,
-      (uint) (ctx->tokens_end - ctx->tokens_cur) );
+      (unsigned) (ctx->tokens_end - ctx->tokens_cur) );
 
    if (advance == 0)
       return false;
@@ -1593,11 +1593,11 @@ static bool parse_declaration( struct translate_ctx *ctx )
 static bool parse_immediate( struct translate_ctx *ctx )
 {
    struct tgsi_full_immediate imm;
-   uint advance;
-   uint type;
+   unsigned advance;
+   unsigned type;
 
    if (*ctx->cur == '[') {
-      uint uindex;
+      unsigned uindex;
 
       ++ctx->cur;
 
@@ -1643,7 +1643,7 @@ static bool parse_immediate( struct translate_ctx *ctx )
       &imm,
       ctx->tokens_cur,
       ctx->header,
-      (uint) (ctx->tokens_end - ctx->tokens_cur) );
+      (unsigned) (ctx->tokens_end - ctx->tokens_cur) );
    if (advance == 0)
       return false;
    ctx->tokens_cur += advance;
@@ -1654,9 +1654,9 @@ static bool parse_immediate( struct translate_ctx *ctx )
 }
 
 static bool
-parse_primitive( const char **pcur, uint *primitive )
+parse_primitive( const char **pcur, unsigned *primitive )
 {
-   uint i;
+   unsigned i;
 
    for (i = 0; i < MESA_PRIM_COUNT; i++) {
       const char *cur = *pcur;
@@ -1671,9 +1671,9 @@ parse_primitive( const char **pcur, uint *primitive )
 }
 
 static bool
-parse_fs_coord_origin( const char **pcur, uint *fs_coord_origin )
+parse_fs_coord_origin( const char **pcur, unsigned *fs_coord_origin )
 {
-   uint i;
+   unsigned i;
 
    for (i = 0; i < ARRAY_SIZE(tgsi_fs_coord_origin_names); i++) {
       const char *cur = *pcur;
@@ -1688,9 +1688,9 @@ parse_fs_coord_origin( const char **pcur, uint *fs_coord_origin )
 }
 
 static bool
-parse_fs_coord_pixel_center( const char **pcur, uint *fs_coord_pixel_center )
+parse_fs_coord_pixel_center( const char **pcur, unsigned *fs_coord_pixel_center )
 {
-   uint i;
+   unsigned i;
 
    for (i = 0; i < ARRAY_SIZE(tgsi_fs_coord_pixel_center_names); i++) {
       const char *cur = *pcur;
@@ -1705,9 +1705,9 @@ parse_fs_coord_pixel_center( const char **pcur, uint *fs_coord_pixel_center )
 }
 
 static bool
-parse_property_next_shader( const char **pcur, uint *next_shader )
+parse_property_next_shader( const char **pcur, unsigned *next_shader )
 {
-   uint i;
+   unsigned i;
 
    for (i = 0; i < ARRAY_SIZE(tgsi_processor_type_names); i++) {
       const char *cur = *pcur;
@@ -1724,9 +1724,9 @@ parse_property_next_shader( const char **pcur, uint *next_shader )
 static bool parse_property( struct translate_ctx *ctx )
 {
    struct tgsi_full_property prop;
-   uint property_name;
-   uint values[8];
-   uint advance;
+   enum tgsi_property_name property_name;
+   unsigned values[8];
+   unsigned advance;
    char id[64];
 
    if (!eat_white( &ctx->cur )) {
@@ -1796,7 +1796,7 @@ static bool parse_property( struct translate_ctx *ctx )
       &prop,
       ctx->tokens_cur,
       ctx->header,
-      (uint) (ctx->tokens_end - ctx->tokens_cur) );
+      (unsigned) (ctx->tokens_end - ctx->tokens_cur) );
    if (advance == 0)
       return false;
    ctx->tokens_cur += advance;
@@ -1816,7 +1816,7 @@ static bool translate( struct translate_ctx *ctx )
        ctx->implied_array_size = 32;
 
    while (*ctx->cur != '\0') {
-      uint label_val = 0;
+      unsigned label_val = 0;
       if (!eat_white( &ctx->cur )) {
          report_error( ctx, "Syntax error" );
          return false;
@@ -1852,7 +1852,7 @@ bool
 tgsi_text_translate(
    const char *text,
    struct tgsi_token *tokens,
-   uint num_tokens )
+   unsigned num_tokens )
 {
    struct translate_ctx ctx = {0};
 

@@ -22,6 +22,8 @@
  */
 #include "nir_serialize.h"
 #include "pipe/p_defines.h"
+#include "r600_asm.h"
+#include "r600_isa.h"
 #include "r600_sq.h"
 #include "r600_formats.h"
 #include "r600_opcodes.h"
@@ -286,11 +288,8 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 	if (shader->gs_copy_shader) {
 		if (dump) {
 			// dump copy shader
-			r = r600_sb_bytecode_process(rctx, &shader->gs_copy_shader->shader.bc,
-						     &shader->gs_copy_shader->shader, dump, 0);
-			if (r)
-				goto error;
-		}
+			r600_bytecode_disasm(&shader->gs_copy_shader->shader.bc);
+                }
 
 		if ((r = store_shader(ctx, shader->gs_copy_shader)))
 			goto error;
@@ -510,6 +509,9 @@ static int emit_streamout(struct r600_shader_ctx *ctx, struct pipe_stream_output
 		}
 	}
 
+	if (so->num_outputs && ctx->bc->cf_last->op != CF_OP_ALU &&
+            ctx->bc->cf_last->op != CF_OP_ALU_PUSH_BEFORE)
+		ctx->bc->force_add_cf = 1;
 	/* Initialize locations where the outputs are stored. */
 	for (i = 0; i < so->num_outputs; i++) {
 
@@ -728,6 +730,7 @@ int generate_gs_copy_shader(struct r600_context *rctx,
 		alu.execute_mask = 1;
 		alu.update_pred = 1;
 		alu.last = 1;
+		ctx.bc->force_add_cf = 1;
 		r600_bytecode_add_alu_type(ctx.bc, &alu, CF_OP_ALU_PUSH_BEFORE);
 
 		r600_bytecode_add_cfinst(ctx.bc, CF_OP_JUMP);
@@ -740,6 +743,7 @@ int generate_gs_copy_shader(struct r600_context *rctx,
 
 	/* bc adds nops - copy it */
 	if (ctx.bc->gfx_level == R600) {
+		ctx.bc->force_add_cf = 1;
 		memset(&alu, 0, sizeof(struct r600_bytecode_alu));
 		alu.op = ALU_OP0_NOP;
 		alu.last = 1;

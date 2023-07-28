@@ -317,8 +317,6 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_PCI_FUNCTION:
    case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
       return 0;
-   case PIPE_CAP_CLEAR_TEXTURE:
-      return vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_CLEAR_TEXTURE;
    case PIPE_CAP_CLIP_HALFZ:
       return vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_CLIP_HALFZ;
    case PIPE_CAP_MAX_GS_INVOCATIONS:
@@ -500,6 +498,12 @@ virgl_get_video_param(struct pipe_screen *screen,
        drv_supported = (entrypoint == PIPE_VIDEO_ENTRYPOINT_BITSTREAM ||
                         entrypoint == PIPE_VIDEO_ENTRYPOINT_ENCODE);
        break;
+   case PIPE_VIDEO_FORMAT_MPEG12:
+   case PIPE_VIDEO_FORMAT_VC1:
+   case PIPE_VIDEO_FORMAT_JPEG:
+   case PIPE_VIDEO_FORMAT_VP9:
+      drv_supported = (entrypoint == PIPE_VIDEO_ENTRYPOINT_BITSTREAM);
+      break;
    default:
        drv_supported = false;
        break;

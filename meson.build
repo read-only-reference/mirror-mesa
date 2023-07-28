@@ -1742,7 +1742,7 @@ else
   draw_with_llvm = false
 endif
 
-with_opencl_spirv = (_opencl != 'disabled' and get_option('opencl-spirv')) or with_clc
+with_opencl_spirv = (_opencl != 'disabled' and get_option('opencl-spirv')) or with_intel_clc or with_microsoft_clc or with_gallium_rusticl
 if with_opencl_spirv
   chosen_llvm_version_array = dep_llvm.version().split('.')
   chosen_llvm_version_major = chosen_llvm_version_array[0].to_int()
@@ -2165,6 +2165,7 @@ summary(
     'ES1': with_gles1,
     'ES2': with_gles2,
     'Shared glapi': with_shared_glapi,
+    'GLVND': with_glvnd,
   },
   section: 'OpenGL', bool_yn: true
 )
@@ -2216,7 +2217,7 @@ if with_any_vk
     vulkan_summary += {'Layers': get_option('vulkan-layers')}
   endif
   vulkan_summary += {'Video codecs': _codecs.length() != 0 ? _codecs : false}
-  vulkan_summary += {'Ray tracing': with_intel_vk_rt ? 'intel' : false}
+  vulkan_summary += {'Intel Ray tracing': with_intel_vk_rt}
 endif
 summary(vulkan_summary, section: 'Vulkan', bool_yn: true, list_sep: ' ')
 
@@ -2254,7 +2255,7 @@ if with_gallium
     gallium_frontends += 'rusticl'
   endif
   gallium_summary += {'Frontends': gallium_frontends}
-  gallium_summary += {'Off-screen rendering': with_osmesa ? 'lib' + osmesa_lib_name : false}
+  gallium_summary += {'Off-screen rendering (OSMesa)': with_osmesa ? 'lib' + osmesa_lib_name : false}
   gallium_summary += {'HUD lm-sensors': dep_lmsensors.found()}
 endif
 summary(gallium_summary, section: 'Gallium', bool_yn: true, list_sep: ' ')

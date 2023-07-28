@@ -3193,8 +3193,7 @@ tu_clear_sysmem_attachment(struct tu_cmd_buffer *cmd,
       tu6_emit_event_write(cmd, cs, PC_CCU_INVALIDATE_COLOR);
    }
 
-   if (cmd->device->physical_device->info->a6xx.has_ccu_flush_bug)
-      tu_cs_emit_wfi(cs);
+   tu_cs_emit_wfi(cs);
 }
 
 void
@@ -3296,6 +3295,7 @@ blit_can_resolve(VkFormat format)
    case VK_FORMAT_R8G8_UNORM:
    case VK_FORMAT_R8G8_UINT:
    case VK_FORMAT_R8G8_SINT:
+   case VK_FORMAT_R8G8_SRGB:
    /* TODO: this one should be able to work? */
    case VK_FORMAT_D24_UNORM_S8_UINT:
       return false;

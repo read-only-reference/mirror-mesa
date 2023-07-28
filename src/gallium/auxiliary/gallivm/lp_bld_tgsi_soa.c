@@ -1538,17 +1538,17 @@ emit_fetch_system_value(
       break;
 
    case TGSI_SEMANTIC_THREAD_ID:
-      res = LLVMBuildExtractValue(gallivm->builder, bld->system_values.thread_id, swizzle, "");
+      res = bld->system_values.thread_id[swizzle];
       atype = TGSI_TYPE_UNSIGNED;
       break;
 
    case TGSI_SEMANTIC_BLOCK_ID:
-      res = lp_build_extract_broadcast(gallivm, lp_type_int_vec(32, 96), bld_base->uint_bld.type, bld->system_values.block_id, lp_build_const_int32(gallivm, swizzle));
+      res = lp_build_broadcast_scalar(&bld_base->uint_bld, bld->system_values.block_id[swizzle]);
       atype = TGSI_TYPE_UNSIGNED;
       break;
 
    case TGSI_SEMANTIC_GRID_SIZE:
-      res = lp_build_extract_broadcast(gallivm, lp_type_int_vec(32, 96), bld_base->uint_bld.type, bld->system_values.grid_size, lp_build_const_int32(gallivm, swizzle));
+      res = lp_build_broadcast_scalar(&bld_base->uint_bld, bld->system_values.grid_size[swizzle]);
       atype = TGSI_TYPE_UNSIGNED;
       break;
 
@@ -3010,7 +3010,7 @@ void lp_emit_immediate_soa(
    struct gallivm_state * gallivm = bld_base->base.gallivm;
    LLVMValueRef imms[4];
    unsigned i;
-   const uint size = imm->Immediate.NrTokens - 1;
+   const unsigned size = imm->Immediate.NrTokens - 1;
    assert(size <= 4);
    switch (imm->Immediate.DataType) {
    case TGSI_IMM_FLOAT32:
@@ -4610,7 +4610,7 @@ lp_build_tgsi_soa(struct gallivm_state *gallivm,
        * were forgetting so we're using MAX_VERTEX_VARYING from
        * that spec even though we could assert if it's not
        * set, but that's a lot uglier. */
-      uint max_output_vertices;
+      unsigned max_output_vertices;
 
       /* inputs are always indirect with gs */
       bld.indirect_files |= (1 << TGSI_FILE_INPUT);

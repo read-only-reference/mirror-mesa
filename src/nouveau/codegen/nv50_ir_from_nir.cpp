@@ -84,11 +84,9 @@ private:
    LValues& convert(nir_dest *);
    SVSemantic convert(nir_intrinsic_op);
    Value* convert(nir_load_const_instr*, uint8_t);
-   LValues& convert(nir_register *);
    LValues& convert(nir_ssa_def *);
 
    Value* getSrc(nir_alu_src *, uint8_t component = 0);
-   Value* getSrc(nir_register *, uint8_t);
    Value* getSrc(nir_src *, uint8_t, bool indirect = false);
    Value* getSrc(nir_ssa_def *, uint8_t);
 
@@ -258,10 +256,8 @@ Converter::isResultSigned(nir_op op)
 DataType
 Converter::getDType(nir_alu_instr *insn)
 {
-   if (insn->dest.dest.is_ssa)
-      return getDType(insn->op, insn->dest.dest.ssa.bit_size);
-   else
-      return getDType(insn->op, insn->dest.dest.reg.reg->bit_size);
+   assert(insn->dest.dest.is_ssa);
+   return getDType(insn->op, insn->dest.dest.ssa.bit_size);
 }
 
 DataType
@@ -285,10 +281,8 @@ Converter::getDType(nir_intrinsic_instr *insn)
       break;
    }
 
-   if (insn->dest.is_ssa)
-      return typeOfSize(insn->dest.ssa.bit_size / 8, isFloat, isSigned);
-   else
-      return typeOfSize(insn->dest.reg.reg->bit_size / 8, isFloat, isSigned);
+   assert(insn->dest.is_ssa);
+   return typeOfSize(insn->dest.ssa.bit_size / 8, isFloat, isSigned);
 }
 
 DataType
@@ -325,11 +319,8 @@ Converter::getSTypes(nir_alu_instr *insn)
 DataType
 Converter::getSType(nir_src &src, bool isFloat, bool isSigned)
 {
-   uint8_t bitSize;
-   if (src.is_ssa)
-      bitSize = src.ssa->bit_size;
-   else
-      bitSize = src.reg.reg->bit_size;
+   assert(src.is_ssa);
+   const uint8_t bitSize = src.ssa->bit_size;
 
    DataType ty = typeOfSize(bitSize / 8, isFloat, isSigned);
    if (ty == TYPE_NONE) {
@@ -701,28 +692,8 @@ Converter::convert(nir_alu_dest *dest)
 Converter::LValues&
 Converter::convert(nir_dest *dest)
 {
-   if (dest->is_ssa)
-      return convert(&dest->ssa);
-   if (dest->reg.indirect) {
-      ERROR("no support for indirects.");
-      assert(false);
-   }
-   return convert(dest->reg.reg);
-}
-
-Converter::LValues&
-Converter::convert(nir_register *reg)
-{
-   assert(!reg->num_array_elems);
-
-   NirDefMap::iterator it = regDefs.find(reg->index);
-   if (it != regDefs.end())
-      return it->second;
-
-   LValues newDef(reg->num_components);
-   for (uint8_t i = 0; i < reg->num_components; i++)
-      newDef[i] = getScratch(std::max(4, reg->bit_size / 8));
-   return regDefs[reg->index] = newDef;
+   assert(dest->is_ssa);
+   return convert(&dest->ssa);
 }
 
 Converter::LValues&
@@ -749,29 +720,10 @@ Converter::getSrc(nir_alu_src *src, uint8_t component)
 }
 
 Value*
-Converter::getSrc(nir_register *reg, uint8_t idx)
-{
-   NirDefMap::iterator it = regDefs.find(reg->index);
-   if (it == regDefs.end())
-      return convert(reg)[idx];
-   return it->second[idx];
-}
-
-Value*
 Converter::getSrc(nir_src *src, uint8_t idx, bool indirect)
 {
-   if (src->is_ssa)
-      return getSrc(src->ssa, idx);
-
-   if (src->reg.indirect) {
-      if (indirect)
-         return getSrc(src->reg.indirect, idx);
-      ERROR("no support for indirects.");
-      assert(false);
-      return NULL;
-   }
-
-   return getSrc(src->reg.reg, idx);
+   assert(src->is_ssa);
+   return getSrc(src->ssa, idx);
 }
 
 Value*
@@ -1626,6 +1578,53 @@ Converter::visit(nir_intrinsic_instr *insn)
    unsigned dest_components = nir_intrinsic_dest_components(insn);
 
    switch (op) {
+   case nir_intrinsic_decl_reg: {
+      const unsigned reg_index = insn->dest.ssa.index;
+      const unsigned bit_size = nir_intrinsic_bit_size(insn);
+      const unsigned num_components = nir_intrinsic_num_components(insn);
+      assert(nir_intrinsic_num_array_elems(insn) == 0);
+
+      LValues newDef(num_components);
+      for (uint8_t c = 0; c < num_components; c++)
+         newDef[c] = getScratch(std::max(4u, bit_size / 8));
+
+      assert(regDefs.find(reg_index) == regDefs.end());
+      regDefs[reg_index] = newDef;
+      break;
+   }
+
+   case nir_intrinsic_load_reg: {
+      const unsigned reg_index = insn->src[0].ssa->index;
+      NirDefMap::iterator it = regDefs.find(reg_index);
+      assert(it != regDefs.end());
+      LValues &src = it->second;
+
+      DataType dType = getDType(insn);
+      LValues &newDefs = convert(&insn->dest);
+      for (uint8_t c = 0; c < insn->num_components; c++)
+         mkMov(newDefs[c], src[c], dType);
+      break;
+   }
+
+   case nir_intrinsic_store_reg: {
+      const unsigned reg_index = insn->src[1].ssa->index;
+      NirDefMap::iterator it = regDefs.find(reg_index);
+      assert(it != regDefs.end());
+      LValues &dst = it->second;
+
+      DataType dType = Converter::getSType(insn->src[0], false, false);
+
+      const nir_component_mask_t write_mask = nir_intrinsic_write_mask(insn);
+      for (uint8_t c = 0u; c < insn->num_components; c++) {
+         if (!((1u << c) & write_mask))
+            continue;
+
+         Value *src = getSrc(&insn->src[0], c);
+         mkMov(dst[c], src, dType);
+      }
+      break;
+   }
+
    case nir_intrinsic_store_output:
    case nir_intrinsic_store_per_vertex_output: {
       Value *indirect;
@@ -2341,11 +2340,6 @@ bool
 Converter::visit(nir_jump_instr *insn)
 {
    switch (insn->type) {
-   case nir_jump_return:
-      // TODO: this only works in the main function
-      mkFlow(OP_BRA, exit, CC_ALWAYS, NULL);
-      bb->cfg.attach(&exit->cfg, Graph::Edge::CROSS);
-      break;
    case nir_jump_break:
    case nir_jump_continue: {
       bool isBreak = insn->type == nir_jump_break;
@@ -2592,7 +2586,13 @@ Converter::visit(nir_alu_instr *insn)
       i->sType = sTypes[0];
       break;
    }
-   case nir_op_mov:
+   case nir_op_mov: {
+      LValues &newDefs = convert(&insn->dest);
+      for (LValues::size_type c = 0u; c < newDefs.size(); ++c) {
+         mkMov(newDefs[c], getSrc(&insn->src[0], c), dType);
+      }
+      break;
+   }
    case nir_op_vec2:
    case nir_op_vec3:
    case nir_op_vec4:
@@ -2958,14 +2958,14 @@ Converter::visit(nir_tex_instr *insn)
             srcs.push_back(getSSA());
       }
 
-      if (insn->op == nir_texop_texture_samples)
-         srcs.push_back(zero);
-      else if (!insn->num_srcs)
-         srcs.push_back(loadImm(NULL, 0));
       if (biasIdx != -1)
          srcs.push_back(getSrc(&insn->src[biasIdx].src, 0));
-      if (lodIdx != -1)
+      // TXQ requires a lod argument for all queries we care about here.
+      // For other ops on MS textures we skip it.
+      if (lodIdx != -1 && !target.isMS())
          srcs.push_back(getSrc(&insn->src[lodIdx].src, 0));
+      else if (op == OP_TXQ)
+         srcs.push_back(zero); // TXQ always needs an LOD
       else if (op == OP_TXF)
          lz = true;
       if (msIdx != -1)
@@ -3006,6 +3006,10 @@ Converter::visit(nir_tex_instr *insn)
       if (target.isMS() || (op == OP_TEX && prog->getType() != Program::TYPE_FRAGMENT))
          lz = true;
 
+      // TODO figure out which instructions still need this.
+      if (srcs.empty())
+         srcs.push_back(loadImm(NULL, 0));
+
       TexInstruction *texi = mkTex(op, target.getEnum(), r, s, defs, srcs);
       texi->tex.levelZero = lz;
       texi->tex.mask = mask;
@@ -3032,6 +3036,7 @@ Converter::visit(nir_tex_instr *insn)
          texi->tex.mask = 0x8;
          texi->tex.query = TXQ_DIMS;
          break;
+      // TODO: TXQ_SAMPLE_POSITION needs the sample id instead of the LOD emited further up.
       default:
          break;
       }
@@ -3257,7 +3262,7 @@ Converter::run()
    NIR_PASS_V(nir, nir_lower_bool_to_int32);
    NIR_PASS_V(nir, nir_lower_bit_size, Converter::lowerBitSizeCB, this);
 
-   NIR_PASS_V(nir, nir_convert_from_ssa, true);
+   NIR_PASS_V(nir, nir_convert_from_ssa, true, true);
 
    // Garbage collect dead instructions
    nir_sweep(nir);
@@ -3291,7 +3296,7 @@ bool
 Program::makeFromNIR(struct nv50_ir_prog_info *info,
                      struct nv50_ir_prog_info_out *info_out)
 {
-   nir_shader *nir = (nir_shader*)info->bin.source;
+   nir_shader *nir = info->bin.nir;
    Converter converter(this, nir, info, info_out);
    bool result = converter.run();
    if (!result)
@@ -3405,7 +3410,7 @@ nvir_nir_shader_compiler_options(int chipset, uint8_t shader_type)
       ((chipset >= NVISA_GV100_CHIPSET) ? nir_lower_isign64 : 0) |
       nir_lower_divmod64 |
       ((chipset >= NVISA_GV100_CHIPSET) ? nir_lower_imul_high64 : 0) |
-      ((chipset >= NVISA_GV100_CHIPSET) ? nir_lower_mov64 : 0) |
+      ((chipset >= NVISA_GV100_CHIPSET) ? nir_lower_bcsel64 : 0) |
       ((chipset >= NVISA_GV100_CHIPSET) ? nir_lower_icmp64 : 0) |
       ((chipset >= NVISA_GV100_CHIPSET) ? nir_lower_iabs64 : 0) |
       ((chipset >= NVISA_GV100_CHIPSET) ? nir_lower_ineg64 : 0) |
@@ -3414,7 +3419,8 @@ nvir_nir_shader_compiler_options(int chipset, uint8_t shader_type)
       ((chipset >= NVISA_GV100_CHIPSET) ? nir_lower_shift64 : 0) |
       nir_lower_imul_2x32_64 |
       ((chipset >= NVISA_GM107_CHIPSET) ? nir_lower_extract64 : 0) |
-      nir_lower_ufind_msb64
+      nir_lower_ufind_msb64 |
+      ((chipset >= NVISA_GV100_CHIPSET) ? nir_lower_conv64 : 0)
    );
    op.lower_doubles_options = (nir_lower_doubles_options) (
       ((chipset >= NVISA_GV100_CHIPSET) ? nir_lower_drcp : 0) |

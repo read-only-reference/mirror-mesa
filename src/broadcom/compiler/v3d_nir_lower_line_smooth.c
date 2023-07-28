@@ -72,9 +72,10 @@ lower_line_smooth_func(struct lower_line_smooth_state *state,
 
                         if (intr->intrinsic != nir_intrinsic_store_output ||
                             nir_intrinsic_base(intr) != 0 ||
-                            intr->num_components != 4 ||
-                            !intr->src[0].is_ssa)
+                            intr->num_components != 4)
                                 continue;
+
+                        assert(intr->src[0].is_ssa);
 
                         lower_line_smooth_intrinsic(state, &b, intr);
                         progress = true;
@@ -88,9 +89,7 @@ static void
 initialise_coverage_var(struct lower_line_smooth_state *state,
                         nir_function_impl *impl)
 {
-        nir_builder b = nir_builder_create(impl);
-
-        b.cursor = nir_before_block(nir_start_block(impl));
+        nir_builder b = nir_builder_at(nir_before_block(nir_start_block(impl)));
 
         nir_ssa_def *line_width = nir_load_line_width(&b);
 

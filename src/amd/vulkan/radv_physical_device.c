@@ -102,6 +102,7 @@ static int
 radv_device_get_cache_uuid(struct radv_physical_device *pdevice, void *uuid)
 {
    enum radeon_family family = pdevice->rad_info.family;
+   bool conformant_trunc_coord = pdevice->rad_info.conformant_trunc_coord;
    struct mesa_sha1 ctx;
    unsigned char sha1[20];
    unsigned ptr_size = sizeof(void *);
@@ -127,6 +128,7 @@ radv_device_get_cache_uuid(struct radv_physical_device *pdevice, void *uuid)
 #endif
 
    _mesa_sha1_update(&ctx, &family, sizeof(family));
+   _mesa_sha1_update(&ctx, &conformant_trunc_coord, sizeof(conformant_trunc_coord));
    _mesa_sha1_update(&ctx, &ptr_size, sizeof(ptr_size));
    _mesa_sha1_final(&ctx, sha1);
 
@@ -514,6 +516,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .EXT_pipeline_creation_cache_control = true,
       .EXT_pipeline_creation_feedback = true,
       .EXT_pipeline_library_group_handles = radv_enable_rt(device, true),
+      .EXT_pipeline_robustness = !device->use_llvm,
       .EXT_post_depth_coverage = device->rad_info.gfx_level >= GFX10,
       .EXT_primitive_topology_list_restart = true,
       .EXT_primitives_generated_query = true,
@@ -889,7 +892,7 @@ radv_physical_device_get_features(const struct radv_physical_device *pdevice, st
 
       /* VK_KHR_ray_tracing_pipeline */
       .rayTracingPipeline = true,
-      .rayTracingPipelineShaderGroupHandleCaptureReplay = false,
+      .rayTracingPipelineShaderGroupHandleCaptureReplay = true,
       .rayTracingPipelineShaderGroupHandleCaptureReplayMixed = false,
       .rayTracingPipelineTraceRaysIndirect = true,
       .rayTraversalPrimitiveCulling = true,
@@ -1021,6 +1024,9 @@ radv_physical_device_get_features(const struct radv_physical_device *pdevice, st
       .fragmentShaderSampleInterlock = has_fragment_shader_interlock,
       .fragmentShaderPixelInterlock = has_fragment_shader_interlock,
       .fragmentShaderShadingRateInterlock = false,
+
+      /* VK_EXT_pipeline_robustness */
+      .pipelineRobustness = true,
    };
 }
 
@@ -1386,6 +1392,10 @@ radv_get_physical_device_properties_1_3(struct radv_physical_device *pdevice, Vk
       /* Only GFX10+ supports wave32. */
       p->minSubgroupSize = 32;
       p->requiredSubgroupSizeStages = VK_SHADER_STAGE_COMPUTE_BIT;
+
+      if (radv_taskmesh_enabled(pdevice)) {
+         p->requiredSubgroupSizeStages |= VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_TASK_BIT_EXT;
+      }
    }
 
    p->maxInlineUniformBlockSize = MAX_INLINE_UNIFORM_BLOCK_SIZE;
@@ -1669,7 +1679,7 @@ radv_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice, VkPhysicalDev
          /* This isn't strictly necessary, but Doom Eternal breaks if the
           * alignment is any lower. */
          props->shaderGroupBaseAlignment = RADV_RT_HANDLE_SIZE;
-         props->shaderGroupHandleCaptureReplaySize = RADV_RT_HANDLE_SIZE;
+         props->shaderGroupHandleCaptureReplaySize = sizeof(struct radv_rt_capture_replay_handle);
          props->maxRayDispatchInvocationCount = 1024 * 1024 * 64;
          props->shaderGroupHandleAlignment = 16;
          props->maxRayHitAttributeSize = RADV_MAX_HIT_ATTRIB_SIZE;
@@ -1815,6 +1825,15 @@ radv_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice, VkPhysicalDev
          VkPhysicalDeviceFragmentShaderBarycentricPropertiesKHR *properties =
             (VkPhysicalDeviceFragmentShaderBarycentricPropertiesKHR *)ext;
          properties->triStripVertexOrderIndependentOfProvokingVertex = false;
+         break;
+      }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_ROBUSTNESS_PROPERTIES_EXT: {
+         VkPhysicalDevicePipelineRobustnessPropertiesEXT *properties =
+            (VkPhysicalDevicePipelineRobustnessPropertiesEXT *)ext;
+         properties->defaultRobustnessStorageBuffers = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_EXT;
+         properties->defaultRobustnessUniformBuffers = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_EXT;
+         properties->defaultRobustnessVertexInputs = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED_EXT;
+         properties->defaultRobustnessImages = VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_2_EXT;
          break;
       }
       default:

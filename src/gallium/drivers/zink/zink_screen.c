@@ -196,7 +196,7 @@ static void
 zink_set_max_shader_compiler_threads(struct pipe_screen *pscreen, unsigned max_threads)
 {
    struct zink_screen *screen = zink_screen(pscreen);
-   util_queue_adjust_num_threads(&screen->cache_get_thread, max_threads);
+   util_queue_adjust_num_threads(&screen->cache_get_thread, max_threads, false);
 }
 
 static bool
@@ -437,9 +437,10 @@ zink_get_compute_param(struct pipe_screen *pscreen, enum pipe_shader_ir ir_type,
    case PIPE_COMPUTE_CAP_IMAGES_SUPPORTED:
       RET((uint32_t []) { 1 });
 
-   case PIPE_COMPUTE_CAP_SUBGROUP_SIZE:
+   case PIPE_COMPUTE_CAP_SUBGROUP_SIZES:
       RET((uint32_t []) { screen->info.props11.subgroupSize });
 
+   case PIPE_COMPUTE_CAP_MAX_SUBGROUPS:
    case PIPE_COMPUTE_CAP_MAX_MEM_ALLOC_SIZE:
    case PIPE_COMPUTE_CAP_MAX_CLOCK_FREQUENCY:
    case PIPE_COMPUTE_CAP_MAX_COMPUTE_UNITS:
@@ -569,7 +570,6 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_DRAW_INDIRECT:
    case PIPE_CAP_TEXTURE_QUERY_LOD:
    case PIPE_CAP_GLSL_TESS_LEVELS_AS_INPUTS:
-   case PIPE_CAP_CLEAR_TEXTURE:
    case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
    case PIPE_CAP_FORCE_PERSAMPLE_INTERP:
    case PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT:
@@ -590,7 +590,6 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
    case PIPE_CAP_LOAD_CONSTBUF:
    case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
-   case PIPE_CAP_RGB_OVERRIDE_DST_ALPHA_BLEND:
    case PIPE_CAP_ALLOW_GLTHREAD_BUFFER_SUBDATA_OPT:
       return 1;
 
@@ -2586,7 +2585,6 @@ init_driver_workarounds(struct zink_screen *screen)
    case VK_DRIVER_ID_MESA_LLVMPIPE:
    case VK_DRIVER_ID_MESA_TURNIP:
    case VK_DRIVER_ID_MESA_PANVK:
-   case VK_DRIVER_ID_MESA_VENUS:
    case VK_DRIVER_ID_MESA_V3DV:
    case VK_DRIVER_ID_IMAGINATION_PROPRIETARY:
    case VK_DRIVER_ID_QUALCOMM_PROPRIETARY:
@@ -2801,7 +2799,8 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
    }
 
    zink_debug = debug_get_option_zink_debug();
-   zink_descriptor_mode = debug_get_option_zink_descriptor_mode();
+   if (zink_descriptor_mode == ZINK_DESCRIPTOR_MODE_AUTO)
+      zink_descriptor_mode = debug_get_option_zink_descriptor_mode();
 
    screen->threaded = util_get_cpu_caps()->nr_cpus > 1 && debug_get_bool_option("GALLIUM_THREAD", util_get_cpu_caps()->nr_cpus > 1);
    if (zink_debug & ZINK_DEBUG_FLUSHSYNC)
@@ -3027,7 +3026,7 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
       goto fail;
    }
    if (!util_queue_init(&screen->cache_get_thread, "zcfq", 8, 4,
-                        UTIL_QUEUE_INIT_RESIZE_IF_FULL | UTIL_QUEUE_INIT_SCALE_THREADS, screen))
+                        UTIL_QUEUE_INIT_RESIZE_IF_FULL, screen))
       goto fail;
    populate_format_props(screen);
 

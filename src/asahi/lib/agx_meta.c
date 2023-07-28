@@ -17,9 +17,10 @@ agx_compile_meta_shader(struct agx_meta_cache *cache, nir_shader *shader,
    struct util_dynarray binary;
    util_dynarray_init(&binary, NULL);
 
-   agx_preprocess_nir(shader, false);
+   agx_preprocess_nir(shader, false, NULL);
    if (tib) {
-      agx_nir_lower_tilebuffer(shader, tib, NULL, NULL);
+      unsigned bindless_base = 0;
+      agx_nir_lower_tilebuffer(shader, tib, NULL, &bindless_base, NULL);
       agx_nir_lower_monolithic_msaa(
          shader, &(struct agx_msaa_state){.nr_samples = tib->nr_samples});
    }
@@ -44,7 +45,7 @@ build_background_op(nir_builder *b, enum agx_meta_op op, unsigned rt,
       /* The type doesn't matter as long as it matches the store */
       tex->dest_type = nir_type_uint32;
       tex->sampler_dim = msaa ? GLSL_SAMPLER_DIM_MS : GLSL_SAMPLER_DIM_2D;
-      tex->op = nir_texop_txf;
+      tex->op = msaa ? nir_texop_txf_ms : nir_texop_txf;
       tex->src[0] = nir_tex_src_for_ssa(nir_tex_src_coord,
                                         nir_u2u32(b, nir_load_pixel_coord(b)));
 
@@ -63,7 +64,7 @@ build_background_op(nir_builder *b, enum agx_meta_op op, unsigned rt,
    } else {
       assert(op == AGX_META_OP_CLEAR);
 
-      return nir_load_preamble(b, nr, 32, rt * 8);
+      return nir_load_preamble(b, nr, 32, 4 + (rt * 8));
    }
 }
 
@@ -78,6 +79,7 @@ agx_build_background_shader(struct agx_meta_cache *cache,
    struct agx_shader_key compiler_key = {
       .fs.ignore_tib_dependencies = true,
       .fs.nr_samples = key->tib.nr_samples,
+      .reserved_preamble = key->reserved_preamble,
    };
 
    for (unsigned rt = 0; rt < ARRAY_SIZE(key->op); ++rt) {
@@ -114,14 +116,26 @@ agx_build_end_of_tile_shader(struct agx_meta_cache *cache,
       if (key->op[rt] == AGX_META_OP_NONE)
          continue;
 
+      /* The end-of-tile shader is unsuitable to handle spilled render targets.
+       * Skip them. If blits are needed with spilled render targets, other parts
+       * of the driver need to implement them.
+       */
+      if (key->tib.spilled[rt])
+         continue;
+
       assert(key->op[rt] == AGX_META_OP_STORE);
+      unsigned offset_B = agx_tilebuffer_offset_B(&key->tib, rt);
+
       nir_block_image_store_agx(
-         &b, nir_imm_int(&b, rt), nir_imm_intN_t(&b, key->tib.offset_B[rt], 16),
+         &b, nir_imm_int(&b, rt), nir_imm_intN_t(&b, offset_B, 16),
          .format = agx_tilebuffer_physical_format(&key->tib, rt),
          .image_dim = dim);
    }
 
-   struct agx_shader_key compiler_key = {0};
+   struct agx_shader_key compiler_key = {
+      .reserved_preamble = key->reserved_preamble,
+   };
+
    return agx_compile_meta_shader(cache, b.shader, &compiler_key, NULL);
 }
 

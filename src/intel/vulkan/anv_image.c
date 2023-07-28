@@ -857,14 +857,6 @@ add_primary_surface(struct anv_device *device,
       assert(plane < ycbcr_info->n_planes);
       width /= ycbcr_info->planes[plane].denominator_scales[0];
       height /= ycbcr_info->planes[plane].denominator_scales[1];
-   } else if (isl_usage & ISL_SURF_USAGE_VIDEO_DECODE_BIT) {
-      /* To get proper width/height for P010 format,
-       * that isn't supported for YCbCr conversion yet
-       */
-      width = util_format_get_plane_width(
-            vk_format_to_pipe_format(image->vk.format), plane, width);
-      height = util_format_get_plane_height(
-            vk_format_to_pipe_format(image->vk.format), plane, height);
    }
 
    ok = isl_surf_init(&device->isl_dev, &anv_surf->isl,
@@ -1099,7 +1091,7 @@ check_drm_format_mod(const struct anv_device *device,
       assert(isl_layout->colorspace == ISL_COLORSPACE_LINEAR ||
              isl_layout->colorspace == ISL_COLORSPACE_SRGB);
 
-      if (isl_mod_info->aux_usage != ISL_AUX_USAGE_NONE) {
+      if (isl_drm_modifier_has_aux(isl_mod_info->modifier)) {
          /* Reject DISJOINT for consistency with the GL driver. */
          assert(!image->disjoint);
 
@@ -1107,7 +1099,10 @@ check_drm_format_mod(const struct anv_device *device,
           * The inverse, however, does not hold; if the modifier has no aux
           * usage, then we may enable a private aux surface.
           */
-         if (plane->aux_usage != isl_mod_info->aux_usage) {
+         if ((isl_mod_info->supports_media_compression &&
+              plane->aux_usage != ISL_AUX_USAGE_MC) ||
+             (isl_mod_info->supports_render_compression &&
+              !isl_aux_usage_has_ccs_e(plane->aux_usage))) {
             return vk_errorf(device, VK_ERROR_UNKNOWN,
                              "image with modifier unexpectedly has wrong aux "
                              "usage");
@@ -1198,10 +1193,10 @@ add_all_surfaces_explicit_layout(
 
    /* We support a restricted set of images with modifiers.
     *
-    * With aux usage,
+    * With aux usage on platforms without flat-CCS,
     * - Format plane count must be 1.
     * - Memory plane count must be 2.
-    * Without aux usage,
+    * Otherwise,
     * - Each format plane must map to a distint memory plane.
     *
     * For the other cases, currently there is no way to properly map memory
@@ -1213,7 +1208,7 @@ add_all_surfaces_explicit_layout(
    else
       assert(!(image->vk.aspects & ~VK_IMAGE_ASPECT_PLANES_BITS_ANV));
 
-   if (mod_has_aux)
+   if (mod_has_aux && !devinfo->has_flat_ccs)
       assert(image->n_planes == 1 && mod_plane_count == 2);
    else
       assert(image->n_planes == mod_plane_count);
@@ -1253,7 +1248,15 @@ add_all_surfaces_explicit_layout(
          return result;
 
       if (mod_has_aux) {
-         const VkSubresourceLayout *aux_layout = &drm_info->pPlaneLayouts[1];
+         assert(!isl_drm_modifier_get_info(
+                  drm_info->drmFormatModifier)->supports_clear_color);
+
+         const VkSubresourceLayout flat_ccs_layout = {
+            .offset = ANV_OFFSET_IMPLICIT,
+         };
+         const VkSubresourceLayout *aux_layout = devinfo->has_flat_ccs ?
+            &flat_ccs_layout : &drm_info->pPlaneLayouts[1];
+
          result = add_aux_surface_if_supported(device, image, plane,
                                                format_plane,
                                                format_list_info,
@@ -1262,6 +1265,8 @@ add_all_surfaces_explicit_layout(
                                                isl_extra_usage_flags);
          if (result != VK_SUCCESS)
             return result;
+
+         assert(isl_aux_usage_has_ccs(image->planes[plane].aux_usage));
       }
    }
 

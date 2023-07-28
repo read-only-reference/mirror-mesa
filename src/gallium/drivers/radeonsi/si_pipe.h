@@ -1342,7 +1342,8 @@ enum si_blitter_op /* bitmask */
    SI_SAVE_TEXTURES = 1,
    SI_SAVE_FRAMEBUFFER = 2,
    SI_SAVE_FRAGMENT_STATE = 4,
-   SI_DISABLE_RENDER_COND = 8,
+   SI_SAVE_FRAGMENT_CONSTANT = 8,
+   SI_DISABLE_RENDER_COND = 16,
 };
 
 void si_blitter_begin(struct si_context *sctx, enum si_blitter_op op);
@@ -1615,8 +1616,8 @@ void *si_create_query_result_cs(struct si_context *sctx);
 void *gfx11_create_sh_query_result_cs(struct si_context *sctx);
 
 /* gfx11_query.c */
-void gfx11_init_query(struct si_context *sctx);
-void gfx11_destroy_query(struct si_context *sctx);
+void si_gfx11_init_query(struct si_context *sctx);
+void si_gfx11_destroy_query(struct si_context *sctx);
 
 /* si_test_image_copy_region.c */
 void si_test_image_copy_region(struct si_screen *sscreen);

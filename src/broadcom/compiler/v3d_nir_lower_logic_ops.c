@@ -385,10 +385,7 @@ v3d_nir_lower_logic_ops_block(nir_block *block, struct v3d_compile *c)
                                 continue;
                         }
 
-                        nir_function_impl *impl =
-                                nir_cf_node_get_function(&block->cf_node);
-                        nir_builder b = nir_builder_create(impl);
-                        b.cursor = nir_before_instr(&intr->instr);
+                        nir_builder b = nir_builder_at(nir_before_instr(&intr->instr));
                         v3d_nir_lower_logic_op_instr(c, &b, intr, rt);
 
                         progress = true;
@@ -409,19 +406,17 @@ v3d_nir_lower_logic_ops(nir_shader *s, struct v3d_compile *c)
         if (c->fs_key->logicop_func == PIPE_LOGICOP_COPY)
                 return false;
 
-        nir_foreach_function(function, s) {
-                if (function->impl) {
-                        nir_foreach_block(block, function->impl)
-                                progress |= v3d_nir_lower_logic_ops_block(block, c);
+        nir_foreach_function_impl(impl, s) {
+                nir_foreach_block(block, impl)
+                        progress |= v3d_nir_lower_logic_ops_block(block, c);
 
-                        if (progress) {
-                                nir_metadata_preserve(function->impl,
-                                                      nir_metadata_block_index |
-                                                      nir_metadata_dominance);
-                        } else {
-                                nir_metadata_preserve(function->impl,
-                                                      nir_metadata_all);
-                        }
+                if (progress) {
+                        nir_metadata_preserve(impl,
+                                              nir_metadata_block_index |
+                                              nir_metadata_dominance);
+                } else {
+                        nir_metadata_preserve(impl,
+                                              nir_metadata_all);
                 }
         }
 

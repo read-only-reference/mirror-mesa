@@ -647,9 +647,8 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
    VkResult result;
    struct radv_device *device;
 
+   enum radv_buffer_robustness buffer_robustness = RADV_BUFFER_ROBUSTNESS_DISABLED;
    bool keep_shader_info = false;
-   bool robust_buffer_access = false;
-   bool robust_buffer_access2 = false;
    bool overallocation_disallowed = false;
    bool custom_border_colors = false;
    bool attachment_vrs_enabled = false;
@@ -666,7 +665,7 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
    /* Check enabled features */
    if (pCreateInfo->pEnabledFeatures) {
       if (pCreateInfo->pEnabledFeatures->robustBufferAccess)
-         robust_buffer_access = true;
+         buffer_robustness = MAX2(buffer_robustness, RADV_BUFFER_ROBUSTNESS_1);
    }
 
    vk_foreach_struct_const (ext, pCreateInfo->pNext) {
@@ -674,7 +673,7 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2: {
          const VkPhysicalDeviceFeatures2 *features = (const void *)ext;
          if (features->features.robustBufferAccess)
-            robust_buffer_access = true;
+            buffer_robustness = MAX2(buffer_robustness, RADV_BUFFER_ROBUSTNESS_1);
          break;
       }
       case VK_STRUCTURE_TYPE_DEVICE_MEMORY_OVERALLOCATION_CREATE_INFO_AMD: {
@@ -696,7 +695,7 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT: {
          const VkPhysicalDeviceRobustness2FeaturesEXT *features = (const void *)ext;
          if (features->robustBufferAccess2)
-            robust_buffer_access2 = true;
+            buffer_robustness = MAX2(buffer_robustness, RADV_BUFFER_ROBUSTNESS_2);
          break;
       }
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT: {
@@ -812,8 +811,7 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
                                 device->vk.enabled_extensions.KHR_acceleration_structure ||
                                 device->vk.enabled_extensions.VALVE_descriptor_set_host_mapping;
 
-   device->robust_buffer_access = robust_buffer_access || robust_buffer_access2;
-   device->robust_buffer_access2 = robust_buffer_access2;
+   device->buffer_robustness = buffer_robustness;
 
    device->attachment_vrs_enabled = attachment_vrs_enabled;
 
@@ -1049,7 +1047,7 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
    if (!(device->instance->debug_flags & RADV_DEBUG_NO_IBS))
       radv_create_gfx_config(device);
 
-   struct vk_pipeline_cache_create_info info = {0};
+   struct vk_pipeline_cache_create_info info = {.weak_ref = true};
    device->mem_cache = vk_pipeline_cache_create(&device->vk, &info, NULL);
    if (!device->mem_cache)
       goto fail_meta;
@@ -1081,6 +1079,10 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
 
    if ((device->instance->vk.trace_mode & RADV_TRACE_MODE_RRA) && radv_enable_rt(physical_device, false)) {
       radv_rra_trace_init(device);
+   }
+
+   if (device->vk.enabled_features.rayTracingPipelineShaderGroupHandleCaptureReplay) {
+      device->capture_replay_arena_vas = _mesa_hash_table_u64_create(NULL);
    }
 
    *pDevice = radv_device_to_handle(device);
@@ -1145,6 +1147,9 @@ radv_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
 
    if (!device)
       return;
+
+   if (device->capture_replay_arena_vas)
+      _mesa_hash_table_u64_destroy(device->capture_replay_arena_vas);
 
    radv_device_finish_perf_counter_lock_cs(device);
    if (device->perf_counter_bo)

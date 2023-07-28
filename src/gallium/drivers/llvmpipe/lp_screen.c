@@ -297,8 +297,6 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
       return 1;
-   case PIPE_CAP_CLEAR_TEXTURE:
-      return 1;
    case PIPE_CAP_MAX_VARYINGS:
       return 32;
    case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
@@ -359,6 +357,8 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_POST_DEPTH_COVERAGE:
    case PIPE_CAP_SHADER_CLOCK:
    case PIPE_CAP_PACKED_UNIFORMS:
+      return 1;
+   case PIPE_CAP_SYSTEM_SVM:
       return 1;
    case PIPE_CAP_ATOMIC_FLOAT_MINMAX:
       return LLVM_VERSION_MAJOR >= 15;
@@ -531,10 +531,16 @@ llvmpipe_get_compute_param(struct pipe_screen *_screen,
       return sizeof(uint32_t);
    case PIPE_COMPUTE_CAP_MAX_VARIABLE_THREADS_PER_BLOCK:
       return 0;
-   case PIPE_COMPUTE_CAP_SUBGROUP_SIZE:
+   case PIPE_COMPUTE_CAP_SUBGROUP_SIZES:
       if (ret) {
          uint32_t *subgroup_size = ret;
-         *subgroup_size = 32;
+         *subgroup_size = lp_native_vector_width / 32;
+      }
+      return sizeof(uint32_t);
+   case PIPE_COMPUTE_CAP_MAX_SUBGROUPS:
+      if (ret) {
+         uint32_t *subgroup_size = ret;
+         *subgroup_size = 1024 / (lp_native_vector_width / 32);
       }
       return sizeof(uint32_t);
    case PIPE_COMPUTE_CAP_MAX_COMPUTE_UNITS:

@@ -191,6 +191,8 @@ bool brw_nir_lower_conversions(nir_shader *nir);
 
 bool brw_nir_lower_shading_rate_output(nir_shader *nir);
 
+bool brw_nir_lower_sparse_intrinsics(nir_shader *nir);
+
 struct brw_nir_lower_storage_image_opts {
    const struct intel_device_info *devinfo;
 
@@ -270,6 +272,8 @@ nir_shader *brw_nir_create_passthrough_tcs(void *mem_ctx,
                                            const struct brw_compiler *compiler,
                                            const struct brw_tcs_prog_key *key);
 
+bool brw_nir_pulls_at_sample(nir_shader *shader);
+
 #define BRW_NIR_FRAG_OUTPUT_INDEX_SHIFT 0
 #define BRW_NIR_FRAG_OUTPUT_INDEX_MASK INTEL_MASK(0, 0)
 #define BRW_NIR_FRAG_OUTPUT_LOCATION_SHIFT 1
@@ -280,6 +284,11 @@ nir_ssa_def *brw_nir_load_global_const(nir_builder *b,
                                        nir_intrinsic_instr *load_uniform,
                                        nir_ssa_def *base_addr,
                                        unsigned off);
+
+const struct glsl_type *brw_nir_get_var_type(const struct nir_shader *nir,
+                                             nir_variable *var);
+
+void brw_nir_adjust_payload(nir_shader *shader, const struct brw_compiler *compiler);
 
 #ifdef __cplusplus
 }

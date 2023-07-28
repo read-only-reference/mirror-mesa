@@ -367,7 +367,8 @@ public:
 
 void ReplaceIndirectArrayAddr::visit(LocalArrayValue& value)
 {
-   if (new_addr->sel() == 0 && value.addr()->as_register())
+   if (new_addr->sel() == 0 && value.addr()
+       && value.addr()->as_register())
       value.set_addr(new_addr);
 }
 
@@ -474,10 +475,8 @@ bool AluInstr::replace_src(int i, PVirtualValue new_src, uint32_t to_set,
    auto old_src = m_src[i]->as_register();
    assert(old_src);
 
-   if (!can_replace_source(old_src, new_src)) {
-      std::cerr << "Can't replace src " << *old_src << " with " << *new_src << "\n";
+   if (!can_replace_source(old_src, new_src))
       return false;
-   }
 
    assert(old_src);
    old_src->del_use(this);
@@ -503,7 +502,7 @@ bool AluInstr::can_replace_source(PRegister old_src, PVirtualValue new_src)
    /* If the old or new source is an array element, we assume that there
     * might have been an (untracked) indirect access, so don't replace
     * this source */
-   if (old_src->pin() == pin_array || new_src->pin() == pin_array)
+   if (old_src->pin() == pin_array && new_src->pin() == pin_array)
       return false;
 
    auto [addr, dummy, index] = indirect_addr();
@@ -634,7 +633,7 @@ AluInstr::replace_dest(PRegister new_dest, AluInstr *move_instr)
    if (m_dest->pin() == pin_chan) {
       if (new_dest->pin() == pin_group)
          new_dest->set_pin(pin_chgr);
-      else
+      else if (new_dest->pin() != pin_chgr)
          new_dest->set_pin(pin_chan);
    }
 
@@ -1233,7 +1232,13 @@ AluInstr::do_ready() const
     * we have to make sure that required ops are already
     * scheduled before marking this one ready */
    for (auto i : required_instr()) {
-      if (!i->is_scheduled())
+      if (i->is_dead())
+         continue;
+
+      bool is_older_instr = i->block_id() <= block_id() &&
+                            i->index() < index();
+      bool is_lds = i->as_alu() && i->as_alu()->has_lds_access();
+      if (!i->is_scheduled() && (is_older_instr || is_lds))
          return false;
    }
 
@@ -1265,7 +1270,13 @@ AluInstr::do_ready() const
        * update are scheduled, otherwise we may use the updated value when we
        * shouldn't */
       for (auto u : m_dest->uses()) {
-         if (u->block_id() <= block_id() && u->index() < index() && !u->is_scheduled()) {
+         /* TODO: This is working around some sloppy use updates, dead instrzuctions
+          * should remove themselves from uses. */
+         if (u->is_dead())
+            continue;
+         if (!u->is_scheduled() &&
+             u->block_id() <= block_id() &&
+             u->index() < index()) {
             return false;
          }
       }

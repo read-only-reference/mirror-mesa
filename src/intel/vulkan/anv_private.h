@@ -404,6 +404,7 @@ struct anv_bo {
     */
    struct util_vma_heap *vma_heap;
 
+   /* All userptr bos in Xe KMD has gem_handle set to workaround_bo->gem_handle */
    uint32_t gem_handle;
 
    uint32_t refcount;
@@ -419,7 +420,7 @@ struct anv_bo {
 
    /* Last known offset.  This value is provided by the kernel when we
     * execbuf and is used as the presumed offset for the next bunch of
-    * relocations.
+    * relocations, in canonical address format.
     */
    uint64_t offset;
 
@@ -596,7 +597,7 @@ struct anv_block_pool {
 
    uint64_t size;
 
-   /* The address where the start of the pool is pinned. The various bos that
+   /* The canonical address where the start of the pool is pinned. The various bos that
     * are created as the pool grows will have addresses in the range
     * [start_address, start_address + BLOCK_POOL_MEMFD_SIZE).
     */
@@ -1387,7 +1388,6 @@ VkResult anv_device_wait(struct anv_device *device, struct anv_bo *bo,
                          int64_t timeout);
 
 VkResult anv_queue_init(struct anv_device *device, struct anv_queue *queue,
-                        uint32_t exec_flags,
                         const VkDeviceQueueCreateInfo *pCreateInfo,
                         uint32_t index_in_family);
 void anv_queue_finish(struct anv_queue *queue);
@@ -1404,7 +1404,6 @@ void *
 anv_gem_mmap(struct anv_device *device, struct anv_bo *bo, uint64_t offset,
              uint64_t size, VkMemoryPropertyFlags property_flags);
 void anv_gem_munmap(struct anv_device *device, void *p, uint64_t size);
-uint32_t anv_gem_userptr(struct anv_device *device, void *mem, size_t size);
 int anv_gem_wait(struct anv_device *device, uint32_t gem_handle, int64_t *timeout_ns);
 int anv_gem_set_tiling(struct anv_device *device, uint32_t gem_handle,
                        uint32_t stride, uint32_t tiling);
@@ -2846,7 +2845,6 @@ struct anv_cmd_compute_state {
    struct anv_address num_workgroups;
 
    uint32_t scratch_size;
-   bool cfe_state_valid;
 };
 
 struct anv_cmd_ray_tracing_state {
@@ -3426,6 +3424,11 @@ struct anv_graphics_base_pipeline {
    /* Shaders */
    struct anv_shader_bin *                      shaders[ANV_GRAPHICS_SHADER_STAGE_COUNT];
 
+   /* A small hash based of shader_info::source_sha1 for identifying
+    * shaders in renderdoc/shader-db.
+    */
+   uint32_t                                     source_hashes[ANV_GRAPHICS_SHADER_STAGE_COUNT];
+
    /* Feedback index in
     * VkPipelineCreationFeedbackCreateInfo::pPipelineStageCreationFeedbacks
     *
@@ -3539,6 +3542,8 @@ struct anv_graphics_pipeline {
       uint32_t                                  wm[2];
       uint32_t                                  streamout_state[5];
       uint32_t                                  hs[9];
+      uint32_t                                  ds[11];
+      uint32_t                                  gs[10];
    } gfx8;
 };
 
@@ -3548,6 +3553,11 @@ struct anv_compute_pipeline {
    struct anv_shader_bin *                      cs;
    uint32_t                                     batch_data[9];
    uint32_t                                     interface_descriptor_data[8];
+
+   /* A small hash based of shader_info::source_sha1 for identifying shaders
+    * in renderdoc/shader-db.
+    */
+   uint32_t                                     source_hash;
 };
 
 struct anv_rt_shader_group {

@@ -361,6 +361,18 @@
       <value name="WB" value="3" />
     </field>
   </struct>
+  <struct name="MEMORY_OBJECT_CONTROL_STATE_CHV" length="1">
+    <field name="Target Cache" start="3" end="4" type="uint">
+      <value name="No Caching" value="0" />
+      <value name="No Caching 1" value="1" />
+      <value name="No Caching 2" value="2" />
+      <value name="L3 Cache Allowed" value="3" />
+    </field>
+    <field name="Memory Type" start="5" end="6" type="uint">
+      <value name="UC" value="0" />
+      <value name="WB" value="3" />
+    </field>
+  </struct>
   <struct name="MFD_MPEG2_BSD_OBJECT_INLINE_DATA_DESCRIPTION" length="2">
     <field name="First MB Bit Offset" start="0" end="2" type="uint" />
     <field name="Last MB" start="3" end="3" type="bool" />
@@ -1383,7 +1395,7 @@
       <value name="CENTER" value="0" />
       <value name="UL_CORNER" value="1" />
     </field>
-    <field name="Pixel Position Offset Enable" start="37" end="37" type="bool" />
+    <field name="Pixel Position Offset Enable" start="37" end="37" type="bool" default="0" />
   </instruction>
   <instruction name="3DSTATE_POLY_STIPPLE_OFFSET" bias="2" length="2" engine="render">
     <field name="DWord Length" start="0" end="7" type="uint" default="0" />

@@ -1289,8 +1289,6 @@ public:
    uint32_t binPos;
    uint32_t binSize;
 
-   Value *stackPtr;
-
    uint32_t tlsBase; // base address for l[] space (if no stack pointer is used)
    uint32_t tlsSize;
 
@@ -1342,8 +1340,6 @@ public:
 
    bool makeFromNIR(struct nv50_ir_prog_info *,
                     struct nv50_ir_prog_info_out *);
-   bool makeFromTGSI(struct nv50_ir_prog_info *,
-                     struct nv50_ir_prog_info_out *);
    bool convertToSSA();
    bool optimizeSSA(int level);
    bool optimizePostRA(int level);

@@ -48,13 +48,25 @@ typedef struct nir_builder {
    nir_function_impl *impl;
 } nir_builder;
 
-void nir_builder_init(nir_builder *build, nir_function_impl *impl);
-
 static inline nir_builder
 nir_builder_create(nir_function_impl *impl)
 {
    nir_builder b;
-   nir_builder_init(&b, impl);
+   memset(&b, 0, sizeof(b));
+   b.exact = false;
+   b.impl = impl;
+   b.shader = impl->function->shader;
+   return b;
+}
+
+/* Requires the cursor to be inside a nir_function_impl. */
+static inline nir_builder
+nir_builder_at(nir_cursor cursor)
+{
+   nir_cf_node *current_block = &nir_cursor_current_block(cursor)->cf_node;
+
+   nir_builder b = nir_builder_create(nir_cf_node_get_function(current_block));
+   b.cursor = cursor;
    return b;
 }
 
@@ -715,7 +727,7 @@ static inline nir_ssa_def *
 nir_replicate(nir_builder *b, nir_ssa_def *scalar, unsigned num_components)
 {
    assert(scalar->num_components == 1);
-   assert(num_components < NIR_MAX_VEC_COMPONENTS);
+   assert(num_components <= NIR_MAX_VEC_COMPONENTS);
 
    nir_ssa_def *copies[NIR_MAX_VEC_COMPONENTS] = {NULL};
    for (unsigned i = 0; i < num_components; ++i)
@@ -1675,6 +1687,52 @@ nir_load_param(nir_builder *build, uint32_t param_idx)
    return nir_build_load_param(build, param->num_components, param->bit_size, param_idx);
 }
 
+#undef nir_decl_reg
+static inline nir_ssa_def *
+nir_decl_reg(nir_builder *b, unsigned num_components, unsigned bit_size,
+             unsigned num_array_elems)
+{
+   nir_intrinsic_instr *decl =
+      nir_intrinsic_instr_create(b->shader, nir_intrinsic_decl_reg);
+   nir_intrinsic_set_num_components(decl, num_components);
+   nir_intrinsic_set_bit_size(decl, bit_size);
+   nir_intrinsic_set_num_array_elems(decl, num_array_elems);
+   nir_intrinsic_set_divergent(decl, true);
+   nir_ssa_dest_init(&decl->instr, &decl->dest, 1, 32);
+
+   nir_instr_insert(nir_before_cf_list(&b->impl->body), &decl->instr);
+
+   return &decl->dest.ssa;
+}
+
+#undef nir_load_reg
+static inline nir_ssa_def *
+nir_load_reg(nir_builder *b, nir_ssa_def *reg)
+{
+   nir_intrinsic_instr *decl = nir_reg_get_decl(reg);
+   unsigned num_components = nir_intrinsic_num_components(decl);
+   unsigned bit_size = nir_intrinsic_bit_size(decl);
+
+   nir_ssa_def *res = nir_build_load_reg(b, num_components, bit_size, reg);
+   res->divergent = nir_intrinsic_divergent(decl);
+
+   return res;
+}
+
+#undef nir_store_reg
+static inline void
+nir_store_reg(nir_builder *b, nir_ssa_def *value, nir_ssa_def *reg)
+{
+   ASSERTED nir_intrinsic_instr *decl = nir_reg_get_decl(reg);
+   ASSERTED unsigned num_components = nir_intrinsic_num_components(decl);
+   ASSERTED unsigned bit_size = nir_intrinsic_bit_size(decl);
+
+   assert(value->num_components == num_components);
+   assert(value->bit_size == bit_size);
+
+   nir_build_store_reg(b, value, reg);
+}
+
 static inline nir_tex_src
 nir_tex_src_for_ssa(nir_tex_src_type src_type, nir_ssa_def *def)
 {
@@ -1732,6 +1790,20 @@ nir_txl_zero_deref(nir_builder *b, nir_deref_instr *t, nir_deref_instr *s,
    return nir_txl_deref(b, t, s, coord, nir_imm_float(b, 0));
 }
 
+static inline bool
+nir_tex_type_has_lod(const struct glsl_type *tex_type)
+{
+   switch (glsl_get_sampler_dim(tex_type)) {
+   case GLSL_SAMPLER_DIM_1D:
+   case GLSL_SAMPLER_DIM_2D:
+   case GLSL_SAMPLER_DIM_3D:
+   case GLSL_SAMPLER_DIM_CUBE:
+      return true;
+   default:
+      return false;
+   }
+}
+
 static inline nir_ssa_def *
 nir_txf_deref(nir_builder *b, nir_deref_instr *t,
               nir_ssa_def *coord, nir_ssa_def *lod)
@@ -1741,18 +1813,8 @@ nir_txf_deref(nir_builder *b, nir_deref_instr *t,
 
    srcs[num_srcs++] = nir_tex_src_for_ssa(nir_tex_src_coord, coord);
 
-   if (lod == NULL) {
-      switch (glsl_get_sampler_dim(t->type)) {
-      case GLSL_SAMPLER_DIM_1D:
-      case GLSL_SAMPLER_DIM_2D:
-      case GLSL_SAMPLER_DIM_3D:
-      case GLSL_SAMPLER_DIM_CUBE:
-         lod = nir_imm_int(b, 0);
-         break;
-      default:
-         break;
-      }
-   }
+   if (lod == NULL && nir_tex_type_has_lod(t->type))
+      lod = nir_imm_int(b, 0);
 
    if (lod != NULL)
       srcs[num_srcs++] = nir_tex_src_for_ssa(nir_tex_src_lod, lod);
@@ -1772,6 +1834,22 @@ nir_txf_ms_deref(nir_builder *b, nir_deref_instr *t,
 
    return nir_build_tex_deref_instr(b, nir_texop_txf_ms, t, NULL,
                                     ARRAY_SIZE(srcs), srcs);
+}
+
+static inline nir_ssa_def *
+nir_txs_deref(nir_builder *b, nir_deref_instr *t, nir_ssa_def *lod)
+{
+   nir_tex_src srcs[1];
+   unsigned num_srcs = 0;
+
+   if (lod == NULL && nir_tex_type_has_lod(t->type))
+      lod = nir_imm_int(b, 0);
+
+   if (lod != NULL)
+      srcs[num_srcs++] = nir_tex_src_for_ssa(nir_tex_src_lod, lod);
+
+   return nir_build_tex_deref_instr(b, nir_texop_txs, t, NULL,
+                                    num_srcs, srcs);
 }
 
 static inline nir_ssa_def *

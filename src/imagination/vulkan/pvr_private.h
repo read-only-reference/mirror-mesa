@@ -459,7 +459,11 @@ struct pvr_sub_cmd_gfx {
    bool modifies_depth;
    bool modifies_stencil;
 
+   /* Store the render to a scratch buffer. */
    bool barrier_store;
+   /* Load the render (stored with a `barrier_store`) as a background to the
+    * current render.
+    */
    bool barrier_load;
 
    const struct pvr_query_pool *query_pool;
@@ -997,6 +1001,7 @@ struct pvr_private_compute_pipeline {
    uint32_t pds_data_size_dw;
    uint32_t pds_temps_used;
    uint32_t coeff_regs_count;
+   uint32_t unified_store_regs_count;
    VkExtent3D workgroup_size;
 
    /* Used by pvr_compute_update_shared_private(). */

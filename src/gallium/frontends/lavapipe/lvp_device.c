@@ -283,8 +283,8 @@ lvp_get_features(const struct lvp_physical_device *pdevice,
       .shaderSampledImageArrayDynamicIndexing   = true,
       .shaderStorageBufferArrayDynamicIndexing  = true,
       .shaderStorageImageArrayDynamicIndexing   = true,
-      .shaderStorageImageReadWithoutFormat      = (pdevice->pscreen->get_param(pdevice->pscreen, PIPE_CAP_IMAGE_LOAD_FORMATTED) != 0),
-      .shaderStorageImageWriteWithoutFormat     = (pdevice->pscreen->get_param(pdevice->pscreen, PIPE_CAP_IMAGE_STORE_FORMATTED) != 0),
+      .shaderStorageImageReadWithoutFormat      = true,
+      .shaderStorageImageWriteWithoutFormat     = true,
       .shaderClipDistance                       = true,
       .shaderCullDistance                       = (pdevice->pscreen->get_param(pdevice->pscreen, PIPE_CAP_CULL_DISTANCE) == 1),
       .shaderFloat64                            = (pdevice->pscreen->get_param(pdevice->pscreen, PIPE_CAP_DOUBLES) == 1),
@@ -304,7 +304,7 @@ lvp_get_features(const struct lvp_physical_device *pdevice,
       .variablePointersStorageBuffer       = true,
       .variablePointers                    = true,
       .protectedMemory                     = false,
-      .samplerYcbcrConversion              = false,
+      .samplerYcbcrConversion              = true,
       .shaderDrawParameters                = true,
 
       /* Vulkan 1.2 */
@@ -944,7 +944,7 @@ lvp_get_physical_device_properties_1_1(struct lvp_physical_device *pdevice,
    p->deviceNodeMask = 0;
 
    p->subgroupSize = lp_native_vector_width / 32;
-   p->subgroupSupportedStages = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+   p->subgroupSupportedStages = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
    p->subgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_VOTE_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT | VK_SUBGROUP_FEATURE_BALLOT_BIT;
    p->subgroupQuadOperationsInAllStages = false;
 
@@ -1252,19 +1252,19 @@ VKAPI_ATTR void VKAPI_CALL lvp_GetPhysicalDeviceProperties2(
          props->imageViewCaptureReplayDescriptorDataSize = 0;
          props->samplerCaptureReplayDescriptorDataSize = 0;
          props->accelerationStructureCaptureReplayDescriptorDataSize = 0;
-         props->samplerDescriptorSize = sizeof(union lp_descriptor);
-         props->combinedImageSamplerDescriptorSize = sizeof(union lp_descriptor);
-         props->sampledImageDescriptorSize = sizeof(union lp_descriptor);
-         props->storageImageDescriptorSize = sizeof(union lp_descriptor);
-         props->uniformTexelBufferDescriptorSize = sizeof(union lp_descriptor);
-         props->robustUniformTexelBufferDescriptorSize = sizeof(union lp_descriptor);
-         props->storageTexelBufferDescriptorSize = sizeof(union lp_descriptor);
-         props->robustStorageTexelBufferDescriptorSize = sizeof(union lp_descriptor);
-         props->uniformBufferDescriptorSize = sizeof(union lp_descriptor);
-         props->robustUniformBufferDescriptorSize = sizeof(union lp_descriptor);
-         props->storageBufferDescriptorSize = sizeof(union lp_descriptor);
-         props->robustStorageBufferDescriptorSize = sizeof(union lp_descriptor);
-         props->inputAttachmentDescriptorSize = sizeof(union lp_descriptor);
+         props->samplerDescriptorSize = sizeof(struct lp_descriptor);
+         props->combinedImageSamplerDescriptorSize = sizeof(struct lp_descriptor);
+         props->sampledImageDescriptorSize = sizeof(struct lp_descriptor);
+         props->storageImageDescriptorSize = sizeof(struct lp_descriptor);
+         props->uniformTexelBufferDescriptorSize = sizeof(struct lp_descriptor);
+         props->robustUniformTexelBufferDescriptorSize = sizeof(struct lp_descriptor);
+         props->storageTexelBufferDescriptorSize = sizeof(struct lp_descriptor);
+         props->robustStorageTexelBufferDescriptorSize = sizeof(struct lp_descriptor);
+         props->uniformBufferDescriptorSize = sizeof(struct lp_descriptor);
+         props->robustUniformBufferDescriptorSize = sizeof(struct lp_descriptor);
+         props->storageBufferDescriptorSize = sizeof(struct lp_descriptor);
+         props->robustStorageBufferDescriptorSize = sizeof(struct lp_descriptor);
+         props->inputAttachmentDescriptorSize = sizeof(struct lp_descriptor);
          props->accelerationStructureDescriptorSize = 0;
          props->maxSamplerDescriptorBufferRange = 1<<27; //spec minimum
          props->maxResourceDescriptorBufferRange = 1<<27; //spec minimum
@@ -2288,6 +2288,8 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_CreateSampler(
    const VkSamplerReductionModeCreateInfo *reduction_mode_create_info =
       vk_find_struct_const(pCreateInfo->pNext,
                            SAMPLER_REDUCTION_MODE_CREATE_INFO);
+   const struct VkSamplerYcbcrConversionInfo *ycbcr_conversion =
+      vk_find_struct_const(pCreateInfo->pNext, SAMPLER_YCBCR_CONVERSION_INFO);
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
 
@@ -2337,6 +2339,8 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_CreateSampler(
    lp_jit_sampler_from_pipe(&sampler->desc.sampler, &state);
    sampler->desc.sampler_index = sampler->texture_handle->sampler_index;
 
+   sampler->ycbcr_conversion = ycbcr_conversion ? vk_ycbcr_conversion_from_handle(ycbcr_conversion->conversion) : NULL;
+
    *pSampler = lvp_sampler_to_handle(sampler);
 
    return VK_SUCCESS;
@@ -2359,22 +2363,6 @@ VKAPI_ATTR void VKAPI_CALL lvp_DestroySampler(
 
    vk_object_base_finish(&sampler->base);
    vk_free2(&device->vk.alloc, pAllocator, sampler);
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL lvp_CreateSamplerYcbcrConversionKHR(
-    VkDevice                                    device,
-    const VkSamplerYcbcrConversionCreateInfo*   pCreateInfo,
-    const VkAllocationCallbacks*                pAllocator,
-    VkSamplerYcbcrConversion*                   pYcbcrConversion)
-{
-   return VK_ERROR_OUT_OF_HOST_MEMORY;
-}
-
-VKAPI_ATTR void VKAPI_CALL lvp_DestroySamplerYcbcrConversionKHR(
-    VkDevice                                    device,
-    VkSamplerYcbcrConversion                    ycbcrConversion,
-    const VkAllocationCallbacks*                pAllocator)
-{
 }
 
 /* vk_icd.h does not declare this function, so we declare it here to

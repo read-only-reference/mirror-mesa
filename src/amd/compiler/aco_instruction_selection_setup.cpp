@@ -412,12 +412,9 @@ init_context(isel_context* ctx, nir_shader* shader)
                case nir_op_f2u16:
                case nir_op_f2i32:
                case nir_op_f2u32:
-               case nir_op_f2i64:
-               case nir_op_f2u64:
                case nir_op_b2i8:
                case nir_op_b2i16:
                case nir_op_b2i32:
-               case nir_op_b2i64:
                case nir_op_b2b32:
                case nir_op_b2f16:
                case nir_op_b2f32:
@@ -664,6 +661,7 @@ setup_isel_context(Program* program, unsigned shader_count, struct nir_shader* c
       case MESA_SHADER_TESS_EVAL: sw_stage = sw_stage | SWStage::TES; break;
       case MESA_SHADER_GEOMETRY: sw_stage = sw_stage | SWStage::GS; break;
       case MESA_SHADER_FRAGMENT: sw_stage = sw_stage | SWStage::FS; break;
+      case MESA_SHADER_KERNEL:
       case MESA_SHADER_COMPUTE: sw_stage = sw_stage | SWStage::CS; break;
       case MESA_SHADER_TASK: sw_stage = sw_stage | SWStage::TS; break;
       case MESA_SHADER_MESH: sw_stage = sw_stage | SWStage::MS; break;

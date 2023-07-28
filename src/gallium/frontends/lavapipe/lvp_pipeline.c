@@ -22,6 +22,7 @@
  */
 
 #include "lvp_private.h"
+#include "vk_nir_convert_ycbcr.h"
 #include "vk_pipeline.h"
 #include "vk_render_pass.h"
 #include "vk_util.h"
@@ -352,6 +353,20 @@ inline_variant_equals(const void *a, const void *b)
    return true;
 }
 
+static const struct vk_ycbcr_conversion_state *
+lvp_ycbcr_conversion_lookup(const void *data, uint32_t set, uint32_t binding, uint32_t array_index)
+{
+   const struct lvp_pipeline_layout *layout = data;
+
+   const struct lvp_descriptor_set_layout *set_layout = container_of(layout->vk.set_layouts[set], struct lvp_descriptor_set_layout, vk);
+   const struct lvp_descriptor_set_binding_layout *binding_layout = &set_layout->binding[binding];
+   if (!binding_layout->immutable_samplers)
+      return NULL;
+
+   struct vk_ycbcr_conversion *ycbcr_conversion = binding_layout->immutable_samplers[array_index]->ycbcr_conversion;
+   return ycbcr_conversion ? &ycbcr_conversion->state : NULL;
+}
+
 static void
 lvp_shader_lower(struct lvp_device *pdevice, nir_shader *nir, struct lvp_shader *shader, struct lvp_pipeline_layout *layout)
 {
@@ -397,6 +412,8 @@ lvp_shader_lower(struct lvp_device *pdevice, nir_shader *nir, struct lvp_shader 
    NIR_PASS_V(nir, nir_lower_explicit_io,
               nir_var_mem_global,
               nir_address_format_64bit_global);
+
+   NIR_PASS(_, nir, nir_vk_lower_ycbcr_tex, lvp_ycbcr_conversion_lookup, layout);
 
    nir_lower_non_uniform_access_options options = {
       .types = nir_lower_non_uniform_ubo_access | nir_lower_non_uniform_texture_access | nir_lower_non_uniform_image_access,
@@ -527,8 +544,7 @@ lvp_shader_xfb_init(struct lvp_shader *shader)
       memset(output_mapping, 0, sizeof(output_mapping));
 
       nir_foreach_shader_out_variable(var, shader->pipeline_nir->nir) {
-         unsigned slots = var->data.compact ? DIV_ROUND_UP(glsl_get_length(var->type), 4)
-                                            : glsl_count_attribute_slots(var->type, false);
+         unsigned slots = nir_variable_count_slots(var, var->type);
          for (unsigned i = 0; i < slots; i++)
             output_mapping[var->data.location + i] = var->data.driver_location + i;
       }
@@ -544,7 +560,7 @@ lvp_shader_xfb_init(struct lvp_shader *shader)
          shader->stream_output.output[i].dst_offset = xfb_info->outputs[i].offset / 4;
          shader->stream_output.output[i].register_index = output_mapping[xfb_info->outputs[i].location];
          shader->stream_output.output[i].num_components = util_bitcount(xfb_info->outputs[i].component_mask);
-         shader->stream_output.output[i].start_component = ffs(xfb_info->outputs[i].component_mask) - 1;
+         shader->stream_output.output[i].start_component = xfb_info->outputs[i].component_offset;
          shader->stream_output.output[i].stream = xfb_info->buffer_to_stream[xfb_info->outputs[i].buffer];
       }
 

@@ -1,3 +1,96 @@
+# Rules for changes that impact either freedreno or turnip.
+.freedreno-common-rules:
+  rules:
+    - !reference [.no_scheduled_pipelines-rules, rules]
+    - !reference [.freedreno-farm-rules, rules]
+    - changes: &freedreno_core_file_list
+      - src/freedreno/ci/**/*
+      - src/freedreno/common/**/*
+      - src/freedreno/drm/**/*
+      - src/freedreno/fdl/**/*
+      - src/freedreno/ir3/**/*
+      - src/freedreno/isa/**/*
+      - src/freedreno/registers/**/*
+      when: on_success
+
+.freedreno-common-manual-rules:
+  retry: !reference [.scheduled_pipeline-rules, retry]
+  rules:
+    - !reference [.freedreno-farm-manual-rules, rules]
+    - !reference [.core-manual-rules, rules]
+    - changes:
+        *freedreno_core_file_list
+      when: manual
+
+.freedreno-rules:
+  stage: freedreno
+  rules:
+    - !reference [.freedreno-common-rules, rules]
+    - !reference [.gl-rules, rules]
+    - changes: &freedreno_gl_file_list
+      - src/freedreno/ir2/**/*
+      - src/gallium/drivers/freedreno/**/*
+      - src/gallium/winsys/freedreno/**/*
+      when: on_success
+
+.freedreno-manual-rules:
+  stage: freedreno
+  retry: !reference [.scheduled_pipeline-rules, retry]
+  rules:
+    - !reference [.freedreno-common-manual-rules, rules]
+    - !reference [.gl-manual-rules, rules]
+    - changes:
+        *freedreno_gl_file_list
+      when: manual
+
+.turnip-rules:
+  stage: freedreno
+  rules:
+    - !reference [.freedreno-common-rules, rules]
+    - !reference [.vulkan-rules, rules]
+    - changes: &freedreno_vulkan_file_list
+      - src/freedreno/vulkan/**/*
+      when: on_success
+
+.turnip-manual-rules:
+  stage: freedreno
+  retry: !reference [.scheduled_pipeline-rules, retry]
+  rules:
+    - !reference [.freedreno-common-manual-rules, rules]
+    - !reference [.vulkan-manual-rules, rules]
+    - changes:
+        *freedreno_vulkan_file_list
+      when: manual
+
+# For piglit and skqp test jobs that run both GL and VK tests.
+.freedreno-turnip-rules:
+  rules:
+    - !reference [.freedreno-rules, rules]
+    - !reference [.turnip-rules, rules]
+
+.freedreno-rules-restricted:
+  stage: freedreno
+  rules:
+    - !reference [.restricted-rules, rules]
+    - !reference [.freedreno-rules, rules]
+
+.freedreno-rules-performance:
+  stage: freedreno
+  retry: !reference [.scheduled_pipeline-rules, retry]
+  rules:
+    - !reference [.performance-rules, rules]
+    - !reference [.freedreno-manual-rules, rules]
+  allow_failure: true # see comment in .performance-rules, which we don't inherit this line from.
+  variables:
+    LAVA_JOB_PRIORITY: 40
+    # Ensure that we are using the release build artifact
+    S3_ARTIFACT_NAME: mesa-arm64-default-release
+  needs:
+    - debian/arm64_test
+    - debian-arm64-release
+  dependencies: null
+
+
 .google-freedreno-test:
   extends:
     - .baremetal-test-arm64
@@ -98,10 +191,10 @@ a530_gl:
   extends:
     - .baremetal-deqp-test
     - .a530-test
-    - .freedreno-manual-rules
   variables:
     DEQP_SUITE: freedreno-a530
     PIGLIT_PLATFORM: gbm
+    FDO_CI_CONCURRENT: 3  # if 4, sometimes "deqp-gles31, not enough memory for the allocation" appears
   parallel: 6
 
 # piglit and piglit_gl since it takes a bit under 20 minutes and has a lot of flakes, so
@@ -135,6 +228,8 @@ a530-traces:
     PIGLIT_RESULTS: "freedreno-a530-replay"
 
 .a618-test:
+  extends:
+    .lava-test:arm64
   variables:
     FLAKES_CHANNEL: "#freedreno-ci"
     BOOT_METHOD: depthcharge
@@ -228,7 +323,7 @@ a618_gl:
     # Note that piglit has GL+VK integration testing.
     - .freedreno-turnip-rules
   variables:
-    HWCI_START_XORG: 1
+    HWCI_START_WESTON: 1
     DEQP_VER: gles2
     PIGLIT_PROFILES: gpu
 
@@ -259,6 +354,9 @@ a618-traces-performance:
     # Always use the same device
     # a618 tag starts with cbg-1 (not cbg-0) for some reason
     LAVA_TAGS: "cbg-1"
+  needs:
+    - !reference [a618-traces, needs]
+    - !reference [.piglit-performance:arm64, needs]
 
 .lava-sm8350-hdk:
   variables:
@@ -273,7 +371,7 @@ a618-traces-performance:
     GPU_VERSION: freedreno-a660
     RUNNER_TAG: mesa-ci-x86-64-lava-sm8350-hdk
 
-.a660_gl:
+a660_gl:
   extends:
     - .lava-test-deqp:arm64
     - .freedreno-rules
@@ -282,6 +380,7 @@ a618-traces-performance:
   variables:
     DEQP_SUITE: freedreno-a660
 
+# 6 devices (2023-07-06)
 .a630-test:
   extends:
     - .google-freedreno-test
@@ -338,7 +437,7 @@ a630_skqp:
     # SKQP tests both the GL and VK drivers.
     - .freedreno-turnip-rules
   variables:
-    HWCI_START_XORG: 1
+    HWCI_START_WESTON: 1
     DEQP_SUITE: freedreno-a630-skqp
 
 a630_vk:
@@ -382,7 +481,7 @@ a630_piglit:
     # Note that piglit has GL+VK integration testing.
     - .freedreno-turnip-rules
   variables:
-    HWCI_START_XORG: 1
+    HWCI_START_WESTON: 1
     DEQP_SUITE: freedreno-a630-piglit
 
 a630-traces:

@@ -31,15 +31,16 @@
 #include "util/memstream.h"
 #include "util/mesa-sha1.h"
 #include "vulkan/vulkan_core.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <inttypes.h> /* for PRIx64 macro */
 
 static void
-print_tabs(unsigned num_tabs, FILE *fp)
+print_indentation(unsigned levels, FILE *fp)
 {
-   for (unsigned i = 0; i < num_tabs; i++)
-      fprintf(fp, "\t");
+   for (unsigned i = 0; i < levels; i++)
+      fprintf(fp, "    ");
 }
 
 typedef struct {
@@ -66,6 +67,14 @@ typedef struct {
     * (such as instr or var) to message to print.
     */
    struct hash_table *annotations;
+
+   /* Maximum length for SSA or Reg index in the current impl */
+   unsigned max_dest_index;
+
+   /* Padding for instructions without destination to make
+    * them align with the `=` for instructions with destination.
+    */
+   unsigned padding_for_no_dest;
 } print_state;
 
 static void
@@ -93,10 +102,11 @@ print_register(nir_register *reg, print_state *state)
    fprintf(fp, "r%u", reg->index);
 }
 
-static const char *sizes[] = { "error", "vec1", "vec2", "vec3", "vec4",
-                               "vec5", "error", "error", "vec8",
-                               "error", "error", "error", "error",
-                               "error", "error", "error", "vec16"};
+/* For 1 element, the size is intentionally omitted. */
+static const char *sizes[] = { "x??", "   ", "x2 ", "x3 ", "x4 ",
+                               "x5 ", "x??", "x??", "x8 ",
+                               "x??", "x??", "x??", "x??",
+                               "x??", "x??", "x??", "x16"};
 
 static const char *
 divergence_status(print_state *state, bool divergent)
@@ -111,8 +121,9 @@ static void
 print_register_decl(nir_register *reg, print_state *state)
 {
    FILE *fp = state->fp;
-   fprintf(fp, "decl_reg %s %u %s", sizes[reg->num_components],
-           reg->bit_size, divergence_status(state, reg->divergent));
+   fprintf(fp, "decl_reg %s %u%s",
+           divergence_status(state, reg->divergent),
+           reg->bit_size, sizes[reg->num_components]);
 
    print_register(reg, state);
    if (reg->num_array_elems != 0)
@@ -120,13 +131,46 @@ print_register_decl(nir_register *reg, print_state *state)
    fprintf(fp, "\n");
 }
 
+static unsigned
+count_digits(unsigned n)
+{
+   return n ? (unsigned)floor(log10(n)) + 1u : 1u;
+}
+
 static void
 print_ssa_def(nir_ssa_def *def, print_state *state)
 {
    FILE *fp = state->fp;
 
-   fprintf(fp, "%s %2u %sssa_%u", sizes[def->num_components], def->bit_size,
-           divergence_status(state, def->divergent), def->index);
+   const unsigned ssa_padding = state->max_dest_index ?
+      count_digits(state->max_dest_index) - count_digits(def->index) : 0;
+
+   const unsigned padding = (def->bit_size == 1) + 1 + ssa_padding;
+
+   fprintf(fp, "%s%u%s%*s%%%u",
+           divergence_status(state, def->divergent),
+           def->bit_size, sizes[def->num_components],
+           padding, "", def->index);
+}
+
+static unsigned
+calculate_padding_for_no_dest(print_state *state)
+{
+   const unsigned div = state->shader->info.divergence_analysis_run ? 4 : 0;
+   const unsigned ssa_size = 5;
+   const unsigned percent = 1;
+   const unsigned ssa_index = count_digits(state->max_dest_index);
+   const unsigned equals = 1;
+   return ssa_size + 1 + div + percent + ssa_index + 1 + equals + 1;
+}
+
+static void
+print_no_dest_padding(print_state *state)
+{
+   FILE *fp = state->fp;
+
+   if (state->padding_for_no_dest)
+      fprintf(fp, "%*s", state->padding_for_no_dest, "");
 }
 
 static void
@@ -329,7 +373,7 @@ static void
 print_ssa_use(nir_ssa_def *def, print_state *state, nir_alu_type src_type)
 {
    FILE *fp = state->fp;
-   fprintf(fp, "ssa_%u", def->index);
+   fprintf(fp, "%%%u", def->index);
    nir_instr *instr = def->parent_instr;
 
    if (instr->type == nir_instr_type_load_const && !NIR_DEBUG(PRINT_NO_INLINE_CONSTS)) {
@@ -361,32 +405,20 @@ static void print_src(const nir_src *src, print_state *state, nir_alu_type src_t
 static void
 print_reg_src(const nir_register_src *src, print_state *state)
 {
-   FILE *fp = state->fp;
    print_register(src->reg, state);
-   if (src->reg->num_array_elems != 0) {
-      fprintf(fp, "[%u", src->base_offset);
-      if (src->indirect != NULL) {
-         fprintf(fp, " + ");
-         print_src(src->indirect, state, nir_type_invalid);
-      }
-      fprintf(fp, "]");
-   }
 }
 
 static void
 print_reg_dest(nir_register_dest *dest, print_state *state)
 {
    FILE *fp = state->fp;
-   fprintf(fp, "%s", divergence_status(state, dest->reg->divergent));
-   print_register(dest->reg, state);
-   if (dest->reg->num_array_elems != 0) {
-      fprintf(fp, "[%u", dest->base_offset);
-      if (dest->indirect != NULL) {
-         fprintf(fp, " + ");
-         print_src(dest->indirect, state, nir_type_invalid);
-      }
-      fprintf(fp, "]");
-   }
+
+   /* TODO: Alignment currently ignore array registers. */
+   /* TODO: If there's no SSA, we could remove the prefix to align with SSA size. */
+   const unsigned padding = state->max_dest_index ?
+   count_digits(state->max_dest_index) - count_digits(dest->reg->index) : 0;
+   fprintf(fp, "%s      %*sr%u", divergence_status(state, dest->reg->divergent),
+           padding, "", dest->reg->index);
 }
 
 static void
@@ -515,13 +547,13 @@ get_var_name(nir_variable *var, print_state *state)
 
    char *name;
    if (var->name == NULL) {
-      name = ralloc_asprintf(state->syms, "@%u", state->index++);
+      name = ralloc_asprintf(state->syms, "#%u", state->index++);
    } else {
       struct set_entry *set_entry = _mesa_set_search(state->syms, var->name);
       if (set_entry != NULL) {
-         /* we have a collision with another name, append an @ + a unique
+         /* we have a collision with another name, append an # + a unique
           * index */
-         name = ralloc_asprintf(state->syms, "%s@%u", var->name,
+         name = ralloc_asprintf(state->syms, "%s#%u", var->name,
                                 state->index++);
       } else {
          /* Mark this one as seen */
@@ -1001,18 +1033,17 @@ print_deref_instr(nir_deref_instr *instr, print_state *state)
    }
    fprintf(fp, " %s)", glsl_get_type_name(instr->type));
 
+   if (instr->deref_type == nir_deref_type_cast) {
+      fprintf(fp, "  (ptr_stride=%u, align_mul=%u, align_offset=%u)",
+              instr->cast.ptr_stride,
+              instr->cast.align_mul, instr->cast.align_offset);
+   }
+
    if (instr->deref_type != nir_deref_type_var &&
        instr->deref_type != nir_deref_type_cast) {
       /* Print the entire chain as a comment */
-      fprintf(fp, " /* &");
+      fprintf(fp, "  // &");
       print_deref_link(instr, true, state);
-      fprintf(fp, " */");
-   }
-
-   if (instr->deref_type == nir_deref_type_cast) {
-      fprintf(fp, " /* ptr_stride=%u, align_mul=%u, align_offset=%u */",
-              instr->cast.ptr_stride,
-              instr->cast.align_mul, instr->cast.align_offset);
    }
 }
 
@@ -1067,9 +1098,11 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
    if (info->has_dest) {
       print_dest(&instr->dest, state);
       fprintf(fp, " = ");
+   } else {
+      print_no_dest_padding(state);
    }
 
-   fprintf(fp, "intrinsic %s (", info->name);
+   fprintf(fp, "@%s (", info->name);
 
    for (unsigned i = 0; i < num_srcs; i++) {
       if (i != 0)
@@ -1428,7 +1461,7 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
             nir_intrinsic_component(instr) <
             (var->data.location_frac + glsl_get_components(var->type)))) &&
            var->name) {
-         fprintf(fp, "\t/* %s */", var->name);
+         fprintf(fp, "  // %s", var->name);
          break;
       }
    }
@@ -1631,6 +1664,8 @@ print_call_instr(nir_call_instr *instr, print_state *state)
 {
    FILE *fp = state->fp;
 
+   print_no_dest_padding(state);
+
    fprintf(fp, "call %s ", instr->callee->name);
 
    for (unsigned i = 0; i < instr->num_params; i++) {
@@ -1645,6 +1680,8 @@ static void
 print_jump_instr(nir_jump_instr *instr, print_state *state)
 {
    FILE *fp = state->fp;
+
+   print_no_dest_padding(state);
 
    switch (instr->type) {
    case nir_jump_break:
@@ -1664,15 +1701,15 @@ print_jump_instr(nir_jump_instr *instr, print_state *state)
       break;
 
    case nir_jump_goto:
-      fprintf(fp, "goto block_%u",
+      fprintf(fp, "goto b%u",
               instr->target ? instr->target->index : -1);
       break;
 
    case nir_jump_goto_if:
-      fprintf(fp, "goto block_%u if ",
+      fprintf(fp, "goto b%u if ",
               instr->target ? instr->target->index : -1);
       print_src(&instr->condition, state, nir_type_invalid);
-      fprintf(fp, " else block_%u",
+      fprintf(fp, " else b%u",
               instr->else_target ? instr->else_target->index : -1);
       break;
    }
@@ -1696,7 +1733,7 @@ print_phi_instr(nir_phi_instr *instr, print_state *state)
       if (&src->node != exec_list_get_head(&instr->srcs))
          fprintf(fp, ", ");
 
-      fprintf(fp, "block_%u: ", src->pred->index);
+      fprintf(fp, "b%u: ", src->pred->index);
       print_src(&src->src, state, nir_type_invalid);
    }
 }
@@ -1709,8 +1746,16 @@ print_parallel_copy_instr(nir_parallel_copy_instr *instr, print_state *state)
       if (&entry->node != exec_list_get_head(&instr->entries))
          fprintf(fp, "; ");
 
-      print_dest(&entry->dest, state);
+      if (entry->dest_is_reg) {
+         fprintf(fp, "*");
+         print_src(&entry->dest.reg, state, nir_type_invalid);
+      } else {
+         print_dest(&entry->dest.dest, state);
+      }
       fprintf(fp, " = ");
+
+      if (entry->src_is_reg)
+         fprintf(fp, "*");
       print_src(&entry->src, state, nir_type_invalid);
    }
 }
@@ -1719,7 +1764,7 @@ static void
 print_instr(const nir_instr *instr, print_state *state, unsigned tabs)
 {
    FILE *fp = state->fp;
-   print_tabs(tabs, fp);
+   print_indentation(tabs, fp);
 
    switch (instr->type) {
    case nir_instr_type_alu:
@@ -1766,29 +1811,102 @@ print_instr(const nir_instr *instr, print_state *state, unsigned tabs)
       unreachable("Invalid instruction type");
       break;
    }
+
+   if (NIR_DEBUG(PRINT_PASS_FLAGS) && instr->pass_flags)
+      fprintf(fp, " (pass_flags: 0x%x)", instr->pass_flags);
+}
+
+static bool
+block_has_instruction_with_dest(nir_block *block)
+{
+   nir_foreach_instr(instr, block) {
+      switch (instr->type) {
+      case nir_instr_type_load_const:
+      case nir_instr_type_deref:
+      case nir_instr_type_alu:
+      case nir_instr_type_tex:
+      case nir_instr_type_ssa_undef:
+      case nir_instr_type_phi:
+      case nir_instr_type_parallel_copy:
+         return true;
+
+      case nir_instr_type_intrinsic: {
+         nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+         const nir_intrinsic_info *info = &nir_intrinsic_infos[intrin->intrinsic];
+         if (info->has_dest)
+            return true;
+
+         /* Doesn't define a new value. */
+         break;
+      }
+
+      case nir_instr_type_jump:
+      case nir_instr_type_call:
+         /* Doesn't define a new value. */
+         break;
+      }
+   }
+
+   return false;
 }
 
 static void print_cf_node(nir_cf_node *node, print_state *state,
                           unsigned tabs);
 
 static void
+print_block_preds(nir_block *block, print_state *state)
+{
+   FILE *fp = state->fp;
+   nir_block **preds = nir_block_get_predecessors_sorted(block, NULL);
+   for (unsigned i = 0; i < block->predecessors->entries; i++) {
+      if (i != 0)
+         fprintf(fp, " ");
+      fprintf(fp, "b%u", preds[i]->index);
+   }
+   ralloc_free(preds);
+}
+
+static void
+print_block_succs(nir_block *block, print_state *state)
+{
+   FILE *fp = state->fp;
+   for (unsigned i = 0; i < 2; i++) {
+      if (block->successors[i]) {
+         fprintf(fp, "b%u ", block->successors[i]->index);
+      }
+   }
+}
+
+static void
 print_block(nir_block *block, print_state *state, unsigned tabs)
 {
    FILE *fp = state->fp;
 
-   print_tabs(tabs, fp);
-   fprintf(fp, "block block_%u:\n", block->index);
+   if (block_has_instruction_with_dest(block))
+      state->padding_for_no_dest = calculate_padding_for_no_dest(state);
+   else
+      state->padding_for_no_dest = 0;
 
-   nir_block **preds = nir_block_get_predecessors_sorted(block, NULL);
+   print_indentation(tabs, fp);
+   fprintf(fp, "block b%u:", block->index);
 
-   print_tabs(tabs, fp);
-   fprintf(fp, "/* preds: ");
-   for (unsigned i = 0; i < block->predecessors->entries; i++) {
-      fprintf(fp, "block_%u ", preds[i]->index);
+   const bool empty_block = exec_list_is_empty(&block->instr_list);
+   if (empty_block) {
+      fprintf(fp, "  // preds: ");
+      print_block_preds(block, state);
+      fprintf(fp, ", succs: ");
+      print_block_succs(block, state);
+      fprintf(fp, "\n");
+      return;
    }
-   fprintf(fp, "*/\n");
 
-   ralloc_free(preds);
+   const unsigned block_length = 7 + count_digits(block->index) + 1;
+   const unsigned pred_padding = block_length < state->padding_for_no_dest ?
+      state->padding_for_no_dest - block_length : 0;
+
+   fprintf(fp, "%*s// preds: ", pred_padding, "");
+   print_block_preds(block, state);
+   fprintf(fp, "\n");
 
    nir_foreach_instr(instr, block) {
       print_instr(instr, state, tabs);
@@ -1796,13 +1914,10 @@ print_block(nir_block *block, print_state *state, unsigned tabs)
       print_annotation(state, instr);
    }
 
-   print_tabs(tabs, fp);
-   fprintf(fp, "/* succs: ");
-   for (unsigned i = 0; i < 2; i++)
-      if (block->successors[i]) {
-         fprintf(fp, "block_%u ", block->successors[i]->index);
-      }
-   fprintf(fp, "*/\n");
+   print_indentation(tabs, fp);
+   fprintf(fp, "%*s// succs: ", state->padding_for_no_dest, "");
+   print_block_succs(block, state);
+   fprintf(fp, "\n");
 }
 
 static void
@@ -1810,18 +1925,18 @@ print_if(nir_if *if_stmt, print_state *state, unsigned tabs)
 {
    FILE *fp = state->fp;
 
-   print_tabs(tabs, fp);
+   print_indentation(tabs, fp);
    fprintf(fp, "if ");
    print_src(&if_stmt->condition, state, nir_type_invalid);
    switch (if_stmt->control) {
    case nir_selection_control_flatten:
-      fprintf(fp, " /* flatten */");
+      fprintf(fp, "  // flatten");
       break;
    case nir_selection_control_dont_flatten:
-      fprintf(fp, " /* don't flatten */");
+      fprintf(fp, "  // don't flatten");
       break;
    case nir_selection_control_divergent_always_taken:
-      fprintf(fp, " /* divergent always taken */");
+      fprintf(fp, "  // divergent always taken");
       break;
    case nir_selection_control_none:
    default:
@@ -1831,12 +1946,12 @@ print_if(nir_if *if_stmt, print_state *state, unsigned tabs)
    foreach_list_typed(nir_cf_node, node, node, &if_stmt->then_list) {
       print_cf_node(node, state, tabs + 1);
    }
-   print_tabs(tabs, fp);
+   print_indentation(tabs, fp);
    fprintf(fp, "} else {\n");
    foreach_list_typed(nir_cf_node, node, node, &if_stmt->else_list) {
       print_cf_node(node, state, tabs + 1);
    }
-   print_tabs(tabs, fp);
+   print_indentation(tabs, fp);
    fprintf(fp, "}\n");
 }
 
@@ -1845,19 +1960,19 @@ print_loop(nir_loop *loop, print_state *state, unsigned tabs)
 {
    FILE *fp = state->fp;
 
-   print_tabs(tabs, fp);
+   print_indentation(tabs, fp);
    fprintf(fp, "loop {\n");
    foreach_list_typed(nir_cf_node, node, node, &loop->body) {
       print_cf_node(node, state, tabs + 1);
    }
-   print_tabs(tabs, fp);
+   print_indentation(tabs, fp);
 
    if (nir_loop_has_continue_construct(loop)) {
       fprintf(fp, "} continue {\n");
       foreach_list_typed(nir_cf_node, node, node, &loop->continue_list) {
          print_cf_node(node, state, tabs + 1);
       }
-      print_tabs(tabs, fp);
+      print_indentation(tabs, fp);
    }
 
    fprintf(fp, "}\n");
@@ -1889,12 +2004,15 @@ print_function_impl(nir_function_impl *impl, print_state *state)
 {
    FILE *fp = state->fp;
 
+   state->max_dest_index = MAX2(impl->ssa_alloc, impl->reg_alloc);
+
    fprintf(fp, "\nimpl %s ", impl->function->name);
 
    fprintf(fp, "{\n");
 
    if (impl->preamble) {
-      fprintf(fp, "\tpreamble %s\n", impl->preamble->name);
+      print_indentation(1, fp);
+      fprintf(fp, "preamble %s\n", impl->preamble->name);
    }
 
    if (!NIR_DEBUG(PRINT_NO_INLINE_CONSTS)) {
@@ -1908,12 +2026,12 @@ print_function_impl(nir_function_impl *impl, print_state *state)
    }
 
    nir_foreach_function_temp_variable(var, impl) {
-      fprintf(fp, "\t");
+      print_indentation(1, fp);
       print_var_decl(var, state);
    }
 
    foreach_list_typed(nir_register, reg, node, &impl->registers) {
-      fprintf(fp, "\t");
+      print_indentation(1, fp);
       print_register_decl(reg, state);
    }
 
@@ -1923,10 +2041,12 @@ print_function_impl(nir_function_impl *impl, print_state *state)
       print_cf_node(node, state, 1);
    }
 
-   fprintf(fp, "\tblock block_%u:\n}\n\n", impl->end_block->index);
+   print_indentation(1, fp);
+   fprintf(fp, "block b%u:\n}\n\n", impl->end_block->index);
 
    free(state->float_types);
    free(state->int_types);
+   state->max_dest_index = 0;
 }
 
 static void
@@ -1956,6 +2076,8 @@ init_print_state(print_state *state, nir_shader *shader, FILE *fp)
    state->index = 0;
    state->int_types = NULL;
    state->float_types = NULL;
+   state->max_dest_index = 0;
+   state->padding_for_no_dest = 0;
 }
 
 static void

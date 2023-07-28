@@ -635,8 +635,7 @@ lower_pv_mode_gs(nir_shader *shader, unsigned prim)
    memset(state.varyings, 0, sizeof(state.varyings));
 
    nir_function_impl *entry = nir_shader_get_entrypoint(shader);
-   b = nir_builder_create(entry);
-   b.cursor = nir_before_cf_list(&entry->body);
+   b = nir_builder_at(nir_before_cf_list(&entry->body));
 
    state.primitive_vert_count =
       lower_pv_mode_vertices_for_prim(shader->info.gs.output_primitive);
@@ -788,8 +787,7 @@ lower_line_stipple_gs(nir_shader *shader, bool line_rectangular)
    state.line_rectangular = line_rectangular;
    // initialize pos_counter and stipple_counter
    nir_function_impl *entry = nir_shader_get_entrypoint(shader);
-   b = nir_builder_create(entry);
-   b.cursor = nir_before_cf_list(&entry->body);
+   b = nir_builder_at(nir_before_cf_list(&entry->body));
    nir_store_var(&b, state.pos_counter, nir_imm_int(&b, 0), 1);
    nir_store_var(&b, state.stipple_counter, nir_imm_float(&b, 0), 1);
 
@@ -802,7 +800,7 @@ lower_line_stipple_fs(nir_shader *shader)
 {
    nir_builder b;
    nir_function_impl *entry = nir_shader_get_entrypoint(shader);
-   b = nir_builder_create(entry);
+   b = nir_builder_at(nir_after_cf_list(&entry->body));
 
    // create stipple counter
    nir_variable *stipple = nir_variable_create(shader, nir_var_shader_in,
@@ -822,8 +820,6 @@ lower_line_stipple_fs(nir_shader *shader)
       sample_mask_out->data.driver_location = shader->num_outputs++;
       sample_mask_out->data.location = FRAG_RESULT_SAMPLE_MASK;
    }
-
-   b.cursor = nir_after_cf_list(&entry->body);
 
    nir_ssa_def *pattern = nir_load_push_constant(&b, 1, 32,
                                                  nir_imm_int(&b, ZINK_GFX_PUSHCONST_LINE_STIPPLE_PATTERN),
@@ -1117,8 +1113,7 @@ lower_line_smooth_gs(nir_shader *shader)
 
    // initialize pos_counter
    nir_function_impl *entry = nir_shader_get_entrypoint(shader);
-   b = nir_builder_create(entry);
-   b.cursor = nir_before_cf_list(&entry->body);
+   b = nir_builder_at(nir_before_cf_list(&entry->body));
    nir_store_var(&b, state.pos_counter, nir_imm_int(&b, 0), 1);
 
    shader->info.gs.vertices_out = 8 * shader->info.gs.vertices_out;
@@ -1151,8 +1146,7 @@ lower_line_smooth_fs(nir_shader *shader, bool lower_stipple)
 
       // initialize stipple_pattern
       nir_function_impl *entry = nir_shader_get_entrypoint(shader);
-      b = nir_builder_create(entry);
-      b.cursor = nir_before_cf_list(&entry->body);
+      b = nir_builder_at(nir_before_cf_list(&entry->body));
       nir_ssa_def *pattern = nir_load_push_constant(&b, 1, 32,
                                                    nir_imm_int(&b, ZINK_GFX_PUSHCONST_LINE_STIPPLE_PATTERN),
                                                    .base = 1);
@@ -1379,7 +1373,6 @@ zink_screen_init_compiler(struct zink_screen *screen)
       .lower_uniforms_to_ubo = true,
       .has_fsub = true,
       .has_isub = true,
-      .has_txs = true,
       .lower_mul_2x32_64 = true,
       .support_16bit_alu = true, /* not quite what it sounds like */
       .max_unroll_iterations = 0,
@@ -1657,7 +1650,7 @@ lower_fbfetch_instr(nir_builder *b, nir_instr *instr, void *data)
    nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
    if (intr->intrinsic != nir_intrinsic_load_deref)
       return false;
-   nir_variable *var = nir_deref_instr_get_variable(nir_src_as_deref(intr->src[0]));
+   nir_variable *var = nir_intrinsic_get_var(intr, 0);
    if (!var->data.fb_fetch_output)
       return false;
    b->cursor = nir_after_instr(instr);
@@ -2439,11 +2432,8 @@ remove_bo_access(nir_shader *shader, struct zink_shader *zs)
 static bool
 find_var_deref(nir_shader *nir, nir_variable *var)
 {
-   nir_foreach_function(function, nir) {
-      if (!function->impl)
-         continue;
-
-      nir_foreach_block(block, function->impl) {
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
          nir_foreach_instr(instr, block) {
             if (instr->type != nir_instr_type_deref)
                continue;
@@ -2535,9 +2525,8 @@ clamp_layer_output(nir_shader *vs, nir_shader *fs, unsigned *next_location)
    } else {
       nir_builder b;
       nir_function_impl *impl = nir_shader_get_entrypoint(vs);
-      b = nir_builder_create(impl);
+      b = nir_builder_at(nir_after_cf_list(&impl->body));
       assert(impl->end_block->predecessors->entries == 1);
-      b.cursor = nir_after_cf_list(&impl->body);
       clamp_layer_output_emit(&b, &state);
       nir_metadata_preserve(impl, nir_metadata_dominance);
    }
@@ -2808,14 +2797,12 @@ deref_is_matrix(nir_deref_instr *deref)
 }
 
 static bool
-lower_64bit_vars_function(nir_shader *shader, nir_function *function, nir_variable *var,
+lower_64bit_vars_function(nir_shader *shader, nir_function_impl *impl, nir_variable *var,
                           struct hash_table *derefs, struct set *deletes, bool doubles_only)
 {
    bool func_progress = false;
-   if (!function->impl)
-      return false;
-   nir_builder b = nir_builder_create(function->impl);
-   nir_foreach_block(block, function->impl) {
+   nir_builder b = nir_builder_create(impl);
+   nir_foreach_block(block, impl) {
       nir_foreach_instr_safe(instr, block) {
          switch (instr->type) {
          case nir_instr_type_deref: {
@@ -3018,7 +3005,7 @@ lower_64bit_vars_function(nir_shader *shader, nir_function *function, nir_variab
       }
    }
    if (func_progress)
-      nir_metadata_preserve(function->impl, nir_metadata_none);
+      nir_metadata_preserve(impl, nir_metadata_none);
    /* derefs must be queued for deletion to avoid deleting the same deref repeatedly */
    set_foreach_remove(deletes, he)
       nir_instr_remove((void*)he->key);
@@ -3033,8 +3020,8 @@ lower_64bit_vars_loop(nir_shader *shader, nir_variable *var, struct hash_table *
       return false;
    var->type = rewrite_64bit_type(shader, var->type, var, doubles_only);
    /* once type is rewritten, rewrite all loads and stores */
-   nir_foreach_function(function, shader)
-      lower_64bit_vars_function(shader, function, var, derefs, deletes, doubles_only);
+   nir_foreach_function_impl(impl, shader)
+      lower_64bit_vars_function(shader, impl, var, derefs, deletes, doubles_only);
    return true;
 }
 
@@ -3047,12 +3034,12 @@ lower_64bit_vars(nir_shader *shader, bool doubles_only)
    struct set *deletes = _mesa_set_create(NULL, _mesa_hash_pointer, _mesa_key_pointer_equal);
    nir_foreach_variable_with_modes(var, shader, nir_var_shader_in | nir_var_shader_out)
       progress |= lower_64bit_vars_loop(shader, var, derefs, deletes, doubles_only);
-   nir_foreach_function(function, shader) {
-      nir_foreach_function_temp_variable(var, function->impl) {
+   nir_foreach_function_impl(impl, shader) {
+      nir_foreach_function_temp_variable(var, impl) {
          if (!glsl_type_contains_64bit(var->type) || (doubles_only && !glsl_contains_double(var->type)))
             continue;
          var->type = rewrite_64bit_type(shader, var->type, var, doubles_only);
-         progress |= lower_64bit_vars_function(shader, function, var, derefs, deletes, doubles_only);
+         progress |= lower_64bit_vars_function(shader, impl, var, derefs, deletes, doubles_only);
       }
    }
    ralloc_free(deletes);
@@ -3091,12 +3078,10 @@ split_blocks(nir_shader *nir)
             offset += glsl_count_attribute_slots(members[i]->type, false);
             nir_shader_add_variable(nir, members[i]);
          }
-         nir_foreach_function(function, nir) {
+         nir_foreach_function_impl(impl, nir) {
             bool func_progress = false;
-            if (!function->impl)
-               continue;
-            nir_builder b = nir_builder_create(function->impl);
-            nir_foreach_block(block, function->impl) {
+            nir_builder b = nir_builder_create(impl);
+            nir_foreach_block(block, impl) {
                nir_foreach_instr_safe(instr, block) {
                   switch (instr->type) {
                   case nir_instr_type_deref: {
@@ -3124,7 +3109,7 @@ split_blocks(nir_shader *nir)
                }
             }
             if (func_progress)
-               nir_metadata_preserve(function->impl, nir_metadata_none);
+               nir_metadata_preserve(impl, nir_metadata_none);
          }
          var->data.mode = nir_var_shader_temp;
          changed = true;
@@ -3500,7 +3485,7 @@ compile_module(struct zink_screen *screen, struct zink_shader *zs, nir_shader *n
    struct zink_shader_info *sinfo = &zs->sinfo;
    prune_io(nir);
 
-   NIR_PASS_V(nir, nir_convert_from_ssa, true);
+   NIR_PASS_V(nir, nir_convert_from_ssa, true, true);
 
    struct zink_shader_object obj;
    struct spirv_shader *spirv = nir_to_spirv(nir, sinfo, screen->spirv_version);
@@ -4312,10 +4297,8 @@ lower_1d_shadow(nir_shader *shader, struct zink_screen *screen)
 static void
 scan_nir(struct zink_screen *screen, nir_shader *shader, struct zink_shader *zs)
 {
-   nir_foreach_function(function, shader) {
-      if (!function->impl)
-         continue;
-      nir_foreach_block_safe(block, function->impl) {
+   nir_foreach_function_impl(impl, shader) {
+      nir_foreach_block_safe(block, impl) {
          nir_foreach_instr_safe(instr, block) {
             if (instr->type == nir_instr_type_tex) {
                nir_tex_instr *tex = nir_instr_as_tex(instr);
@@ -4334,8 +4317,7 @@ scan_nir(struct zink_screen *screen, nir_shader *shader, struct zink_shader *zs)
                 intr->intrinsic == nir_intrinsic_image_deref_format ||
                 intr->intrinsic == nir_intrinsic_image_deref_order) {
 
-                nir_variable *var =
-                   nir_deref_instr_get_variable(nir_src_as_deref(intr->src[0]));
+                nir_variable *var = nir_intrinsic_get_var(intr, 0);
 
                 /* Structs have been lowered already, so get_aoa_size is sufficient. */
                 const unsigned size =
@@ -4536,8 +4518,8 @@ split_bitfields(nir_shader *shader)
 static void
 rewrite_cl_derefs(nir_shader *nir, nir_variable *var)
 {
-   nir_foreach_function(function, nir) {
-      nir_foreach_block(block, function->impl) {
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
          nir_foreach_instr_safe(instr, block) {
             if (instr->type != nir_instr_type_deref)
                continue;
@@ -4561,8 +4543,8 @@ rewrite_cl_derefs(nir_shader *nir, nir_variable *var)
 static void
 type_image(nir_shader *nir, nir_variable *var)
 {
-   nir_foreach_function(function, nir) {
-      nir_foreach_block(block, function->impl) {
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
          nir_foreach_instr_safe(instr, block) {
             if (instr->type != nir_instr_type_intrinsic)
                continue;
@@ -4595,8 +4577,8 @@ type_image(nir_shader *nir, nir_variable *var)
          }
       }
    }
-   nir_foreach_function(function, nir) {
-      nir_foreach_block(block, function->impl) {
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
          nir_foreach_instr_safe(instr, block) {
             if (instr->type != nir_instr_type_intrinsic)
                continue;
@@ -4640,8 +4622,8 @@ static bool
 type_sampler_vars(nir_shader *nir, unsigned *sampler_mask)
 {
    bool progress = false;
-   nir_foreach_function(function, nir) {
-      nir_foreach_block(block, function->impl) {
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
          nir_foreach_instr(instr, block) {
             if (instr->type != nir_instr_type_tex)
                continue;
@@ -4670,8 +4652,8 @@ type_sampler_vars(nir_shader *nir, unsigned *sampler_mask)
          }
       }
    }
-   nir_foreach_function(function, nir) {
-      nir_foreach_block(block, function->impl) {
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
          nir_foreach_instr(instr, block) {
             if (instr->type != nir_instr_type_tex)
                continue;
@@ -5219,8 +5201,7 @@ zink_shader_tcs_create(struct zink_screen *screen, nir_shader *tes, unsigned ver
    fn->is_entrypoint = true;
    nir_function_impl *impl = nir_function_impl_create(fn);
 
-   nir_builder b = nir_builder_create(impl);
-   b.cursor = nir_before_block(nir_start_block(impl));
+   nir_builder b = nir_builder_at(nir_before_block(nir_start_block(impl)));
 
    nir_ssa_def *invocation_id = nir_load_invocation_id(&b);
 
@@ -5284,7 +5265,7 @@ zink_shader_tcs_create(struct zink_screen *screen, nir_shader *tes, unsigned ver
 
    optimize_nir(nir, NULL);
    NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_function_temp, NULL);
-   NIR_PASS_V(nir, nir_convert_from_ssa, true);
+   NIR_PASS_V(nir, nir_convert_from_ssa, true, true);
 
    *nir_ret = nir;
    zink_shader_serialize_blob(nir, &ret->blob);

@@ -42,8 +42,10 @@ struct radv_shader_args {
    /* Streamout */
    struct ac_arg streamout_buffers;
 
+   /* Emulated query */
+   struct ac_arg shader_query_state;
+
    /* NGG */
-   struct ac_arg ngg_query_state;
    struct ac_arg ngg_provoking_vtx;
 
    /* NGG GS */
@@ -68,7 +70,10 @@ struct radv_shader_args {
    struct ac_arg tcs_offchip_layout;
 
    /* TES */
-   struct ac_arg tes_num_patches;
+   /* # [0:7] = the number of tessellation patches
+    * # [8:15] = the number of TCS vertices output
+    */
+   struct ac_arg tes_state;
 
    /* NGG VS streamout */
    struct ac_arg num_verts_per_prim;

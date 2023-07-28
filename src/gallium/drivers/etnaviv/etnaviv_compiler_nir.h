@@ -32,6 +32,7 @@
 #include "etnaviv_compiler.h"
 #include "util/compiler.h"
 #include "util/log.h"
+#include "util/macros.h"
 
 struct etna_compile {
    nir_shader *nir;
@@ -66,10 +67,65 @@ struct etna_compile {
    abort(); \
 })
 
-enum {
-   BYPASS_DST = 1,
-   BYPASS_SRC = 2,
+enum etna_pass_flags {
+   BYPASS_DST = BITFIELD_BIT(0),
+   BYPASS_SRC = BITFIELD_BIT(1),
+
+   /* source modifier */
+   SRC0_MOD_NEG = BITFIELD_BIT(2),
+   SRC1_MOD_NEG = BITFIELD_BIT(3),
+   SRC2_MOD_NEG = BITFIELD_BIT(4),
+   SRC0_MOD_ABS = BITFIELD_BIT(5),
+   SRC1_MOD_ABS = BITFIELD_BIT(6),
+   SRC2_MOD_ABS = BITFIELD_BIT(7),
 };
+
+#define PASS_FLAGS_IS_DEAD_MASK     BITFIELD_RANGE(0, 2)
+#define PASS_FLAGS_SRC_MOD_NEG_MASK BITFIELD_RANGE(2, 3)
+#define PASS_FLAGS_SRC_MOD_ABS_MASK BITFIELD_RANGE(5, 3)
+
+static_assert(PASS_FLAGS_IS_DEAD_MASK == (BYPASS_DST | BYPASS_SRC), "is_dead_mask is wrong");
+static_assert(PASS_FLAGS_SRC_MOD_NEG_MASK == (SRC0_MOD_NEG | SRC1_MOD_NEG | SRC2_MOD_NEG), "src_mod_neg_mask is wrong");
+static_assert(PASS_FLAGS_SRC_MOD_ABS_MASK == (SRC0_MOD_ABS | SRC1_MOD_ABS | SRC2_MOD_ABS), "src_mod_abs_mask is wrong");
+
+static inline bool is_dead_instruction(nir_instr *instr)
+{
+   return instr->pass_flags & PASS_FLAGS_IS_DEAD_MASK;
+}
+
+static inline void set_src_mod_abs(nir_instr *instr, unsigned idx)
+{
+   assert(idx < 3);
+   instr->pass_flags |= (SRC0_MOD_ABS << idx);
+}
+
+static inline void set_src_mod_neg(nir_instr *instr, unsigned idx)
+{
+   assert(idx < 3);
+   instr->pass_flags |= (SRC0_MOD_NEG << idx);
+}
+
+static inline void toggle_src_mod_neg(nir_instr *instr, unsigned idx)
+{
+   assert(idx < 3);
+   instr->pass_flags ^= (SRC0_MOD_NEG << idx);
+}
+
+static inline bool is_src_mod_abs(nir_instr *instr, unsigned idx)
+{
+   if (idx < 3)
+      return instr->pass_flags & (SRC0_MOD_ABS << idx);
+
+   return false;
+}
+
+static inline bool is_src_mod_neg(nir_instr *instr, unsigned idx)
+{
+   if (idx < 3)
+      return instr->pass_flags & (SRC0_MOD_NEG << idx);
+
+   return false;
+}
 
 static inline bool is_sysval(nir_instr *instr)
 {
@@ -85,14 +141,40 @@ static inline bool is_sysval(nir_instr *instr)
 static inline unsigned
 src_index(nir_function_impl *impl, nir_src *src)
 {
-   return src->is_ssa ? src->ssa->index : (src->reg.reg->index + impl->ssa_alloc);
+   assert(src->is_ssa);
+
+   nir_intrinsic_instr *load = nir_load_reg_for_def(src->ssa);
+
+   if (load) {
+      nir_ssa_def *reg = load->src[0].ssa;
+      ASSERTED nir_intrinsic_instr *decl = nir_reg_get_decl(reg);
+      assert(nir_intrinsic_base(load) == 0);
+      assert(nir_intrinsic_num_array_elems(decl) == 0);
+
+      return reg->index;
+   }
+
+   return src->ssa->index;
 }
 
 /* get unique ssa/reg index for nir_dest */
 static inline unsigned
 dest_index(nir_function_impl *impl, nir_dest *dest)
 {
-   return dest->is_ssa ? dest->ssa.index : (dest->reg.reg->index + impl->ssa_alloc);
+   assert(dest->is_ssa);
+
+   nir_intrinsic_instr *store = nir_store_reg_for_def(&dest->ssa);
+
+   if (store) {
+      nir_ssa_def *reg = store->src[1].ssa;
+      ASSERTED nir_intrinsic_instr *decl = nir_reg_get_decl(reg);
+      assert(nir_intrinsic_base(store) == 0);
+      assert(nir_intrinsic_num_array_elems(decl) == 0);
+
+      return reg->index;
+   }
+
+   return dest->ssa.index;
 }
 
 static inline void
@@ -218,7 +300,8 @@ dest_for_instr(nir_instr *instr)
           intr->intrinsic == nir_intrinsic_load_ubo ||
           intr->intrinsic == nir_intrinsic_load_input ||
           intr->intrinsic == nir_intrinsic_load_instance_id ||
-          intr->intrinsic == nir_intrinsic_load_texture_rect_scaling)
+          intr->intrinsic == nir_intrinsic_load_texture_scale ||
+          intr->intrinsic == nir_intrinsic_load_texture_size_etna)
          dest = &intr->dest;
    } break;
    case nir_instr_type_deref:

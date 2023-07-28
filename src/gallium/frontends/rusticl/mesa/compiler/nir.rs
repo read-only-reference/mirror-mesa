@@ -40,6 +40,33 @@ impl<'a, T: 'a> Iterator for ExecListIter<'a, T> {
     }
 }
 
+pub struct NirPrintfInfo {
+    count: usize,
+    printf_info: *mut u_printf_info,
+}
+
+impl NirPrintfInfo {
+    pub fn u_printf(&self, buf: &[u8]) {
+        unsafe {
+            u_printf(
+                stdout_ptr(),
+                buf.as_ptr().cast(),
+                buf.len(),
+                self.printf_info.cast(),
+                self.count as u32,
+            );
+        }
+    }
+}
+
+impl Drop for NirPrintfInfo {
+    fn drop(&mut self) {
+        unsafe {
+            ralloc_free(self.printf_info.cast());
+        };
+    }
+}
+
 pub struct NirShader {
     nir: NonNull<nir_shader>,
 }
@@ -179,6 +206,27 @@ impl NirShader {
         unsafe { (*self.nir.as_ptr()).info.workgroup_size }
     }
 
+    pub fn subgroup_size(&self) -> u8 {
+        let subgroup_size = unsafe { (*self.nir.as_ptr()).info.subgroup_size };
+        let valid_subgroup_sizes = [
+            gl_subgroup_size::SUBGROUP_SIZE_REQUIRE_8,
+            gl_subgroup_size::SUBGROUP_SIZE_REQUIRE_16,
+            gl_subgroup_size::SUBGROUP_SIZE_REQUIRE_32,
+            gl_subgroup_size::SUBGROUP_SIZE_REQUIRE_64,
+            gl_subgroup_size::SUBGROUP_SIZE_REQUIRE_128,
+        ];
+
+        if valid_subgroup_sizes.contains(&subgroup_size) {
+            subgroup_size as u8
+        } else {
+            0
+        }
+    }
+
+    pub fn num_subgroups(&self) -> u8 {
+        unsafe { (*self.nir.as_ptr()).info.num_subgroups }
+    }
+
     pub fn set_workgroup_size_variable_if_zero(&self) {
         let nir = self.nir.as_ptr();
         unsafe {
@@ -235,15 +283,33 @@ impl NirShader {
         }
     }
 
-    pub fn printf_format(&self) -> &[u_printf_info] {
-        if self.has_printf() {
-            unsafe {
-                let nir = self.nir.as_ref();
-                slice::from_raw_parts(nir.printf_info, nir.printf_info_count as usize)
-            }
-        } else {
-            &[]
+    pub fn take_printf_info(&mut self) -> Option<NirPrintfInfo> {
+        let nir = unsafe { self.nir.as_mut() };
+
+        let info = nir.printf_info;
+        if info.is_null() {
+            return None;
         }
+        let count = nir.printf_info_count as usize;
+
+        unsafe {
+            ralloc_steal(ptr::null(), info.cast());
+
+            for i in 0..count {
+                ralloc_steal(info.cast(), (*info.add(i)).arg_sizes.cast());
+                ralloc_steal(info.cast(), (*info.add(i)).strings.cast());
+            }
+        };
+
+        let result = Some(NirPrintfInfo {
+            count: count,
+            printf_info: info,
+        });
+
+        nir.printf_info_count = 0;
+        nir.printf_info = ptr::null_mut();
+
+        result
     }
 
     pub fn get_constant_buffer(&self) -> &[u8] {
@@ -277,14 +343,6 @@ impl NirShader {
             let var = nir_variable_create(self.nir.as_ptr(), mode, glsl_type, name.as_ptr());
             (*var).data.location = loc.try_into().unwrap();
             var
-        }
-    }
-}
-
-impl Clone for NirShader {
-    fn clone(&self) -> Self {
-        Self {
-            nir: NonNull::new(self.dup_for_driver()).unwrap(),
         }
     }
 }

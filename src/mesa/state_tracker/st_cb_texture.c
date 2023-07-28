@@ -2081,7 +2081,7 @@ st_TexSubImage(struct gl_context *ctx, GLuint dims,
    GLubyte *map;
    unsigned dstz = texImage->Face + texImage->TexObject->Attrib.MinLayer;
    unsigned dst_level = 0;
-   bool is_ms = dst->nr_samples > 1;
+   bool is_ms;
    bool throttled = false;
 
    st_flush_bitmap_cache(st);
@@ -2096,6 +2096,8 @@ st_TexSubImage(struct gl_context *ctx, GLuint dims,
 
    if (!dst)
       goto fallback;
+
+   is_ms = dst->nr_samples > 1;
 
    /* Try texture_subdata, which should be the fastest memcpy path. */
    if (pixels &&
@@ -3689,7 +3691,13 @@ st_ClearTexSubImage(struct gl_context *ctx,
 
    assert(level <= pt->last_level);
 
-   pipe->clear_texture(pipe, pt, level, &box, clearValue ? clearValue : zeros);
+   if (pipe->clear_texture) {
+      pipe->clear_texture(pipe, pt, level, &box,
+                          clearValue ? clearValue : zeros);
+   } else {
+      u_default_clear_texture(pipe, pt, level, &box,
+                              clearValue ? clearValue : zeros);
+   }
 }
 
 

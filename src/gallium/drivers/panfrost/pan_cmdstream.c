@@ -3430,11 +3430,18 @@ panfrost_launch_xfb(struct panfrost_batch *batch,
    mali_ptr saved_rsd = batch->rsd[PIPE_SHADER_VERTEX];
    mali_ptr saved_ubo = batch->uniform_buffers[PIPE_SHADER_VERTEX];
    mali_ptr saved_push = batch->push_uniforms[PIPE_SHADER_VERTEX];
+   unsigned saved_nr_push_uniforms =
+      batch->nr_push_uniforms[PIPE_SHADER_VERTEX];
 
    ctx->uncompiled[PIPE_SHADER_VERTEX] = NULL; /* should not be read */
    ctx->prog[PIPE_SHADER_VERTEX] = vs_uncompiled->xfb;
    batch->rsd[PIPE_SHADER_VERTEX] =
       panfrost_emit_compute_shader_meta(batch, PIPE_SHADER_VERTEX);
+
+   batch->uniform_buffers[PIPE_SHADER_VERTEX] =
+      panfrost_emit_const_buf(batch, PIPE_SHADER_VERTEX, NULL,
+                              &batch->push_uniforms[PIPE_SHADER_VERTEX],
+                              &batch->nr_push_uniforms[PIPE_SHADER_VERTEX]);
 
 #if PAN_ARCH >= 9
    pan_section_pack(t.cpu, COMPUTE_JOB, PAYLOAD, cfg) {
@@ -3466,10 +3473,6 @@ panfrost_launch_xfb(struct panfrost_batch *batch,
                                      info->instance_count, 1, 1, 1,
                                      PAN_ARCH <= 5, false);
 
-   batch->uniform_buffers[PIPE_SHADER_VERTEX] =
-      panfrost_emit_const_buf(batch, PIPE_SHADER_VERTEX, NULL,
-                              &batch->push_uniforms[PIPE_SHADER_VERTEX], NULL);
-
    panfrost_draw_emit_vertex(batch, info, &invocation, 0, 0, attribs,
                              attrib_bufs, t.cpu);
 #endif
@@ -3485,6 +3488,7 @@ panfrost_launch_xfb(struct panfrost_batch *batch,
    batch->rsd[PIPE_SHADER_VERTEX] = saved_rsd;
    batch->uniform_buffers[PIPE_SHADER_VERTEX] = saved_ubo;
    batch->push_uniforms[PIPE_SHADER_VERTEX] = saved_push;
+   batch->nr_push_uniforms[PIPE_SHADER_VERTEX] = saved_nr_push_uniforms;
 }
 
 /*
@@ -4201,31 +4205,21 @@ panfrost_create_blend_state(struct pipe_context *pipe,
       equation.blend_enable = pipe.blend_enable;
 
       if (pipe.blend_enable) {
-         equation.rgb_func = util_blend_func_to_shader(pipe.rgb_func);
-         equation.rgb_src_factor =
-            util_blend_factor_to_shader(pipe.rgb_src_factor);
-         equation.rgb_invert_src_factor =
-            util_blend_factor_is_inverted(pipe.rgb_src_factor);
-         equation.rgb_dst_factor =
-            util_blend_factor_to_shader(pipe.rgb_dst_factor);
-         equation.rgb_invert_dst_factor =
-            util_blend_factor_is_inverted(pipe.rgb_dst_factor);
-         equation.alpha_func = util_blend_func_to_shader(pipe.alpha_func);
-         equation.alpha_src_factor =
-            util_blend_factor_to_shader(pipe.alpha_src_factor);
-         equation.alpha_invert_src_factor =
-            util_blend_factor_is_inverted(pipe.alpha_src_factor);
-         equation.alpha_dst_factor =
-            util_blend_factor_to_shader(pipe.alpha_dst_factor);
-         equation.alpha_invert_dst_factor =
-            util_blend_factor_is_inverted(pipe.alpha_dst_factor);
+         equation.rgb_func = pipe.rgb_func;
+         equation.rgb_src_factor = pipe.rgb_src_factor;
+         equation.rgb_dst_factor = pipe.rgb_dst_factor;
+         equation.alpha_func = pipe.alpha_func;
+         equation.alpha_src_factor = pipe.alpha_src_factor;
+         equation.alpha_dst_factor = pipe.alpha_dst_factor;
       }
 
       /* Determine some common properties */
       unsigned constant_mask = pan_blend_constant_mask(equation);
       const bool supports_2src = pan_blend_supports_2src(PAN_ARCH);
       so->info[c] = (struct pan_blend_info){
-         .enabled = (equation.color_mask != 0),
+         .enabled = (equation.color_mask != 0) &&
+                    !(blend->logicop_enable &&
+                      blend->logicop_func == PIPE_LOGICOP_NOOP),
          .opaque = !blend->logicop_enable && pan_blend_is_opaque(equation),
          .constant_mask = constant_mask,
 

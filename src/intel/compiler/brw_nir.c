@@ -1174,7 +1174,7 @@ brw_nir_link_shaders(const struct brw_compiler *compiler,
    if (producer->info.stage == MESA_SHADER_MESH &&
        consumer->info.stage == MESA_SHADER_FRAGMENT) {
       uint64_t fs_inputs = 0, ms_outputs = 0;
-      /* gl_MeshPerPrimitiveNV[].gl_ViewportIndex, gl_PrimitiveID and gl_Layer
+      /* gl_MeshPerPrimitiveEXT[].gl_ViewportIndex, gl_PrimitiveID and gl_Layer
        * are per primitive, but fragment shader does not have them marked as
        * such. Add the annotation here.
        */
@@ -1283,6 +1283,24 @@ brw_nir_link_shaders(const struct brw_compiler *compiler,
       NIR_PASS(_, producer, nir_lower_global_vars_to_local);
       NIR_PASS(_, producer, nir_split_var_copies);
       NIR_PASS(_, producer, nir_lower_var_copies);
+   }
+
+   if (producer->info.stage == MESA_SHADER_TASK &&
+         consumer->info.stage == MESA_SHADER_MESH) {
+
+      for (unsigned i = 0; i < 3; ++i)
+         assert(producer->info.mesh.ts_mesh_dispatch_dimensions[i] <= UINT16_MAX);
+
+      nir_lower_compute_system_values_options options = {
+            .lower_workgroup_id_to_index = true,
+            .num_workgroups[0] = producer->info.mesh.ts_mesh_dispatch_dimensions[0],
+            .num_workgroups[1] = producer->info.mesh.ts_mesh_dispatch_dimensions[1],
+            .num_workgroups[2] = producer->info.mesh.ts_mesh_dispatch_dimensions[2],
+            /* nir_lower_idiv generates expensive code */
+            .shortcut_1d_workgroup_id = compiler->devinfo->verx10 >= 125,
+      };
+
+      NIR_PASS(_, consumer, nir_lower_compute_system_values, &options);
    }
 }
 
@@ -1543,6 +1561,8 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
 
    UNUSED bool progress; /* Written by OPT */
 
+   OPT(brw_nir_lower_sparse_intrinsics);
+
    OPT(nir_lower_bit_size, lower_bit_size_callback, (void *)compiler);
 
    OPT(nir_opt_combine_barriers, combine_all_memory_barriers, NULL);
@@ -1703,11 +1723,11 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
 
    nir_validate_ssa_dominance(nir, "before nir_convert_from_ssa");
 
-   OPT(nir_convert_from_ssa, true);
+   OPT(nir_convert_from_ssa, true, true);
 
    if (!is_scalar) {
       OPT(nir_move_vec_src_uses_to_dest);
-      OPT(nir_lower_vec_to_movs, NULL, NULL);
+      OPT(nir_lower_vec_to_regs, NULL, NULL);
    }
 
    OPT(nir_opt_dce);
@@ -1723,6 +1743,18 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
    if (devinfo->ver <= 5)
       brw_nir_analyze_boolean_resolves(nir);
 
+   OPT(nir_opt_dce);
+
+   /* The mesh stages require this pass to be called at the last minute,
+    * but if anything is done by it, it will also constant fold, and that
+    * undoes the work done by nir_trivialize_registers, so call it right
+    * before that one instead.
+    */
+   if (nir->info.stage == MESA_SHADER_MESH ||
+       nir->info.stage == MESA_SHADER_TASK)
+      brw_nir_adjust_payload(nir, compiler);
+
+   nir_trivialize_registers(nir);
    nir_sweep(nir);
 
    if (unlikely(debug_enabled)) {
@@ -2063,4 +2095,39 @@ brw_nir_load_global_const(nir_builder *b, nir_intrinsic_instr *load_uniform,
    }
 
    return sysval;
+}
+
+const struct glsl_type *
+brw_nir_get_var_type(const struct nir_shader *nir, nir_variable *var)
+{
+   const struct glsl_type *type = var->interface_type;
+   if (!type) {
+      type = var->type;
+      if (nir_is_arrayed_io(var, nir->info.stage) || var->data.per_view) {
+         assert(glsl_type_is_array(type));
+         type = glsl_get_array_element(type);
+      }
+   }
+
+   return type;
+}
+
+bool
+brw_nir_pulls_at_sample(nir_shader *shader)
+{
+   nir_foreach_function_impl(impl, shader) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+
+            nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+
+            if (intrin->intrinsic == nir_intrinsic_load_barycentric_at_sample)
+               return true;
+         }
+      }
+   }
+
+   return false;
 }

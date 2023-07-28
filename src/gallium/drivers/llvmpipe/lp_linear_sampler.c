@@ -79,12 +79,87 @@ fixed16_approx(int x, int y, int tol)
    return y - tol <= x && x <= y + tol;
 }
 
+/* set alpha channel of rgba value to 0xff. */
+static inline uint32_t
+rgbx(uint32_t src_val)
+{
+   return src_val | 0xff000000;
+}
+
+/* swap red/blue channels of a 32-bit rgba value. */
+static inline uint32_t
+rb_swap(uint32_t src_val)
+{
+   uint32_t dst_val = src_val & 0xff00ff00;
+   dst_val |= (src_val & 0xff) << 16;
+   dst_val |= (src_val & 0xff0000) >> 16;
+   return dst_val;
+}
+
+/* swap red/blue channels and set alpha to 0xff
+ * of a 32-bit rgbx value. */
+static inline uint32_t
+rbx_swap(uint32_t src_val)
+{
+   uint32_t dst_val = 0xff000000;
+   dst_val |= src_val & 0xff00;
+   dst_val |= (src_val & 0xff) << 16;
+   dst_val |= (src_val & 0xff0000) >> 16;
+   return dst_val;
+}
+
+/* set alpha channel of 128-bit 4xrgba values to 0xff. */
+static inline __m128i
+rgbx_128(const __m128i src_val)
+{
+   const __m128i mask = _mm_set1_epi32(0xff000000);
+   __m128i bgrx = _mm_or_si128(src_val, mask);
+   return bgrx;
+}
+
+/* swap red/blue channels of a 128-bit 4xrgba value. */
+/* ssse3 could use pshufb */
+static inline __m128i
+rb_swap_128(const __m128i src_val)
+{
+   const __m128i mask = _mm_set1_epi32(0xff00ff00);
+   const __m128i mask_r = _mm_set1_epi32(0xff);
+
+   __m128i rgba = _mm_and_si128(src_val, mask);
+   __m128i r = _mm_srli_epi32(src_val, 16);
+   __m128i b = _mm_and_si128(src_val, mask_r);
+   r = _mm_and_si128(r, mask_r);
+   b = _mm_slli_epi32(b, 16);
+   rgba = _mm_or_si128(rgba, r);
+   rgba = _mm_or_si128(rgba, b);
+   return rgba;
+}
+
+/* swap red/blue channels and set alpha to 0xff
+ * of a 128-bit 4xrgbx value. */
+static inline __m128i
+rbx_swap_128(const __m128i src_val)
+{
+   const __m128i mask_a = _mm_set1_epi32(0xff000000);
+   const __m128i mask_g = _mm_set1_epi32(0xff00);
+   const __m128i mask_r = _mm_set1_epi32(0xff);
+
+   __m128i rgbx = _mm_and_si128(src_val, mask_g);
+   __m128i r = _mm_srli_epi32(src_val, 16);
+   __m128i b = _mm_and_si128(src_val, mask_r);
+   r = _mm_and_si128(r, mask_r);
+   b = _mm_slli_epi32(b, 16);
+   rgbx = _mm_or_si128(rgbx, mask_a);
+   rgbx = _mm_or_si128(rgbx, r);
+   rgbx = _mm_or_si128(rgbx, b);
+   return rgbx;
+}
 
 /*
  * Unstretched blit of a bgra texture.
  */
 static const uint32_t *
-fetch_bgra_memcpy(struct lp_linear_elem *elem)
+fetch_memcpy_bgra(struct lp_linear_elem *elem)
 {
    struct lp_linear_sampler *samp = (struct lp_linear_sampler *)elem;
    const struct lp_jit_texture *texture = samp->texture;
@@ -108,223 +183,6 @@ fetch_bgra_memcpy(struct lp_linear_elem *elem)
    samp->t += samp->dtdy;
    return row;
 }
-
-
-/*
- * Unstretched blit of a bgrx texture.
- */
-static const uint32_t *
-fetch_bgrx_memcpy(struct lp_linear_elem *elem)
-{
-   struct lp_linear_sampler *samp = (struct lp_linear_sampler *)elem;
-   const struct lp_jit_texture *texture = samp->texture;
-   const uint32_t *src_row =
-      (const uint32_t *)((const uint8_t *)texture->base +
-                         (samp->t >> FIXED16_SHIFT) * texture->row_stride[0]);
-   const int s     = samp->s;
-   const int width = samp->width;
-   uint32_t *row   = samp->row;
-
-   src_row = &src_row[s >> FIXED16_SHIFT];
-
-   for (int i = 0; i < width; i++) {
-      row[i] = src_row[i] | 0xff000000;
-   }
-
-   samp->t += samp->dtdy;
-   return row;
-}
-
-
-/*
- * Perform nearest filtered lookup of a row of texels.  Texture lookup
- * is assumed to be axis aligned but with arbitrary scaling.
- *
- * Texture coordinate interpolation is performed in 16.16 fixed point,
- * not to be confused with the 1.15 format used by the interpolants.
- *
- * After 64 pixels (ie. in the next tile), the starting point will be
- * recalculated with floating point arithmetic.
- */
-static const uint32_t *
-fetch_bgra_axis_aligned(struct lp_linear_elem *elem)
-{
-   struct lp_linear_sampler *samp = (struct lp_linear_sampler *)elem;
-   const struct lp_jit_texture *texture = samp->texture;
-   const uint32_t *src_row =
-      (const uint32_t *)((const uint8_t *)texture->base +
-                         (samp->t >> FIXED16_SHIFT) * texture->row_stride[0]);
-   const int dsdx  = samp->dsdx;
-   const int width = samp->width;
-   uint32_t *row   = samp->row;
-   int s = samp->s;
-
-   for (int i = 0; i < width; i++) {
-      row[i] = src_row[s>>FIXED16_SHIFT];
-      s += dsdx;
-   }
-
-   samp->t += samp->dtdy;
-   return row;
-}
-
-
-static const uint32_t *
-fetch_bgrx_axis_aligned(struct lp_linear_elem *elem)
-{
-   struct lp_linear_sampler *samp = (struct lp_linear_sampler *)elem;
-   const struct lp_jit_texture *texture = samp->texture;
-   const uint32_t *src_row =
-      (const uint32_t *)((const uint8_t *)texture->base +
-                         (samp->t >> FIXED16_SHIFT) * texture->row_stride[0]);
-   const int dsdx  = samp->dsdx;
-   const int width = samp->width;
-   uint32_t *row   = samp->row;
-   int s = samp->s;
-
-   for (int i = 0; i < width; i++) {
-      row[i] = src_row[s>>FIXED16_SHIFT] | 0xff000000;
-      s += dsdx;
-   }
-
-   samp->t += samp->dtdy;
-   return row;
-}
-
-
-/* Non-axis aligned, but no clamping or wrapping required
- */
-static const uint32_t *
-fetch_bgra(struct lp_linear_elem *elem)
-{
-   struct lp_linear_sampler *samp = (struct lp_linear_sampler *)elem;
-   const struct lp_jit_texture *texture = samp->texture;
-   const uint8_t *src = texture->base;
-   const int stride = texture->row_stride[0];
-   const int dsdx  = samp->dsdx;
-   const int dtdx  = samp->dtdx;
-   const int width = samp->width;
-   uint32_t *row   = samp->row;
-   int s = samp->s;
-   int t = samp->t;
-
-   for (int i = 0; i < width; i++) {
-      const uint8_t *texel = (src +
-                              (t>>FIXED16_SHIFT) * stride +
-                              (s>>FIXED16_SHIFT) * 4);
-
-      row[i] = *(const uint32_t *)texel;
-
-      s += dsdx;
-      t += dtdx;
-   }
-
-   samp->s += samp->dsdy;
-   samp->t += samp->dtdy;
-   return row;
-}
-
-
-static const uint32_t *
-fetch_bgrx(struct lp_linear_elem *elem)
-{
-   struct lp_linear_sampler *samp = (struct lp_linear_sampler *)elem;
-   const struct lp_jit_texture *texture = samp->texture;
-   const uint8_t *src = texture->base;
-   const int stride = texture->row_stride[0];
-   const int dsdx  = samp->dsdx;
-   const int dtdx  = samp->dtdx;
-   const int width = samp->width;
-   uint32_t *row   = samp->row;
-   int s = samp->s;
-   int t = samp->t;
-
-   for (int i = 0; i < width; i++) {
-      const uint8_t *texel = (src +
-                              (t>>FIXED16_SHIFT) * stride +
-                              (s>>FIXED16_SHIFT) * 4);
-
-      row[i] = (*(const uint32_t *)texel) | 0xff000000;
-
-      s += dsdx;
-      t += dtdx;
-   }
-
-   samp->s += samp->dsdy;
-   samp->t += samp->dtdy;
-   return row;
-}
-
-
-/* Non-axis aligned, clamped.
- */
-static const uint32_t *
-fetch_bgra_clamp(struct lp_linear_elem *elem)
-{
-   struct lp_linear_sampler *samp = (struct lp_linear_sampler *)elem;
-   const struct lp_jit_texture *texture = samp->texture;
-   const uint8_t *src   = texture->base;
-   const int stride     = texture->row_stride[0];
-   const int tex_height = texture->height - 1;
-   const int tex_width  = texture->width - 1;
-   const int dsdx  = samp->dsdx;
-   const int dtdx  = samp->dtdx;
-   const int width = samp->width;
-   uint32_t *row   = samp->row;
-   int s = samp->s;
-   int t = samp->t;
-
-   for (int i = 0; i < width; i++) {
-      int ct = CLAMP(t>>FIXED16_SHIFT, 0, tex_height);
-      int cs = CLAMP(s>>FIXED16_SHIFT, 0, tex_width);
-
-      const uint8_t *texel = src + ct * stride + cs * 4;
-
-      row[i] = *(const uint32_t *)texel;
-
-      s += dsdx;
-      t += dtdx;
-   }
-
-   samp->s += samp->dsdy;
-   samp->t += samp->dtdy;
-   return row;
-}
-
-
-static const uint32_t *
-fetch_bgrx_clamp(struct lp_linear_elem *elem)
-{
-   struct lp_linear_sampler *samp = (struct lp_linear_sampler *)elem;
-   const struct lp_jit_texture *texture = samp->texture;
-   const uint8_t *src   = texture->base;
-   const int stride     = texture->row_stride[0];
-   const int tex_height = texture->height - 1;
-   const int tex_width  = texture->width - 1;
-   const int dsdx  = samp->dsdx;
-   const int dtdx  = samp->dtdx;
-   const int width = samp->width;
-   uint32_t *row   = samp->row;
-   int s = samp->s;
-   int t = samp->t;
-
-   for (int i = 0; i < width; i++) {
-      int ct = CLAMP(t>>FIXED16_SHIFT, 0, tex_height);
-      int cs = CLAMP(s>>FIXED16_SHIFT, 0, tex_width);
-
-      const uint8_t *texel = src + ct * stride + cs * 4;
-
-      row[i] = (*(const uint32_t *)texel) | 0xff000000;
-
-      s += dsdx;
-      t += dtdx;
-   }
-
-   samp->s += samp->dsdy;
-   samp->t += samp->dtdy;
-   return row;
-}
-
 
 /**
  * Fetch and stretch one row.
@@ -394,7 +252,7 @@ fetch_and_stretch_bgra_row(struct lp_linear_sampler *samp,
  * temporary or fetch sparsely.
  */
 static const uint32_t *
-fetch_bgra_axis_aligned_linear(struct lp_linear_elem *elem)
+fetch_axis_aligned_linear_bgra(struct lp_linear_elem *elem)
 {
    struct lp_linear_sampler *samp = (struct lp_linear_sampler *)elem;
    const int width = samp->width;
@@ -431,7 +289,7 @@ fetch_bgra_axis_aligned_linear(struct lp_linear_elem *elem)
  * maximize.
  */
 static const uint32_t *
-fetch_bgra_linear(struct lp_linear_elem *elem)
+fetch_linear_bgra(struct lp_linear_elem *elem)
 {
    struct lp_linear_sampler *samp = (struct lp_linear_sampler *)elem;
    const struct lp_jit_texture *texture = samp->texture;
@@ -485,7 +343,7 @@ fetch_bgra_linear(struct lp_linear_elem *elem)
  * maximize.
  */
 static const uint32_t *
-fetch_bgra_clamp_linear(struct lp_linear_elem *elem)
+fetch_clamp_linear_bgra(struct lp_linear_elem *elem)
 {
    struct lp_linear_sampler *samp = (struct lp_linear_sampler *)elem;
    const struct lp_jit_texture *texture = samp->texture;
@@ -596,65 +454,26 @@ fetch_bgra_clamp_linear(struct lp_linear_elem *elem)
    return row;
 }
 
+/* don't generate bgra 128-bits or memcpy ops they have their own path */
+#define FETCH_TYPE bgra
+#define OP
+#define NO_MEMCPY
+#include "lp_linear_sampler_tmp.h"
 
-static const uint32_t *
-fetch_bgrx_axis_aligned_linear(struct lp_linear_elem *elem)
-{
-   struct lp_linear_sampler *samp = (struct lp_linear_sampler *)elem;
-   const __m128i mask = _mm_set1_epi32(0xff000000);
-   uint32_t *dst_row = samp->row;
-   const uint32_t *src_row = fetch_bgra_axis_aligned_linear(&samp->base);
-   const int width = samp->width;
+#define FETCH_TYPE bgrx
+#define OP rgbx
+#define OP128 rgbx_128
+#include "lp_linear_sampler_tmp.h"
 
-   for (int i = 0; i < width; i += 4) {
-      __m128i bgra = *(__m128i *)&src_row[i];
-      __m128i bgrx = _mm_or_si128(bgra, mask);
-      *(__m128i *)&dst_row[i] = bgrx;
-   }
+#define FETCH_TYPE bgra_swapped
+#define OP rb_swap
+#define OP128 rb_swap_128
+#include "lp_linear_sampler_tmp.h"
 
-   return dst_row;
-}
-
-
-static const uint32_t *
-fetch_bgrx_clamp_linear(struct lp_linear_elem *elem)
-{
-   struct lp_linear_sampler *samp = (struct lp_linear_sampler *)elem;
-   const __m128i mask = _mm_set1_epi32(0xff000000);
-   uint32_t *row = samp->row;
-   const int width = samp->width;
-
-   fetch_bgra_clamp_linear(&samp->base);
-
-   for (int i = 0; i < width; i += 4) {
-      __m128i bgra = *(__m128i *)&row[i];
-      __m128i bgrx = _mm_or_si128(bgra, mask);
-      *(__m128i *)&row[i] = bgrx;
-   }
-
-   return row;
-}
-
-
-static const uint32_t *
-fetch_bgrx_linear(struct lp_linear_elem *elem)
-{
-   struct lp_linear_sampler *samp = (struct lp_linear_sampler *)elem;
-   const __m128i mask = _mm_set1_epi32(0xff000000);
-   uint32_t *row = samp->row;
-   const int width = samp->width;
-
-   fetch_bgra_linear(&samp->base);
-
-   for (int i = 0; i < width; i += 4) {
-      __m128i bgra = *(__m128i *)&row[i];
-      __m128i bgrx = _mm_or_si128(bgra, mask);
-      *(__m128i *)&row[i] = bgrx;
-   }
-
-   return row;
-}
-
+#define FETCH_TYPE bgrx_swapped
+#define OP rbx_swap
+#define OP128 rbx_swap_128
+#include "lp_linear_sampler_tmp.h"
 
 static bool
 sampler_is_nearest(const struct lp_linear_sampler *samp,
@@ -727,7 +546,8 @@ lp_linear_init_sampler(struct lp_linear_sampler *samp,
                        int x0, int y0, int width, int height,
                        const float (*a0)[4],
                        const float (*dadx)[4],
-                       const float (*dady)[4])
+                       const float (*dady)[4],
+                       bool rgba_order)
 {
    const struct lp_tgsi_channel_info *schan = &info->coord[0];
    const struct lp_tgsi_channel_info *tchan = &info->coord[1];
@@ -874,24 +694,88 @@ lp_linear_init_sampler(struct lp_linear_sampler *samp,
    if (is_nearest) {
       switch (sampler_state->texture_state.format) {
       case PIPE_FORMAT_B8G8R8A8_UNORM:
-         if (need_wrap)
-            samp->base.fetch = fetch_bgra_clamp;
-         else if (!samp->axis_aligned)
-            samp->base.fetch = fetch_bgra;
-         else if (samp->dsdx != FIXED16_ONE) // TODO: could be relaxed
-            samp->base.fetch = fetch_bgra_axis_aligned;
-         else
-            samp->base.fetch = fetch_bgra_memcpy;
+         if (rgba_order) {
+            if (need_wrap)
+               samp->base.fetch = fetch_clamp_bgra_swapped;
+            else if (!samp->axis_aligned)
+               samp->base.fetch = fetch_bgra_swapped;
+            else if (samp->dsdx != FIXED16_ONE) // TODO: could be relaxed
+               samp->base.fetch = fetch_axis_aligned_bgra_swapped;
+            else
+               samp->base.fetch = fetch_memcpy_bgra_swapped;
+         } else {
+            if (need_wrap)
+               samp->base.fetch = fetch_clamp_bgra;
+            else if (!samp->axis_aligned)
+               samp->base.fetch = fetch_bgra;
+            else if (samp->dsdx != FIXED16_ONE) // TODO: could be relaxed
+               samp->base.fetch = fetch_axis_aligned_bgra;
+            else
+               samp->base.fetch = fetch_memcpy_bgra;
+         }
          return true;
       case PIPE_FORMAT_B8G8R8X8_UNORM:
-         if (need_wrap)
-            samp->base.fetch = fetch_bgrx_clamp;
-         else if (!samp->axis_aligned)
-            samp->base.fetch = fetch_bgrx;
-         else if (samp->dsdx != FIXED16_ONE) // TODO: could be relaxed
-            samp->base.fetch = fetch_bgrx_axis_aligned;
-         else
-            samp->base.fetch = fetch_bgrx_memcpy;
+         if (rgba_order) {
+            if (need_wrap)
+               samp->base.fetch = fetch_clamp_bgrx_swapped;
+            else if (!samp->axis_aligned)
+               samp->base.fetch = fetch_bgrx_swapped;
+            else if (samp->dsdx != FIXED16_ONE) // TODO: could be relaxed
+               samp->base.fetch = fetch_axis_aligned_bgrx_swapped;
+            else
+               samp->base.fetch = fetch_memcpy_bgrx_swapped;
+         } else {
+            if (need_wrap)
+               samp->base.fetch = fetch_clamp_bgrx;
+            else if (!samp->axis_aligned)
+               samp->base.fetch = fetch_bgrx;
+            else if (samp->dsdx != FIXED16_ONE) // TODO: could be relaxed
+               samp->base.fetch = fetch_axis_aligned_bgrx;
+            else
+               samp->base.fetch = fetch_memcpy_bgrx;
+         }
+         return true;
+      case PIPE_FORMAT_R8G8B8A8_UNORM:
+         if (!rgba_order) {
+            if (need_wrap)
+               samp->base.fetch = fetch_clamp_bgra_swapped;
+            else if (!samp->axis_aligned)
+               samp->base.fetch = fetch_bgra_swapped;
+            else if (samp->dsdx != FIXED16_ONE) // TODO: could be relaxed
+               samp->base.fetch = fetch_axis_aligned_bgra_swapped;
+            else
+               samp->base.fetch = fetch_memcpy_bgra_swapped;
+         } else {
+            if (need_wrap)
+               samp->base.fetch = fetch_clamp_bgra;
+            else if (!samp->axis_aligned)
+               samp->base.fetch = fetch_bgra;
+            else if (samp->dsdx != FIXED16_ONE) // TODO: could be relaxed
+               samp->base.fetch = fetch_axis_aligned_bgra;
+            else
+               samp->base.fetch = fetch_memcpy_bgra;
+         }
+         return true;
+      case PIPE_FORMAT_R8G8B8X8_UNORM:
+         if (!rgba_order) {
+            if (need_wrap)
+               samp->base.fetch = fetch_clamp_bgrx_swapped;
+            else if (!samp->axis_aligned)
+               samp->base.fetch = fetch_bgrx_swapped;
+            else if (samp->dsdx != FIXED16_ONE) // TODO: could be relaxed
+               samp->base.fetch = fetch_axis_aligned_bgrx_swapped;
+            else
+               samp->base.fetch = fetch_memcpy_bgrx_swapped;
+         } else {
+            if (need_wrap)
+               samp->base.fetch = fetch_clamp_bgrx;
+            else if (!samp->axis_aligned)
+               samp->base.fetch = fetch_bgrx;
+            else if (samp->dsdx != FIXED16_ONE) // TODO: could be relaxed
+               samp->base.fetch = fetch_axis_aligned_bgrx;
+            else
+               samp->base.fetch = fetch_memcpy_bgrx;
+         }
          return true;
       default:
          break;
@@ -905,20 +789,72 @@ lp_linear_init_sampler(struct lp_linear_sampler *samp,
 
       switch (sampler_state->texture_state.format) {
       case PIPE_FORMAT_B8G8R8A8_UNORM:
-         if (need_wrap)
-            samp->base.fetch = fetch_bgra_clamp_linear;
-         else if (!samp->axis_aligned)
-            samp->base.fetch = fetch_bgra_linear;
-         else
-            samp->base.fetch = fetch_bgra_axis_aligned_linear;
+         if (rgba_order) {
+            if (need_wrap)
+               samp->base.fetch = fetch_clamp_linear_bgra_swapped;
+            else if (!samp->axis_aligned)
+               samp->base.fetch = fetch_linear_bgra_swapped;
+            else
+               samp->base.fetch = fetch_axis_aligned_linear_bgra_swapped;
+         } else {
+            if (need_wrap)
+               samp->base.fetch = fetch_clamp_linear_bgra;
+            else if (!samp->axis_aligned)
+               samp->base.fetch = fetch_linear_bgra;
+            else
+               samp->base.fetch = fetch_axis_aligned_linear_bgra;
+         }
          return true;
       case PIPE_FORMAT_B8G8R8X8_UNORM:
-         if (need_wrap)
-            samp->base.fetch = fetch_bgrx_clamp_linear;
-         else if (!samp->axis_aligned)
-            samp->base.fetch = fetch_bgrx_linear;
-         else
-            samp->base.fetch = fetch_bgrx_axis_aligned_linear;
+         if (rgba_order) {
+            if (need_wrap)
+               samp->base.fetch = fetch_clamp_linear_bgrx_swapped;
+            else if (!samp->axis_aligned)
+               samp->base.fetch = fetch_linear_bgrx_swapped;
+            else
+               samp->base.fetch = fetch_axis_aligned_linear_bgrx_swapped;
+         } else {
+            if (need_wrap)
+               samp->base.fetch = fetch_clamp_linear_bgrx;
+            else if (!samp->axis_aligned)
+               samp->base.fetch = fetch_linear_bgrx;
+            else
+               samp->base.fetch = fetch_axis_aligned_linear_bgrx;
+         }
+         return true;
+      case PIPE_FORMAT_R8G8B8A8_UNORM:
+         if (!rgba_order) {
+            if (need_wrap)
+               samp->base.fetch = fetch_clamp_linear_bgra_swapped;
+            else if (!samp->axis_aligned)
+               samp->base.fetch = fetch_linear_bgra_swapped;
+            else
+               samp->base.fetch = fetch_axis_aligned_linear_bgra_swapped;
+         } else {
+            if (need_wrap)
+               samp->base.fetch = fetch_clamp_linear_bgra;
+            else if (!samp->axis_aligned)
+               samp->base.fetch = fetch_linear_bgra;
+            else
+               samp->base.fetch = fetch_axis_aligned_linear_bgra;
+         }
+         return true;
+      case PIPE_FORMAT_R8G8B8X8_UNORM:
+         if (!rgba_order) {
+            if (need_wrap)
+               samp->base.fetch = fetch_clamp_linear_bgrx_swapped;
+            else if (!samp->axis_aligned)
+               samp->base.fetch = fetch_linear_bgrx_swapped;
+            else
+               samp->base.fetch = fetch_axis_aligned_linear_bgrx_swapped;
+         } else {
+            if (need_wrap)
+               samp->base.fetch = fetch_clamp_linear_bgrx;
+            else if (!samp->axis_aligned)
+               samp->base.fetch = fetch_linear_bgrx;
+            else
+               samp->base.fetch = fetch_axis_aligned_linear_bgrx;
+         }
          return true;
       default:
          break;
@@ -974,7 +910,9 @@ lp_linear_check_sampler(const struct lp_sampler_static_state *sampler,
    /* These are the only texture formats we support at the moment
     */
    if (sampler->texture_state.format != PIPE_FORMAT_B8G8R8A8_UNORM &&
-       sampler->texture_state.format != PIPE_FORMAT_B8G8R8X8_UNORM)
+       sampler->texture_state.format != PIPE_FORMAT_B8G8R8X8_UNORM &&
+       sampler->texture_state.format != PIPE_FORMAT_R8G8B8A8_UNORM &&
+       sampler->texture_state.format != PIPE_FORMAT_R8G8B8X8_UNORM)
       return false;
 
    /* We don't support sampler view swizzling on the linear path */

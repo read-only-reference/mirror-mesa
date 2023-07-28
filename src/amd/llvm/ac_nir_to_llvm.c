@@ -2628,18 +2628,6 @@ static LLVMValueRef visit_load_local_invocation_index(struct ac_nir_context *ctx
                         ac_get_thread_id(&ctx->ac));
 }
 
-static LLVMValueRef visit_load_num_subgroups(struct ac_nir_context *ctx)
-{
-   if (gl_shader_stage_is_compute(ctx->stage)) {
-      return LLVMBuildAnd(ctx->ac.builder, ac_get_arg(&ctx->ac, ctx->args->tg_size),
-                          LLVMConstInt(ctx->ac.i32, 0x3f, false), "");
-   } else if (ctx->args->merged_wave_info.used) {
-      return ac_unpack_param(&ctx->ac, ac_get_arg(&ctx->ac, ctx->args->merged_wave_info), 28, 4);
-   } else {
-      return ctx->ac.i32_1;
-   }
-}
-
 static LLVMValueRef visit_first_invocation(struct ac_nir_context *ctx)
 {
    LLVMValueRef active_set = ac_build_ballot(&ctx->ac, ctx->ac.i32_1);
@@ -3055,8 +3043,10 @@ static bool visit_intrinsic(struct ac_nir_context *ctx, nir_intrinsic_instr *ins
    switch (instr->intrinsic) {
    case nir_intrinsic_ballot:
       result = ac_build_ballot(&ctx->ac, get_src(ctx, instr->src[0]));
-      if (ctx->ac.ballot_mask_bits > ctx->ac.wave_size)
-         result = LLVMBuildZExt(ctx->ac.builder, result, ctx->ac.iN_ballotmask, "");
+      if (instr->dest.ssa.bit_size > ctx->ac.wave_size) {
+         LLVMTypeRef dest_type = LLVMIntTypeInContext(ctx->ac.context, instr->dest.ssa.bit_size);
+         result = LLVMBuildZExt(ctx->ac.builder, result, dest_type, "");
+      }
       break;
    case nir_intrinsic_read_invocation:
       result =
@@ -3179,12 +3169,6 @@ static bool visit_intrinsic(struct ac_nir_context *ctx, nir_intrinsic_instr *ins
       break;
    case nir_intrinsic_load_local_invocation_index:
       result = visit_load_local_invocation_index(ctx);
-      break;
-   case nir_intrinsic_load_subgroup_id:
-      result = visit_load_subgroup_id(ctx);
-      break;
-   case nir_intrinsic_load_num_subgroups:
-      result = visit_load_num_subgroups(ctx);
       break;
    case nir_intrinsic_first_invocation:
       result = visit_first_invocation(ctx);

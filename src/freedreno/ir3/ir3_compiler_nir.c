@@ -1992,6 +1992,63 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
    const unsigned primitive_map = const_state->offsets.primitive_map * 4;
 
    switch (intr->intrinsic) {
+   case nir_intrinsic_decl_reg:
+      /* There's logically nothing to do, but this has a destination in NIR so
+       * plug in something... It will get DCE'd.
+       */
+      dst[0] = create_immed(ctx->block, 0);
+      break;
+
+   case nir_intrinsic_load_reg:
+   case nir_intrinsic_load_reg_indirect: {
+      struct ir3_array *arr = ir3_get_array(ctx, intr->src[0].ssa);
+      struct ir3_instruction *addr = NULL;
+
+      if (intr->intrinsic == nir_intrinsic_load_reg_indirect) {
+         addr = ir3_get_addr0(ctx, ir3_get_src(ctx, &intr->src[1])[0],
+                              dest_components);
+      }
+
+      ASSERTED nir_intrinsic_instr *decl = nir_reg_get_decl(intr->src[0].ssa);
+      assert(dest_components == nir_intrinsic_num_components(decl));
+
+      for (unsigned i = 0; i < dest_components; i++) {
+         unsigned n = nir_intrinsic_base(intr) * dest_components + i;
+         compile_assert(ctx, n < arr->length);
+         dst[i] = ir3_create_array_load(ctx, arr, n, addr);
+      }
+
+      break;
+   }
+
+   case nir_intrinsic_store_reg:
+   case nir_intrinsic_store_reg_indirect: {
+      struct ir3_array *arr = ir3_get_array(ctx, intr->src[1].ssa);
+      unsigned num_components = nir_src_num_components(intr->src[0]);
+      struct ir3_instruction *addr = NULL;
+
+      ASSERTED nir_intrinsic_instr *decl = nir_reg_get_decl(intr->src[1].ssa);
+      assert(num_components == nir_intrinsic_num_components(decl));
+
+      struct ir3_instruction *const *value = ir3_get_src(ctx, &intr->src[0]);
+
+      if (intr->intrinsic == nir_intrinsic_store_reg_indirect) {
+         addr = ir3_get_addr0(ctx, ir3_get_src(ctx, &intr->src[2])[0],
+                              num_components);
+      }
+
+      u_foreach_bit(i, nir_intrinsic_write_mask(intr)) {
+         assert(i < num_components);
+
+         unsigned n = nir_intrinsic_base(intr) * num_components + i;
+         compile_assert(ctx, n < arr->length);
+         if (value[i])
+            ir3_create_array_store(ctx, arr, n, value[i], addr);
+      }
+
+      break;
+   }
+
    case nir_intrinsic_load_uniform:
       idx = nir_intrinsic_base(intr);
       if (nir_src_is_const(intr->src[0])) {
@@ -2066,15 +2123,12 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
       dst[0] = ctx->primitive_id;
       break;
 
-   case nir_intrinsic_load_tess_coord:
+   case nir_intrinsic_load_tess_coord_xy:
       if (!ctx->tess_coord) {
          ctx->tess_coord =
             create_sysval_input(ctx, SYSTEM_VALUE_TESS_COORD, 0x3);
       }
       ir3_split_dest(b, dst, ctx->tess_coord, 0, 2);
-
-      /* Unused, but ir3_put_dst() below wants to free something */
-      dst[2] = create_immed(b, 0);
       break;
 
    case nir_intrinsic_end_patch_ir3:
@@ -2247,8 +2301,6 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
       dst[0] = ctx->instance_id;
       break;
    case nir_intrinsic_load_sample_id:
-      ctx->so->per_samp = true;
-      FALLTHROUGH;
    case nir_intrinsic_load_sample_id_no_per_sample:
       if (!ctx->samp_id) {
          ctx->samp_id = create_sysval_input(ctx, SYSTEM_VALUE_SAMPLE_ID, 0x1);
@@ -4243,12 +4295,6 @@ emit_instructions(struct ir3_context *ctx)
    /* some varying setup which can't be done in setup_input(): */
    if (ctx->so->type == MESA_SHADER_FRAGMENT) {
       nir_foreach_shader_in_variable (var, ctx->s) {
-         /* if any varyings have 'sample' qualifer, that triggers us
-          * to run in per-sample mode:
-          */
-         if (var->data.sample)
-            ctx->so->per_samp = true;
-
          /* set rasterflat flag for front/back color */
          if (var->data.interpolation == INTERP_MODE_NONE) {
             switch (var->data.location) {
@@ -4377,8 +4423,8 @@ emit_instructions(struct ir3_context *ctx)
    ctx->so->shared_size = ctx->s->info.shared_size;
 
    /* NOTE: need to do something more clever when we support >1 fxn */
-   nir_foreach_register (reg, &fxn->registers) {
-      ir3_declare_array(ctx, reg);
+   nir_foreach_reg_decl (decl, fxn) {
+      ir3_declare_array(ctx, decl);
    }
 
    if (ctx->so->type == MESA_SHADER_TESS_CTRL &&
@@ -4963,8 +5009,10 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
    collect_tex_prefetches(ctx, ir);
 
    if (so->type == MESA_SHADER_FRAGMENT &&
-       ctx->s->info.fs.needs_quad_helper_invocations)
+       ctx->s->info.fs.needs_quad_helper_invocations) {
       so->need_pixlod = true;
+      so->need_full_quad = true;
+   }
 
    if ((ctx->so->type == MESA_SHADER_FRAGMENT) &&
        !ctx->s->info.fs.early_fragment_tests)
@@ -4973,6 +5021,8 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
    if ((ctx->so->type == MESA_SHADER_FRAGMENT) &&
        ctx->s->info.fs.post_depth_coverage)
       so->post_depth_coverage = true;
+
+   ctx->so->per_samp = ctx->s->info.fs.uses_sample_shading;
 
 out:
    if (ret) {

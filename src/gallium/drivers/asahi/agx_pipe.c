@@ -38,6 +38,7 @@
 #include "agx_fence.h"
 #include "agx_public.h"
 #include "agx_state.h"
+#include "agx_tilebuffer.h"
 
 /* Fake values, pending UAPI upstreaming */
 #ifndef DRM_FORMAT_MOD_APPLE_TWIDDLED
@@ -64,6 +65,9 @@ static const struct debug_named_value agx_debug_options[] = {
    {"resource",  AGX_DBG_RESOURCE, "Log resource operations"},
    {"batch",     AGX_DBG_BATCH,    "Log batches"},
    {"nowc",      AGX_DBG_NOWC,     "Disable write-combining"},
+   {"synctvb",   AGX_DBG_SYNCTVB,  "Synchronous TVB growth"},
+   {"smalltile", AGX_DBG_SMALLTILE,"Force 16x16 tiles"},
+   {"nomsaa",    AGX_DBG_NOMSAA,   "Force disable MSAA"},
    DEBUG_NAMED_VALUE_END
 };
 /* clang-format on */
@@ -160,6 +164,7 @@ agx_resource_setup(struct agx_device *dev, struct agx_resource *nresource)
       .depth_px = templ->depth0 * templ->array_size,
       .sample_count_sa = MAX2(templ->nr_samples, 1),
       .levels = templ->last_level + 1,
+      .writeable_image = templ->bind & PIPE_BIND_SHADER_IMAGE,
    };
 }
 
@@ -351,17 +356,23 @@ agx_linear_allowed(const struct agx_resource *pres)
       return false;
 
    switch (pres->base.target) {
-   /* 1D is always linear */
+   /* 1D is always linear, even with image atomics */
    case PIPE_BUFFER:
    case PIPE_TEXTURE_1D:
    case PIPE_TEXTURE_1D_ARRAY:
 
    /* Linear textures require specifying their strides explicitly, which only
     * works for 2D textures. Rectangle textures are a special case of 2D.
+    *
+    * However, we don't want to support this case in the image atomic
+    * implementation, so linear shader images are specially forbidden.
     */
    case PIPE_TEXTURE_2D:
    case PIPE_TEXTURE_2D_ARRAY:
    case PIPE_TEXTURE_RECT:
+      if (pres->base.bind & PIPE_BIND_SHADER_IMAGE)
+         return false;
+
       break;
 
    /* No other texture type can specify a stride */
@@ -506,6 +517,16 @@ agx_resource_create_with_modifiers(struct pipe_screen *screen,
       assert(nresource->modifier != DRM_FORMAT_MOD_INVALID);
    }
 
+   /* If there's only 1 layer and there's no compression, there's no harm in
+    * inferring the shader image flag. Do so to avoid reallocation in case the
+    * resource is later used as an image.
+    */
+   if (nresource->modifier != DRM_FORMAT_MOD_APPLE_TWIDDLED_COMPRESSED &&
+       templ->depth0 == 1) {
+
+      nresource->base.bind |= PIPE_BIND_SHADER_IMAGE;
+   }
+
    nresource->mipmapped = (templ->last_level > 0);
 
    assert(templ->format != PIPE_FORMAT_Z24X8_UNORM &&
@@ -596,6 +617,27 @@ agx_resource_destroy(struct pipe_screen *screen, struct pipe_resource *prsrc)
 
    agx_bo_unreference(rsrc->bo);
    FREE(rsrc);
+}
+
+void
+agx_batch_track_image(struct agx_batch *batch, struct pipe_image_view *image)
+{
+   struct agx_resource *rsrc = agx_resource(image->resource);
+
+   if (image->shader_access & PIPE_IMAGE_ACCESS_WRITE) {
+      agx_batch_writes(batch, rsrc);
+
+      bool is_buffer = rsrc->base.target == PIPE_BUFFER;
+      unsigned level = is_buffer ? 0 : image->u.tex.level;
+      BITSET_SET(rsrc->data_valid, level);
+
+      if (is_buffer) {
+         util_range_add(&rsrc->base, &rsrc->valid_buffer_range, 0,
+                        rsrc->base.width0);
+      }
+   } else {
+      agx_batch_reads(batch, rsrc);
+   }
 }
 
 /*
@@ -1077,6 +1119,7 @@ transition_resource(struct pipe_context *pctx, struct agx_resource *rsrc,
       agx_resource(pctx->screen->resource_create(pctx->screen, templ));
 
    assert(new_res);
+   assert(!(rsrc->base.bind & PIPE_BIND_SHARED) && "cannot swap BOs if shared");
 
    int level;
    BITSET_FOREACH_SET(level, rsrc->data_valid, PIPE_MAX_TEXTURE_LEVELS) {
@@ -1117,8 +1160,11 @@ void
 agx_decompress(struct agx_context *ctx, struct agx_resource *rsrc,
                const char *reason)
 {
-   assert(rsrc->layout.tiling == AIL_TILING_TWIDDLED_COMPRESSED);
-   perf_debug_ctx(ctx, "Decompressing resource due to %s", reason);
+   if (rsrc->layout.tiling == AIL_TILING_TWIDDLED_COMPRESSED) {
+      perf_debug_ctx(ctx, "Decompressing resource due to %s", reason);
+   } else if (!rsrc->layout.writeable_image) {
+      perf_debug_ctx(ctx, "Reallocating image due to %s", reason);
+   }
 
    struct pipe_resource templ = rsrc->base;
    assert(!(templ.bind & PIPE_BIND_SHADER_IMAGE) && "currently compressed");
@@ -1206,7 +1252,8 @@ agx_flush_batch(struct agx_context *ctx, struct agx_batch *batch)
    uint64_t pipeline_background_partial = agx_build_meta(batch, false, true);
    uint64_t pipeline_store = agx_build_meta(batch, true, false);
 
-   bool clear_pipeline_textures = false;
+   bool clear_pipeline_textures =
+      agx_tilebuffer_spills(&batch->tilebuffer_layout);
 
    for (unsigned i = 0; i < batch->key.nr_cbufs; ++i) {
       struct pipe_surface *surf = batch->key.cbufs[i];
@@ -1773,8 +1820,10 @@ agx_get_shader_param(struct pipe_screen *pscreen, enum pipe_shader_type shader,
       return 0;
 
    case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+      return 16;
+
    case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
-      return 16; /* XXX: How many? */
+      return PIPE_MAX_SHADER_SAMPLER_VIEWS;
 
    case PIPE_SHADER_CAP_SUPPORTED_IRS:
       return (1 << PIPE_SHADER_IR_NIR);
@@ -1854,8 +1903,11 @@ agx_get_compute_param(struct pipe_screen *pscreen, enum pipe_shader_ir ir_type,
    case PIPE_COMPUTE_CAP_IMAGES_SUPPORTED:
       RET((uint32_t[]){1});
 
-   case PIPE_COMPUTE_CAP_SUBGROUP_SIZE:
+   case PIPE_COMPUTE_CAP_SUBGROUP_SIZES:
       RET((uint32_t[]){32});
+
+   case PIPE_COMPUTE_CAP_MAX_SUBGROUPS:
+      RET((uint32_t[]){0 /* TODO */});
 
    case PIPE_COMPUTE_CAP_MAX_VARIABLE_THREADS_PER_BLOCK:
       RET((uint64_t[]){1024}); // TODO
@@ -1876,6 +1928,9 @@ agx_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
           target == PIPE_TEXTURE_CUBE_ARRAY);
 
    if (sample_count > 1 && sample_count != 4 && sample_count != 2)
+      return false;
+
+   if (sample_count > 1 && agx_device(pscreen)->debug & AGX_DBG_NOMSAA)
       return false;
 
    if (MAX2(sample_count, 1) != MAX2(storage_sample_count, 1))
@@ -1914,8 +1969,8 @@ agx_is_format_supported(struct pipe_screen *pscreen, enum pipe_format format,
 
    if (usage & PIPE_BIND_DEPTH_STENCIL) {
       switch (format) {
-      /* natively supported
-       * TODO: we could also support Z16_UNORM */
+      /* natively supported */
+      case PIPE_FORMAT_Z16_UNORM:
       case PIPE_FORMAT_Z32_FLOAT:
       case PIPE_FORMAT_S8_UINT:
 

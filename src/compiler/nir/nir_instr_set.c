@@ -283,6 +283,7 @@ hash_tex(uint32_t hash, const nir_tex_instr *instr)
    hash = HASH(hash, instr->sampler_index);
    hash = HASH(hash, instr->texture_non_uniform);
    hash = HASH(hash, instr->sampler_non_uniform);
+   hash = HASH(hash, instr->backend_flags);
 
    return hash;
 }
@@ -338,16 +339,7 @@ nir_srcs_equal(nir_src src1, nir_src src2)
       if (src2.is_ssa) {
          return false;
       } else {
-         if ((src1.reg.indirect == NULL) != (src2.reg.indirect == NULL))
-            return false;
-
-         if (src1.reg.indirect) {
-            if (!nir_srcs_equal(*src1.reg.indirect, *src2.reg.indirect))
-               return false;
-         }
-
-         return src1.reg.reg == src2.reg.reg &&
-                src1.reg.base_offset == src2.reg.base_offset;
+         return src1.reg.reg == src2.reg.reg;
       }
    }
 }
@@ -668,7 +660,8 @@ nir_instrs_equal(const nir_instr *instr1, const nir_instr *instr2)
           tex1->is_new_style_shadow != tex2->is_new_style_shadow ||
           tex1->component != tex2->component ||
          tex1->texture_index != tex2->texture_index ||
-         tex1->sampler_index != tex2->sampler_index) {
+         tex1->sampler_index != tex2->sampler_index ||
+         tex1->backend_flags != tex2->backend_flags) {
          return false;
       }
 

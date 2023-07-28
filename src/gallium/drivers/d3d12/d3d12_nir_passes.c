@@ -590,8 +590,7 @@ d3d12_add_missing_dual_src_target(struct nir_shader *s,
    assert(missing_mask != 0);
    nir_builder b;
    nir_function_impl *impl = nir_shader_get_entrypoint(s);
-   b = nir_builder_create(impl);
-   b.cursor = nir_before_cf_list(&impl->body);
+   b = nir_builder_at(nir_before_cf_list(&impl->body));
 
    nir_ssa_def *zero = nir_imm_zero(&b, 4, 32);
    for (unsigned i = 0; i < 2; ++i) {
@@ -793,7 +792,7 @@ is_multisampling_instr(const nir_instr *instr, const void *_data)
       nir_io_semantics semantics = nir_intrinsic_io_semantics(intr);
       return semantics.location == FRAG_RESULT_SAMPLE_MASK;
    } else if (intr->intrinsic == nir_intrinsic_store_deref) {
-      nir_variable *var = nir_deref_instr_get_variable(nir_src_as_deref(intr->src[0]));
+      nir_variable *var = nir_intrinsic_get_var(intr, 0);
       return var->data.location == FRAG_RESULT_SAMPLE_MASK;
    } else if (intr->intrinsic == nir_intrinsic_load_sample_id ||
               intr->intrinsic == nir_intrinsic_load_sample_mask_in)

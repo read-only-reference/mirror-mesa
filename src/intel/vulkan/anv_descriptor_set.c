@@ -78,10 +78,6 @@ anv_indirect_descriptor_data_for_type(VkDescriptorType type)
 
    case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
    case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-      data = ANV_DESCRIPTOR_BTI_SURFACE_STATE |
-             ANV_DESCRIPTOR_INDIRECT_SAMPLED_IMAGE;
-      break;
-
    case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
       data = ANV_DESCRIPTOR_BTI_SURFACE_STATE |
              ANV_DESCRIPTOR_INDIRECT_SAMPLED_IMAGE;
@@ -148,22 +144,10 @@ anv_direct_descriptor_data_for_type(VkDescriptorType type)
    case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
    case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
    case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
-      data = ANV_DESCRIPTOR_BTI_SURFACE_STATE |
-             ANV_DESCRIPTOR_SURFACE;
-      break;
-
    case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
    case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-      data = ANV_DESCRIPTOR_BTI_SURFACE_STATE |
-             ANV_DESCRIPTOR_SURFACE;
-      break;
-
    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-      data = ANV_DESCRIPTOR_BTI_SURFACE_STATE |
-             ANV_DESCRIPTOR_SURFACE;
-         break;
-
    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
       data = ANV_DESCRIPTOR_BTI_SURFACE_STATE |
@@ -1647,12 +1631,12 @@ anv_descriptor_set_write_image_view(struct anv_device *device,
 
       if (image_view) {
          for (unsigned p = 0; p < image_view->n_planes; p++) {
-            struct anv_surface_state sstate =
+            const struct anv_surface_state *sstate =
                (desc->layout == VK_IMAGE_LAYOUT_GENERAL) ?
-               image_view->planes[p].general_sampler :
-               image_view->planes[p].optimal_sampler;
+               &image_view->planes[p].general_sampler :
+               &image_view->planes[p].optimal_sampler;
             desc_data[p].image =
-               anv_surface_state_to_handle(device->physical, sstate.state);
+               anv_surface_state_to_handle(device->physical, sstate->state);
          }
       }
 
@@ -1783,7 +1767,10 @@ anv_descriptor_set_write_buffer_view(struct anv_device *device,
                     element * bind_layout->descriptor_stride;
 
    if (buffer_view == NULL) {
-      memset(desc_map, 0, bind_layout->descriptor_stride);
+      if (data & ANV_DESCRIPTOR_SURFACE)
+         memcpy(desc_map, device->null_surface_state.map, ANV_SURFACE_STATE_SIZE);
+      else
+         memset(desc_map, 0, bind_layout->descriptor_stride);
       return;
    }
 
@@ -1804,13 +1791,9 @@ anv_descriptor_set_write_buffer_view(struct anv_device *device,
    }
 
    if (data & ANV_DESCRIPTOR_SURFACE) {
-      if (buffer_view != NULL) {
-         memcpy(desc_map,
-                anv_buffer_view_surface_data(buffer_view, type),
-                ANV_SURFACE_STATE_SIZE);
-      } else {
-         memcpy(desc_map, device->null_surface_state.map, ANV_SURFACE_STATE_SIZE);
-      }
+      memcpy(desc_map,
+             anv_buffer_view_surface_data(buffer_view, type),
+             ANV_SURFACE_STATE_SIZE);
    }
 }
 

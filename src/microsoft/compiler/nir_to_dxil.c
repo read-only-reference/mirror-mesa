@@ -141,7 +141,6 @@ nir_options = {
    .lower_base_vertex = true,
    .lower_helper_invocation = true,
    .has_cs_global_id = true,
-   .has_txs = true,
    .lower_mul_2x32_64 = true,
    .lower_doubles_options =
       nir_lower_drcp |
@@ -5886,13 +5885,9 @@ emit_scratch(struct ntd_context *ctx, nir_function_impl *impl)
 }
 
 static bool
-emit_function(struct ntd_context *ctx, nir_function *func)
+emit_function(struct ntd_context *ctx, nir_function *func, nir_function_impl *impl)
 {
    assert(func->num_params == 0);
-   nir_function_impl *impl = func->impl;
-   if (!impl)
-      return true;
-
    nir_metadata_require(impl, nir_metadata_block_index);
 
    const char *attr_keys[2] = { NULL };
@@ -6078,8 +6073,8 @@ emit_module(struct ntd_context *ctx, const struct nir_to_dxil_options *opts)
       ctx->shader->info.clip_distance_array_size : ctx->opts->input_clip_size;
    preprocess_signatures(&ctx->mod, ctx->shader, input_clip_size);
 
-   nir_foreach_function(func, ctx->shader) {
-      if (!emit_function(ctx, func))
+   nir_foreach_function_with_impl(func, impl, ctx->shader) {
+      if (!emit_function(ctx, func, impl))
          return false;
    }
 

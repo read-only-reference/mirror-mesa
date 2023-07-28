@@ -430,6 +430,7 @@ flush_before_state_base_change(struct iris_batch *batch)
 static void
 flush_after_state_base_change(struct iris_batch *batch)
 {
+   const struct intel_device_info *devinfo = batch->screen->devinfo;
    /* After re-setting the surface state base address, we have to do some
     * cache flusing so that the sampler engine will pick up the new
     * SURFACE_STATE objects and binding tables. From the Broadwell PRM,
@@ -467,7 +468,7 @@ flush_after_state_base_change(struct iris_batch *batch)
     * units cache the binding table in the texture cache.  However, we have
     * yet to be able to actually confirm this.
     *
-    * Wa_14013910100:
+    * Wa_16013000631:
     *
     *  "DG2 128/256/512-A/B: S/W must program STATE_BASE_ADDRESS command twice
     *   or program pipe control with Instruction cache invalidate post
@@ -478,8 +479,8 @@ flush_after_state_base_change(struct iris_batch *batch)
                               PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE |
                               PIPE_CONTROL_CONST_CACHE_INVALIDATE |
                               PIPE_CONTROL_STATE_CACHE_INVALIDATE |
-                              (GFX_VERx10 != 125 ? 0 :
-                               PIPE_CONTROL_INSTRUCTION_INVALIDATE));
+                              (intel_needs_workaround(devinfo, 16013000631) ?
+                               PIPE_CONTROL_INSTRUCTION_INVALIDATE : 0));
 }
 
 static void
@@ -1338,6 +1339,11 @@ iris_init_render_context(struct iris_batch *batch)
    /* TODO: may need to set an offset for origin-UL framebuffers */
    iris_emit_cmd(batch, GENX(3DSTATE_POLY_STIPPLE_OFFSET), foo);
 
+#if GFX_VERx10 >= 125
+   iris_emit_cmd(batch, GENX(3DSTATE_MESH_CONTROL), foo);
+   iris_emit_cmd(batch, GENX(3DSTATE_TASK_CONTROL), foo);
+#endif
+
    iris_alloc_push_constants(batch);
 
 
@@ -1384,6 +1390,13 @@ iris_init_compute_context(struct iris_batch *batch)
 
 #if GFX_VER >= 12
    init_aux_map_state(batch);
+#endif
+
+#if GFX_VERx10 >= 125
+   iris_emit_cmd(batch, GENX(CFE_STATE), cfe) {
+      cfe.MaximumNumberofThreads =
+         devinfo->max_cs_threads * devinfo->subslice_total;
+   }
 #endif
 
    iris_batch_sync_region_end(batch);
@@ -4250,7 +4263,8 @@ iris_set_stream_output_targets(struct pipe_context *ctx,
          sob.SOBufferEnable = true;
          sob.StreamOffsetWriteEnable = true;
          sob.StreamOutputBufferOffsetAddressEnable = true;
-         sob.MOCS = iris_mocs(res->bo, &screen->isl_dev, 0);
+         sob.MOCS = iris_mocs(res->bo, &screen->isl_dev,
+                              ISL_SURF_USAGE_STREAM_OUT_BIT);
 
          sob.SurfaceSize = MAX2(tgt->base.buffer_size / 4, 1) - 1;
          sob.StreamOutputBufferOffsetAddress =
@@ -5962,7 +5976,7 @@ invalidate_aux_map_state_per_engine(struct iris_batch *batch)
                                  (GFX_VERx10 == 125 ?
                                   PIPE_CONTROL_CCS_CACHE_FLUSH : 0));
 
-      register_addr = GENX(CCS_CCS_AUX_INV_num);
+      register_addr = GENX(COMPCS0_CCS_AUX_INV_num);
       break;
    }
    case IRIS_BATCH_BLITTER: {
@@ -6307,6 +6321,16 @@ iris_upload_dirty_render_state(struct iris_context *ice,
    struct iris_screen *screen = batch->screen;
    struct iris_border_color_pool *border_color_pool =
       iris_bufmgr_get_border_color_pool(screen->bufmgr);
+
+   /* Re-emit 3DSTATE_DS before any 3DPRIMITIVE when tessellation is on */
+   /* FIXME: WA framework doesn't know about 14019750404 yet.
+    * if (intel_needs_workaround(batch->screen->devinfo, 14019750404) &&
+    *     ice->shaders.prog[MESA_SHADER_TESS_EVAL])
+    */
+   if (batch->screen->devinfo->has_mesh_shading &&
+       ice->shaders.prog[MESA_SHADER_TESS_EVAL])
+      ice->state.stage_dirty |= IRIS_STAGE_DIRTY_TES;
+
    const uint64_t dirty = ice->state.dirty;
    const uint64_t stage_dirty = ice->state.stage_dirty;
 
@@ -7509,6 +7533,7 @@ iris_upload_render_state(struct iris_context *ice,
                          const struct pipe_draw_indirect_info *indirect,
                          const struct pipe_draw_start_count_bias *sc)
 {
+   UNUSED const struct intel_device_info *devinfo = batch->screen->devinfo;
    bool use_predicate = ice->state.predicate == IRIS_PREDICATE_STATE_USE_BIT;
 
    trace_intel_begin_draw(&batch->trace);
@@ -7733,9 +7758,10 @@ iris_upload_render_state(struct iris_context *ice,
    }
 
 #if GFX_VERx10 == 125
-   if (point_or_line_list(ice->state.prim_mode) ||
-       indirect || (sc->count == 1 || sc->count == 2)) {
-         iris_emit_pipe_control_write(batch, "Wa_14016118574",
+   if (intel_needs_workaround(devinfo, 22014412737) &&
+       (point_or_line_list(ice->state.prim_mode) || indirect ||
+        (sc->count == 1 || sc->count == 2))) {
+         iris_emit_pipe_control_write(batch, "Wa_22014412737",
                                       PIPE_CONTROL_WRITE_IMMEDIATE,
                                       batch->screen->workaround_bo,
                                       batch->screen->workaround_address.offset,
@@ -7746,7 +7772,7 @@ iris_upload_render_state(struct iris_context *ice,
    iris_batch_sync_region_end(batch);
 
    uint32_t count = (sc) ? sc->count : 0;
-   count *= (draw && draw->instance_count) ? draw->instance_count : 1;
+   count *= draw->instance_count ? draw->instance_count : 1;
    trace_intel_end_draw(&batch->trace, count);
 }
 

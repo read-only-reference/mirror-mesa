@@ -21,7 +21,7 @@ _nir_foreach_dest(nir_instr *instr, nir_foreach_dest_cb cb, void *state)
       return cb(&nir_instr_as_phi(instr)->dest, state);
    case nir_instr_type_parallel_copy: {
       nir_foreach_parallel_copy_entry(entry, nir_instr_as_parallel_copy(instr)) {
-         if (!cb(&entry->dest, state))
+         if (!entry->dest_is_reg && !cb(&entry->dest.dest, state))
             return false;
       }
       return true;
@@ -46,24 +46,6 @@ _nir_visit_src(nir_src *src, nir_foreach_src_cb cb, void *state)
 {
    if (!cb(src, state))
       return false;
-   if (!src->is_ssa && src->reg.indirect)
-      return cb(src->reg.indirect, state);
-   return true;
-}
-
-typedef struct {
-   void *state;
-   nir_foreach_src_cb cb;
-} _nir_visit_dest_indirect_state;
-
-static ALWAYS_INLINE bool
-_nir_visit_dest_indirect(nir_dest *dest, void *_state)
-{
-   _nir_visit_dest_indirect_state *state = (_nir_visit_dest_indirect_state *) _state;
-
-   if (!dest->is_ssa && dest->reg.indirect)
-      return state->cb(dest->reg.indirect, state->state);
-
    return true;
 }
 
@@ -137,6 +119,8 @@ nir_foreach_src(nir_instr *instr, nir_foreach_src_cb cb, void *state)
       nir_foreach_parallel_copy_entry(entry, pc) {
          if (!_nir_visit_src(&entry->src, cb, state))
             return false;
+         if (entry->dest_is_reg && !_nir_visit_src(&entry->dest.reg, cb, state))
+            return false;
       }
       break;
    }
@@ -157,8 +141,5 @@ nir_foreach_src(nir_instr *instr, nir_foreach_src_cb cb, void *state)
       break;
    }
 
-   _nir_visit_dest_indirect_state dest_state;
-   dest_state.state = state;
-   dest_state.cb = cb;
-   return _nir_foreach_dest(instr, _nir_visit_dest_indirect, &dest_state);
+   return true;
 }

@@ -294,6 +294,24 @@ index("unsigned", "resource_block_intel")
 # Various flags describing the resource access
 index("nir_resource_data_intel", "resource_access_intel")
 
+# Register metadata
+# number of vector components
+index("unsigned", "num_components")
+# size of array (0 for no array)
+index("unsigned", "num_array_elems")
+# The bit-size of each channel; must be one of 1, 8, 16, 32, or 64
+index("unsigned", "bit_size")
+# True if this register may have different values in different SIMD invocations
+# of the shader.
+index("bool", "divergent")
+
+# On a register load, floating-point absolute value/negate loaded value.
+index("bool", "legacy_fabs")
+index("bool", "legacy_fneg")
+
+# On a register store, floating-point saturate the stored value.
+index("bool", "legacy_fsat")
+
 intrinsic("nop", flags=[CAN_ELIMINATE])
 
 intrinsic("convert_alu_types", dest_comp=0, src_comp=[0],
@@ -307,6 +325,33 @@ intrinsic("load_deref", dest_comp=0, src_comp=[-1],
 intrinsic("store_deref", src_comp=[-1, 0], indices=[WRITE_MASK, ACCESS])
 intrinsic("copy_deref", src_comp=[-1, -1], indices=[DST_ACCESS, SRC_ACCESS])
 intrinsic("memcpy_deref", src_comp=[-1, -1, 1], indices=[DST_ACCESS, SRC_ACCESS])
+
+# Returns an opaque handle representing a register indexed by BASE. The
+# logically def-use list of a register is given by the use list of this handle.
+# The shape of the underlying register is given by the indices, the handle
+# itself is always a 32-bit scalar.
+intrinsic("decl_reg", dest_comp=1,
+          indices=[NUM_COMPONENTS, NUM_ARRAY_ELEMS, BIT_SIZE, DIVERGENT],
+          flags=[CAN_ELIMINATE])
+
+# Load a register given as the source directly with base offset BASE.
+intrinsic("load_reg", dest_comp=0, src_comp=[1],
+          indices=[BASE, LEGACY_FABS, LEGACY_FNEG], flags=[CAN_ELIMINATE])
+
+# Load a register given as first source indirectly with base offset BASE and
+# indirect offset as second source.
+intrinsic("load_reg_indirect", dest_comp=0, src_comp=[1, 1],
+          indices=[BASE, LEGACY_FABS, LEGACY_FNEG], flags=[CAN_ELIMINATE])
+
+# Store the value in the first source to a register given as the second source
+# directly with base offset BASE.
+intrinsic("store_reg", src_comp=[0, 1],
+          indices=[BASE, WRITE_MASK, LEGACY_FSAT])
+
+# Store the value in the first source to a register given as the second
+# source indirectly with base offset BASE and indirect offset as third source.
+intrinsic("store_reg_indirect", src_comp=[0, 1, 1],
+          indices=[BASE, WRITE_MASK, LEGACY_FSAT])
 
 # Interpolation of input.  The interp_deref_at* intrinsics are similar to the
 # load_var intrinsic acting on a shader input except that they interpolate the
@@ -794,6 +839,8 @@ system_value("sample_mask_in", 1)
 system_value("primitive_id", 1)
 system_value("invocation_id", 1)
 system_value("tess_coord", 3)
+# First 2 components of tess_coord only
+system_value("tess_coord_xy", 2)
 system_value("tess_level_outer", 4)
 system_value("tess_level_inner", 2)
 system_value("tess_level_outer_default", 4)
@@ -913,6 +960,14 @@ system_value("color1", 4)
 # System value for internal compute shaders in radeonsi.
 system_value("user_data_amd", 4)
 
+# In a fragment shader, the current sample mask. At the beginning of the shader,
+# this is the same as load_sample_mask_in, but as the shader is executed, it may
+# be affected by writes, discards, etc.
+#
+# No frontend generates this, but drivers may use it for internal lowerings.
+intrinsic("load_sample_mask", [], 1, [], flags=[CAN_ELIMINATE], sysval=True,
+          bit_sizes=[32])
+
 # Barycentric coordinate intrinsics.
 #
 # These set up the barycentric coordinates for a particular interpolation.
@@ -964,7 +1019,7 @@ intrinsic("load_persp_center_rhw_ir3", dest_comp=1,
 #
 # Takes a sampler # and returns 1/size values for multiplying to normalize
 # texture coordinates.  Used for lowering rect textures.
-intrinsic("load_texture_rect_scaling", src_comp=[1], dest_comp=2,
+intrinsic("load_texture_scale", src_comp=[1], dest_comp=2,
           flags=[CAN_ELIMINATE, CAN_REORDER])
 
 # Fragment shader input interpolation delta intrinsic.
@@ -1282,10 +1337,6 @@ system_value("sample_positions_pan", 1, bit_sizes=[64])
 # In a fragment shader, is the framebuffer single-sampled? 0/~0 bool
 system_value("multisampled_pan", 1, bit_sizes=[32])
 
-# In a fragment shader, the current coverage mask. Affected by writes.
-intrinsic("load_coverage_mask_pan", [], 1, [], flags=[CAN_ELIMINATE],
-          sysval=True, bit_sizes=[32])
-
 # R600 specific instrincs
 #
 # location where the tesselation data is stored in LDS
@@ -1293,9 +1344,6 @@ system_value("tcs_in_param_base_r600", 4)
 system_value("tcs_out_param_base_r600", 4)
 system_value("tcs_rel_patch_id_r600", 1)
 system_value("tcs_tess_factor_base_r600", 1)
-
-# the tess coords come as xy only, z has to be calculated
-system_value("tess_coord_r600", 2)
 
 # load as many components as needed giving per-component addresses
 intrinsic("load_local_shared_r600", src_comp=[0], dest_comp=0, indices = [], flags = [CAN_ELIMINATE])
@@ -1704,6 +1752,19 @@ system_value("api_sample_mask_agx", 1, bit_sizes=[16])
 # Loads the sample position array as fixed point packed into a 32-bit word
 system_value("sample_positions_agx", 1, bit_sizes=[32])
 
+# Image loads go through the texture cache, which is not coherent with the PBE
+# or memory access, so fencing is necessary for writes to become visible.
+
+# Make writes via main memory (image atomics) visible for texturing.
+barrier("fence_pbe_to_tex_agx")
+
+# Make writes from global memory instructions (atomics) visible for texturing.
+barrier("fence_mem_to_tex_agx")
+
+# Variant of fence_pbe_to_tex_agx specialized to stores in pixel shaders that
+# act like render target writes, in conjunction with fragment interlock.
+barrier("fence_pbe_to_tex_pixel_agx")
+
 # Intel-specific query for loading from the brw_image_param struct passed
 # into the shader as a uniform.  The variable is a deref to the image
 # variable. The const index specifies which of the six parameters to load.
@@ -1844,3 +1905,11 @@ system_value("ray_query_global_intel", 1, bit_sizes=[64])
 # is defined to be whatever thing the hardware can easily give you, so long as
 # it's in normalized coordinates in the range [0, 1] across the point.
 intrinsic("load_point_coord_maybe_flipped", dest_comp=2, bit_sizes=[32])
+
+
+# Load texture size values:
+#
+# Takes a sampler # and returns width, height and depth.  If texture is a array
+# texture it returns width, height and array size.  Used for txs lowering.
+intrinsic("load_texture_size_etna", src_comp=[1], dest_comp=3,
+          flags=[CAN_ELIMINATE, CAN_REORDER])

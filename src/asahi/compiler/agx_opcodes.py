@@ -128,6 +128,7 @@ SR = enum("sr", {
    53: 'subgroup_index_in_threadgroup',
    56: 'active_thread_index_in_quad',
    58: 'active_thread_index_in_subgroup',
+   60: 'coverage_mask',
    62: 'backfacing',
    63: 'is_active_thread',
    80: 'thread_position_in_grid.x',
@@ -247,15 +248,17 @@ op("fcmpsel",
       encoding_32 = (0x02, 0x7F, 8, 10),
       srcs = 4, imms = [FCOND])
 
-# sources are coordinates, LOD, texture, sampler, shadow/offset
+# sources are coordinates, LOD, texture bindless base (zero for texture state
+# registers), texture, sampler, shadow/offset
 # TODO: anything else?
 op("texture_sample",
       encoding_32 = (0x31, 0x7F, 8, 10), # XXX WRONG SIZE
-      srcs = 5, imms = [DIM, LOD_MODE, MASK, SCOREBOARD, OFFSET, SHADOW,
+      srcs = 6, imms = [DIM, LOD_MODE, MASK, SCOREBOARD, OFFSET, SHADOW,
 								GATHER])
-op("texture_load",
-      encoding_32 = (0x71, 0x7F, 8, 10), # XXX WRONG SIZE
-      srcs = 5, imms = [DIM, LOD_MODE, MASK, SCOREBOARD, OFFSET])
+for memory, can_reorder in [("texture", True), ("image", False)]:
+    op(f"{memory}_load", encoding_32 = (0x71, 0x7F, 8, 10), # XXX WRONG SIZE
+       srcs = 6, imms = [DIM, LOD_MODE, MASK, SCOREBOARD, OFFSET],
+       can_reorder = can_reorder)
 
 # sources are base, index
 op("device_load",
@@ -334,6 +337,7 @@ for is_float in [False, True]:
             imms = imms, is_float = is_float)
 
 op("bitop", (0x7E, 0x7F, 6, _), srcs = 2, imms = [TRUTH_TABLE])
+op("intl", (0x3E, 0x7F, 6, _), srcs = 2, imms = [])
 op("convert", (0x3E | L, 0x7F | L | (0x3 << 38), 6, _), srcs = 2, imms = [ROUND]) 
 
 # Sources are the coeffient register and the sample index (if applicable)
@@ -351,6 +355,11 @@ op("trap", (0x08, 0xFFFF, 2, _), dests = 0, can_eliminate = False)
 op("wait_pix", (0x48, 0xFF, 4, _), dests = 0, imms = [WRITEOUT], can_eliminate = False)
 op("signal_pix", (0x58, 0xFF, 4, _), dests = 0, imms = [WRITEOUT], can_eliminate = False)
 
+# Sources are the data vector, the coordinate vector, the LOD, the bindless
+# table if present (zero for texture state registers), and texture index.
+op("image_write", (0xF1 | (1 << 23) | (9 << 43), 0xFF, 6, 8), dests = 0, srcs = 5, imms
+   = [DIM], can_eliminate = False)
+
 # Sources are the image and the offset within shared memory
 # TODO: Do we need the short encoding?
 op("block_image_store", (0xB1, 0xFF, 10, _), dests = 0, srcs = 2,
@@ -359,8 +368,20 @@ op("block_image_store", (0xB1, 0xFF, 10, _), dests = 0, srcs = 2,
 # Barriers
 op("threadgroup_barrier", (0x0068, 0xFFFF, 2, _), dests = 0, srcs = 0,
    can_eliminate = False)
-op("memory_barrier", (0x96F5, 0xFFFF, 2, _), dests = 0, srcs = 0,
-   can_eliminate = False)
+
+def memory_barrier(name, a, b, c):
+    op(name, (0xF5 | (a << 10) | (b << 8) | (c << 12), 0xFFFF, 2, _), dests = 0, srcs = 0,
+       can_eliminate = False)
+
+memory_barrier("memory_barrier", 1, 2, 9)
+
+# TODO: Not clear what these individually are. Some might be cache flushes?
+memory_barrier("image_barrier_1", 2, 2, 10)
+memory_barrier("image_barrier_2", 3, 2, 10)
+memory_barrier("image_barrier_3", 2, 1, 10)
+memory_barrier("image_barrier_4", 3, 1, 10)
+
+memory_barrier("flush_memory_to_texture", 0, 0, 4)
 
 # Convenient aliases.
 op("mov", _, srcs = 1)

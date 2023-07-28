@@ -27,8 +27,8 @@
 #ifndef ACO_SHADER_INFO_H
 #define ACO_SHADER_INFO_H
 
+#include "ac_hw_stage.h"
 #include "ac_shader_args.h"
-#include "ac_shader_util.h"
 #include "amd_family.h"
 #include "shader_enums.h"
 
@@ -91,7 +91,6 @@ struct aco_shader_info {
    } vs;
    struct {
       uint32_t num_lds_blocks;
-      unsigned tess_input_vertices;
    } tcs;
    struct {
       bool has_epilog;

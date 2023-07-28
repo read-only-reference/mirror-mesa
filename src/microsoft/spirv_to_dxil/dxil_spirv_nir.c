@@ -96,11 +96,7 @@ dxil_spirv_nir_prep(nir_shader *nir)
    NIR_PASS_V(nir, nir_opt_deref);
 
    /* Pick off the single entrypoint that we want */
-   foreach_list_typed_safe(nir_function, func, node, &nir->functions) {
-      if (!func->is_entrypoint)
-         exec_node_remove(&func->node);
-   }
-   assert(exec_list_length(&nir->functions) == 1);
+   nir_remove_non_entrypoints(nir);
 
    /* Now that we've deleted all but the main function, we can go ahead and
    * lower the rest of the constant initializers.  We do this here so that
@@ -895,8 +891,7 @@ lower_view_index_to_rt_layer(nir_shader *nir)
                                    nir_metadata_loop_analysis, var);
    } else {
       nir_function_impl *func = nir_shader_get_entrypoint(nir);
-      nir_builder b = nir_builder_create(func);
-      b.cursor = nir_after_block(nir_impl_last_block(func));
+      nir_builder b = nir_builder_at(nir_after_block(nir_impl_last_block(func)));
       add_layer_write(&b, NULL, var);
    }
 }

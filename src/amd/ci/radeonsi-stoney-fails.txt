@@ -1,7 +1,5 @@
 glx@glx-multi-window-single-context,Fail
 glx@glx-swap-pixmap-bad,Fail
-glx@glx-visuals-depth -pixmap,Crash
-glx@glx-visuals-stencil -pixmap,Crash
 glx@glx_arb_create_context_es2_profile@invalid opengl es version,Fail
 glx@glx_arb_create_context_no_error@no error,Fail
 glx@glx_arb_create_context_robustness@invalid reset notification strategy,Fail
@@ -122,7 +120,6 @@ spec@arb_texture_rg@texwrap formats-int bordercolor-swizzled@GL_RG8I- swizzled- 
 spec@arb_texture_rg@texwrap formats-int bordercolor-swizzled@GL_RG8UI- swizzled- border color only,Fail
 spec@arb_texture_rgb10_a2ui@texwrap formats bordercolor-swizzled,Fail
 spec@arb_texture_rgb10_a2ui@texwrap formats bordercolor-swizzled@GL_RGB10_A2UI- swizzled- border color only,Fail
-spec@arb_timer_query@timestamp-get,Fail
 spec@egl 1.4@eglterminate then unbind context,Fail
 spec@egl_chromium_sync_control@conformance,Fail
 spec@egl_chromium_sync_control@conformance@eglGetSyncValuesCHROMIUM_msc_and_sbc_test,Fail
@@ -234,3 +231,5 @@ spec@!opengl 1.1@line-smooth-stipple,Fail
 
 # since Debian 12 (bookworm)
 spec@arb_viewport_array@display-list,Fail
+# since transition XORG -> WESTON
+glx@glx_arb_sync_control@waitformsc,Fail

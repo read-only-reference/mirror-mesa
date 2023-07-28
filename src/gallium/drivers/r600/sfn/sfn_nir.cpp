@@ -113,11 +113,11 @@ bool
 r600_lower_scratch_addresses(nir_shader *shader)
 {
    bool progress = false;
-   nir_foreach_function(function, shader)
+   nir_foreach_function_impl(impl, shader)
    {
-      nir_builder build = nir_builder_create(function->impl);
+      nir_builder build = nir_builder_create(impl);
 
-      nir_foreach_block(block, function->impl)
+      nir_foreach_block(block, impl)
       {
          nir_foreach_instr(instr, block)
          {
@@ -503,12 +503,12 @@ r600_get_natural_size_align_bytes(const struct glsl_type *type,
 }
 
 static bool
-r600_lower_shared_io_impl(nir_function *func)
+r600_lower_shared_io_impl(nir_function_impl *impl)
 {
-   nir_builder b = nir_builder_create(func->impl);
+   nir_builder b = nir_builder_create(impl);
 
    bool progress = false;
-   nir_foreach_block(block, func->impl)
+   nir_foreach_block(block, impl)
    {
       nir_foreach_instr_safe(instr, block)
       {
@@ -586,9 +586,9 @@ static bool
 r600_lower_shared_io(nir_shader *nir)
 {
    bool progress = false;
-   nir_foreach_function(function, nir)
+   nir_foreach_function_impl(impl, nir)
    {
-      if (function->impl && r600_lower_shared_io_impl(function))
+      if (r600_lower_shared_io_impl(impl))
          progress = true;
    }
    return progress;
@@ -874,9 +874,8 @@ r600_shader_from_nir(struct r600_context *rctx,
       NIR_PASS_V(sh, r600_append_tcs_TF_emission, (mesa_prim)key->tcs.prim_mode);
 
    if (sh->info.stage == MESA_SHADER_TESS_EVAL) {
-      NIR_PASS_V(sh,
-                 r600_lower_tess_coord,
-                 u_tess_prim_from_shader(sh->info.tess._primitive_mode));
+      NIR_PASS_V(sh, nir_lower_tess_coord_z,
+                 sh->info.tess._primitive_mode == TESS_PRIMITIVE_TRIANGLES);
    }
 
    NIR_PASS_V(sh, nir_lower_alu_to_scalar, r600_lower_to_scalar_instr_filter, NULL);
@@ -936,7 +935,7 @@ r600_shader_from_nir(struct r600_context *rctx,
    NIR_PASS_V(sh, nir_lower_bool_to_int32);
 
    NIR_PASS_V(sh, nir_lower_locals_to_regs, 32);
-   NIR_PASS_V(sh, nir_convert_from_ssa, true);
+   NIR_PASS_V(sh, nir_convert_from_ssa, true, true);
    NIR_PASS_V(sh, nir_opt_dce);
 
    if (rctx->screen->b.debug_flags & DBG_ALL_SHADERS) {

@@ -73,6 +73,7 @@ typedef uint32_t xcb_window_t;
 #include "vk_queue.h"
 #include "vk_sync.h"
 #include "vk_sync_timeline.h"
+#include "vk_ycbcr_conversion.h"
 #include "lp_jit.h"
 
 #include "wsi_common.h"
@@ -83,7 +84,7 @@ extern "C" {
 #endif
 
 #define MAX_SETS         8
-#define MAX_DESCRIPTORS (UINT32_MAX / sizeof(union lp_descriptor))
+#define MAX_DESCRIPTORS 1000000 /* Required by vkd3d-proton */
 #define MAX_PUSH_CONSTANTS_SIZE 256
 #define MAX_PUSH_DESCRIPTORS 32
 #define MAX_DESCRIPTOR_UNIFORM_BLOCK_SIZE 4096
@@ -276,9 +277,11 @@ struct lvp_image_view {
 
 struct lvp_sampler {
    struct vk_object_base base;
-   union lp_descriptor desc;
+   struct lp_descriptor desc;
 
    struct lp_texture_handle *texture_handle;
+
+   struct vk_ycbcr_conversion *ycbcr_conversion;
 };
 
 struct lvp_descriptor_set_binding_layout {
@@ -294,7 +297,7 @@ struct lvp_descriptor_set_binding_layout {
    uint32_t uniform_block_size;
 
    /* Immutable samplers (or NULL if no immutable samplers) */
-   union lp_descriptor **immutable_samplers;
+   struct lvp_sampler **immutable_samplers;
 };
 
 struct lvp_descriptor_set_layout {
@@ -623,8 +626,6 @@ lvp_vk_format_to_pipe_format(VkFormat format)
        format == VK_FORMAT_R64G64B64_SFLOAT ||
        format == VK_FORMAT_A2R10G10B10_SINT_PACK32 ||
        format == VK_FORMAT_A2B10G10R10_SINT_PACK32 ||
-       format == VK_FORMAT_G8B8G8R8_422_UNORM ||
-       format == VK_FORMAT_B8G8R8G8_422_UNORM ||
        format == VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM ||
        format == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM ||
        format == VK_FORMAT_G8_B8_R8_3PLANE_422_UNORM ||
