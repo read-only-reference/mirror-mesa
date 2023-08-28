@@ -22,7 +22,7 @@
 static void
 insert_z_write(nir_builder *b)
 {
-   nir_ssa_def *z = nir_load_frag_coord_zw(b, .component = 2);
+   nir_def *z = nir_load_frag_coord_zw(b, .component = 2);
 
    nir_store_output(b, z, nir_imm_int(b, 0),
                     .io_semantics.location = FRAG_RESULT_DEPTH,
@@ -32,12 +32,8 @@ insert_z_write(nir_builder *b)
 }
 
 static bool
-pass(struct nir_builder *b, nir_instr *instr, void *data)
+pass(struct nir_builder *b, nir_intrinsic_instr *intr, void *data)
 {
-   if (instr->type != nir_instr_type_intrinsic)
-      return false;
-
-   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
    if (intr->intrinsic != nir_intrinsic_store_output)
       return false;
 
@@ -47,7 +43,7 @@ pass(struct nir_builder *b, nir_instr *instr, void *data)
       return false;
    *done = true;
 
-   b->cursor = nir_before_instr(instr);
+   b->cursor = nir_before_instr(&intr->instr);
    insert_z_write(b);
    return true;
 }
@@ -76,7 +72,7 @@ agx_nir_lower_frag_sidefx(nir_shader *s)
    if (s->info.fs.early_fragment_tests) {
       assert(!writes_zs && "incompatible");
       nir_function_impl *impl = nir_shader_get_entrypoint(s);
-      nir_builder b = nir_builder_at(nir_before_cf_list(&impl->body));
+      nir_builder b = nir_builder_at(nir_before_impl(impl));
       nir_sample_mask_agx(&b, nir_imm_intN_t(&b, ALL_SAMPLES, 16),
                           nir_imm_intN_t(&b, ALL_SAMPLES, 16));
       return true;
@@ -87,14 +83,13 @@ agx_nir_lower_frag_sidefx(nir_shader *s)
       return false;
 
    bool done = false;
-   nir_shader_instructions_pass(
+   nir_shader_intrinsics_pass(
       s, pass, nir_metadata_block_index | nir_metadata_dominance, &done);
 
    /* If there's no render targets written, just put the write at the end */
    if (!done) {
       nir_function_impl *impl = nir_shader_get_entrypoint(s);
-      nir_builder b =
-         nir_builder_at(nir_after_block(nir_impl_last_block(impl)));
+      nir_builder b = nir_builder_at(nir_after_impl(impl));
 
       insert_z_write(&b);
    }

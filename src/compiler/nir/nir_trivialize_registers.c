@@ -86,7 +86,7 @@ move_reg_decls(nir_block *block)
    }
 }
 
- /*
+/*
  * Any load can be trivialized by copying immediately after the load and then
  * rewriting uses of the load to read from the copy. That has no functional
  * change, but it means that for every use of the load (the copy), there is no
@@ -99,11 +99,11 @@ trivialize_load(nir_intrinsic_instr *load)
    assert(nir_is_load_reg(load));
 
    nir_builder b = nir_builder_at(nir_after_instr(&load->instr));
-   nir_ssa_def *copy = nir_mov(&b, &load->dest.ssa);
-   copy->divergent = load->dest.ssa.divergent;
-   nir_ssa_def_rewrite_uses_after(&load->dest.ssa, copy, copy->parent_instr);
+   nir_def *copy = nir_mov(&b, &load->def);
+   copy->divergent = load->def.divergent;
+   nir_def_rewrite_uses_after(&load->def, copy, copy->parent_instr);
 
-   assert(list_is_singular(&load->dest.ssa.uses));
+   assert(list_is_singular(&load->def.uses));
 }
 
 struct trivialize_src_state {
@@ -116,7 +116,6 @@ trivialize_src(nir_src *src, void *state_)
 {
    struct trivialize_src_state *state = state_;
 
-   assert(src->is_ssa && "register intrinsics only");
    nir_instr *parent = src->ssa->parent_instr;
    if (parent->type != nir_instr_type_intrinsic)
       return true;
@@ -194,9 +193,9 @@ isolate_store(nir_intrinsic_instr *store)
    assert(nir_is_store_reg(store));
 
    nir_builder b = nir_builder_at(nir_before_instr(&store->instr));
-   nir_ssa_def *copy = nir_mov(&b, store->src[0].ssa);
+   nir_def *copy = nir_mov(&b, store->src[0].ssa);
    copy->divergent = store->src[0].ssa->divergent;
-   nir_instr_rewrite_src_ssa(&store->instr, &store->src[0], copy);
+   nir_src_rewrite(&store->src[0], copy);
 }
 
 static void
@@ -213,7 +212,7 @@ clear_store(nir_intrinsic_instr *store,
 }
 
 static void
-clear_reg_stores(nir_ssa_def *reg,
+clear_reg_stores(nir_def *reg,
                  struct hash_table *possibly_trivial_stores)
 {
    /* At any given point in store trivialize pass, every store in the current
@@ -240,7 +239,7 @@ static void
 trivialize_store(nir_intrinsic_instr *store,
                  struct hash_table *possibly_trivial_stores)
 {
-   nir_ssa_def *reg = store->src[1].ssa;
+   nir_def *reg = store->src[1].ssa;
 
    /* At any given point in store trivialize pass, every store in the current
     * block is either trivial or in the possibly_trivial_stores map.
@@ -270,7 +269,7 @@ trivialize_store(nir_intrinsic_instr *store,
 }
 
 static void
-trivialize_reg_stores(nir_ssa_def *reg, nir_component_mask_t mask,
+trivialize_reg_stores(nir_def *reg, nir_component_mask_t mask,
                       struct hash_table *possibly_trivial_stores)
 {
    /* At any given point in store trivialize pass, every store in the current
@@ -305,13 +304,13 @@ trivialize_read_after_write(nir_intrinsic_instr *load,
 {
    assert(nir_is_load_reg(load));
 
-   unsigned nr = load->dest.ssa.num_components;
+   unsigned nr = load->def.num_components;
    trivialize_reg_stores(load->src[0].ssa, nir_component_mask(nr),
                          possibly_trivial_stores);
 }
 
 static bool
-clear_def(nir_ssa_def *def, void *state)
+clear_def(nir_def *def, void *state)
 {
    struct hash_table *possibly_trivial_stores = state;
 
@@ -364,7 +363,6 @@ trivialize_source(nir_src *src, void *state)
       trivialize_read_after_write(load_reg, possibly_trivial_stores);
 
    return true;
-
 }
 
 static void
@@ -388,7 +386,7 @@ trivialize_stores(nir_function_impl *impl, nir_block *block)
     */
 
    nir_foreach_instr_reverse_safe(instr, block) {
-      nir_foreach_ssa_def(instr, clear_def, possibly_trivial_stores);
+      nir_foreach_def(instr, clear_def, possibly_trivial_stores);
 
       if (instr->type == nir_instr_type_intrinsic) {
          nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
@@ -397,8 +395,8 @@ trivialize_stores(nir_function_impl *impl, nir_block *block)
             /* Read-after-write: there is a load between the def and store. */
             trivialize_read_after_write(intr, possibly_trivial_stores);
          } else if (nir_is_store_reg(intr)) {
-            nir_ssa_def *value = intr->src[0].ssa;
-            nir_ssa_def *reg = intr->src[1].ssa;
+            nir_def *value = intr->src[0].ssa;
+            nir_def *reg = intr->src[1].ssa;
             nir_intrinsic_instr *decl = nir_reg_get_decl(reg);
             unsigned num_components = nir_intrinsic_num_components(decl);
             nir_component_mask_t write_mask = nir_intrinsic_write_mask(intr);
@@ -416,7 +414,7 @@ trivialize_stores(nir_function_impl *impl, nir_block *block)
             /* SSA-only instruction types */
             nir_instr *parent = value->parent_instr;
             nontrivial |= (parent->type == nir_instr_type_load_const) ||
-                          (parent->type == nir_instr_type_ssa_undef);
+                          (parent->type == nir_instr_type_undef);
 
             /* Must be written in the same block */
             nontrivial |= (parent->block != block);

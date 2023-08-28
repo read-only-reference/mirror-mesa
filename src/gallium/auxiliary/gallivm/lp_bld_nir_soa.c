@@ -1893,7 +1893,7 @@ static void emit_sysval_intrin(struct lp_build_nir_context *bld_base,
 {
    struct lp_build_nir_soa_context *bld = (struct lp_build_nir_soa_context *)bld_base;
    struct gallivm_state *gallivm = bld_base->base.gallivm;
-   struct lp_build_context *bld_broad = get_int_bld(bld_base, true, instr->dest.ssa.bit_size);
+   struct lp_build_context *bld_broad = get_int_bld(bld_base, true, instr->def.bit_size);
    switch (instr->intrinsic) {
    case nir_intrinsic_load_instance_id:
       result[0] = lp_build_broadcast_scalar(&bld_base->uint_bld, bld->system_values.instance_id);
@@ -1917,8 +1917,6 @@ static void emit_sysval_intrin(struct lp_build_nir_context *bld_base,
       LLVMValueRef tmp[3];
       for (unsigned i = 0; i < 3; i++) {
          tmp[i] = bld->system_values.block_id[i];
-         if (instr->dest.ssa.bit_size == 64)
-            tmp[i] = LLVMBuildZExt(gallivm->builder, tmp[i], bld_base->uint64_bld.elem_type, "");
          result[i] = lp_build_broadcast_scalar(bld_broad, tmp[i]);
       }
       break;
@@ -1934,8 +1932,6 @@ static void emit_sysval_intrin(struct lp_build_nir_context *bld_base,
       LLVMValueRef tmp[3];
       for (unsigned i = 0; i < 3; i++) {
          tmp[i] = bld->system_values.grid_size[i];
-         if (instr->dest.ssa.bit_size == 64)
-            tmp[i] = LLVMBuildZExt(gallivm->builder, tmp[i], bld_base->uint64_bld.elem_type, "");
          result[i] = lp_build_broadcast_scalar(bld_broad, tmp[i]);
       }
       break;
@@ -2927,7 +2923,6 @@ void lp_build_nir_soa(struct gallivm_state *gallivm,
    bld.consts_ptr = params->consts_ptr;
    bld.ssbo_ptr = params->ssbo_ptr;
    bld.sampler = params->sampler;
-//   bld.bld_base.info = params->info;
 
    bld.resources_type = params->resources_type;
    bld.resources_ptr = params->resources_ptr;
@@ -2940,7 +2935,7 @@ void lp_build_nir_soa(struct gallivm_state *gallivm,
    bld.coro = params->coro;
    bld.kernel_args_ptr = params->kernel_args;
    bld.indirects = 0;
-   if (params->info->indirect_files & (1 << TGSI_FILE_INPUT))
+   if (shader->info.inputs_read_indirectly)
       bld.indirects |= nir_var_shader_in;
 
    bld.gs_iface = params->gs_iface;

@@ -1087,24 +1087,6 @@ iris_image_view_aux_usage(struct iris_context *ice,
    return res->aux.usage;
 }
 
-bool
-iris_can_sample_mcs_with_clear(const struct intel_device_info *devinfo,
-                               const struct iris_resource *res)
-{
-   assert(isl_aux_usage_has_mcs(res->aux.usage));
-
-   /* On TGL, the sampler has an issue with some 8 and 16bpp MSAA fast clears.
-    * See HSD 1707282275, wa_14013111325. Due to the use of
-    * format-reinterpretation, a simplified workaround is implemented.
-    */
-   if (intel_needs_workaround(devinfo, 14013111325) &&
-       isl_format_get_layout(res->surf.format)->bpb <= 16) {
-      return false;
-   }
-
-   return true;
-}
-
 static bool
 formats_are_fast_clear_compatible(enum isl_format a, enum isl_format b)
 {
@@ -1138,15 +1120,41 @@ iris_resource_prepare_texture(struct iris_context *ice,
 
    bool clear_supported = isl_aux_usage_has_fast_clears(aux_usage);
 
-   /* Clear color is specified as ints or floats and the conversion is done by
-    * the sampler.  If we have a texture view, we would have to perform the
-    * clear color conversion manually.  Just disable clear color.
+   /* On gfx8-9, the clear color is specified as ints or floats and the
+    * conversion is done by the sampler.  If we have a texture view, we would
+    * have to perform the clear color conversion manually.  Just disable clear
+    * color.
     */
-   if (!formats_are_fast_clear_compatible(res->surf.format, view_format))
+   if (devinfo->ver <= 9 &&
+       !formats_are_fast_clear_compatible(res->surf.format, view_format)) {
       clear_supported = false;
+   }
 
+   /* On gfx11+, the sampler reads clear values stored in pixel form.  The
+    * location the sampler reads from is dependent on the bits-per-channel of
+    * the format.  Specifically, a pixel is read from the Raw Clear Color
+    * fields if the format is 32bpc.  Otherwise, it's read from the Converted
+    * Clear Color fields.  To avoid modifying the clear color, disable it if
+    * the new format points the sampler to an incompatible location.
+    *
+    * Note: although hardware looks at the bits-per-channel of the format, we
+    * only need to check the red channel's size here.  In the scope of formats
+    * supporting fast-clears, all 32bpc formats have 32-bit red channels and
+    * vice-versa.
+    */
+   if (devinfo->ver >= 11 &&
+       isl_format_get_layout(res->surf.format)->channels.r.bits != 32 &&
+       isl_format_get_layout(view_format)->channels.r.bits == 32) {
+      clear_supported = false;
+   }
+
+   /* On gfx12.0, the sampler has an issue with some 8 and 16bpp MSAA fast
+    * clears.  See HSD 1707282275, wa_14013111325.  A simplified workaround is
+    * implemented, but we could implement something more specific.
+    */
    if (isl_aux_usage_has_mcs(aux_usage) &&
-       !iris_can_sample_mcs_with_clear(devinfo, res)) {
+       intel_needs_workaround(devinfo, 14013111325) &&
+       isl_format_get_layout(res->surf.format)->bpb <= 16) {
       clear_supported = false;
    }
 
@@ -1232,10 +1240,6 @@ iris_resource_prepare_render(struct iris_context *ice,
                              uint32_t start_layer, uint32_t layer_count,
                              enum isl_aux_usage aux_usage)
 {
-   iris_resource_prepare_access(ice, res, level, 1, start_layer,
-                                layer_count, aux_usage,
-                                isl_aux_usage_has_fast_clears(aux_usage));
-
    /* If the resource's clear color is incompatible with render_format,
     * replace it with one that is. This process keeps the aux buffer
     * compatible with render_format and the resource's format.
@@ -1283,6 +1287,14 @@ iris_resource_prepare_render(struct iris_context *ice,
          ice->state.stage_dirty |= IRIS_ALL_STAGE_DIRTY_BINDINGS;
       }
    }
+
+   /* Now, do the preparation requested by the caller. Doing this after the
+    * partial resolves above helps maintain the accuracy of the aux-usage
+    * tracking that happens within the preparation function.
+    */
+   iris_resource_prepare_access(ice, res, level, 1, start_layer,
+                                layer_count, aux_usage,
+                                isl_aux_usage_has_fast_clears(aux_usage));
 }
 
 void

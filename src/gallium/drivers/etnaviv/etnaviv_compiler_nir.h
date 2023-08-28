@@ -141,12 +141,10 @@ static inline bool is_sysval(nir_instr *instr)
 static inline unsigned
 src_index(nir_function_impl *impl, nir_src *src)
 {
-   assert(src->is_ssa);
-
    nir_intrinsic_instr *load = nir_load_reg_for_def(src->ssa);
 
    if (load) {
-      nir_ssa_def *reg = load->src[0].ssa;
+      nir_def *reg = load->src[0].ssa;
       ASSERTED nir_intrinsic_instr *decl = nir_reg_get_decl(reg);
       assert(nir_intrinsic_base(load) == 0);
       assert(nir_intrinsic_num_array_elems(decl) == 0);
@@ -157,16 +155,14 @@ src_index(nir_function_impl *impl, nir_src *src)
    return src->ssa->index;
 }
 
-/* get unique ssa/reg index for nir_dest */
+/* get unique ssa/reg index for nir_def */
 static inline unsigned
-dest_index(nir_function_impl *impl, nir_dest *dest)
+def_index(nir_function_impl *impl, nir_def *def)
 {
-   assert(dest->is_ssa);
-
-   nir_intrinsic_instr *store = nir_store_reg_for_def(&dest->ssa);
+   nir_intrinsic_instr *store = nir_store_reg_for_def(def);
 
    if (store) {
-      nir_ssa_def *reg = store->src[1].ssa;
+      nir_def *reg = store->src[1].ssa;
       ASSERTED nir_intrinsic_instr *decl = nir_reg_get_decl(reg);
       assert(nir_intrinsic_base(store) == 0);
       assert(nir_intrinsic_num_array_elems(decl) == 0);
@@ -174,23 +170,20 @@ dest_index(nir_function_impl *impl, nir_dest *dest)
       return reg->index;
    }
 
-   return dest->ssa.index;
+   return def->index;
 }
 
 static inline void
-update_swiz_mask(nir_alu_instr *alu, nir_dest *dest, unsigned *swiz, unsigned *mask)
+update_swiz_mask(nir_alu_instr *alu, nir_def *def, unsigned *swiz, unsigned *mask)
 {
    if (!swiz)
       return;
 
-   bool is_vec = dest != NULL;
+   bool is_vec = def != NULL;
    unsigned swizzle = 0, write_mask = 0;
-   for (unsigned i = 0; i < 4; i++) {
-      /* channel not written */
-      if (!(alu->dest.write_mask & (1 << i)))
-         continue;
+   for (unsigned i = 0; i < alu->def.num_components; i++) {
       /* src is different (only check for vecN) */
-      if (is_vec && alu->src[i].src.ssa != &dest->ssa)
+      if (is_vec && alu->src[i].src.ssa != def)
          continue;
 
       unsigned src_swiz = is_vec ? alu->src[i].swizzle[0] : alu->src[0].swizzle[i];
@@ -203,20 +196,20 @@ update_swiz_mask(nir_alu_instr *alu, nir_dest *dest, unsigned *swiz, unsigned *m
    *mask = write_mask;
 }
 
-static nir_dest *
-real_dest(nir_dest *dest, unsigned *swiz, unsigned *mask)
+static nir_def *
+real_def(nir_def *def, unsigned *swiz, unsigned *mask)
 {
-   if (!dest || !dest->is_ssa)
-      return dest;
+   if (!def)
+      return def;
 
-   bool can_bypass_src = !nir_ssa_def_used_by_if(&dest->ssa);
-   nir_instr *p_instr = dest->ssa.parent_instr;
+   bool can_bypass_src = !nir_def_used_by_if(def);
+   nir_instr *p_instr = def->parent_instr;
 
    /* if used by a vecN, the "real" destination becomes the vecN destination
     * lower_alu guarantees that values used by a vecN are only used by that vecN
     * we can apply the same logic to movs in a some cases too
     */
-   nir_foreach_use(use_src, &dest->ssa) {
+   nir_foreach_use(use_src, def) {
       nir_instr *instr = use_src->parent_instr;
 
       /* src bypass check: for now only deal with tex src mov case
@@ -243,22 +236,21 @@ real_dest(nir_dest *dest, unsigned *swiz, unsigned *mask)
       case nir_op_vec2:
       case nir_op_vec3:
       case nir_op_vec4:
-         assert(!nir_ssa_def_used_by_if(&dest->ssa));
-         nir_foreach_use(use_src, &dest->ssa)
+         assert(!nir_def_used_by_if(def));
+         nir_foreach_use(use_src, def)
             assert(use_src->parent_instr == instr);
 
-         update_swiz_mask(alu, dest, swiz, mask);
+         update_swiz_mask(alu, def, swiz, mask);
          break;
       case nir_op_mov: {
-         switch (dest->ssa.parent_instr->type) {
+         switch (def->parent_instr->type) {
          case nir_instr_type_alu:
          case nir_instr_type_tex:
             break;
          default:
             continue;
          }
-         if (nir_ssa_def_used_by_if(&dest->ssa) ||
-             list_length(&dest->ssa.uses) > 1)
+         if (nir_def_used_by_if(def) || list_length(&def->uses) > 1)
             continue;
 
          update_swiz_mask(alu, NULL, swiz, mask);
@@ -270,7 +262,7 @@ real_dest(nir_dest *dest, unsigned *swiz, unsigned *mask)
 
       assert(!(instr->pass_flags & BYPASS_SRC));
       instr->pass_flags |= BYPASS_DST;
-      return real_dest(&alu->dest.dest, swiz, mask);
+      return real_def(&alu->def, swiz, mask);
    }
 
    if (can_bypass_src && !(p_instr->pass_flags & BYPASS_DST)) {
@@ -278,21 +270,21 @@ real_dest(nir_dest *dest, unsigned *swiz, unsigned *mask)
       return NULL;
    }
 
-   return dest;
+   return def;
 }
 
-/* if instruction dest needs a register, return nir_dest for it */
-static inline nir_dest *
-dest_for_instr(nir_instr *instr)
+/* if instruction dest needs a register, return nir_def for it */
+static inline nir_def *
+def_for_instr(nir_instr *instr)
 {
-   nir_dest *dest = NULL;
+   nir_def *def = NULL;
 
    switch (instr->type) {
    case nir_instr_type_alu:
-      dest = &nir_instr_as_alu(instr)->dest.dest;
+      def = &nir_instr_as_alu(instr)->def;
       break;
    case nir_instr_type_tex:
-      dest = &nir_instr_as_tex(instr)->dest;
+      def = &nir_instr_as_tex(instr)->def;
       break;
    case nir_instr_type_intrinsic: {
       nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
@@ -302,19 +294,19 @@ dest_for_instr(nir_instr *instr)
           intr->intrinsic == nir_intrinsic_load_instance_id ||
           intr->intrinsic == nir_intrinsic_load_texture_scale ||
           intr->intrinsic == nir_intrinsic_load_texture_size_etna)
-         dest = &intr->dest;
+         def = &intr->def;
    } break;
    case nir_instr_type_deref:
       return NULL;
    default:
       break;
    }
-   return real_dest(dest, NULL, NULL);
+   return real_def(def, NULL, NULL);
 }
 
 struct live_def {
    nir_instr *instr;
-   nir_dest *dest; /* cached dest_for_instr */
+   nir_def *def; /* cached def_for_instr */
    unsigned live_start, live_end; /* live range */
 };
 

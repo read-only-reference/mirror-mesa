@@ -9,20 +9,16 @@
 #include "shader_enums.h"
 
 static bool
-lower_tess_coord_z(nir_builder *b, nir_instr *instr, void *state)
+lower_tess_coord_z(nir_builder *b, nir_intrinsic_instr *intr, void *state)
 {
-   if (instr->type != nir_instr_type_intrinsic)
-      return false;
-
-   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
    if (intr->intrinsic != nir_intrinsic_load_tess_coord)
       return false;
 
-   b->cursor = nir_instr_remove(instr);
-   nir_ssa_def *xy = nir_load_tess_coord_xy(b);
-   nir_ssa_def *x = nir_channel(b, xy, 0);
-   nir_ssa_def *y = nir_channel(b, xy, 1);
-   nir_ssa_def *z;
+   b->cursor = nir_instr_remove(&intr->instr);
+   nir_def *xy = nir_load_tess_coord_xy(b);
+   nir_def *x = nir_channel(b, xy, 0);
+   nir_def *y = nir_channel(b, xy, 1);
+   nir_def *z;
 
    bool *triangles = state;
    if (*triangles)
@@ -30,14 +26,15 @@ lower_tess_coord_z(nir_builder *b, nir_instr *instr, void *state)
    else
       z = nir_imm_float(b, 0.0f);
 
-   nir_ssa_def_rewrite_uses(&intr->dest.ssa, nir_vec3(b, x, y, z));
+   nir_def_rewrite_uses(&intr->def, nir_vec3(b, x, y, z));
    return true;
 }
 
 bool
 nir_lower_tess_coord_z(nir_shader *shader, bool triangles)
 {
-   return nir_shader_instructions_pass(shader, lower_tess_coord_z,
+   return nir_shader_intrinsics_pass(shader, lower_tess_coord_z,
                                        nir_metadata_block_index |
-                                       nir_metadata_dominance, &triangles);
+                                          nir_metadata_dominance,
+                                       &triangles);
 }

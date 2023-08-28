@@ -691,55 +691,6 @@ const uint32_t genX(vk_to_intel_front_face)[] = {
    [VK_FRONT_FACE_CLOCKWISE]                 = 0
 };
 
-void
-genX(rasterization_mode)(VkPolygonMode raster_mode,
-                         VkLineRasterizationModeEXT line_mode,
-                         float line_width,
-                         uint32_t *api_mode,
-                         bool *msaa_rasterization_enable)
-{
-   if (raster_mode == VK_POLYGON_MODE_LINE) {
-      /* Unfortunately, configuring our line rasterization hardware on gfx8
-       * and later is rather painful.  Instead of giving us bits to tell the
-       * hardware what line mode to use like we had on gfx7, we now have an
-       * arcane combination of API Mode and MSAA enable bits which do things
-       * in a table which are expected to magically put the hardware into the
-       * right mode for your API.  Sadly, Vulkan isn't any of the APIs the
-       * hardware people thought of so nothing works the way you want it to.
-       *
-       * Look at the table titled "Multisample Rasterization Modes" in Vol 7
-       * of the Skylake PRM for more details.
-       */
-      switch (line_mode) {
-      case VK_LINE_RASTERIZATION_MODE_RECTANGULAR_EXT:
-         *api_mode = DX101;
-#if GFX_VER <= 9
-         /* Prior to ICL, the algorithm the HW uses to draw wide lines
-          * doesn't quite match what the CTS expects, at least for rectangular
-          * lines, so we set this to false here, making it draw parallelograms
-          * instead, which work well enough.
-          */
-         *msaa_rasterization_enable = line_width < 1.0078125;
-#else
-         *msaa_rasterization_enable = true;
-#endif
-         break;
-
-      case VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH_EXT:
-      case VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT:
-         *api_mode = DX9OGL;
-         *msaa_rasterization_enable = false;
-         break;
-
-      default:
-         unreachable("Unsupported line rasterization mode");
-      }
-   } else {
-      *api_mode = DX101;
-      *msaa_rasterization_enable = true;
-   }
-}
-
 static void
 emit_rs_state(struct anv_graphics_pipeline *pipeline,
               const struct vk_input_assembly_state *ia,
@@ -804,9 +755,18 @@ emit_ms_state(struct anv_graphics_pipeline *pipeline,
               const struct vk_multisample_state *ms)
 {
    struct anv_batch *batch = &pipeline->base.base.batch;
+   anv_batch_emit(batch, GENX(3DSTATE_MULTISAMPLE), ms) {
+      ms.NumberofMultisamples       = __builtin_ffs(pipeline->rasterization_samples) - 1;
 
-   /* On Gfx8+ 3DSTATE_MULTISAMPLE only holds the number of samples. */
-   genX(emit_multisample)(batch, pipeline->rasterization_samples);
+      ms.PixelLocation              = CENTER;
+
+      /* The PRM says that this bit is valid only for DX9:
+       *
+       *    SW can choose to set this bit only for DX9 API. DX10/OGL API's
+       *    should not have any effect by setting or not setting this bit.
+       */
+      ms.PixelPositionOffsetEnable  = false;
+   }
 }
 
 const uint32_t genX(vk_to_intel_logic_op)[] = {
@@ -1159,8 +1119,7 @@ get_scratch_surf(struct anv_pipeline *pipeline,
       anv_scratch_pool_alloc(pipeline->device,
                              &pipeline->device->scratch_pool,
                              stage, bin->prog_data->total_scratch);
-   anv_reloc_list_add_bo(pipeline->batch.relocs,
-                         pipeline->batch.alloc, bo);
+   anv_reloc_list_add_bo(pipeline->batch.relocs, bo);
    return anv_scratch_pool_get_surf(pipeline->device,
                                     &pipeline->device->scratch_pool,
                                     bin->prog_data->total_scratch) >> 4;
@@ -1384,67 +1343,63 @@ emit_3dstate_hs_ds(struct anv_graphics_pipeline *pipeline,
 static void
 emit_3dstate_gs(struct anv_graphics_pipeline *pipeline)
 {
-   struct anv_batch *batch = &pipeline->base.base.batch;
    const struct intel_device_info *devinfo = pipeline->base.base.device->info;
    const struct anv_shader_bin *gs_bin =
       pipeline->base.shaders[MESA_SHADER_GEOMETRY];
-
-   if (!anv_pipeline_has_stage(pipeline, MESA_SHADER_GEOMETRY)) {
-      anv_batch_emit(batch, GENX(3DSTATE_GS), gs);
-      return;
-   }
-
-   const struct brw_gs_prog_data *gs_prog_data = get_gs_prog_data(pipeline);
 
    struct GENX(3DSTATE_GS) gs = {
       GENX(3DSTATE_GS_header),
    };
 
-   gs.Enable                  = true;
-   gs.StatisticsEnable        = true;
-   gs.KernelStartPointer      = gs_bin->kernel.offset;
-   gs.DispatchMode            = gs_prog_data->base.dispatch_mode;
+   if (anv_pipeline_has_stage(pipeline, MESA_SHADER_GEOMETRY)) {
+       const struct brw_gs_prog_data *gs_prog_data = get_gs_prog_data(pipeline);
 
-   gs.SingleProgramFlow       = false;
-   gs.VectorMaskEnable        = false;
-   /* Wa_1606682166 */
-   gs.SamplerCount            = GFX_VER == 11 ? 0 : get_sampler_count(gs_bin);
-   gs.BindingTableEntryCount  = gs_bin->bind_map.surface_count;
-   gs.IncludeVertexHandles    = gs_prog_data->base.include_vue_handles;
-   gs.IncludePrimitiveID      = gs_prog_data->include_primitive_id;
+      gs.Enable                  = true;
+      gs.StatisticsEnable        = true;
+      gs.KernelStartPointer      = gs_bin->kernel.offset;
+      gs.DispatchMode            = gs_prog_data->base.dispatch_mode;
 
-   gs.MaximumNumberofThreads = devinfo->max_gs_threads - 1;
+      gs.SingleProgramFlow       = false;
+      gs.VectorMaskEnable        = false;
+      /* Wa_1606682166 */
+      gs.SamplerCount            = GFX_VER == 11 ? 0 : get_sampler_count(gs_bin);
+      gs.BindingTableEntryCount  = gs_bin->bind_map.surface_count;
+      gs.IncludeVertexHandles    = gs_prog_data->base.include_vue_handles;
+      gs.IncludePrimitiveID      = gs_prog_data->include_primitive_id;
 
-   gs.OutputVertexSize        = gs_prog_data->output_vertex_size_hwords * 2 - 1;
-   gs.OutputTopology          = gs_prog_data->output_topology;
-   gs.ControlDataFormat       = gs_prog_data->control_data_format;
-   gs.ControlDataHeaderSize   = gs_prog_data->control_data_header_size_hwords;
-   gs.InstanceControl         = MAX2(gs_prog_data->invocations, 1) - 1;
-   gs.ReorderMode             = LEADING;
+      gs.MaximumNumberofThreads = devinfo->max_gs_threads - 1;
 
-   gs.ExpectedVertexCount     = gs_prog_data->vertices_in;
-   gs.StaticOutput            = gs_prog_data->static_vertex_count >= 0;
-   gs.StaticOutputVertexCount = gs_prog_data->static_vertex_count >= 0 ?
-      gs_prog_data->static_vertex_count : 0;
+      gs.OutputVertexSize        = gs_prog_data->output_vertex_size_hwords * 2 - 1;
+      gs.OutputTopology          = gs_prog_data->output_topology;
+      gs.ControlDataFormat       = gs_prog_data->control_data_format;
+      gs.ControlDataHeaderSize   = gs_prog_data->control_data_header_size_hwords;
+      gs.InstanceControl         = MAX2(gs_prog_data->invocations, 1) - 1;
+      gs.ReorderMode             = LEADING;
 
-   gs.VertexURBEntryReadOffset = 0;
-   gs.VertexURBEntryReadLength = gs_prog_data->base.urb_read_length;
-   gs.DispatchGRFStartRegisterForURBData =
-      gs_prog_data->base.base.dispatch_grf_start_reg;
+      gs.ExpectedVertexCount     = gs_prog_data->vertices_in;
+      gs.StaticOutput            = gs_prog_data->static_vertex_count >= 0;
+      gs.StaticOutputVertexCount = gs_prog_data->static_vertex_count >= 0 ?
+         gs_prog_data->static_vertex_count : 0;
 
-   gs.UserClipDistanceClipTestEnableBitmask =
-      gs_prog_data->base.clip_distance_mask;
-   gs.UserClipDistanceCullTestEnableBitmask =
-      gs_prog_data->base.cull_distance_mask;
+      gs.VertexURBEntryReadOffset = 0;
+      gs.VertexURBEntryReadLength = gs_prog_data->base.urb_read_length;
+      gs.DispatchGRFStartRegisterForURBData =
+         gs_prog_data->base.base.dispatch_grf_start_reg;
+
+      gs.UserClipDistanceClipTestEnableBitmask =
+         gs_prog_data->base.clip_distance_mask;
+      gs.UserClipDistanceCullTestEnableBitmask =
+         gs_prog_data->base.cull_distance_mask;
 
 #if GFX_VERx10 >= 125
-   gs.ScratchSpaceBuffer =
-      get_scratch_surf(&pipeline->base.base, MESA_SHADER_GEOMETRY, gs_bin);
+      gs.ScratchSpaceBuffer =
+         get_scratch_surf(&pipeline->base.base, MESA_SHADER_GEOMETRY, gs_bin);
 #else
-   gs.PerThreadScratchSpace   = get_scratch_space(gs_bin);
-   gs.ScratchSpaceBasePointer =
-      get_scratch_address(&pipeline->base.base, MESA_SHADER_GEOMETRY, gs_bin);
+      gs.PerThreadScratchSpace   = get_scratch_space(gs_bin);
+      gs.ScratchSpaceBasePointer =
+         get_scratch_address(&pipeline->base.base, MESA_SHADER_GEOMETRY, gs_bin);
 #endif
+   }
 
    GENX(3DSTATE_GS_pack)(&pipeline->base.base.batch, pipeline->gfx8.gs, &gs);
 }
@@ -1680,7 +1635,7 @@ compute_kill_pixel(struct anv_graphics_pipeline *pipeline,
       (ms && ms->alpha_to_coverage_enable);
 }
 
-#if GFX_VER == 12
+#if GFX_VER >= 12
 static void
 emit_3dstate_primitive_replication(struct anv_graphics_pipeline *pipeline,
                                    const struct vk_render_pass_state *rp)
@@ -1872,7 +1827,7 @@ genX(graphics_pipeline_emit)(struct anv_graphics_pipeline *pipeline,
 
    emit_3dstate_clip(pipeline, state->ia, state->vp, state->rs);
 
-#if GFX_VER == 12
+#if GFX_VER >= 12
    emit_3dstate_primitive_replication(pipeline, state->rp);
 #endif
 

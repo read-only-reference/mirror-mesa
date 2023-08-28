@@ -33,8 +33,6 @@
 #include "util/u_math.h"
 #include "pipe/p_shader_tokens.h"
 
-#include "sb/sb_public.h"
-
 #define NUM_OF_CYCLES 3
 #define NUM_OF_COMPONENTS 4
 
@@ -1211,7 +1209,7 @@ static int load_ar_r6xx(struct r600_bytecode *bc, bool for_src)
 		return 0;
 
 	/* hack to avoid making MOVA the last instruction in the clause */
-	if ((bc->cf_last->ndw>>1) >= 110)
+	if (bc->cf_last == NULL || (bc->cf_last->ndw>>1) >= 110)
 		bc->force_add_cf = 1;
    else if (for_src) {
       insert_nop_r6xx(bc, 4);
@@ -1246,7 +1244,7 @@ int r600_load_ar(struct r600_bytecode *bc, bool for_src)
 		return 0;
 
 	/* hack to avoid making MOVA the last instruction in the clause */
-	if ((bc->cf_last->ndw>>1) >= 110)
+	if (bc->cf_last == NULL || (bc->cf_last->ndw>>1) >= 110)
 		bc->force_add_cf = 1;
 
 	memset(&alu, 0, sizeof(alu));
@@ -2029,14 +2027,14 @@ static int print_dst(struct r600_bytecode_alu *alu)
 	int o = 0;
 	unsigned sel = alu->dst.sel;
 	char reg_char = 'R';
-	if (sel > 128 - 4) { /* clause temporary gpr */
+	if (sel >= 128 - 4) { /* clause temporary gpr */
 		sel -= 128 - 4;
 		reg_char = 'T';
 	}
 
 	if (alu_writes(alu)) {
 		o += fprintf(stderr, "%c", reg_char);
-		o += print_sel(alu->dst.sel, alu->dst.rel, alu->index_mode, 0);
+		o += print_sel(sel, alu->dst.rel, alu->index_mode, 0);
 	} else {
 		o += fprintf(stderr, "__");
 	}
@@ -2816,9 +2814,9 @@ void *r600_create_vertex_fetch_shader(struct pipe_context *ctx,
 	unsigned format, num_format, format_comp, endian;
 	uint32_t *bytecode;
 	int i, j, r, fs_size;
+	uint32_t buffer_mask = 0;
 	struct r600_fetch_shader *shader;
-	unsigned no_sb = rctx->screen->b.debug_flags & (DBG_NO_SB | DBG_NIR);
-	unsigned sb_disasm = !no_sb || (rctx->screen->b.debug_flags & DBG_SB_DISASM);
+	unsigned strides[PIPE_MAX_ATTRIBS];
 
 	assert(count < 32);
 
@@ -2866,6 +2864,8 @@ void *r600_create_vertex_fetch_shader(struct pipe_context *ctx,
 				}
 			}
 		}
+		strides[elements[i].vertex_buffer_index] = elements[i].src_stride;
+		buffer_mask |= BITFIELD_BIT(elements[i].vertex_buffer_index);
 	}
 
 	for (i = 0; i < count; i++) {
@@ -2919,13 +2919,7 @@ void *r600_create_vertex_fetch_shader(struct pipe_context *ctx,
 			fprintf(stderr, "\n");
 		}
 
-		if (!sb_disasm) {
-			r600_bytecode_disasm(&bc);
-
-			fprintf(stderr, "______________________________________________________________\n");
-		} else {
-			r600_sb_bytecode_process(rctx, &bc, NULL, 1 /*dump*/, 0 /*optimize*/);
-		}
+                r600_bytecode_disasm(&bc);
 	}
 
 	fs_size = bc.ndw*4;
@@ -2936,6 +2930,8 @@ void *r600_create_vertex_fetch_shader(struct pipe_context *ctx,
 		r600_bytecode_clear(&bc);
 		return NULL;
 	}
+	memcpy(shader->strides, strides, sizeof(strides));
+	shader->buffer_mask = buffer_mask;
 
 	u_suballocator_alloc(&rctx->allocator_fetch_shader, fs_size, 256,
 			     &shader->offset,

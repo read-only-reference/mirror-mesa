@@ -68,6 +68,7 @@ static const struct debug_named_value agx_debug_options[] = {
    {"synctvb",   AGX_DBG_SYNCTVB,  "Synchronous TVB growth"},
    {"smalltile", AGX_DBG_SMALLTILE,"Force 16x16 tiles"},
    {"nomsaa",    AGX_DBG_NOMSAA,   "Force disable MSAA"},
+   {"noshadow",  AGX_DBG_NOSHADOW, "Force disable resource shadowing"},
    DEBUG_NAMED_VALUE_END
 };
 /* clang-format on */
@@ -77,6 +78,20 @@ uint64_t agx_best_modifiers[] = {
    DRM_FORMAT_MOD_APPLE_TWIDDLED,
    DRM_FORMAT_MOD_LINEAR,
 };
+
+/* These limits are arbitrarily chosen and subject to change as
+ * we discover more workloads with heavy shadowing.
+ *
+ * Maximum size of a shadowed object in bytes.
+ * Hint: 1024x1024xRGBA8 = 4 MiB. Go higher for compression.
+ */
+#define MAX_SHADOW_BYTES (6 * 1024 * 1024)
+
+/* Maximum cumulative size to shadow an object before we flush.
+ * Allows shadowing a 4MiB + meta object 8 times with the logic
+ * below (+1 shadow offset implied).
+ */
+#define MAX_TOTAL_SHADOW_BYTES (32 * 1024 * 1024)
 
 void agx_init_state_functions(struct pipe_context *ctx);
 
@@ -468,11 +483,12 @@ agx_select_best_modifier(const struct agx_resource *pres)
    if (agx_linear_allowed(pres) && pres->base.usage == PIPE_USAGE_STAGING)
       return DRM_FORMAT_MOD_LINEAR;
 
-   /* For SCANOUT resources with no explicit modifier selection, assume we need
-    * linear.
+   /* For SCANOUT or SHARED resources with no explicit modifier selection, force
+    * linear since we cannot expect consumers to correctly pass through the
+    * modifier (unless linear is not allowed at all).
     */
-   if (pres->base.bind & PIPE_BIND_SCANOUT) {
-      assert(agx_linear_allowed(pres));
+   if (agx_linear_allowed(pres) &&
+       pres->base.bind & (PIPE_BIND_SCANOUT | PIPE_BIND_SHARED)) {
       return DRM_FORMAT_MOD_LINEAR;
    }
 
@@ -657,13 +673,27 @@ agx_shadow(struct agx_context *ctx, struct agx_resource *rsrc, bool needs_copy)
 {
    struct agx_device *dev = agx_device(ctx->base.screen);
    struct agx_bo *old = rsrc->bo;
+   size_t size = rsrc->layout.size_B;
    unsigned flags = old->flags;
+
+   if (dev->debug & AGX_DBG_NOSHADOW)
+      return false;
 
    /* If a resource is (or could be) shared, shadowing would desync across
     * processes. (It's also not what this path is for.)
     */
    if (flags & (AGX_BO_SHARED | AGX_BO_SHAREABLE))
       return false;
+
+   /* Do not shadow resources that are too large */
+   if (size > MAX_SHADOW_BYTES)
+      return false;
+
+   /* Do not shadow resources too much */
+   if (rsrc->shadowed_bytes >= MAX_TOTAL_SHADOW_BYTES)
+      return false;
+
+   rsrc->shadowed_bytes += size;
 
    /* If we need to copy, we reallocate the resource with cached-coherent
     * memory. This is a heuristic: it assumes that if the app needs a shadows
@@ -674,17 +704,18 @@ agx_shadow(struct agx_context *ctx, struct agx_resource *rsrc, bool needs_copy)
    if (needs_copy)
       flags |= AGX_BO_WRITEBACK;
 
-   struct agx_bo *new_ = agx_bo_create(dev, old->size, flags, old->label);
+   struct agx_bo *new_ = agx_bo_create(dev, size, flags, old->label);
 
    /* If allocation failed, we can fallback on a flush gracefully*/
    if (new_ == NULL)
       return false;
 
    if (needs_copy) {
-      perf_debug_ctx(ctx, "Shadowing %zu bytes on the CPU (%s)", old->size,
+      perf_debug_ctx(ctx, "Shadowing %zu bytes on the CPU (%s)", size,
                      (old->flags & AGX_BO_WRITEBACK) ? "cached" : "uncached");
+      agx_resource_debug(rsrc, "Shadowed: ");
 
-      memcpy(new_->ptr.cpu, old->ptr.cpu, old->size);
+      memcpy(new_->ptr.cpu, old->ptr.cpu, size);
    }
 
    /* Swap the pointers, dropping a reference */
@@ -748,8 +779,10 @@ agx_prepare_for_map(struct agx_context *ctx, struct agx_resource *rsrc,
    /* If there are no readers, we're done. We check at the start to
     * avoid expensive shadowing paths or duplicated checks in this hapyp path.
     */
-   if (!agx_any_batch_uses_resource(ctx, rsrc))
+   if (!agx_any_batch_uses_resource(ctx, rsrc)) {
+      rsrc->shadowed_bytes = 0;
       return;
+   }
 
    /* There are readers. Try to shadow the resource to avoid a sync */
    if (!(rsrc->base.flags & PIPE_RESOURCE_FLAG_MAP_PERSISTENT) &&
@@ -758,6 +791,8 @@ agx_prepare_for_map(struct agx_context *ctx, struct agx_resource *rsrc,
 
    /* Otherwise, we need to sync */
    agx_sync_readers(ctx, rsrc, "Unsynchronized write");
+
+   rsrc->shadowed_bytes = 0;
 }
 
 /*
@@ -1573,21 +1608,16 @@ agx_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
    case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
    case PIPE_CAP_NULL_TEXTURES:
-      return 1;
-
    case PIPE_CAP_TEXTURE_MULTISAMPLE:
-      return 1;
-   case PIPE_CAP_SURFACE_SAMPLE_COUNT:
-      /* TODO: MSRTT */
-   case PIPE_CAP_SAMPLE_SHADING:
-      /* TODO: sample shading */
-      return 0;
-
    case PIPE_CAP_IMAGE_LOAD_FORMATTED:
    case PIPE_CAP_IMAGE_STORE_FORMATTED:
    case PIPE_CAP_COMPUTE:
    case PIPE_CAP_INT64:
-      return is_deqp;
+   case PIPE_CAP_SAMPLE_SHADING:
+      return 1;
+   case PIPE_CAP_SURFACE_SAMPLE_COUNT:
+      /* TODO: MSRTT */
+      return 0;
 
    case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
       return 0;
@@ -1610,7 +1640,7 @@ agx_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
       return is_deqp ? 330 : 140;
    case PIPE_CAP_ESSL_FEATURE_LEVEL:
-      return is_deqp ? 310 : 300;
+      return 320;
 
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return 16;
@@ -1754,11 +1784,15 @@ agx_get_shader_param(struct pipe_screen *pscreen, enum pipe_shader_type shader,
                      enum pipe_shader_cap param)
 {
    bool is_no16 = agx_device(pscreen)->debug & AGX_DBG_NO16;
-   bool is_deqp = agx_device(pscreen)->debug & AGX_DBG_DEQP;
 
-   if (shader != PIPE_SHADER_VERTEX && shader != PIPE_SHADER_FRAGMENT &&
-       !(shader == PIPE_SHADER_COMPUTE && is_deqp))
-      return 0;
+   switch (shader) {
+   case PIPE_SHADER_VERTEX:
+   case PIPE_SHADER_FRAGMENT:
+   case PIPE_SHADER_COMPUTE:
+      break;
+   default:
+      return false;
+   }
 
    /* Don't allow side effects with vertex processing. The APIs don't require it
     * and it may be problematic on our hardware.
@@ -1829,10 +1863,10 @@ agx_get_shader_param(struct pipe_screen *pscreen, enum pipe_shader_type shader,
       return (1 << PIPE_SHADER_IR_NIR);
 
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
-      return (is_deqp && allow_side_effects) ? PIPE_MAX_SHADER_BUFFERS : 0;
+      return allow_side_effects ? PIPE_MAX_SHADER_BUFFERS : 0;
 
    case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
-      return (is_deqp && allow_side_effects) ? PIPE_MAX_SHADER_IMAGES : 0;
+      return allow_side_effects ? PIPE_MAX_SHADER_IMAGES : 0;
 
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
@@ -1850,9 +1884,6 @@ static int
 agx_get_compute_param(struct pipe_screen *pscreen, enum pipe_shader_ir ir_type,
                       enum pipe_compute_cap param, void *ret)
 {
-   if (!(agx_device(pscreen)->debug & AGX_DBG_DEQP))
-      return 0;
-
 #define RET(x)                                                                 \
    do {                                                                        \
       if (ret)                                                                 \

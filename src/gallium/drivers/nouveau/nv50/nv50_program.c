@@ -64,14 +64,14 @@ nv50_vertprog_assign_slots(struct nv50_ir_prog_info_out *info)
 
    for (i = 0; i < info->numSysVals; ++i) {
       switch (info->sv[i].sn) {
-      case TGSI_SEMANTIC_INSTANCEID:
+      case SYSTEM_VALUE_INSTANCE_ID:
          prog->vp.attrs[2] |= NV50_3D_VP_GP_BUILTIN_ATTR_EN_INSTANCE_ID;
          continue;
-      case TGSI_SEMANTIC_VERTEXID:
+      case SYSTEM_VALUE_VERTEX_ID:
          prog->vp.attrs[2] |= NV50_3D_VP_GP_BUILTIN_ATTR_EN_VERTEX_ID;
          prog->vp.attrs[2] |= NV50_3D_VP_GP_BUILTIN_ATTR_EN_VERTEX_ID_DRAW_ARRAYS_ADD_START;
          continue;
-      case TGSI_SEMANTIC_PRIMID:
+      case SYSTEM_VALUE_PRIMITIVE_ID:
          prog->vp.attrs[2] |= NV50_3D_VP_GP_BUILTIN_ATTR_EN_PRIMITIVE_ID;
          break;
       default:
@@ -375,11 +375,11 @@ nv50_program_translate(struct nv50_program *prog, uint16_t chipset,
    info_out.driverPriv = prog;
 
 #ifndef NDEBUG
-   info->optLevel = debug_get_num_option("NV50_PROG_OPTIMIZE", 3);
+   info->optLevel = debug_get_num_option("NV50_PROG_OPTIMIZE", 4);
    info->dbgFlags = debug_get_num_option("NV50_PROG_DEBUG", 0);
    info->omitLineNum = debug_get_num_option("NV50_PROG_DEBUG_OMIT_LINENUM", 0);
 #else
-   info->optLevel = 3;
+   info->optLevel = 4;
 #endif
 
    ret = nv50_ir_generate_code(info, &info_out);

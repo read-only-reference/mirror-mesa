@@ -28,7 +28,6 @@
  * from the LIR.
  */
 
-#include "main/macros.h"
 #include "brw_eu.h"
 #include "brw_fs.h"
 #include "brw_fs_live_variables.h"
@@ -41,7 +40,6 @@
 #include "dev/intel_wa.h"
 #include "compiler/glsl_types.h"
 #include "compiler/nir/nir_builder.h"
-#include "program/prog_parameter.h"
 #include "util/u_math.h"
 
 #include <memory>
@@ -2542,10 +2540,11 @@ fs_visitor::get_pull_locs(const fs_reg &src,
  * Replace UNIFORM register file access with either UNIFORM_PULL_CONSTANT_LOAD
  * or VARYING_PULL_CONSTANT_LOAD instructions which load values into VGRFs.
  */
-void
+bool
 fs_visitor::lower_constant_loads()
 {
    unsigned index, pull_index;
+   bool progress = false;
 
    foreach_block_and_inst_safe (block, fs_inst, inst, cfg) {
       /* Set up the annotation tracking for new generated instructions. */
@@ -2583,6 +2582,8 @@ fs_visitor::lower_constant_loads()
          inst->src[i].nr = dst.nr;
          inst->src[i].offset = (base & (block_sz - 1)) +
                                inst->src[i].offset % 4;
+
+         progress = true;
       }
 
       if (inst->opcode == SHADER_OPCODE_MOV_INDIRECT &&
@@ -2597,9 +2598,13 @@ fs_visitor::lower_constant_loads()
                                     inst->src[1],
                                     pull_index * 4, 4);
          inst->remove(block);
+
+         progress = true;
       }
    }
    invalidate_analysis(DEPENDENCY_INSTRUCTIONS);
+
+   return progress;
 }
 
 static uint64_t
@@ -6172,6 +6177,18 @@ brw::register_pressure::register_pressure(const fs_visitor *v)
       for (int ip = live.vgrf_start[reg]; ip <= live.vgrf_end[reg]; ip++)
          regs_live_at_ip[ip] += v->alloc.sizes[reg];
    }
+
+   const unsigned payload_count = v->first_non_payload_grf;
+
+   int *payload_last_use_ip = new int[payload_count];
+   v->calculate_payload_ranges(payload_count, payload_last_use_ip);
+
+   for (unsigned reg = 0; reg < payload_count; reg++) {
+      for (int ip = 0; ip < payload_last_use_ip[reg]; ip++)
+         ++regs_live_at_ip[ip];
+   }
+
+   delete[] payload_last_use_ip;
 }
 
 brw::register_pressure::~register_pressure()
@@ -6188,8 +6205,29 @@ fs_visitor::invalidate_analysis(brw::analysis_dependency_class c)
 }
 
 void
+fs_visitor::debug_optimizer(const nir_shader *nir,
+                            const char *pass_name,
+                            int iteration, int pass_num) const
+{
+   if (!brw_should_print_shader(nir, DEBUG_OPTIMIZER))
+      return;
+
+   char *filename;
+   int ret = asprintf(&filename, "%s/%s%d-%s-%02d-%02d-%s",
+                      debug_get_option("INTEL_SHADER_OPTIMIZER_PATH", "./"),
+                      stage_abbrev, dispatch_width, nir->info.name,
+                      iteration, pass_num, pass_name);
+   if (ret == -1)
+      return;
+   dump_instructions(filename);
+   free(filename);
+}
+
+void
 fs_visitor::optimize()
 {
+   debug_optimizer(nir, "start", 0, 0);
+
    /* Start by validating the shader we currently have. */
    validate();
 
@@ -6206,22 +6244,16 @@ fs_visitor::optimize()
     */
    bld = fs_builder(this, 64);
 
-   assign_constant_locations();
-   lower_constant_loads();
-
-   validate();
+   bool progress = false;
+   int iteration = 0;
+   int pass_num = 0;
 
 #define OPT(pass, args...) ({                                           \
       pass_num++;                                                       \
       bool this_progress = pass(args);                                  \
                                                                         \
-      if (INTEL_DEBUG(DEBUG_OPTIMIZER) && this_progress) {              \
-         char filename[64];                                             \
-         snprintf(filename, 64, "%s%d-%s-%02d-%02d-" #pass,              \
-                  stage_abbrev, dispatch_width, nir->info.name, iteration, pass_num); \
-                                                                        \
-         dump_instructions(filename);                                   \
-      }                                                                 \
+      if (this_progress)                                                \
+         debug_optimizer(nir, #pass, iteration, pass_num);              \
                                                                         \
       validate();                                                       \
                                                                         \
@@ -6229,17 +6261,10 @@ fs_visitor::optimize()
       this_progress;                                                    \
    })
 
-   if (INTEL_DEBUG(DEBUG_OPTIMIZER)) {
-      char filename[64];
-      snprintf(filename, 64, "%s%d-%s-00-00-start",
-               stage_abbrev, dispatch_width, nir->info.name);
+   assign_constant_locations();
+   OPT(lower_constant_loads);
 
-      dump_instructions(filename);
-   }
-
-   bool progress = false;
-   int iteration = 0;
-   int pass_num = 0;
+   validate();
 
    OPT(split_virtual_grfs);
 
@@ -6362,9 +6387,9 @@ fs_visitor::optimize()
 
    OPT(fixup_sends_duplicate_payload);
 
-   lower_uniform_pull_constant_loads();
+   OPT(lower_uniform_pull_constant_loads);
 
-   lower_find_live_channel();
+   OPT(lower_find_live_channel);
 
    validate();
 }
@@ -6711,6 +6736,42 @@ fs_visitor::compute_max_register_pressure()
    return max_pressure;
 }
 
+static fs_inst **
+save_instruction_order(const struct cfg_t *cfg)
+{
+   /* Before we schedule anything, stash off the instruction order as an array
+    * of fs_inst *.  This way, we can reset it between scheduling passes to
+    * prevent dependencies between the different scheduling modes.
+    */
+   int num_insts = cfg->last_block()->end_ip + 1;
+   fs_inst **inst_arr = new fs_inst * [num_insts];
+
+   int ip = 0;
+   foreach_block_and_inst(block, fs_inst, inst, cfg) {
+      assert(ip >= block->start_ip && ip <= block->end_ip);
+      inst_arr[ip++] = inst;
+   }
+   assert(ip == num_insts);
+
+   return inst_arr;
+}
+
+static void
+restore_instruction_order(struct cfg_t *cfg, fs_inst **inst_arr)
+{
+   int num_insts = cfg->last_block()->end_ip + 1;
+
+   int ip = 0;
+   foreach_block (block, cfg) {
+      block->instructions.make_empty();
+
+      assert(ip == block->start_ip);
+      for (; ip <= block->end_ip; ip++)
+         block->instructions.push_tail(inst_arr[ip]);
+   }
+   assert(ip == num_insts);
+}
+
 void
 fs_visitor::allocate_registers(bool allow_spilling)
 {
@@ -6724,16 +6785,22 @@ fs_visitor::allocate_registers(bool allow_spilling)
    };
 
    static const char *scheduler_mode_name[] = {
-      "top-down",
-      "non-lifo",
-      "none",
-      "lifo"
+      [SCHEDULE_PRE] = "top-down",
+      [SCHEDULE_PRE_NON_LIFO] = "non-lifo",
+      [SCHEDULE_PRE_LIFO] = "lifo",
+      [SCHEDULE_POST] = "post",
+      [SCHEDULE_NONE] = "none",
    };
+
+   uint32_t best_register_pressure = UINT32_MAX;
+   enum instruction_scheduler_mode best_sched = SCHEDULE_NONE;
 
    compact_virtual_grfs();
 
    if (needs_register_pressure)
       shader_stats.max_register_pressure = compute_max_register_pressure();
+
+   debug_optimizer(nir, "pre_register_allocate", 90, 90);
 
    bool spill_all = allow_spilling && INTEL_DEBUG(DEBUG_SPILL_FS);
 
@@ -6741,39 +6808,20 @@ fs_visitor::allocate_registers(bool allow_spilling)
     * of fs_inst *.  This way, we can reset it between scheduling passes to
     * prevent dependencies between the different scheduling modes.
     */
-   int num_insts = cfg->last_block()->end_ip + 1;
-   fs_inst **inst_arr = ralloc_array(mem_ctx, fs_inst *, num_insts);
-
-   int ip = 0;
-   foreach_block_and_inst(block, fs_inst, inst, cfg) {
-      assert(ip >= block->start_ip && ip <= block->end_ip);
-      inst_arr[ip++] = inst;
-   }
-   assert(ip == num_insts);
+   fs_inst **orig_order = save_instruction_order(cfg);
+   fs_inst **best_pressure_order = NULL;
 
    /* Try each scheduling heuristic to see if it can successfully register
     * allocate without spilling.  They should be ordered by decreasing
     * performance but increasing likelihood of allocating.
     */
    for (unsigned i = 0; i < ARRAY_SIZE(pre_modes); i++) {
-      if (i > 0) {
-         /* Unless we're the first pass, reset back to the original order */
-         ip = 0;
-         foreach_block (block, cfg) {
-            block->instructions.make_empty();
+      enum instruction_scheduler_mode sched_mode = pre_modes[i];
 
-            assert(ip == block->start_ip);
-            for (; ip <= block->end_ip; ip++)
-               block->instructions.push_tail(inst_arr[ip]);
-         }
-         assert(ip == num_insts);
+      schedule_instructions(sched_mode);
+      this->shader_stats.scheduler_mode = scheduler_mode_name[sched_mode];
 
-         invalidate_analysis(DEPENDENCY_INSTRUCTIONS);
-      }
-
-      if (pre_modes[i] != SCHEDULE_NONE)
-         schedule_instructions(pre_modes[i]);
-      this->shader_stats.scheduler_mode = scheduler_mode_name[i];
+      debug_optimizer(nir, shader_stats.scheduler_mode, 95, i);
 
       if (0) {
          assign_regs_trivial();
@@ -6781,16 +6829,46 @@ fs_visitor::allocate_registers(bool allow_spilling)
          break;
       }
 
-      bool can_spill = allow_spilling &&
-                       (i == ARRAY_SIZE(pre_modes) - 1);
-
       /* We should only spill registers on the last scheduling. */
       assert(!spilled_any_registers);
 
-      allocated = assign_regs(can_spill, spill_all);
+      allocated = assign_regs(false, spill_all);
       if (allocated)
          break;
+
+      /* Save the maximum register pressure */
+      uint32_t this_pressure = compute_max_register_pressure();
+
+      if (0) {
+         fprintf(stderr, "Scheduler mode \"%s\" spilled, max pressure = %u\n",
+                 scheduler_mode_name[sched_mode], this_pressure);
+      }
+
+      if (this_pressure < best_register_pressure) {
+         best_register_pressure = this_pressure;
+         best_sched = sched_mode;
+         delete[] best_pressure_order;
+         best_pressure_order = save_instruction_order(cfg);
+      }
+
+      /* Reset back to the original order before trying the next mode */
+      restore_instruction_order(cfg, orig_order);
+      invalidate_analysis(DEPENDENCY_INSTRUCTIONS);
    }
+
+   if (!allocated) {
+      if (0) {
+         fprintf(stderr, "Spilling - using lowest-pressure mode \"%s\"\n",
+                 scheduler_mode_name[best_sched]);
+      }
+      restore_instruction_order(cfg, best_pressure_order);
+      shader_stats.scheduler_mode = scheduler_mode_name[best_sched];
+
+      allocated = assign_regs(allow_spilling, spill_all);
+   }
+
+   delete[] orig_order;
+   delete[] best_pressure_order;
 
    if (!allocated) {
       fail("Failure to register allocate.  Reduce number of "
@@ -7340,7 +7418,7 @@ fs_visitor::run_mesh(bool allow_spilling)
 }
 
 static bool
-is_used_in_not_interp_frag_coord(nir_ssa_def *def)
+is_used_in_not_interp_frag_coord(nir_def *def)
 {
    nir_foreach_use_including_if(src, def) {
       if (src->is_if)
@@ -7390,8 +7468,7 @@ brw_compute_barycentric_interp_modes(const struct intel_device_info *devinfo,
             }
 
             /* Ignore WPOS; it doesn't require interpolation. */
-            assert(intrin->dest.is_ssa);
-            if (!is_used_in_not_interp_frag_coord(&intrin->dest.ssa))
+            if (!is_used_in_not_interp_frag_coord(&intrin->def))
                continue;
 
             nir_intrinsic_op bary_op = intrin->intrinsic;
@@ -7735,7 +7812,7 @@ brw_compile_fs(const struct brw_compiler *compiler,
 
    NIR_PASS(_, nir, brw_nir_move_interpolation_to_top);
    brw_postprocess_nir(nir, compiler, debug_enabled,
-                       key->base.robust_buffer_access);
+                       key->base.robust_flags);
 
    brw_nir_populate_wm_prog_data(nir, compiler->devinfo, key, prog_data,
                                  params->mue_map);
@@ -7828,7 +7905,7 @@ brw_compile_fs(const struct brw_compiler *compiler,
       } else {
          const performance &perf = v32->performance_analysis.require();
 
-         if (!INTEL_DEBUG(DEBUG_DO32) && throughput > perf.throughput) {
+         if (!INTEL_DEBUG(DEBUG_DO32) && throughput >= perf.throughput) {
             brw_shader_perf_log(compiler, params->base.log_data,
                                 "SIMD32 shader inefficient\n");
          } else {
@@ -8014,7 +8091,7 @@ filter_simd(const nir_instr *instr, const void * /* options */)
    }
 }
 
-static nir_ssa_def *
+static nir_def *
 lower_simd(nir_builder *b, nir_instr *instr, void *options)
 {
    uintptr_t simd_width = (uintptr_t)options;
@@ -8097,7 +8174,7 @@ brw_compile_cs(const struct brw_compiler *compiler,
       NIR_PASS(_, shader, nir_opt_dce);
 
       brw_postprocess_nir(shader, compiler, debug_enabled,
-                          key->base.robust_buffer_access);
+                          key->base.robust_flags);
 
       v[simd] = std::make_unique<fs_visitor>(compiler, &params->base,
                                              &key->base,
@@ -8220,7 +8297,7 @@ compile_single_bs(const struct brw_compiler *compiler,
    const unsigned max_dispatch_width = 16;
    brw_nir_apply_key(shader, compiler, &key->base, max_dispatch_width);
    brw_postprocess_nir(shader, compiler, debug_enabled,
-                       key->base.robust_buffer_access);
+                       key->base.robust_flags);
 
    brw_simd_selection_state simd_state{
       .mem_ctx = params->base.mem_ctx,

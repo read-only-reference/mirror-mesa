@@ -1003,7 +1003,7 @@ fix_exports(asm_context& ctx, std::vector<uint32_t>& out, Program* program)
                   break;
                }
             } else {
-               if (!program->info.ps.has_epilog) {
+               if (!program->info.has_epilog) {
                   exp.done = true;
                   exp.valid_mask = true;
                }
@@ -1016,7 +1016,7 @@ fix_exports(asm_context& ctx, std::vector<uint32_t>& out, Program* program)
             /* Do not abort if the main FS has an epilog because it only
              * exports MRTZ (if present) and the epilog exports colors.
              */
-            exported |= program->stage.hw == AC_HW_PIXEL_SHADER && program->info.ps.has_epilog;
+            exported |= program->stage.hw == AC_HW_PIXEL_SHADER && program->info.has_epilog;
          }
          ++it;
       }
@@ -1209,6 +1209,13 @@ fix_constaddrs(asm_context& ctx, std::vector<uint32_t>& out)
    for (auto& constaddr : ctx.constaddrs) {
       constaddr_info& info = constaddr.second;
       out[info.add_literal] += (out.size() - info.getpc_end) * 4u;
+
+      if (ctx.symbols) {
+         struct aco_symbol sym;
+         sym.id = aco_symbol_const_data_addr;
+         sym.offset = info.add_literal;
+         ctx.symbols->push_back(sym);
+      }
    }
    for (auto& addr : ctx.resumeaddrs) {
       constaddr_info& info = addr.second;
@@ -1279,12 +1286,15 @@ align_block(asm_context& ctx, std::vector<uint32_t>& code, Block& block)
 }
 
 unsigned
-emit_program(Program* program, std::vector<uint32_t>& code, std::vector<struct aco_symbol>* symbols)
+emit_program(Program* program, std::vector<uint32_t>& code, std::vector<struct aco_symbol>* symbols,
+             bool append_endpgm)
 {
    asm_context ctx(program, symbols);
 
-   if (program->stage.hw == AC_HW_VERTEX_SHADER || program->stage.hw == AC_HW_PIXEL_SHADER ||
-       program->stage.hw == AC_HW_NEXT_GEN_GEOMETRY_SHADER)
+   /* Prolog has no exports. */
+   if (!program->is_prolog &&
+       (program->stage.hw == AC_HW_VERTEX_SHADER || program->stage.hw == AC_HW_PIXEL_SHADER ||
+        program->stage.hw == AC_HW_NEXT_GEN_GEOMETRY_SHADER))
       fix_exports(ctx, code, program);
 
    for (Block& block : program->blocks) {
@@ -1298,7 +1308,8 @@ emit_program(Program* program, std::vector<uint32_t>& code, std::vector<struct a
    unsigned exec_size = code.size() * sizeof(uint32_t);
 
    /* Add end-of-code markers for the UMR disassembler. */
-   code.resize(code.size() + 5, 0xbf9f0000u);
+   if (append_endpgm)
+      code.resize(code.size() + 5, 0xbf9f0000u);
 
    fix_constaddrs(ctx, code);
 

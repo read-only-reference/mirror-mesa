@@ -56,16 +56,10 @@ nir_lower_to_source_mods_instr(nir_builder *b, nir_instr *instr,
    nir_alu_instr *alu = nir_instr_as_alu(instr);
 
    for (unsigned i = 0; i < nir_op_infos[alu->op].num_inputs; i++) {
-      if (!alu->src[i].src.is_ssa)
-         continue;
-
       if (alu->src[i].src.ssa->parent_instr->type != nir_instr_type_alu)
          continue;
 
       nir_alu_instr *parent = nir_instr_as_alu(alu->src[i].src.ssa->parent_instr);
-
-      if (parent->dest.saturate)
-         continue;
 
       if (nir_alu_type_get_base_type(nir_op_infos[alu->op].input_types[i]) != nir_type_float)
          continue;
@@ -82,7 +76,7 @@ nir_lower_to_source_mods_instr(nir_builder *b, nir_instr *instr,
       if (i >= 3)
          continue;
 
-      nir_instr_rewrite_src(instr, &alu->src[i].src, parent->src[0].src);
+      nir_src_rewrite(&alu->src[i].src, parent->src[0].src.ssa);
 
       /* Apply any modifiers that come from the parent opcode */
       if (parent->op == nir_op_fneg)
@@ -91,9 +85,9 @@ nir_lower_to_source_mods_instr(nir_builder *b, nir_instr *instr,
          alu_src_consume_abs(instr, i);
 
       /* Apply modifiers from the parent source */
-      if (parent->src[0].negate || is_src_mod_neg(&parent->instr, 0))
+      if (is_src_mod_neg(&parent->instr, 0))
          alu_src_consume_negate(instr, i);
-      if (parent->src[0].abs || is_src_mod_abs(&parent->instr, 0))
+      if (is_src_mod_abs(&parent->instr, 0))
          alu_src_consume_abs(instr, i);
 
       for (int j = 0; j < 4; ++j) {
@@ -102,7 +96,7 @@ nir_lower_to_source_mods_instr(nir_builder *b, nir_instr *instr,
          alu->src[i].swizzle[j] = parent->src[0].swizzle[alu->src[i].swizzle[j]];
       }
 
-      if (nir_ssa_def_is_unused(&parent->dest.dest.ssa))
+      if (nir_def_is_unused(&parent->def))
          nir_instr_remove(&parent->instr);
 
       progress = true;

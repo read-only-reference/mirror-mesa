@@ -2,9 +2,6 @@
 glx@glx-multi-window-single-context,Crash
 spec@egl_chromium_sync_control@conformance@eglGetSyncValuesCHROMIUM_ust_test,Fail
 
-# Mesa bug not Zink bug. See piglit MR 824
-spec@arb_bindless_texture@compiler@images@return-struct.frag,Crash
-
 # #6115
 spec@arb_tessellation_shader@execution@variable-indexing@tes-both-input-array-float-index-rd,Crash
 spec@arb_tessellation_shader@execution@variable-indexing@tes-both-input-array-vec2-index-rd,Crash
@@ -87,7 +84,6 @@ spec@arb_gpu_shader_fp64@execution@conversion@vert-conversion-explicit-dvec3-vec
 spec@arb_gpu_shader_fp64@execution@conversion@vert-conversion-explicit-dvec4-vec4,Fail
 spec@arb_gpu_shader_int64@execution@fs-ishl-then-ishr,Fail
 spec@arb_gpu_shader_int64@execution@fs-ishl-then-ishr-loop,Fail
-spec@arb_gl_spirv@execution@xfb@vs_block_array,Fail
 spec@arb_point_sprite@arb_point_sprite-mipmap,Fail
 spec@arb_program_interface_query@arb_program_interface_query-getprogramresourceindex,Fail
 spec@arb_program_interface_query@arb_program_interface_query-getprogramresourceindex@'vs_input2[1][0]' on GL_PROGRAM_INPUT,Fail
@@ -301,26 +297,6 @@ spec@ext_transform_feedback@tessellation quad_strip wireframe,Fail
 spec@ext_transform_feedback@tessellation quads wireframe,Fail
 
 # Regressed between 1080ff39717b92b99afcf51283bec3994deae376..ef01a9cf3b465889fe8084732264dad0580270c3
-spec@!opengl 1.0@gl-1.0-drawpixels-stencil-test,Fail
-spec@!opengl 1.0@gl-1.0-rastercolor,Fail
-spec@!opengl 1.1@depthstencil-default_fb-drawpixels-float-and-ushort,Fail
-spec@!opengl 1.1@depthstencil-default_fb-drawpixels-float-and-ushort samples=2,Fail
-spec@!opengl 1.1@depthstencil-default_fb-drawpixels-float-and-ushort samples=4,Fail
-spec@!opengl 1.1@depthstencil-default_fb-drawpixels-float-and-ushort samples=6,Fail
-spec@!opengl 1.1@depthstencil-default_fb-drawpixels-float-and-ushort samples=8,Fail
-spec@arb_color_buffer_float@gl_rgba16f-render,Fail
-spec@arb_color_buffer_float@gl_rgba16f-render-sanity,Fail
-spec@arb_color_buffer_float@gl_rgba32f-render,Fail
-spec@arb_color_buffer_float@gl_rgba32f-render-sanity,Fail
-spec@arb_color_buffer_float@gl_rgba8-render,Fail
-spec@arb_color_buffer_float@gl_rgba8-render-sanity,Fail
-spec@arb_color_buffer_float@gl_rgba8_snorm-render,Fail
-spec@arb_color_buffer_float@gl_rgba8_snorm-render-sanity,Fail
-spec@arb_depth_buffer_float@fbo-clear-formats stencil,Fail
-spec@arb_depth_buffer_float@fbo-clear-formats stencil@GL_DEPTH32F_STENCIL8,Fail
-spec@arb_depth_buffer_float@fbo-depthstencil-gl_depth32f_stencil8-drawpixels-float-and-ushort,Fail
-spec@arb_depth_buffer_float@fbo-stencil-gl_depth32f_stencil8-drawpixels,Fail
-spec@arb_fragment_program@fdo38145,Fail
 spec@arb_sample_shading@samplemask 2,Fail
 spec@arb_sample_shading@samplemask 2 all,Fail
 spec@arb_sample_shading@samplemask 2 all@0.500000 mask_in_one,Fail
@@ -396,14 +372,6 @@ spec@ext_framebuffer_multisample@interpolation 8 centroid-deriv-disabled,Fail
 spec@ext_framebuffer_multisample@interpolation 8 centroid-disabled,Fail
 spec@ext_framebuffer_multisample@interpolation 8 non-centroid-deriv-disabled,Fail
 spec@ext_framebuffer_multisample@interpolation 8 non-centroid-disabled,Fail
-spec@ext_framebuffer_object@fbo-stencil-gl_stencil_index1-drawpixels,Fail
-spec@ext_framebuffer_object@fbo-stencil-gl_stencil_index16-drawpixels,Fail
-spec@ext_framebuffer_object@fbo-stencil-gl_stencil_index4-drawpixels,Fail
-spec@ext_framebuffer_object@fbo-stencil-gl_stencil_index8-drawpixels,Fail
-spec@ext_packed_depth_stencil@fbo-clear-formats stencil,Fail
-spec@ext_packed_depth_stencil@fbo-clear-formats stencil@GL_DEPTH_STENCIL,Fail
-spec@ext_packed_depth_stencil@fbo-depthstencil-gl_depth24_stencil8-drawpixels-float-and-ushort,Fail
-spec@ext_packed_depth_stencil@fbo-stencil-gl_depth24_stencil8-drawpixels,Fail
 
 # Polygon smoothing isn't supported in Vulkan.
 spec@!opengl 1.0@gl-1.0-polygon-line-aa,Fail

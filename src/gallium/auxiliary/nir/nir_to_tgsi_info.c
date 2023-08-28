@@ -136,7 +136,7 @@ static void gather_intrinsic_load_deref_info(const nir_shader *nir,
    assert(var && var->data.mode == nir_var_shader_in);
 
    if (nir->info.stage == MESA_SHADER_FRAGMENT)
-      gather_usage(deref, nir_ssa_def_components_read(&instr->dest.ssa),
+      gather_usage(deref, nir_def_components_read(&instr->def),
                    info->input_usage_mask);
 
    switch (nir->info.stage) {
@@ -224,6 +224,10 @@ static void scan_instruction(const struct nir_shader *nir,
       case nir_intrinsic_ssbo_atomic_swap:
          info->writes_memory = true;
          break;
+      case nir_intrinsic_interp_deref_at_centroid:
+      case nir_intrinsic_interp_deref_at_offset:
+      case nir_intrinsic_interp_deref_at_sample:
+      case nir_intrinsic_interp_deref_at_vertex:
       case nir_intrinsic_load_deref: {
          const nir_variable *var = nir_intrinsic_get_var(intr, 0);
          const nir_variable_mode mode = var->data.mode;

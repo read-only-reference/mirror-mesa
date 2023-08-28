@@ -29,6 +29,7 @@ enum agx_dbg {
    AGX_DBG_SYNCTVB = BITFIELD_BIT(13),
    AGX_DBG_SMALLTILE = BITFIELD_BIT(14),
    AGX_DBG_NOMSAA = BITFIELD_BIT(15),
+   AGX_DBG_NOSHADOW = BITFIELD_BIT(16),
 };
 
 /* Dummy partial declarations, pending real UAPI */
@@ -48,6 +49,7 @@ struct drm_asahi_params_global {
    uint32_t num_clusters_total;
    uint32_t gpu_generation;
    uint32_t gpu_variant;
+   uint32_t num_dies;
 };
 
 /* How many power-of-two levels in the BO cache do we want? 2^14 minimum chosen

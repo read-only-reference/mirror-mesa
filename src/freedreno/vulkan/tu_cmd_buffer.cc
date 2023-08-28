@@ -756,7 +756,7 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
 
 /* Optimization: there is no reason to load gmem if there is no
  * geometry to process. COND_REG_EXEC predicate is set here,
- * but the actual skip happens in tu6_emit_tile_load() and tile_store_cs,
+ * but the actual skip happens in tu_load_gmem_attachment() and tile_store_cs,
  * for each blit separately.
  */
 static void
@@ -956,17 +956,6 @@ tu6_emit_sysmem_resolves(struct tu_cmd_buffer *cmd,
          tu6_emit_sysmem_resolve(cmd, cs, subpass->multiview_mask, a, gmem_a);
       }
    }
-}
-
-static void
-tu6_emit_tile_load(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
-{
-   tu6_emit_blit_scissor(cmd, cs, true);
-
-   const bool cond_exec_allowed = cmd->state.tiling->binning &&
-                                  cmd->state.pass->has_cond_load_store;
-   for (uint32_t i = 0; i < cmd->state.pass->attachment_count; ++i)
-      tu_load_gmem_attachment(cmd, cs, i, cond_exec_allowed, false);
 }
 
 static void
@@ -1462,35 +1451,8 @@ tu_set_input_attachments(struct tu_cmd_buffer *cmd, const struct tu_subpass *sub
 
 
 static void
-tu_emit_renderpass_begin(struct tu_cmd_buffer *cmd,
-                         const VkClearValue *clear_values)
+tu_emit_renderpass_begin(struct tu_cmd_buffer *cmd)
 {
-   struct tu_cs *cs = &cmd->draw_cs;
-
-   if (cmd->state.pass->has_fdm)
-      tu_cs_set_writeable(cs, true);
-
-   tu_cond_exec_start(cs, CP_COND_EXEC_0_RENDER_MODE_GMEM);
-
-   tu6_emit_tile_load(cmd, cs);
-
-   tu6_emit_blit_scissor(cmd, cs, false);
-
-   for (uint32_t i = 0; i < cmd->state.pass->attachment_count; ++i)
-      tu_clear_gmem_attachment(cmd, cs, i, &clear_values[i]);
-
-   tu_cond_exec_end(cs);
-
-   if (cmd->state.pass->has_fdm)
-      tu_cs_set_writeable(cs, false);
-
-   tu_cond_exec_start(cs, CP_COND_EXEC_0_RENDER_MODE_SYSMEM);
-
-   for (uint32_t i = 0; i < cmd->state.pass->attachment_count; ++i)
-      tu_clear_sysmem_attachment(cmd, cs, i, &clear_values[i]);
-
-   tu_cond_exec_end(cs);
-
    /* We need to re-emit any draw states that are patched in order for them to
     * be correctly added to the per-renderpass patchpoint list, even if they
     * are the same as before.
@@ -1806,6 +1768,7 @@ static void tu_reset_render_pass(struct tu_cmd_buffer *cmd_buffer)
    cmd_buffer->state.subpass = NULL;
    cmd_buffer->state.framebuffer = NULL;
    cmd_buffer->state.attachments = NULL;
+   cmd_buffer->state.clear_values = NULL;
    cmd_buffer->state.gmem_layout = TU_GMEM_LAYOUT_COUNT; /* invalid value to prevent looking up gmem offsets */
    memset(&cmd_buffer->state.rp, 0, sizeof(cmd_buffer->state.rp));
 
@@ -2052,6 +2015,8 @@ tu_BeginCommandBuffer(VkCommandBuffer commandBuffer,
          tu_fill_render_pass_state(&cmd_buffer->state.vk_rp,
                                    cmd_buffer->state.pass,
                                    cmd_buffer->state.subpass);
+         vk_cmd_set_cb_attachment_count(&cmd_buffer->vk,
+                                        cmd_buffer->state.subpass->color_count);
          cmd_buffer->state.dirty |= TU_CMD_DIRTY_SUBPASS;
 
          cmd_buffer->patchpoints_ctx = ralloc_parent(NULL);
@@ -3600,18 +3565,93 @@ tu_subpass_barrier(struct tu_cmd_buffer *cmd_buffer,
    tu_flush_for_stage(cache, src_stage, dst_stage);
 }
 
-/* emit mrt/zs/msaa/ubwc state for the subpass that is starting (either at
- * vkCmdBeginRenderPass2() or vkCmdNextSubpass2())
+static void
+tu_emit_subpass_begin_gmem(struct tu_cmd_buffer *cmd)
+{
+   struct tu_cs *cs = &cmd->draw_cs;
+   uint32_t subpass_idx = cmd->state.subpass - cmd->state.pass->subpasses;
+
+   /* If we might choose to bin, then put the loads under a check for geometry
+    * having been binned to this tile.  If we don't choose to bin in the end,
+    * then we will have manually set those registers to say geometry is present.
+    *
+    * However, if the draw CS has a write to the condition for some other reason
+    * (perf queries), then we can't do this optimization since the
+    * start-of-the-CS geometry condition will have been overwritten.
+    */
+   bool cond_load_allowed = cmd->state.tiling->binning &&
+                            cmd->state.pass->has_cond_load_store &&
+                            !cmd->state.rp.draw_cs_writes_to_cond_pred;
+
+   tu_cond_exec_start(cs, CP_COND_EXEC_0_RENDER_MODE_GMEM);
+
+   /* Emit gmem loads that are first used in this subpass. */
+   bool emitted_scissor = false;
+   for (uint32_t i = 0; i < cmd->state.pass->attachment_count; ++i) {
+      struct tu_render_pass_attachment *att = &cmd->state.pass->attachments[i];
+      if ((att->load || att->load_stencil) && att->first_subpass_idx == subpass_idx) {
+         if (!emitted_scissor) {
+            tu6_emit_blit_scissor(cmd, cs, true);
+            emitted_scissor = true;
+         }
+         tu_load_gmem_attachment(cmd, cs, i, cond_load_allowed, false);
+      }
+   }
+
+   /* Emit gmem clears that are first used in this subpass. */
+   emitted_scissor = false;
+   for (uint32_t i = 0; i < cmd->state.pass->attachment_count; ++i) {
+      struct tu_render_pass_attachment *att = &cmd->state.pass->attachments[i];
+      if (att->clear_mask && att->first_subpass_idx == subpass_idx) {
+         if (!emitted_scissor) {
+            tu6_emit_blit_scissor(cmd, cs, false);
+            emitted_scissor = true;
+         }
+         tu_clear_gmem_attachment(cmd, cs, i);
+      }
+   }
+
+   tu_cond_exec_end(cs); /* CP_COND_EXEC_0_RENDER_MODE_GMEM */
+}
+
+/* Emits sysmem clears that are first used in this subpass. */
+static void
+tu_emit_subpass_begin_sysmem(struct tu_cmd_buffer *cmd)
+{
+   struct tu_cs *cs = &cmd->draw_cs;
+   uint32_t subpass_idx = cmd->state.subpass - cmd->state.pass->subpasses;
+
+   tu_cond_exec_start(cs, CP_COND_EXEC_0_RENDER_MODE_SYSMEM);
+   for (uint32_t i = 0; i < cmd->state.pass->attachment_count; ++i) {
+      struct tu_render_pass_attachment *att = &cmd->state.pass->attachments[i];
+      if (att->clear_mask && att->first_subpass_idx == subpass_idx)
+         tu_clear_sysmem_attachment(cmd, cs, i);
+   }
+   tu_cond_exec_end(cs); /* sysmem */
+}
+
+/* emit loads, clears, and mrt/zs/msaa/ubwc state for the subpass that is
+ * starting (either at vkCmdBeginRenderPass2() or vkCmdNextSubpass2())
+ *
+ * Clears and loads have to happen at this point, because with
+ * VK_ATTACHMENT_DESCRIPTION_MAY_ALIAS_BIT the loads may depend on the output of
+ * a previous aliased attachment's store.
  */
 static void
 tu_emit_subpass_begin(struct tu_cmd_buffer *cmd)
 {
    tu_fill_render_pass_state(&cmd->state.vk_rp, cmd->state.pass, cmd->state.subpass);
+
+   tu_emit_subpass_begin_gmem(cmd);
+   tu_emit_subpass_begin_sysmem(cmd);
+
    tu6_emit_zs(cmd, cmd->state.subpass, &cmd->draw_cs);
    tu6_emit_mrt(cmd, cmd->state.subpass, &cmd->draw_cs);
    tu6_emit_render_cntl(cmd, cmd->state.subpass, &cmd->draw_cs, false);
 
    tu_set_input_attachments(cmd, cmd->state.subpass);
+
+   vk_cmd_set_cb_attachment_count(&cmd->vk, cmd->state.subpass->color_count);
 
    cmd->state.dirty |= TU_CMD_DIRTY_SUBPASS;
 }
@@ -3641,12 +3681,13 @@ tu_CmdBeginRenderPass2(VkCommandBuffer commandBuffer,
    cmd->state.framebuffer = fb;
    cmd->state.render_area = pRenderPassBegin->renderArea;
 
-   cmd->state.attachments = (const struct tu_image_view **)
-      vk_alloc(&cmd->vk.pool->alloc, pass->attachment_count *
-               sizeof(cmd->state.attachments[0]), 8,
-               VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-
-   if (!cmd->state.attachments) {
+   VK_MULTIALLOC(ma);
+   vk_multialloc_add(&ma, &cmd->state.attachments,
+                     const struct tu_image_view *, pass->attachment_count);
+   vk_multialloc_add(&ma, &cmd->state.clear_values, VkClearValue,
+                     pRenderPassBegin->clearValueCount);
+   if (!vk_multialloc_alloc(&ma, &cmd->vk.pool->alloc,
+                            VK_SYSTEM_ALLOCATION_SCOPE_OBJECT)) {
       vk_command_buffer_set_error(&cmd->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
       return;
    }
@@ -3660,6 +3701,9 @@ tu_CmdBeginRenderPass2(VkCommandBuffer commandBuffer,
          tu_image_view_from_handle(pAttachmentInfo->pAttachments[i]) :
          cmd->state.framebuffer->attachments[i].attachment;
    }
+   for (unsigned i = 0; i < pRenderPassBegin->clearValueCount; i++)
+         cmd->state.clear_values[i] = pRenderPassBegin->pClearValues[i];
+
    tu_choose_gmem_layout(cmd);
 
    trace_start_render_pass(&cmd->trace, &cmd->cs, cmd->state.framebuffer,
@@ -3677,11 +3721,11 @@ tu_CmdBeginRenderPass2(VkCommandBuffer commandBuffer,
    if (pass->subpasses[0].feedback_invalidate)
       cmd->state.renderpass_cache.flush_bits |= TU_CMD_FLAG_CACHE_INVALIDATE;
 
-   tu_lrz_begin_renderpass(cmd, pRenderPassBegin->pClearValues);
+   tu_lrz_begin_renderpass(cmd);
 
    cmd->trace_renderpass_start = u_trace_end_iterator(&cmd->trace);
 
-   tu_emit_renderpass_begin(cmd, pRenderPassBegin->pClearValues);
+   tu_emit_renderpass_begin(cmd);
    tu_emit_subpass_begin(cmd);
 
    if (pass->has_fdm)
@@ -3693,7 +3737,6 @@ tu_CmdBeginRendering(VkCommandBuffer commandBuffer,
                      const VkRenderingInfo *pRenderingInfo)
 {
    TU_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
-   VkClearValue clear_values[2 * (MAX_RTS + 1)];
 
    tu_setup_dynamic_render_pass(cmd, pRenderingInfo);
    tu_setup_dynamic_framebuffer(cmd, pRenderingInfo);
@@ -3704,16 +3747,19 @@ tu_CmdBeginRendering(VkCommandBuffer commandBuffer,
    cmd->state.render_area = pRenderingInfo->renderArea;
 
    cmd->state.attachments = cmd->dynamic_attachments;
+   cmd->state.clear_values = cmd->dynamic_clear_values;
 
    for (unsigned i = 0; i < pRenderingInfo->colorAttachmentCount; i++) {
       uint32_t a = cmd->dynamic_subpass.color_attachments[i].attachment;
       if (!pRenderingInfo->pColorAttachments[i].imageView)
          continue;
 
+      cmd->state.clear_values[a] =
+         pRenderingInfo->pColorAttachments[i].clearValue;
+
       TU_FROM_HANDLE(tu_image_view, view,
                      pRenderingInfo->pColorAttachments[i].imageView);
       cmd->state.attachments[a] = view;
-      clear_values[a] = pRenderingInfo->pColorAttachments[i].clearValue;
 
       a = cmd->dynamic_subpass.resolve_attachments[i].attachment;
       if (a != VK_ATTACHMENT_UNUSED) {
@@ -3734,12 +3780,12 @@ tu_CmdBeginRendering(VkCommandBuffer commandBuffer,
          TU_FROM_HANDLE(tu_image_view, view, common_info->imageView);
          cmd->state.attachments[a] = view;
          if (pRenderingInfo->pDepthAttachment) {
-            clear_values[a].depthStencil.depth =
+            cmd->state.clear_values[a].depthStencil.depth =
                pRenderingInfo->pDepthAttachment->clearValue.depthStencil.depth;
          }
 
          if (pRenderingInfo->pStencilAttachment) {
-            clear_values[a].depthStencil.stencil =
+            cmd->state.clear_values[a].depthStencil.stencil =
                pRenderingInfo->pStencilAttachment->clearValue.depthStencil.stencil;
          }
 
@@ -3788,9 +3834,9 @@ tu_CmdBeginRendering(VkCommandBuffer commandBuffer,
       cmd->state.lrz.valid = false;
    } else {
       if (resuming)
-         tu_lrz_begin_resumed_renderpass(cmd, clear_values);
+         tu_lrz_begin_resumed_renderpass(cmd);
       else
-         tu_lrz_begin_renderpass(cmd, clear_values);
+         tu_lrz_begin_renderpass(cmd);
    }
 
 
@@ -3812,7 +3858,7 @@ tu_CmdBeginRendering(VkCommandBuffer commandBuffer,
    }
 
    if (!resuming) {
-      tu_emit_renderpass_begin(cmd, clear_values);
+      tu_emit_renderpass_begin(cmd);
       tu_emit_subpass_begin(cmd);
    }
 

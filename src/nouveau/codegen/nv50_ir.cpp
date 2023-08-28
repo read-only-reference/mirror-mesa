@@ -971,8 +971,6 @@ const struct TexInstruction::Target::Desc TexInstruction::Target::descTable[] =
 
 const struct TexInstruction::ImgFormatDesc TexInstruction::formatTable[] =
 {
-   { "NONE",         0, {  0,  0,  0,  0 },  UINT },
-
    { "RGBA32F",      4, { 32, 32, 32, 32 }, FLOAT },
    { "RGBA16F",      4, { 16, 16, 16, 16 }, FLOAT },
    { "RG32F",        2, { 32, 32,  0,  0 }, FLOAT },
@@ -1028,7 +1026,7 @@ TexInstruction::translateImgFormat(enum pipe_format format)
   case PIPE_FORMAT_ ## a: return &formatTable[nv50_ir::FMT_ ## b]
 
    switch (format) {
-   FMT_CASE(NONE, NONE);
+   case PIPE_FORMAT_NONE: return NULL;
 
    FMT_CASE(R32G32B32A32_FLOAT, RGBA32F);
    FMT_CASE(R16G16B16A16_FLOAT, RGBA16F);
@@ -1078,7 +1076,7 @@ TexInstruction::translateImgFormat(enum pipe_format format)
 
    default:
       assert(!"Unexpected format");
-      return &formatTable[nv50_ir::FMT_NONE];
+      return NULL;
    }
 }
 
@@ -1260,7 +1258,6 @@ nv50_ir_init_prog_info(struct nv50_ir_prog_info *info,
       info->prop.cp.numThreads[2] = 1;
    }
    info_out->bin.smemSize = info->bin.smemSize;
-   info_out->io.genUserClip = info->io.genUserClip;
    info_out->io.instanceId = 0xff;
    info_out->io.vertexId = 0xff;
    info_out->io.edgeFlagIn = 0xff;

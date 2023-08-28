@@ -4,8 +4,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include "si_compute.h"
-
 #include "ac_rtld.h"
 #include "amd_kernel_code_t.h"
 #include "nir/tgsi_to_nir.h"
@@ -49,7 +47,6 @@ static const amd_kernel_code_t *si_compute_get_code_object(const struct si_compu
    if (!ac_rtld_open(&rtld,
                      (struct ac_rtld_open_info){.info = &sel->screen->info,
                                                 .shader_type = MESA_SHADER_COMPUTE,
-                                                .wave_size = program->shader.wave_size,
                                                 .num_parts = 1,
                                                 .elf_ptrs = &program->shader.binary.code_buffer,
                                                 .elf_sizes = &program->shader.binary.code_size}))
@@ -195,7 +192,7 @@ static void si_create_compute_state_async(void *job, void *gdata, int thread_ind
                              S_00B84C_TGID_X_EN(sel->info.uses_block_id[0]) |
                              S_00B84C_TGID_Y_EN(sel->info.uses_block_id[1]) |
                              S_00B84C_TGID_Z_EN(sel->info.uses_block_id[2]) |
-                             S_00B84C_TG_SIZE_EN(sel->info.uses_subgroup_info) |
+                             S_00B84C_TG_SIZE_EN(sel->info.uses_tg_size) |
                              S_00B84C_TIDIG_COMP_CNT(sel->info.uses_thread_id[2]
                                                         ? 2
                                                         : sel->info.uses_thread_id[1] ? 1 : 0) |
@@ -260,11 +257,13 @@ static void *si_create_compute_state(struct pipe_context *ctx, const struct pipe
       }
       memcpy((void *)program->shader.binary.code_buffer, header->blob, header->num_bytes);
 
-      /* This is only for clover without NIR. */
-      program->shader.wave_size = sscreen->info.gfx_level >= GFX10 ? 32 : 64;
-
       const amd_kernel_code_t *code_object = si_compute_get_code_object(program, 0);
       code_object_to_config(code_object, &program->shader.config);
+
+      if (AMD_HSA_BITS_GET(code_object->code_properties, AMD_CODE_PROPERTY_ENABLE_WAVEFRONT_SIZE32))
+         program->shader.wave_size = 32;
+      else
+         program->shader.wave_size = 64;
 
       bool ok = si_shader_binary_upload(sctx->screen, &program->shader, 0);
       si_shader_dump(sctx->screen, &program->shader, &sctx->debug, stderr, true);
@@ -578,7 +577,8 @@ static void setup_scratch_rsrc_user_sgprs(struct si_context *sctx,
 
    /* Disable address clamping */
    uint32_t scratch_dword2 = 0xffffffff;
-   uint32_t scratch_dword3 = S_008F0C_INDEX_STRIDE(3) | S_008F0C_ADD_TID_ENABLE(1);
+   uint32_t index_stride = sctx->cs_shader_state.program->shader.wave_size == 32 ? 2 : 3;
+   uint32_t scratch_dword3 = S_008F0C_INDEX_STRIDE(index_stride) | S_008F0C_ADD_TID_ENABLE(1);
 
    if (sctx->gfx_level >= GFX9) {
       assert(max_private_element_size == 1); /* only 4 bytes on GFX9 */
@@ -949,8 +949,10 @@ static void si_launch_grid(struct pipe_context *ctx, const struct pipe_grid_info
    bool cs_regalloc_hang = sscreen->info.has_cs_regalloc_hang_bug &&
                            info->block[0] * info->block[1] * info->block[2] > 256;
 
-   if (cs_regalloc_hang)
+   if (cs_regalloc_hang) {
       sctx->flags |= SI_CONTEXT_PS_PARTIAL_FLUSH | SI_CONTEXT_CS_PARTIAL_FLUSH;
+      si_mark_atom_dirty(sctx, &sctx->atoms.s.cache_flush);
+   }
 
    if (program->ir_type != PIPE_SHADER_IR_NATIVE && program->shader.compilation_failed)
       return;
@@ -974,16 +976,11 @@ static void si_launch_grid(struct pipe_context *ctx, const struct pipe_grid_info
          gfx11_decompress_textures(sctx, 1 << PIPE_SHADER_COMPUTE);
    }
 
-   /* Add buffer sizes for memory checking in need_cs_space. */
-   si_context_add_resource_size(sctx, &program->shader.bo->b.b);
-   /* TODO: add the scratch buffer */
-
    if (info->indirect) {
-      si_context_add_resource_size(sctx, info->indirect);
-
       /* Indirect buffers use TC L2 on GFX9, but not older hw. */
       if (sctx->gfx_level <= GFX8 && si_resource(info->indirect)->TC_L2_dirty) {
          sctx->flags |= SI_CONTEXT_WB_L2;
+         si_mark_atom_dirty(sctx, &sctx->atoms.s.cache_flush);
          si_resource(info->indirect)->TC_L2_dirty = false;
       }
    }
@@ -1013,7 +1010,6 @@ static void si_launch_grid(struct pipe_context *ctx, const struct pipe_grid_info
                                  info->variable_shared_mem))
       return;
 
-   si_upload_compute_shader_descriptors(sctx);
    si_emit_compute_shader_pointers(sctx);
 
    if (program->ir_type == PIPE_SHADER_IR_NATIVE &&
@@ -1032,10 +1028,10 @@ static void si_launch_grid(struct pipe_context *ctx, const struct pipe_grid_info
 
    /* Registers that are not read from memory should be set before this: */
    if (sctx->flags)
-      sctx->emit_cache_flush(sctx, &sctx->gfx_cs);
+      si_emit_cache_flush_direct(sctx);
 
    if (sctx->has_graphics && si_is_atom_dirty(sctx, &sctx->atoms.s.render_cond)) {
-      sctx->atoms.s.render_cond.emit(sctx);
+      sctx->atoms.s.render_cond.emit(sctx, -1);
       si_set_atom_dirty(sctx, &sctx->atoms.s.render_cond, false);
    }
 
@@ -1068,8 +1064,10 @@ static void si_launch_grid(struct pipe_context *ctx, const struct pipe_grid_info
    sctx->compute_is_busy = true;
    sctx->num_compute_calls++;
 
-   if (cs_regalloc_hang)
+   if (cs_regalloc_hang) {
       sctx->flags |= SI_CONTEXT_CS_PARTIAL_FLUSH;
+      si_mark_atom_dirty(sctx, &sctx->atoms.s.cache_flush);
+   }
 }
 
 void si_destroy_compute(struct si_compute *program)

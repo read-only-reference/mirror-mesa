@@ -183,6 +183,7 @@ lvp_physical_device_get_format_properties(struct lvp_physical_device *physical_d
    }
    if ((pformat != PIPE_FORMAT_R9G9B9E5_FLOAT) &&
        util_format_get_nr_components(pformat) != 3 &&
+       !util_format_is_yuv(pformat) &&
        pformat != PIPE_FORMAT_R10G10B10A2_SNORM &&
        pformat != PIPE_FORMAT_B10G10R10A2_SNORM &&
        pformat != PIPE_FORMAT_B10G10R10A2_UNORM) {
@@ -193,6 +194,10 @@ lvp_physical_device_get_format_properties(struct lvp_physical_device *physical_d
    out_properties->linearTilingFeatures = features;
    out_properties->optimalTilingFeatures = features;
    out_properties->bufferFeatures = buffer_features;
+   if (out_properties->linearTilingFeatures)
+      out_properties->linearTilingFeatures |= VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT_EXT;
+   if (out_properties->optimalTilingFeatures)
+      out_properties->optimalTilingFeatures |= VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT_EXT;
 }
 
 

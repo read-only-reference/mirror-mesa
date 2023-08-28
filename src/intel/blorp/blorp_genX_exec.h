@@ -123,6 +123,11 @@ static void
 blorp_emit_pipeline(struct blorp_batch *batch,
                     const struct blorp_params *params);
 
+static void
+blorp_emit_breakpoint_pre_draw(struct blorp_batch *batch);
+static void
+blorp_emit_breakpoint_post_draw(struct blorp_batch *batch);
+
 /***** BEGIN blorp_exec implementation ******/
 
 static uint64_t
@@ -1244,6 +1249,18 @@ blorp_emit_depth_stencil_state(struct blorp_batch *batch,
       return 0;
 
    GENX(3DSTATE_WM_DEPTH_STENCIL_pack)(NULL, dw, &ds);
+
+#if INTEL_NEEDS_WA_18019816803
+   /* Check if need PSS Stall sync. */
+   if (intel_needs_workaround(batch->blorp->compiler->devinfo, 18019816803) &&
+       batch->flags & BLORP_BATCH_NEED_PSS_STALL_SYNC) {
+      blorp_emit(batch, GENX(PIPE_CONTROL), pc) {
+            pc.PSSStallSyncEnable = true;
+      }
+      batch->flags &= ~BLORP_BATCH_NEED_PSS_STALL_SYNC;
+   }
+#endif
+
 #else
    uint32_t offset;
    void *state = blorp_alloc_dynamic_state(batch,
@@ -1415,9 +1432,6 @@ blorp_emit_pipeline(struct blorp_batch *batch,
 #if GFX_VERx10 >= 125
       blorp_emit(batch, GENX(3DSTATE_URB_ALLOC_MESH), zero);
       blorp_emit(batch, GENX(3DSTATE_URB_ALLOC_TASK), zero);
-
-      blorp_emit(batch, GENX(3DSTATE_MESH_SHADER), zero);
-      blorp_emit(batch, GENX(3DSTATE_TASK_SHADER), zero);
 
       blorp_emit(batch, GENX(3DSTATE_MESH_CONTROL), zero);
       blorp_emit(batch, GENX(3DSTATE_TASK_CONTROL), zero);
@@ -2033,6 +2047,7 @@ blorp_exec_3d(struct blorp_batch *batch, const struct blorp_params *params)
    if (!(batch->flags & BLORP_BATCH_NO_EMIT_DEPTH_STENCIL))
       blorp_emit_depth_stencil_config(batch, params);
 
+   blorp_emit_breakpoint_pre_draw(batch);
    blorp_emit(batch, GENX(3DPRIMITIVE), prim) {
       prim.VertexAccessType = SEQUENTIAL;
       prim.PrimitiveTopologyType = _3DPRIM_RECTLIST;
@@ -2042,7 +2057,7 @@ blorp_exec_3d(struct blorp_batch *batch, const struct blorp_params *params)
       prim.VertexCountPerInstance = 3;
       prim.InstanceCount = params->num_layers;
    }
-
+   blorp_emit_breakpoint_post_draw(batch);
    blorp_measure_end(batch, params);
 }
 

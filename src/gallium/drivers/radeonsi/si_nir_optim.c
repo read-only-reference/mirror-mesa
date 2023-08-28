@@ -13,9 +13,6 @@
 static bool
 add_src_instr_to_worklist(nir_src *src, void *wl)
 {
-   if (!src->is_ssa)
-      return false;
-
    nir_instr_worklist_push_tail(wl, src->ssa->parent_instr);
    return true;
 }
@@ -109,12 +106,9 @@ struct replace_param {
 };
 
 static bool
-store_instr_depends_on_tex(nir_builder *b, nir_instr *instr, void *state)
+store_instr_depends_on_tex(nir_builder *b, nir_intrinsic_instr *intrin,
+                           void *state)
 {
-   if (instr->type != nir_instr_type_intrinsic)
-      return false;
-
-   nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
    if (intrin->intrinsic != nir_intrinsic_store_output)
       return false;
 
@@ -138,8 +132,8 @@ replace_tex_by_imm(nir_builder *b, nir_instr *instr, void *state)
       return false;
 
    b->cursor = nir_instr_remove(&tex->instr);
-   nir_ssa_def *imm = nir_imm_vec4(b, p->value[0], p->value[1], p->value[2], p->value[3]);
-   nir_ssa_def_rewrite_uses(&tex->dest.ssa, imm);
+   nir_def *imm = nir_imm_vec4(b, p->value[0], p->value[1], p->value[2], p->value[3]);
+   nir_def_rewrite_uses(&tex->def, imm);
    return true;
 }
 
@@ -163,7 +157,7 @@ si_nir_is_output_const_if_tex_is_const(nir_shader *shader, float *in, float *out
    p.texunit = texunit;
 
    /* Test if the single store_output only depends on constants and a single texture op */
-   if (nir_shader_instructions_pass(shader, store_instr_depends_on_tex, nir_metadata_all, &p)) {
+   if (nir_shader_intrinsics_pass(shader, store_instr_depends_on_tex, nir_metadata_all, &p)) {
       assert(*p.texunit != -1);
 
       /* Replace nir_tex_instr using texunit by vec4(v) */

@@ -88,6 +88,7 @@ static const driOptionDescription anv_dri_options[] = {
       DRI_CONF_LIMIT_TRIG_INPUT_RANGE(false)
       DRI_CONF_ANV_MESH_CONV_PRIM_ATTRS_TO_VERT_ATTRS(-2)
       DRI_CONF_FORCE_VK_VENDOR(0)
+      DRI_CONF_FAKE_SPARSE(false)
    DRI_CONF_SECTION_END
 
    DRI_CONF_SECTION_QUALITY
@@ -140,7 +141,11 @@ compiler_perf_log(UNUSED void *data, UNUSED unsigned *id, const char *fmt, ...)
 #endif
 
 #ifdef ANDROID
+#if ANDROID_API_LEVEL >= 33
+#define ANV_API_VERSION VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)
+#else
 #define ANV_API_VERSION VK_MAKE_VERSION(1, 1, VK_HEADER_VERSION)
+#endif
 #else
 #define ANV_API_VERSION VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)
 #endif
@@ -237,6 +242,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .KHR_maintenance2                      = true,
       .KHR_maintenance3                      = true,
       .KHR_maintenance4                      = true,
+      .KHR_maintenance5                      = true,
       .KHR_map_memory2                       = true,
       .KHR_multiview                         = true,
       .KHR_performance_query =
@@ -345,6 +351,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .EXT_pipeline_creation_cache_control   = true,
       .EXT_pipeline_creation_feedback        = true,
       .EXT_pipeline_library_group_handles    = rt_enabled,
+      .EXT_pipeline_robustness               = true,
       .EXT_post_depth_coverage               = true,
       .EXT_primitives_generated_query        = true,
       .EXT_primitive_topology_list_restart   = true,
@@ -453,7 +460,17 @@ get_features(const struct anv_physical_device *pdevice,
       .shaderFloat64                            = pdevice->info.has_64bit_float,
       .shaderInt64                              = true,
       .shaderInt16                              = true,
+      .shaderResourceResidency                  = pdevice->instance->has_fake_sparse,
       .shaderResourceMinLod                     = true,
+      .sparseBinding                            = pdevice->instance->has_fake_sparse,
+      .sparseResidencyBuffer                    = pdevice->instance->has_fake_sparse,
+      .sparseResidencyImage2D                   = pdevice->instance->has_fake_sparse,
+      .sparseResidencyImage3D                   = pdevice->instance->has_fake_sparse,
+      .sparseResidency2Samples                  = false,
+      .sparseResidency4Samples                  = false,
+      .sparseResidency8Samples                  = false,
+      .sparseResidency16Samples                 = false,
+      .sparseResidencyAliased                   = pdevice->instance->has_fake_sparse,
       .variableMultisampleRate                  = true,
       .inheritedQueries                         = true,
 
@@ -818,6 +835,12 @@ get_features(const struct anv_physical_device *pdevice,
       .floatRepresentation = true,
       .leastRepresentableValueForceUnormRepresentation = false,
       .depthBiasExact = true,
+
+      /* VK_EXT_pipeline_robustness */
+      .pipelineRobustness = true,
+
+      /* VK_KHR_maintenance5 */
+      .maintenance5 = true,
    };
 
    /* The new DOOM and Wolfenstein games require depthBounds without
@@ -1099,6 +1122,8 @@ static void
 anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
 {
    uint32_t family_count = 0;
+   VkQueueFlags sparse_flags = pdevice->instance->has_fake_sparse ?
+                               VK_QUEUE_SPARSE_BINDING_BIT : 0;
 
    if (pdevice->engine_info) {
       int gc_count =
@@ -1120,7 +1145,8 @@ anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
          pdevice->queue.families[family_count++] = (struct anv_queue_family) {
             .queueFlags = VK_QUEUE_GRAPHICS_BIT |
                           VK_QUEUE_COMPUTE_BIT |
-                          VK_QUEUE_TRANSFER_BIT,
+                          VK_QUEUE_TRANSFER_BIT |
+                          sparse_flags,
             .queueCount = gc_count,
             .engine_class = INTEL_ENGINE_CLASS_RENDER,
          };
@@ -1128,7 +1154,8 @@ anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
       if (g_count > 0) {
          pdevice->queue.families[family_count++] = (struct anv_queue_family) {
             .queueFlags = VK_QUEUE_GRAPHICS_BIT |
-                          VK_QUEUE_TRANSFER_BIT,
+                          VK_QUEUE_TRANSFER_BIT |
+                          sparse_flags,
             .queueCount = g_count,
             .engine_class = INTEL_ENGINE_CLASS_RENDER,
          };
@@ -1136,7 +1163,8 @@ anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
       if (c_count > 0) {
          pdevice->queue.families[family_count++] = (struct anv_queue_family) {
             .queueFlags = VK_QUEUE_COMPUTE_BIT |
-                          VK_QUEUE_TRANSFER_BIT,
+                          VK_QUEUE_TRANSFER_BIT |
+                          sparse_flags,
             .queueCount = c_count,
             .engine_class = compute_class,
          };
@@ -1168,7 +1196,8 @@ anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
       pdevice->queue.families[family_count++] = (struct anv_queue_family) {
          .queueFlags = VK_QUEUE_GRAPHICS_BIT |
                        VK_QUEUE_COMPUTE_BIT |
-                       VK_QUEUE_TRANSFER_BIT,
+                       VK_QUEUE_TRANSFER_BIT |
+                       sparse_flags,
          .queueCount = 1,
          .engine_class = INTEL_ENGINE_CLASS_RENDER,
       };
@@ -1260,7 +1289,7 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
       &dispatch_table, &wsi_physical_device_entrypoints, false);
 
    result = vk_physical_device_init(&device->vk, &instance->vk,
-                                    NULL, NULL, /* We set up extensions later */
+                                    NULL, NULL, NULL, /* We set up extensions later */
                                     &dispatch_table);
    if (result != VK_SUCCESS) {
       vk_error(instance, result);
@@ -1358,6 +1387,8 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
    device->has_reg_timestamp = intel_gem_read_render_timestamp(fd,
                                                                device->info.kmd_type,
                                                                &u64_ignore);
+
+   device->uses_relocs = device->info.kmd_type != INTEL_KMD_TYPE_XE;
 
    device->always_flush_cache = INTEL_DEBUG(DEBUG_STALL) ||
       driQueryOptionb(&instance->dri_options, "always_flush_cache");
@@ -1528,6 +1559,8 @@ anv_init_dri_options(struct anv_instance *instance)
        driQueryOptioni(&instance->dri_options, "query_copy_with_shader_threshold");
     instance->force_vk_vendor =
        driQueryOptioni(&instance->dri_options, "force_vk_vendor");
+    instance->has_fake_sparse =
+       driQueryOptionb(&instance->dri_options, "fake_sparse");
 }
 
 VkResult anv_CreateInstance(
@@ -1649,7 +1682,7 @@ void anv_GetPhysicalDeviceProperties(
       .maxMemoryAllocationCount                 = UINT32_MAX,
       .maxSamplerAllocationCount                = 64 * 1024,
       .bufferImageGranularity                   = 1,
-      .sparseAddressSpaceSize                   = 0,
+      .sparseAddressSpaceSize                   = pdevice->instance->has_fake_sparse ? (1uLL << 48) : 0,
       .maxBoundDescriptorSets                   = MAX_SETS,
       .maxPerStageDescriptorSamplers            = max_samplers,
       .maxPerStageDescriptorUniformBuffers      = MAX_PER_STAGE_DESCRIPTOR_UNIFORM_BUFFERS,
@@ -1774,7 +1807,13 @@ void anv_GetPhysicalDeviceProperties(
                     VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU :
                     VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU,
       .limits = limits,
-      .sparseProperties = {0}, /* Broadwell doesn't do sparse. */
+      .sparseProperties = {
+         .residencyStandard2DBlockShape = pdevice->instance->has_fake_sparse,
+         .residencyStandard2DMultisampleBlockShape = pdevice->instance->has_fake_sparse,
+         .residencyStandard3DBlockShape = pdevice->instance->has_fake_sparse,
+         .residencyAlignedMipSize = false,
+         .residencyNonResidentStrict = pdevice->instance->has_fake_sparse,
+      },
    };
 
    if (unlikely(pdevice->instance->force_vk_vendor))
@@ -2228,6 +2267,18 @@ void anv_GetPhysicalDeviceProperties2(
          break;
       }
 
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_PROPERTIES_KHR: {
+         VkPhysicalDeviceMaintenance5PropertiesKHR *properties =
+            (VkPhysicalDeviceMaintenance5PropertiesKHR *)ext;
+         properties->earlyFragmentMultisampleCoverageAfterSampleCounting = false;
+         properties->earlyFragmentSampleMaskTestBeforeSampleCounting = false;
+         properties->depthStencilSwizzleOneSupport = true;
+         properties->polygonModePointSize = true;
+         properties->nonStrictSinglePixelWideLinesUseParallelogram = false;
+         properties->nonStrictWideLinesUseParallelogram = false;
+         break;
+      }
+
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT: {
          VkPhysicalDeviceMeshShaderPropertiesEXT *properties =
             (VkPhysicalDeviceMeshShaderPropertiesEXT *)ext;
@@ -2381,6 +2432,20 @@ void anv_GetPhysicalDeviceProperties2(
           * normalization.
           */
          properties->allowCommandBufferQueryCopies = false;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_ROBUSTNESS_PROPERTIES_EXT: {
+         VkPhysicalDevicePipelineRobustnessPropertiesEXT *properties =
+            (VkPhysicalDevicePipelineRobustnessPropertiesEXT *)ext;
+         properties->defaultRobustnessStorageBuffers =
+            VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED_EXT;
+         properties->defaultRobustnessUniformBuffers =
+            VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED_EXT;
+         properties->defaultRobustnessVertexInputs =
+            VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_2_EXT;
+         properties->defaultRobustnessImages =
+            VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_2_EXT;
          break;
       }
 
@@ -2998,11 +3063,7 @@ VkResult anv_CreateDevice(
       for (unsigned i = 0; i < physical_device->queue.family_count; i++) {
          struct intel_batch_decode_ctx *decoder = &device->decoder[i];
 
-         const unsigned decode_flags =
-            INTEL_BATCH_DECODE_FULL |
-            (INTEL_DEBUG(DEBUG_COLOR) ? INTEL_BATCH_DECODE_IN_COLOR : 0) |
-            INTEL_BATCH_DECODE_OFFSETS |
-            INTEL_BATCH_DECODE_FLOATS;
+         const unsigned decode_flags = INTEL_BATCH_DECODE_DEFAULT_FLAGS;
 
          intel_batch_decode_ctx_init(decoder,
                                      &physical_device->compiler->isa,
@@ -3390,6 +3451,10 @@ VkResult anv_CreateDevice(
       device->vk.enabled_features.robustBufferAccess ||
       device->vk.enabled_features.nullDescriptor;
 
+   device->breakpoint = anv_state_pool_alloc(&device->dynamic_state_pool, 4,
+                                             4);
+   p_atomic_set(&device->draw_call_count, 0);
+
    anv_device_init_blorp(device);
 
    anv_device_init_border_colors(device);
@@ -3505,6 +3570,7 @@ void anv_DestroyDevice(
    anv_state_pool_free(&device->dynamic_state_pool, device->border_colors);
    anv_state_pool_free(&device->dynamic_state_pool, device->slice_hash);
    anv_state_pool_free(&device->dynamic_state_pool, device->cps_states);
+   anv_state_pool_free(&device->dynamic_state_pool, device->breakpoint);
 #endif
 
    for (unsigned i = 0; i < ARRAY_SIZE(device->rt_scratch_bos); i++) {
@@ -3680,9 +3746,6 @@ VkResult anv_AllocateMemory(
    VkResult result = VK_SUCCESS;
 
    assert(pAllocateInfo->sType == VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
-
-   /* The Vulkan 1.0.33 spec says "allocationSize must be greater than 0". */
-   assert(pAllocateInfo->allocationSize > 0);
 
    VkDeviceSize aligned_alloc_size =
       align64(pAllocateInfo->allocationSize, 4096);
@@ -4216,6 +4279,9 @@ VkResult anv_QueueBindSparse(
    if (vk_device_is_lost(&queue->device->vk))
       return VK_ERROR_DEVICE_LOST;
 
+   if (INTEL_DEBUG(DEBUG_SPARSE))
+      fprintf(stderr, "=== [%s:%d] [%s]\n", __FILE__, __LINE__, __func__);
+
    return vk_error(queue, VK_ERROR_FEATURE_NOT_PRESENT);
 }
 
@@ -4358,6 +4424,13 @@ void anv_GetDeviceBufferMemoryRequirementsKHR(
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
 
+   if (INTEL_DEBUG(DEBUG_SPARSE) && pInfo->pCreateInfo->flags &
+           (VK_BUFFER_CREATE_SPARSE_BINDING_BIT |
+            VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT |
+            VK_BUFFER_CREATE_SPARSE_ALIASED_BIT))
+      fprintf(stderr, "=== %s %s:%d flags:0x%08x\n", __func__, __FILE__,
+              __LINE__, pInfo->pCreateInfo->flags);
+
    anv_get_buffer_memory_requirements(device,
                                       pInfo->pCreateInfo->size,
                                       pInfo->pCreateInfo->usage,
@@ -4372,6 +4445,13 @@ VkResult anv_CreateBuffer(
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
    struct anv_buffer *buffer;
+
+   if (INTEL_DEBUG(DEBUG_SPARSE) && (pCreateInfo->flags &
+           (VK_BUFFER_CREATE_SPARSE_BINDING_BIT |
+            VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT |
+            VK_BUFFER_CREATE_SPARSE_ALIASED_BIT)))
+      fprintf(stderr, "=== %s %s:%d flags:0x%08x\n", __func__, __FILE__,
+              __LINE__, pCreateInfo->flags);
 
    /* Don't allow creating buffers bigger than our address space.  The real
     * issue here is that we may align up the buffer size and we don't want
@@ -4476,7 +4556,7 @@ void anv_DestroySampler(
                                    sampler->custom_border_color);
    }
 
-   vk_object_free(&device->vk, pAllocator, sampler);
+   vk_sampler_destroy(&device->vk, pAllocator, &sampler->vk);
 }
 
 static const VkTimeDomainEXT anv_time_domains[] = {

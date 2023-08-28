@@ -93,6 +93,8 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_OCCLUSION_QUERY:
       return vscreen->caps.caps.v1.bset.occlusion_query;
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
+      return vscreen->caps.caps.v1.bset.mirror_clamp &&
+      vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_HOST_IS_GLES ? 0 : 1;
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP_TO_EDGE:
       return vscreen->caps.caps.v1.bset.mirror_clamp;
    case PIPE_CAP_TEXTURE_SWIZZLE:
@@ -502,6 +504,7 @@ virgl_get_video_param(struct pipe_screen *screen,
    case PIPE_VIDEO_FORMAT_VC1:
    case PIPE_VIDEO_FORMAT_JPEG:
    case PIPE_VIDEO_FORMAT_VP9:
+   case PIPE_VIDEO_FORMAT_AV1:
       drv_supported = (entrypoint == PIPE_VIDEO_ENTRYPOINT_BITSTREAM);
       break;
    default:

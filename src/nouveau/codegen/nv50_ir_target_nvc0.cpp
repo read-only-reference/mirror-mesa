@@ -206,7 +206,7 @@ void TargetNVC0::initOpInfo()
 
    static const operation noDest[] =
    {
-      OP_STORE, OP_WRSV, OP_EXPORT, OP_BRA, OP_CALL, OP_RET, OP_EXIT,
+      OP_STORE, OP_EXPORT, OP_BRA, OP_CALL, OP_RET, OP_EXIT,
       OP_DISCARD, OP_CONT, OP_BREAK, OP_PRECONT, OP_PREBREAK, OP_PRERET,
       OP_JOIN, OP_JOINAT, OP_BRKPT, OP_MEMBAR, OP_EMIT, OP_RESTART,
       OP_QUADON, OP_QUADPOP, OP_TEXBAR, OP_SUSTB, OP_SUSTP, OP_SUREDP,
@@ -482,7 +482,7 @@ TargetNVC0::isOpSupported(operation op, DataType ty) const
 {
    if (op == OP_SAD && ty != TYPE_S32 && ty != TYPE_U32)
       return false;
-   if (op == OP_POW || op == OP_SQRT || op == OP_DIV || op == OP_MOD)
+   if (op == OP_SQRT || op == OP_DIV || op == OP_MOD)
       return false;
    if (op == OP_XMAD)
       return false;

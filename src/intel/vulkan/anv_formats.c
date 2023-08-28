@@ -326,9 +326,9 @@ static const struct anv_format _4444_formats[] = {
 
 static const struct anv_format ycbcr_formats[] = {
    ycbcr_fmt(VK_FORMAT_G8B8G8R8_422_UNORM, 1, true, false,
-             ycbcr_plane(0, ISL_FORMAT_YCRCB_SWAPUV, RGBA)),
+             ycbcr_plane(0, ISL_FORMAT_YCRCB_NORMAL, RGBA)),
    ycbcr_fmt(VK_FORMAT_B8G8R8G8_422_UNORM, 1, true, false,
-             ycbcr_plane(0, ISL_FORMAT_YCRCB_SWAPUVY, RGBA)),
+             ycbcr_plane(0, ISL_FORMAT_YCRCB_SWAPY, RGBA)),
    ycbcr_fmt(VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM, 3, true, false,
              ycbcr_plane(0, ISL_FORMAT_R8_UNORM, RGBA),
              ycbcr_plane(1, ISL_FORMAT_R8_UNORM, RGBA),
@@ -396,6 +396,11 @@ static const struct anv_format ycbcr_formats[] = {
              ycbcr_plane(2, ISL_FORMAT_R16_UNORM, RGBA)),
 };
 
+static const struct anv_format maintenance5_formats[] = {
+   fmt1(VK_FORMAT_A8_UNORM_KHR,                   ISL_FORMAT_A8_UNORM),
+   swiz_fmt1(VK_FORMAT_A1B5G5R5_UNORM_PACK16_KHR, ISL_FORMAT_B5G5R5A1_UNORM, BGRA)
+};
+
 #undef _fmt
 #undef swiz_fmt1
 #undef fmt1
@@ -411,6 +416,8 @@ static const struct {
                                                  .n_formats = ARRAY_SIZE(_4444_formats), },
    [_VK_KHR_sampler_ycbcr_conversion_number] = { .formats = ycbcr_formats,
                                                  .n_formats = ARRAY_SIZE(ycbcr_formats), },
+   [_VK_KHR_maintenance5_number]             = { .formats = maintenance5_formats,
+                                                 .n_formats = ARRAY_SIZE(maintenance5_formats), },
 };
 
 const struct anv_format *
@@ -781,7 +788,7 @@ anv_get_image_format_features2(const struct anv_physical_device *physical_device
       }
 
       if (isl_drm_modifier_has_aux(isl_mod_info->modifier) &&
-          !isl_format_supports_ccs_e(devinfo, plane_format.isl_format)) {
+          !anv_format_supports_ccs_e(devinfo, plane_format.isl_format)) {
          return 0;
       }
 
@@ -1734,11 +1741,13 @@ VkResult anv_GetPhysicalDeviceImageFormatProperties2(
           * requires support for VK_IMAGE_TILING_OPTIMAL. Android systems
           * communicate the image's memory layout through backdoor channels.
           */
-         if (ahw_supported && external_props) {
-            external_props->externalMemoryProperties = android_image_props;
-            if (anv_ahb_format_for_vk_format(base_info->format)) {
-               external_props->externalMemoryProperties.externalMemoryFeatures |=
-                  VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT;
+         if (ahw_supported) {
+            if (external_props) {
+               external_props->externalMemoryProperties = android_image_props;
+               if (anv_ahb_format_for_vk_format(base_info->format)) {
+                  external_props->externalMemoryProperties.externalMemoryFeatures |=
+                     VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT;
+               }
             }
             break;
          }
@@ -1785,6 +1794,8 @@ void anv_GetPhysicalDeviceSparseImageFormatProperties(
     uint32_t*                                   pNumProperties,
     VkSparseImageFormatProperties*              pProperties)
 {
+   if (INTEL_DEBUG(DEBUG_SPARSE))
+      fprintf(stderr, "=== [%s:%d] [%s]\n", __FILE__, __LINE__, __func__);
    /* Sparse images are not yet supported. */
    *pNumProperties = 0;
 }
@@ -1795,6 +1806,9 @@ void anv_GetPhysicalDeviceSparseImageFormatProperties2(
     uint32_t*                                   pPropertyCount,
     VkSparseImageFormatProperties2*             pProperties)
 {
+   if (INTEL_DEBUG(DEBUG_SPARSE))
+      fprintf(stderr, "=== [%s:%d] [%s]\n", __FILE__, __LINE__, __func__);
+
    /* Sparse images are not yet supported. */
    *pPropertyCount = 0;
 }

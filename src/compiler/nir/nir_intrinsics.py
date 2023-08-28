@@ -415,7 +415,7 @@ barrier("terminate")
 # OpMemoryBarrier and OpControlBarrier, used to implement Vulkan Memory Model.
 # Storage that the barrier applies is represented using NIR variable modes.
 # For an OpMemoryBarrier, set EXECUTION_SCOPE to SCOPE_NONE.
-intrinsic("scoped_barrier",
+intrinsic("barrier",
           indices=[EXECUTION_SCOPE, MEMORY_SCOPE, MEMORY_SEMANTICS, MEMORY_MODES])
 
 # Shader clock intrinsic with semantics analogous to the clock2x32ARB()
@@ -850,14 +850,14 @@ system_value("local_invocation_id", 3)
 system_value("local_invocation_index", 1)
 # zero_base indicates it starts from 0 for the current dispatch
 # non-zero_base indicates the base is included
-system_value("workgroup_id", 3, bit_sizes=[32, 64])
+system_value("workgroup_id", 3)
 system_value("workgroup_id_zero_base", 3)
 # The workgroup_index is intended for situations when a 3 dimensional
 # workgroup_id is not available on the HW, but a 1 dimensional index is.
 system_value("workgroup_index", 1)
 system_value("base_workgroup_id", 3, bit_sizes=[32, 64])
 system_value("user_clip_plane", 4, indices=[UCP_ID])
-system_value("num_workgroups", 3, bit_sizes=[32, 64])
+system_value("num_workgroups", 3)
 system_value("num_vertices", 1)
 system_value("helper_invocation", 1, bit_sizes=[1, 32])
 system_value("layer_id", 1)
@@ -1655,6 +1655,15 @@ store("tlb_sample_color_v3d", [1], [BASE, COMPONENT, SRC_TYPE], [])
 # the target framebuffer
 intrinsic("load_fb_layers_v3d", dest_comp=1, flags=[CAN_ELIMINATE, CAN_REORDER])
 
+# Load the coefficient register corresponding to a given fragment shader input.
+# Coefficient registers are vec3s that are dotted with <x, y, 1> to interpolate
+# the input, where x and y are relative to the 32x32 supertile.
+intrinsic("load_coefficients_agx",
+          bit_sizes = [32],
+          dest_comp = 3,
+          indices=[COMPONENT, IO_SEMANTICS, INTERP_MODE],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
+
 # Load/store a pixel in local memory. This operation is formatted, with
 # conversion between the specified format and the implied register format of the
 # source/destination (for store/loads respectively). This mostly matters for
@@ -1725,15 +1734,14 @@ store("agx", [1, 1], [ACCESS, BASE, FORMAT, SIGN_EXTEND])
 # Logical complement of load_front_face, mapping to an AGX system value
 system_value("back_face_agx", 1, bit_sizes=[1, 32])
 
-# Loads the texture descriptor base for indexed (non-bindless) textures. On G13,
-# the referenced array has stride 24.
-system_value("texture_base_agx", 1, bit_sizes=[64])
-
-# Load the base address of an indexed UBO/VBO (for lowering UBOs/VBOs)
-intrinsic("load_ubo_base_agx", src_comp=[1], dest_comp=1, bit_sizes=[64],
-          flags=[CAN_ELIMINATE, CAN_REORDER])
+# Load the base address of an indexed VBO (for lowering VBOs)
 intrinsic("load_vbo_base_agx", src_comp=[1], dest_comp=1, bit_sizes=[64],
           flags=[CAN_ELIMINATE, CAN_REORDER])
+
+# Load a driver-internal system value from a given system value set at a given
+# binding within the set. This is used for correctness when lowering things like
+# UBOs with merged shaders.
+load("sysval_agx", [], [DESC_SET, BINDING], [CAN_REORDER, CAN_ELIMINATE])
 
 # Write out a sample mask for a targeted subset of samples, specified in the two
 # masks. Maps to the corresponding AGX instruction, the actual workings are
@@ -1913,3 +1921,25 @@ intrinsic("load_point_coord_maybe_flipped", dest_comp=2, bit_sizes=[32])
 # texture it returns width, height and array size.  Used for txs lowering.
 intrinsic("load_texture_size_etna", src_comp=[1], dest_comp=3,
           flags=[CAN_ELIMINATE, CAN_REORDER])
+
+# Zink specific intrinsics
+
+# src[] = { field }.
+load("push_constant_zink", [1], [COMPONENT], [CAN_ELIMINATE, CAN_REORDER])
+
+system_value("shader_index", 1, bit_sizes=[32])
+
+system_value("coalesced_input_count", 1, bit_sizes=[32])
+
+# Initialize a payload array per scope
+#
+#   0. Payloads deref
+#   1. Payload count
+#   2. Node index
+intrinsic("initialize_node_payloads", src_comp=[-1, 1, 1], indices=[EXECUTION_SCOPE])
+
+# Optionally enqueue payloads after shader finished writing to them
+intrinsic("enqueue_node_payloads", src_comp=[-1])
+
+# Returns true if it has been called for every payload.
+intrinsic("finalize_incoming_node_payload", src_comp=[-1], dest_comp=1)

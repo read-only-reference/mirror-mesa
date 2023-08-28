@@ -40,8 +40,8 @@ gather_intrinsic_load_input_info(const nir_shader *nir, const nir_intrinsic_inst
    case MESA_SHADER_VERTEX: {
       unsigned idx = nir_intrinsic_io_semantics(instr).location;
       unsigned component = nir_intrinsic_component(instr);
-      unsigned mask = nir_ssa_def_components_read(&instr->dest.ssa);
-      mask = (instr->dest.ssa.bit_size == 64 ? util_widen_mask(mask, 2) : mask) << component;
+      unsigned mask = nir_def_components_read(&instr->def);
+      mask = (instr->def.bit_size == 64 ? util_widen_mask(mask, 2) : mask) << component;
 
       info->vs.input_usage_mask[idx] |= mask & 0xf;
       if (mask >> 4)
@@ -95,11 +95,11 @@ gather_intrinsic_store_output_info(const nir_shader *nir, const nir_intrinsic_in
       unsigned pos_w_chan = 3 - component;
 
       if (write_mask & BITFIELD_BIT(pos_w_chan)) {
-         nir_ssa_scalar pos_w = nir_ssa_scalar_resolved(instr->src[0].ssa, pos_w_chan);
+         nir_scalar pos_w = nir_scalar_resolved(instr->src[0].ssa, pos_w_chan);
          /* Use coarse shading if the value of Pos.W can't be determined or if its value is != 1
           * (typical for non-GUI elements).
           */
-         if (!nir_ssa_scalar_is_const(pos_w) || nir_ssa_scalar_as_uint(pos_w) != 0x3f800000u)
+         if (!nir_scalar_is_const(pos_w) || nir_scalar_as_uint(pos_w) != 0x3f800000u)
             info->force_vrs_per_vertex = true;
       }
    }
@@ -115,9 +115,9 @@ gather_push_constant_info(const nir_shader *nir, const nir_intrinsic_instr *inst
 {
    info->loads_push_constants = true;
 
-   if (nir_src_is_const(instr->src[0]) && instr->dest.ssa.bit_size >= 32) {
+   if (nir_src_is_const(instr->src[0]) && instr->def.bit_size >= 32) {
       uint32_t start = (nir_intrinsic_base(instr) + nir_src_as_uint(instr->src[0])) / 4u;
-      uint32_t size = instr->num_components * (instr->dest.ssa.bit_size / 32u);
+      uint32_t size = instr->num_components * (instr->def.bit_size / 32u);
 
       if (start + size <= (MAX_PUSH_CONSTANTS_SIZE / 4u)) {
          info->inline_push_constant_mask |= u_bit_consecutive64(start, size);
@@ -179,7 +179,7 @@ gather_intrinsic_info(const nir_shader *nir, const nir_intrinsic_instr *instr, s
       break;
    case nir_intrinsic_load_local_invocation_id:
    case nir_intrinsic_load_workgroup_id: {
-      unsigned mask = nir_ssa_def_components_read(&instr->dest.ssa);
+      unsigned mask = nir_def_components_read(&instr->def);
       while (mask) {
          unsigned i = u_bit_scan(&mask);
 
@@ -191,10 +191,10 @@ gather_intrinsic_info(const nir_shader *nir, const nir_intrinsic_instr *instr, s
       break;
    }
    case nir_intrinsic_load_frag_coord:
-      info->ps.reads_frag_coord_mask |= nir_ssa_def_components_read(&instr->dest.ssa);
+      info->ps.reads_frag_coord_mask |= nir_def_components_read(&instr->def);
       break;
    case nir_intrinsic_load_sample_pos:
-      info->ps.reads_sample_pos_mask |= nir_ssa_def_components_read(&instr->dest.ssa);
+      info->ps.reads_sample_pos_mask |= nir_def_components_read(&instr->def);
       break;
    case nir_intrinsic_load_push_constant:
       gather_push_constant_info(nir, instr, info);
@@ -468,6 +468,13 @@ gather_shader_info_tcs(struct radv_device *device, const nir_shader *nir, const 
    info->tcs.tes_inputs_read = ~0ULL;
    info->tcs.tes_patch_inputs_read = ~0ULL;
 
+   if (!info->inputs_linked)
+      info->tcs.num_linked_inputs = util_last_bit64(nir->info.inputs_read);
+   if (!info->outputs_linked) {
+      info->tcs.num_linked_outputs = util_last_bit64(nir->info.outputs_written);
+      info->tcs.num_linked_patch_outputs = util_last_bit64(nir->info.patch_outputs_written);
+   }
+
    if (!(pipeline_key->dynamic_patch_control_points)) {
       /* Number of tessellation patches per workgroup processed by the current pipeline. */
       info->num_tess_patches =
@@ -482,6 +489,9 @@ gather_shader_info_tcs(struct radv_device *device, const nir_shader *nir, const 
                                  nir->info.tess.tcs_vertices_out, info->tcs.num_linked_inputs, info->num_tess_patches,
                                  info->tcs.num_linked_outputs, info->tcs.num_linked_patch_outputs);
    }
+
+   /* By default, assume a TCS needs an epilog unless it's linked with a TES. */
+   info->has_epilog = true;
 }
 
 static void
@@ -492,7 +502,11 @@ gather_shader_info_tes(struct radv_device *device, const nir_shader *nir, struct
    info->tes.ccw = nir->info.tess.ccw;
    info->tes.point_mode = nir->info.tess.point_mode;
    info->tes.tcs_vertices_out = nir->info.tess.tcs_vertices_out;
+   info->tes.reads_tess_factors =
+      !!(nir->info.inputs_read & (VARYING_BIT_TESS_LEVEL_INNER | VARYING_BIT_TESS_LEVEL_OUTER));
 
+   if (!info->inputs_linked)
+      info->tes.num_linked_inputs = util_last_bit64(nir->info.inputs_read);
    if (!info->outputs_linked)
       info->tes.num_linked_outputs = util_last_bit64(nir->info.outputs_written);
 
@@ -779,7 +793,7 @@ gather_shader_info_fs(const struct radv_device *device, const nir_shader *nir,
 
    info->ps.spi_ps_input = radv_compute_spi_ps_input(pipeline_key, info);
 
-   info->ps.has_epilog = pipeline_key->ps.has_epilog && info->ps.colors_written;
+   info->has_epilog = pipeline_key->ps.has_epilog && info->ps.colors_written;
 
    info->ps.writes_mrt0_alpha = (pipeline_key->ps.alpha_to_coverage_via_mrtz && (info->ps.color0_written & 0x8)) &&
                                 (info->ps.writes_z || info->ps.writes_stencil || info->ps.writes_sample_mask);
@@ -997,6 +1011,32 @@ radv_get_user_data_0(const struct radv_device *device, struct radv_shader_info *
    }
 }
 
+static bool
+radv_is_shader_monolithic(const struct radv_device *device, const struct radv_shader_info *info)
+{
+   const enum amd_gfx_level gfx_level = device->physical_device->rad_info.gfx_level;
+
+   if (gfx_level >= GFX9) {
+      switch (info->stage) {
+      case MESA_SHADER_VERTEX:
+         if (info->next_stage == MESA_SHADER_TESS_CTRL || info->next_stage == MESA_SHADER_GEOMETRY)
+            return info->outputs_linked;
+         break;
+      case MESA_SHADER_TESS_EVAL:
+         if (info->next_stage == MESA_SHADER_GEOMETRY)
+            return info->outputs_linked;
+         break;
+      case MESA_SHADER_TESS_CTRL:
+      case MESA_SHADER_GEOMETRY:
+         return info->inputs_linked;
+      default:
+         break;
+      }
+   }
+
+   return true;
+}
+
 void
 radv_nir_shader_info_init(gl_shader_stage stage, gl_shader_stage next_stage, struct radv_shader_info *info)
 {
@@ -1011,14 +1051,13 @@ radv_nir_shader_info_init(gl_shader_stage stage, gl_shader_stage next_stage, str
 
 void
 radv_nir_shader_info_pass(struct radv_device *device, const struct nir_shader *nir,
-                          const struct radv_pipeline_layout *layout, const struct radv_pipeline_key *pipeline_key,
+                          const struct radv_shader_layout *layout, const struct radv_pipeline_key *pipeline_key,
                           const enum radv_pipeline_type pipeline_type, bool consider_force_vrs,
                           struct radv_shader_info *info)
 {
    struct nir_function *func = (struct nir_function *)exec_list_get_head_const(&nir->functions);
 
-   if (layout && layout->dynamic_offset_count &&
-       (layout->dynamic_shader_stages & mesa_to_vk_shader_stage(nir->info.stage))) {
+   if (layout->use_dynamic_descriptors) {
       info->loads_push_constants = true;
       info->loads_dynamic_offsets = true;
    }
@@ -1121,6 +1160,7 @@ radv_nir_shader_info_pass(struct radv_device *device, const struct nir_shader *n
    }
 
    info->user_data_0 = radv_get_user_data_0(device, info);
+   info->is_monolithic = radv_is_shader_monolithic(device, info);
 
    switch (nir->info.stage) {
    case MESA_SHADER_COMPUTE:
@@ -1518,8 +1558,6 @@ radv_link_shaders_info(struct radv_device *device, struct radv_shader_stage *pro
             outinfo->vs_output_param_offset[VARYING_SLOT_CLIP_DIST0] = outinfo->param_exports++;
          if (producer->nir->info.outputs_written & VARYING_BIT_CLIP_DIST1)
             outinfo->vs_output_param_offset[VARYING_SLOT_CLIP_DIST1] = outinfo->param_exports++;
-
-         outinfo->export_clip_dists = true;
       }
    }
 
@@ -1598,8 +1636,8 @@ radv_link_shaders_info(struct radv_device *device, struct radv_shader_stage *pro
       struct radv_shader_stage *tcs_stage = producer;
       struct radv_shader_stage *tes_stage = consumer;
 
-      tcs_stage->info.tcs.tes_reads_tess_factors =
-         !!(tes_stage->nir->info.inputs_read & (VARYING_BIT_TESS_LEVEL_INNER | VARYING_BIT_TESS_LEVEL_OUTER));
+      tcs_stage->info.has_epilog = false;
+      tcs_stage->info.tcs.tes_reads_tess_factors = tes_stage->info.tes.reads_tess_factors;
       tcs_stage->info.tcs.tes_inputs_read = tes_stage->nir->info.inputs_read;
       tcs_stage->info.tcs.tes_patch_inputs_read = tes_stage->nir->info.patch_inputs_read;
 
@@ -1627,7 +1665,6 @@ radv_nir_shader_info_merge(const struct radv_shader_stage *src, struct radv_shad
    dst_info->loads_dynamic_offsets |= src_info->loads_dynamic_offsets;
    dst_info->desc_set_used_mask |= src_info->desc_set_used_mask;
    dst_info->uses_view_index |= src_info->uses_view_index;
-   dst_info->uses_invocation_id |= src_info->uses_invocation_id;
    dst_info->uses_prim_id |= src_info->uses_prim_id;
    dst_info->inline_push_constant_mask |= src_info->inline_push_constant_mask;
 
