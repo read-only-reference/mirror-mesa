@@ -389,7 +389,7 @@ impl PipeContext {
                 pipe_shader_type::PIPE_SHADER_COMPUTE,
                 idx,
                 false,
-                &cb,
+                if data.is_empty() { ptr::null() } else { &cb },
             )
         }
     }
@@ -479,6 +479,7 @@ impl PipeContext {
     }
 
     pub fn clear_sampler_views(&self, count: u32) {
+        let mut samplers = vec![ptr::null_mut(); count as usize];
         unsafe {
             self.pipe.as_ref().set_sampler_views.unwrap()(
                 self.pipe.as_ptr(),
@@ -487,7 +488,7 @@ impl PipeContext {
                 count,
                 0,
                 false,
-                ptr::null_mut(),
+                samplers.as_mut_ptr(),
             )
         }
     }
@@ -522,15 +523,21 @@ impl PipeContext {
         }
     }
 
-    pub fn create_query(&self, query_type: c_uint, index: c_uint) -> *mut pipe_query {
+    pub(crate) fn create_query(&self, query_type: c_uint, index: c_uint) -> *mut pipe_query {
         unsafe { self.pipe.as_ref().create_query.unwrap()(self.pipe.as_ptr(), query_type, index) }
     }
 
-    pub fn end_query(&self, pq: *mut pipe_query) -> bool {
+    /// # Safety
+    ///
+    /// usual rules on raw mut pointers apply, specifically no concurrent access
+    pub(crate) unsafe fn end_query(&self, pq: *mut pipe_query) -> bool {
         unsafe { self.pipe.as_ref().end_query.unwrap()(self.pipe.as_ptr(), pq) }
     }
 
-    pub fn get_query_result(
+    /// # Safety
+    ///
+    /// usual rules on raw mut pointers apply, specifically no concurrent access
+    pub(crate) unsafe fn get_query_result(
         &self,
         pq: *mut pipe_query,
         wait: bool,
@@ -539,7 +546,10 @@ impl PipeContext {
         unsafe { self.pipe.as_ref().get_query_result.unwrap()(self.pipe.as_ptr(), pq, wait, pqr) }
     }
 
-    pub fn destroy_query(&self, pq: *mut pipe_query) {
+    /// # Safety
+    ///
+    /// usual rules on raw mut pointers apply, specifically no concurrent access
+    pub(crate) unsafe fn destroy_query(&self, pq: *mut pipe_query) {
         unsafe { self.pipe.as_ref().destroy_query.unwrap()(self.pipe.as_ptr(), pq) }
     }
 

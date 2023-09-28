@@ -138,6 +138,9 @@ remove_barriers_impl(nir_builder *b, nir_intrinsic_instr *intr, void *data)
    if (intr->intrinsic != nir_intrinsic_barrier)
       return false;
    if (data) {
+      if (nir_intrinsic_execution_scope(intr) != SCOPE_NONE)
+         return false;
+
       if (nir_intrinsic_memory_scope(intr) == SCOPE_WORKGROUP ||
           nir_intrinsic_memory_scope(intr) == SCOPE_DEVICE ||
           nir_intrinsic_memory_scope(intr) == SCOPE_QUEUE_FAMILY)
@@ -398,6 +401,7 @@ lvp_shader_lower(struct lvp_device *pdevice, struct lvp_pipeline *pipeline, nir_
    subgroup_opts.lower_quad = true;
    subgroup_opts.ballot_components = 1;
    subgroup_opts.ballot_bit_size = 32;
+   subgroup_opts.lower_inverse_ballot = true;
    NIR_PASS_V(nir, nir_lower_subgroups, &subgroup_opts);
 
    if (nir->info.stage == MESA_SHADER_FRAGMENT)
@@ -1252,6 +1256,7 @@ create_shader_object(struct lvp_device *device, const VkShaderCreateInfoEXT *pCr
       VkResult result = compile_spirv(device, &sinfo, &nir);
       if (result != VK_SUCCESS)
          goto fail;
+      nir->info.separate_shader = true;
    } else {
       assert(pCreateInfo->codeType == VK_SHADER_CODE_TYPE_BINARY_EXT);
       if (pCreateInfo->codeSize < SHA1_DIGEST_LENGTH + VK_UUID_SIZE + 1)

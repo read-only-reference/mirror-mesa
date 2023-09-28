@@ -89,7 +89,7 @@ init_program(Program* program, Stage stage, const struct aco_shader_info* info,
       case GFX9: program->family = CHIP_VEGA10; break;
       case GFX10: program->family = CHIP_NAVI10; break;
       case GFX10_3: program->family = CHIP_NAVI21; break;
-      case GFX11: program->family = CHIP_GFX1100; break;
+      case GFX11: program->family = CHIP_NAVI31; break;
       default: program->family = CHIP_UNKNOWN; break;
       }
    } else {
@@ -119,7 +119,7 @@ init_program(Program* program, Stage stage, const struct aco_shader_info* info,
       program->dev.sgpr_limit =
          108; /* includes VCC, which can be treated as s[106-107] on GFX10+ */
 
-      if (family == CHIP_GFX1100 || family == CHIP_GFX1101) {
+      if (family == CHIP_NAVI31 || family == CHIP_NAVI32) {
          program->dev.physical_vgprs = program->wave_size == 32 ? 1536 : 768;
          program->dev.vgpr_alloc_granule = program->wave_size == 32 ? 24 : 12;
       } else {
@@ -398,6 +398,10 @@ can_use_DPP(amd_gfx_level gfx_level, const aco_ptr<Instruction>& instr, bool dpp
       if (!instr->operands[i].isOfType(RegType::vgpr) && i < 2)
          return false;
    }
+
+   /* According to LLVM, it's unsafe to combine DPP into v_cmpx. */
+   if (instr->writes_exec())
+      return false;
 
    /* simpler than listing all VOP3P opcodes which do not support DPP */
    if (instr->isVOP3P()) {
@@ -861,6 +865,7 @@ needs_exec_mask(const Instruction* instr)
       case aco_opcode::p_logical_start:
       case aco_opcode::p_logical_end:
       case aco_opcode::p_startpgm:
+      case aco_opcode::p_end_wqm:
       case aco_opcode::p_init_scratch: return instr->reads_exec();
       case aco_opcode::p_start_linear_vgpr: return instr->operands.size();
       default: break;
@@ -1284,6 +1289,19 @@ wait_imm::empty() const
 {
    return vm == unset_counter && exp == unset_counter && lgkm == unset_counter &&
           vs == unset_counter;
+}
+
+void
+wait_imm::print(FILE* output) const
+{
+   if (exp != unset_counter)
+      fprintf(output, "exp: %u\n", exp);
+   if (vm != unset_counter)
+      fprintf(output, "vm: %u\n", vm);
+   if (lgkm != unset_counter)
+      fprintf(output, "lgkm: %u\n", lgkm);
+   if (vs != unset_counter)
+      fprintf(output, "vs: %u\n", vs);
 }
 
 bool

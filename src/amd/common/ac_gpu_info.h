@@ -17,6 +17,7 @@ extern "C" {
 
 #define AMD_MAX_SE         32
 #define AMD_MAX_SA_PER_SE  2
+#define AMD_MAX_WGP        60
 
 struct amdgpu_gpu_info;
 
@@ -229,6 +230,7 @@ struct radeon_info {
    uint32_t min_good_cu_per_sa; /* min != max if SAs have different # of CUs */
    uint32_t max_se;             /* number of shader engines incl. disabled ones */
    uint32_t max_sa_per_se;      /* shader arrays per shader engine */
+   uint32_t num_cu_per_sh;
    uint32_t max_wave64_per_simd;
    uint32_t num_physical_sgprs_per_simd;
    uint32_t num_physical_wave64_vgprs_per_simd;

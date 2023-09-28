@@ -238,7 +238,11 @@ def parse_args() -> None:
         epilog="Example: mesa-monitor.py --rev $(git rev-parse HEAD) "
         + '--target ".*traces" ',
     )
-    parser.add_argument("--target", metavar="target-job", help="Target job")
+    parser.add_argument(
+        "--target",
+        metavar="target-job",
+        help="Target job regex. For multiple targets, separate with pipe | character",
+    )
     parser.add_argument(
         "--token",
         metavar="token",
@@ -315,10 +319,15 @@ if __name__ == "__main__":
             pipe = cur_project.pipelines.get(pipeline_id)
             REV = pipe.sha
         else:
-            cur_project = get_gitlab_project(gl, args.project)
             if not REV:
                 REV = check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
-            pipe = wait_for_pipeline(cur_project, REV)
+            # Look for an MR pipeline first
+            cur_project = gl.projects.get("mesa/mesa")
+            pipe = wait_for_pipeline(cur_project, REV, timeout=10)
+            if not pipe:
+                # Fallback to a pipeline in the user's fork
+                cur_project = get_gitlab_project(gl, args.project)
+                pipe = wait_for_pipeline(cur_project, REV)
 
         print(f"Revision: {REV}")
         print(f"Pipeline: {pipe.web_url}")

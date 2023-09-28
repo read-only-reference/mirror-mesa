@@ -283,6 +283,8 @@ struct wait_imm {
    bool combine(const wait_imm& other);
 
    bool empty() const;
+
+   void print(FILE* output) const;
 };
 
 /* s_wait_event immediate bits. */
@@ -1051,6 +1053,15 @@ struct Instruction {
    {
       for (const Operand& op : operands) {
          if (op.isFixed() && op.physReg() == exec)
+            return true;
+      }
+      return false;
+   }
+
+   constexpr bool writes_exec() const noexcept
+   {
+      for (const Definition& def : definitions) {
+         if (def.isFixed() && (def.physReg() == exec_lo || def.physReg() == exec_hi))
             return true;
       }
       return false;
@@ -1885,9 +1896,8 @@ enum block_kind {
    block_kind_invert = 1 << 10,
    block_kind_discard_early_exit = 1 << 11,
    block_kind_uses_discard = 1 << 12,
-   block_kind_needs_lowering = 1 << 13,
-   block_kind_resume = 1 << 14,
-   block_kind_export_end = 1 << 15,
+   block_kind_resume = 1 << 13,
+   block_kind_export_end = 1 << 14,
 };
 
 struct RegisterDemand {

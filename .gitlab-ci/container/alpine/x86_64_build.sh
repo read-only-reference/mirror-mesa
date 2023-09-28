@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1091
+
+# When changing this file, you need to bump the following
+# .gitlab-ci/image-tags.yml tags:
+# ALPINE_X86_64_BUILD_TAG
+
 set -e
 set -o xtrace
 
@@ -53,13 +58,6 @@ DEPS=(
 apk add "${DEPS[@]}" "${EPHEMERAL[@]}"
 
 . .gitlab-ci/container/container_pre_build.sh
-
-pushd /usr/local
-git clone https://gitlab.freedesktop.org/mesa/shader-db.git --depth 1
-rm -rf shader-db/.git
-cd shader-db
-make
-popd
 
 
 ############### Uninstall the build software

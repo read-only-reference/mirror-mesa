@@ -48,7 +48,7 @@ struct asm_context {
    std::map<unsigned, constaddr_info> constaddrs;
    std::map<unsigned, constaddr_info> resumeaddrs;
    std::vector<struct aco_symbol>* symbols;
-   Block* loop_header;
+   Block* loop_header = NULL;
    const int16_t* opcode;
    // TODO: keep track of branch instructions referring blocks
    // and, when emitting the block, correct the offset in instr
@@ -796,7 +796,7 @@ emit_instruction(asm_context& ctx, std::vector<uint32_t>& out, Instruction* inst
          encoding |= dpp.abs[0] << 21;
          encoding |= dpp.neg[0] << 20;
          if (ctx.gfx_level >= GFX10)
-            encoding |= 1 << 18; /* set Fetch Inactive to match GFX9 behaviour */
+            encoding |= 1 << 18; /* set Fetch Inactive */
          encoding |= dpp.bound_ctrl << 19;
          encoding |= dpp.dpp_ctrl << 8;
          encoding |= reg(ctx, dpp_op, 8);
@@ -1017,6 +1017,13 @@ fix_exports(asm_context& ctx, std::vector<uint32_t>& out, Program* program)
              * exports MRTZ (if present) and the epilog exports colors.
              */
             exported |= program->stage.hw == AC_HW_PIXEL_SHADER && program->info.has_epilog;
+
+            /* Do not abort for VS/TES as NGG if they are non-monolithic shaders
+             * because a jump would be emitted.
+             */
+            exported |= (program->stage.sw == SWStage::VS || program->stage.sw == SWStage::TES) &&
+                        program->stage.hw == AC_HW_NEXT_GEN_GEOMETRY_SHADER &&
+                        program->info.merged_shader_compiled_separately;
          }
          ++it;
       }
@@ -1228,7 +1235,11 @@ fix_constaddrs(asm_context& ctx, std::vector<uint32_t>& out)
 void
 align_block(asm_context& ctx, std::vector<uint32_t>& code, Block& block)
 {
-   if (block.kind & block_kind_loop_exit && ctx.loop_header) {
+   /* Blocks with block_kind_loop_exit might be eliminated after jump threading, so we instead find
+    * loop exits using loop_nest_depth.
+    */
+   if (ctx.loop_header && !block.linear_preds.empty() &&
+       block.loop_nest_depth < ctx.loop_header->loop_nest_depth) {
       Block* loop_header = ctx.loop_header;
       ctx.loop_header = NULL;
       std::vector<uint32_t> nops;

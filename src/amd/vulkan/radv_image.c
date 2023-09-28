@@ -277,10 +277,6 @@ radv_use_dcc_for_image_early(struct radv_device *device, struct radv_image *imag
    if (pCreateInfo->samples > 1 && !device->physical_device->use_fmask)
       return false;
 
-   /* FIXME: DCC with mipmaps is broken on GFX11. */
-   if (device->physical_device->rad_info.gfx_level == GFX11 && pCreateInfo->mipLevels > 1)
-      return false;
-
    return radv_are_formats_dcc_compatible(device->physical_device, pCreateInfo->pNext, format, pCreateInfo->flags,
                                           sign_reinterpret);
 }
@@ -1727,7 +1723,7 @@ radv_image_create_layout(struct radv_device *device, struct radv_image_create_in
    if (image->vk.usage & (VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR)) {
       assert(profile_list);
       uint32_t width_align, height_align;
-      vk_video_get_profile_alignments(profile_list, &width_align, &height_align);
+      radv_video_get_profile_alignments(device->physical_device, profile_list, &width_align, &height_align);
       image_info.width = align(image_info.width, width_align);
       image_info.height = align(image_info.height, height_align);
    }

@@ -1528,7 +1528,7 @@ ntr_emit_store_output(struct ntr_compile *c, nir_intrinsic_instr *instr)
    }
 
    uint8_t swizzle[4] = { 0, 0, 0, 0 };
-   for (int i = frac; i <= 4; i++) {
+   for (int i = frac; i < 4; i++) {
       if (out.WriteMask & (1 << i))
          swizzle[i] = i - frac;
    }
@@ -2451,6 +2451,7 @@ const void *nir_to_rc_options(struct nir_shader *s,
        nir_move_comparisons | nir_move_copies | nir_move_load_ssbo;
 
    NIR_PASS_V(s, nir_opt_move, move_all);
+   NIR_PASS_V(s, nir_move_vec_src_uses_to_dest, true);
 
    NIR_PASS_V(s, nir_convert_from_ssa, true);
    NIR_PASS_V(s, nir_lower_vec_to_regs, NULL, NULL);

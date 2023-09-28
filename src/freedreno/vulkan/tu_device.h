@@ -287,6 +287,8 @@ struct tu_device
    struct ir3_shader *global_shaders[GLOBAL_SH_COUNT];
    uint64_t global_shader_va[GLOBAL_SH_COUNT];
 
+   struct tu_shader *empty_tcs, *empty_tes, *empty_gs, *empty_fs, *empty_fs_fdm;
+
    uint32_t vsc_draw_strm_pitch;
    uint32_t vsc_prim_strm_pitch;
    BITSET_DECLARE(custom_border_color, TU_BORDER_COLOR_COUNT);
@@ -371,6 +373,7 @@ struct tu_device
    #endif
 
    bool use_z24uint_s8uint;
+   bool use_lrz;
 };
 VK_DEFINE_HANDLE_CASTS(tu_device, vk.base, VkDevice, VK_OBJECT_TYPE_DEVICE)
 
@@ -456,7 +459,7 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(tu_sampler, base, VkSampler,
                                VK_OBJECT_TYPE_SAMPLER)
 
 uint64_t
-tu_get_system_heap_size(void);
+tu_get_system_heap_size(struct tu_physical_device *physical_device);
 
 VkResult
 tu_physical_device_init(struct tu_physical_device *device,

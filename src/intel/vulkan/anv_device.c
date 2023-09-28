@@ -48,18 +48,24 @@
 #include "util/os_file.h"
 #include "util/os_misc.h"
 #include "util/u_atomic.h"
+#ifdef ANDROID
+#include "util/u_gralloc/u_gralloc.h"
+#endif
 #include "util/u_string.h"
 #include "util/driconf.h"
 #include "git_sha1.h"
+#include "vk_common_entrypoints.h"
 #include "vk_util.h"
 #include "vk_deferred_operation.h"
 #include "vk_drm_syncobj.h"
 #include "common/intel_aux_map.h"
 #include "common/intel_uuid.h"
+#include "common/i915/intel_gem.h"
 #include "perf/intel_perf.h"
 
 #include "i915/anv_device.h"
 #include "xe/anv_device.h"
+#include "xe/anv_queue.h"
 
 #include "genxml/gen7_pack.h"
 #include "genxml/genX_bits.h"
@@ -85,6 +91,7 @@ static const driOptionDescription anv_dri_options[] = {
    DRI_CONF_SECTION_DEBUG
       DRI_CONF_ALWAYS_FLUSH_CACHE(false)
       DRI_CONF_VK_WSI_FORCE_BGRA8_UNORM_FIRST(false)
+      DRI_CONF_VK_WSI_FORCE_SWAPCHAIN_TO_CURRENT_EXTENT(false)
       DRI_CONF_LIMIT_TRIG_INPUT_RANGE(false)
       DRI_CONF_ANV_MESH_CONV_PRIM_ATTRS_TO_VERT_ATTRS(-2)
       DRI_CONF_FORCE_VK_VENDOR(0)
@@ -201,12 +208,6 @@ get_device_extensions(const struct anv_physical_device *device,
       (device->sync_syncobj_type.features & VK_SYNC_FEATURE_CPU_WAIT) != 0;
 
    const bool rt_enabled = ANV_SUPPORT_RT && device->info.has_ray_tracing;
-
-   /* We are still seeing some failures with mesh and graphics pipeline
-    * libraries used together, so disable mesh by default.
-    */
-   const bool mesh_shader_enabled = device->info.has_mesh_shading &&
-      debug_get_bool_option("ANV_MESH_SHADER", false);
 
    *ext = (struct vk_device_extension_table) {
       .KHR_8bit_storage                      = true,
@@ -343,7 +344,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .EXT_memory_budget                     = (!device->info.has_local_mem ||
                                                 device->vram_mappable.available > 0) &&
                                                device->sys.available,
-      .EXT_mesh_shader                       = mesh_shader_enabled,
+      .EXT_mesh_shader                       = device->info.has_mesh_shading,
       .EXT_mutable_descriptor_type           = true,
       .EXT_non_seamless_cube_map             = true,
       .EXT_pci_bus_info                      = true,
@@ -410,6 +411,9 @@ get_features(const struct anv_physical_device *pdevice,
    const bool mesh_shader =
       pdevice->vk.supported_extensions.EXT_mesh_shader;
 
+   const bool has_sparse_or_fake = pdevice->instance->has_fake_sparse ||
+                                   pdevice->has_sparse;
+
    *features = (struct vk_features) {
       /* Vulkan 1.0 */
       .robustBufferAccess                       = true,
@@ -460,17 +464,17 @@ get_features(const struct anv_physical_device *pdevice,
       .shaderFloat64                            = pdevice->info.has_64bit_float,
       .shaderInt64                              = true,
       .shaderInt16                              = true,
-      .shaderResourceResidency                  = pdevice->instance->has_fake_sparse,
       .shaderResourceMinLod                     = true,
-      .sparseBinding                            = pdevice->instance->has_fake_sparse,
-      .sparseResidencyBuffer                    = pdevice->instance->has_fake_sparse,
-      .sparseResidencyImage2D                   = pdevice->instance->has_fake_sparse,
-      .sparseResidencyImage3D                   = pdevice->instance->has_fake_sparse,
+      .shaderResourceResidency                  = has_sparse_or_fake,
+      .sparseBinding                            = has_sparse_or_fake,
+      .sparseResidencyAliased                   = has_sparse_or_fake,
+      .sparseResidencyBuffer                    = has_sparse_or_fake,
+      .sparseResidencyImage2D                   = has_sparse_or_fake,
+      .sparseResidencyImage3D                   = has_sparse_or_fake,
       .sparseResidency2Samples                  = false,
       .sparseResidency4Samples                  = false,
       .sparseResidency8Samples                  = false,
       .sparseResidency16Samples                 = false,
-      .sparseResidencyAliased                   = pdevice->instance->has_fake_sparse,
       .variableMultisampleRate                  = true,
       .inheritedQueries                         = true,
 
@@ -973,7 +977,7 @@ anv_physical_device_init_heaps(struct anv_physical_device *device, int fd)
       if ((props & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
           !(props & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
 #ifdef SUPPORT_INTEL_INTEGRATED_GPUS
-         device->memory.need_clflush = true;
+         device->memory.need_flush = true;
 #else
          return vk_errorf(device, VK_ERROR_INITIALIZATION_FAILED,
                           "Memory configuration requires flushing, but it's not implemented for this architecture");
@@ -1122,7 +1126,8 @@ static void
 anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
 {
    uint32_t family_count = 0;
-   VkQueueFlags sparse_flags = pdevice->instance->has_fake_sparse ?
+   VkQueueFlags sparse_flags = (pdevice->instance->has_fake_sparse ||
+                                pdevice->has_sparse) ?
                                VK_QUEUE_SPARSE_BINDING_BIT : 0;
 
    if (pdevice->engine_info) {
@@ -1258,7 +1263,9 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
       goto fail_fd;
    }
 
-   if (devinfo.ver > 12) {
+   if (devinfo.ver == 20) {
+      mesa_logw("Vulkan not yet supported on %s", devinfo.name);
+   } else if (devinfo.ver > 12) {
       result = vk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
                          "Vulkan not yet supported on %s", devinfo.name);
       goto fail_fd;
@@ -1389,6 +1396,9 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
                                                                &u64_ignore);
 
    device->uses_relocs = device->info.kmd_type != INTEL_KMD_TYPE_XE;
+
+   device->has_sparse = device->info.kmd_type == INTEL_KMD_TYPE_XE &&
+      debug_get_bool_option("ANV_SPARSE", true);
 
    device->always_flush_cache = INTEL_DEBUG(DEBUG_STALL) ||
       driQueryOptionb(&instance->dri_options, "always_flush_cache");
@@ -1665,6 +1675,9 @@ void anv_GetPhysicalDeviceProperties(
    const uint32_t max_workgroup_size =
       MIN2(1024, 32 * devinfo->max_cs_workgroup_threads);
 
+   const bool has_sparse_or_fake = pdevice->instance->has_fake_sparse ||
+                                   pdevice->has_sparse;
+
    VkSampleCountFlags sample_counts =
       isl_device_get_sample_counts(&pdevice->isl_dev);
 
@@ -1682,7 +1695,7 @@ void anv_GetPhysicalDeviceProperties(
       .maxMemoryAllocationCount                 = UINT32_MAX,
       .maxSamplerAllocationCount                = 64 * 1024,
       .bufferImageGranularity                   = 1,
-      .sparseAddressSpaceSize                   = pdevice->instance->has_fake_sparse ? (1uLL << 48) : 0,
+      .sparseAddressSpaceSize                   = has_sparse_or_fake ? (1uLL << 48) : 0,
       .maxBoundDescriptorSets                   = MAX_SETS,
       .maxPerStageDescriptorSamplers            = max_samplers,
       .maxPerStageDescriptorUniformBuffers      = MAX_PER_STAGE_DESCRIPTOR_UNIFORM_BUFFERS,
@@ -1808,11 +1821,11 @@ void anv_GetPhysicalDeviceProperties(
                     VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU,
       .limits = limits,
       .sparseProperties = {
-         .residencyStandard2DBlockShape = pdevice->instance->has_fake_sparse,
-         .residencyStandard2DMultisampleBlockShape = pdevice->instance->has_fake_sparse,
-         .residencyStandard3DBlockShape = pdevice->instance->has_fake_sparse,
+         .residencyStandard2DBlockShape = has_sparse_or_fake,
+         .residencyStandard2DMultisampleBlockShape = false,
+         .residencyStandard3DBlockShape = has_sparse_or_fake,
          .residencyAlignedMipSize = false,
-         .residencyNonResidentStrict = pdevice->instance->has_fake_sparse,
+         .residencyNonResidentStrict = has_sparse_or_fake,
       },
    };
 
@@ -2449,15 +2462,23 @@ void anv_GetPhysicalDeviceProperties2(
          break;
       }
 
+#ifdef ANDROID
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wswitch"
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENTATION_PROPERTIES_ANDROID: {
          VkPhysicalDevicePresentationPropertiesANDROID *props =
             (VkPhysicalDevicePresentationPropertiesANDROID *)ext;
-         props->sharedImage = VK_FALSE;
+         uint64_t front_rendering_usage = 0;
+         struct u_gralloc *gralloc = u_gralloc_create(U_GRALLOC_TYPE_AUTO);
+         if (gralloc != NULL) {
+            u_gralloc_get_front_rendering_usage(gralloc, &front_rendering_usage);
+            u_gralloc_destroy(&gralloc);
+         }
+         props->sharedImage = front_rendering_usage ? VK_TRUE : VK_FALSE;
          break;
       }
 #pragma GCC diagnostic pop
+#endif
 
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_PROPERTIES_EXT: {
          VkPhysicalDeviceProvokingVertexPropertiesEXT *properties =
@@ -2841,8 +2862,8 @@ anv_device_init_trivial_batch(struct anv_device *device)
    anv_batch_emit(&batch, GFX7_MI_NOOP, noop);
 
 #ifdef SUPPORT_INTEL_INTEGRATED_GPUS
-   if (device->physical->memory.need_clflush)
-      intel_clflush_range(batch.start, batch.next - batch.start);
+   if (device->physical->memory.need_flush)
+      intel_flush_range(batch.start, batch.next - batch.start);
 #endif
 
    return VK_SUCCESS;
@@ -2992,7 +3013,10 @@ anv_device_destroy_context_or_vm(struct anv_device *device)
 {
    switch (device->info->kmd_type) {
    case INTEL_KMD_TYPE_I915:
-      return intel_gem_destroy_context(device->fd, device->context_id);
+      if (device->physical->has_vm_control)
+         return anv_i915_device_destroy_vm(device);
+      else
+         return intel_gem_destroy_context(device->fd, device->context_id);
    case INTEL_KMD_TYPE_XE:
       return anv_xe_device_destroy_vm(device);
    default:
@@ -3059,7 +3083,7 @@ VkResult anv_CreateDevice(
    if (result != VK_SUCCESS)
       goto fail_alloc;
 
-   if (INTEL_DEBUG(DEBUG_BATCH)) {
+   if (INTEL_DEBUG(DEBUG_BATCH | DEBUG_BATCH_STATS)) {
       for (unsigned i = 0; i < physical_device->queue.family_count; i++) {
          struct intel_batch_decode_ctx *decoder = &device->decoder[i];
 
@@ -3070,6 +3094,7 @@ VkResult anv_CreateDevice(
                                      &physical_device->info,
                                      stderr, decode_flags, NULL,
                                      decode_get_bo, NULL, device);
+         intel_batch_stats_reset(decoder);
 
          decoder->engine = physical_device->queue.families[i].engine_class;
          decoder->dynamic_base = physical_device->va.dynamic_state_pool.addr;
@@ -3447,6 +3472,10 @@ VkResult anv_CreateDevice(
       goto fail_internal_cache;
    }
 
+#ifdef ANDROID
+   device->u_gralloc = u_gralloc_create(U_GRALLOC_TYPE_AUTO);
+#endif
+
    device->robust_buffer_access =
       device->vk.enabled_features.robustBufferAccess ||
       device->vk.enabled_features.nullDescriptor;
@@ -3454,6 +3483,22 @@ VkResult anv_CreateDevice(
    device->breakpoint = anv_state_pool_alloc(&device->dynamic_state_pool, 4,
                                              4);
    p_atomic_set(&device->draw_call_count, 0);
+
+   /* Create a separate command pool for companion RCS command buffer. */
+   if (device->info->verx10 >= 125) {
+      VkCommandPoolCreateInfo pool_info = {
+         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+         .queueFamilyIndex =
+             anv_get_first_render_queue_index(device->physical),
+      };
+
+      result = vk_common_CreateCommandPool(anv_device_to_handle(device),
+                                           &pool_info, NULL,
+                                           &device->companion_rcs_cmd_pool);
+      if (result != VK_SUCCESS) {
+         goto fail_internal_cache;
+      }
+   }
 
    anv_device_init_blorp(device);
 
@@ -3464,6 +3509,34 @@ VkResult anv_CreateDevice(
    anv_device_perf_init(device);
 
    anv_device_utrace_init(device);
+
+   BITSET_ONES(device->gfx_dirty_state);
+   BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_INDEX_BUFFER);
+   BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_SO_DECL_LIST);
+   if (device->info->ver < 11)
+      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_VF_SGVS_2);
+   if (device->info->ver < 12) {
+      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_PRIMITIVE_REPLICATION);
+      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_DEPTH_BOUNDS);
+   }
+   if (!device->vk.enabled_extensions.EXT_sample_locations)
+      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_SAMPLE_PATTERN);
+   if (!device->vk.enabled_extensions.KHR_fragment_shading_rate)
+      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_CPS);
+   if (!device->vk.enabled_extensions.EXT_mesh_shader) {
+      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_SBE_MESH);
+      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_CLIP_MESH);
+      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_MESH_CONTROL);
+      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_MESH_SHADER);
+      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_MESH_DISTRIB);
+      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_TASK_CONTROL);
+      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_TASK_SHADER);
+      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_TASK_REDISTRIB);
+   }
+   if (!intel_needs_workaround(device->info, 18019816803))
+      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_WA_18019816803);
+   if (device->info->ver > 9)
+      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_PMA_FIX);
 
    *pDevice = anv_device_to_handle(device);
 
@@ -3546,6 +3619,10 @@ void anv_DestroyDevice(
    if (!device)
       return;
 
+#ifdef ANDROID
+   u_gralloc_destroy(&device->u_gralloc);
+#endif
+
    struct anv_physical_device *pdevice = device->physical;
 
    anv_device_utrace_finish(device);
@@ -3561,6 +3638,11 @@ void anv_DestroyDevice(
 
    if (ANV_SUPPORT_RT && device->info->has_ray_tracing)
       anv_device_release_bo(device, device->btd_fifo_bo);
+
+   if (device->info->verx10 >= 125) {
+      vk_common_DestroyCommandPool(anv_device_to_handle(device),
+                                   device->companion_rcs_cmd_pool, NULL);
+   }
 
 #ifdef HAVE_VALGRIND
    /* We only need to free these to prevent valgrind errors.  The backing
@@ -3622,11 +3704,16 @@ void anv_DestroyDevice(
       anv_queue_finish(&device->queues[i]);
    vk_free(&device->vk.alloc, device->queues);
 
+   ralloc_free(device->fp64_nir);
+
    anv_device_destroy_context_or_vm(device);
 
-   if (INTEL_DEBUG(DEBUG_BATCH)) {
-      for (unsigned i = 0; i < pdevice->queue.family_count; i++)
+   if (INTEL_DEBUG(DEBUG_BATCH | DEBUG_BATCH_STATS)) {
+      for (unsigned i = 0; i < pdevice->queue.family_count; i++) {
+         if (INTEL_DEBUG(DEBUG_BATCH_STATS))
+            intel_batch_print_stats(&device->decoder[i]);
          intel_batch_decode_ctx_finish(&device->decoder[i]);
+      }
    }
 
    close(device->fd);
@@ -4176,7 +4263,7 @@ VkResult anv_FlushMappedMemoryRanges(
 #ifdef SUPPORT_INTEL_INTEGRATED_GPUS
    ANV_FROM_HANDLE(anv_device, device, _device);
 
-   if (!device->physical->memory.need_clflush)
+   if (!device->physical->memory.need_flush)
       return VK_SUCCESS;
 
    /* Make sure the writes we're flushing have landed. */
@@ -4191,9 +4278,9 @@ VkResult anv_FlushMappedMemoryRanges(
       if (map_offset >= mem->map_size)
          continue;
 
-      intel_clflush_range(mem->map + map_offset,
-                          MIN2(pMemoryRanges[i].size,
-                               mem->map_size - map_offset));
+      intel_flush_range(mem->map + map_offset,
+                        MIN2(pMemoryRanges[i].size,
+                             mem->map_size - map_offset));
    }
 #endif
    return VK_SUCCESS;
@@ -4207,7 +4294,7 @@ VkResult anv_InvalidateMappedMemoryRanges(
 #ifdef SUPPORT_INTEL_INTEGRATED_GPUS
    ANV_FROM_HANDLE(anv_device, device, _device);
 
-   if (!device->physical->memory.need_clflush)
+   if (!device->physical->memory.need_flush)
       return VK_SUCCESS;
 
    for (uint32_t i = 0; i < memoryRangeCount; i++) {
@@ -4245,6 +4332,7 @@ anv_bind_buffer_memory(const VkBindBufferMemoryInfo *pBindInfo)
    ANV_FROM_HANDLE(anv_buffer, buffer, pBindInfo->buffer);
 
    assert(pBindInfo->sType == VK_STRUCTURE_TYPE_BIND_BUFFER_MEMORY_INFO);
+   assert(!anv_buffer_is_sparse(buffer));
 
    if (mem) {
       assert(pBindInfo->memoryOffset < mem->vk.size);
@@ -4267,22 +4355,6 @@ VkResult anv_BindBufferMemory2(
       anv_bind_buffer_memory(&pBindInfos[i]);
 
    return VK_SUCCESS;
-}
-
-VkResult anv_QueueBindSparse(
-    VkQueue                                     _queue,
-    uint32_t                                    bindInfoCount,
-    const VkBindSparseInfo*                     pBindInfo,
-    VkFence                                     fence)
-{
-   ANV_FROM_HANDLE(anv_queue, queue, _queue);
-   if (vk_device_is_lost(&queue->device->vk))
-      return VK_ERROR_DEVICE_LOST;
-
-   if (INTEL_DEBUG(DEBUG_SPARSE))
-      fprintf(stderr, "=== [%s:%d] [%s]\n", __FILE__, __LINE__, __func__);
-
-   return vk_error(queue, VK_ERROR_FEATURE_NOT_PRESENT);
 }
 
 // Event functions
@@ -4369,6 +4441,7 @@ static void
 anv_get_buffer_memory_requirements(struct anv_device *device,
                                    VkDeviceSize size,
                                    VkBufferUsageFlags usage,
+                                   bool is_sparse,
                                    VkMemoryRequirements2* pMemoryRequirements)
 {
    /* The Vulkan spec (git aaed022) says:
@@ -4385,6 +4458,18 @@ anv_get_buffer_memory_requirements(struct anv_device *device,
     * those are in different cachelines.
     */
    uint32_t alignment = 64;
+
+   /* From the spec, section "Sparse Buffer and Fully-Resident Image Block
+    * Size":
+    *   "The sparse block size in bytes for sparse buffers and fully-resident
+    *    images is reported as VkMemoryRequirements::alignment. alignment
+    *    represents both the memory alignment requirement and the binding
+    *    granularity (in bytes) for sparse resources."
+    */
+   if (is_sparse) {
+      alignment = ANV_SPARSE_BLOCK_SIZE;
+      size = align64(size, alignment);
+   }
 
    pMemoryRequirements->memoryRequirements.size = size;
    pMemoryRequirements->memoryRequirements.alignment = alignment;
@@ -4423,17 +4508,21 @@ void anv_GetDeviceBufferMemoryRequirementsKHR(
     VkMemoryRequirements2*                      pMemoryRequirements)
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
+   const bool is_sparse =
+      pInfo->pCreateInfo->flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT;
 
-   if (INTEL_DEBUG(DEBUG_SPARSE) && pInfo->pCreateInfo->flags &
-           (VK_BUFFER_CREATE_SPARSE_BINDING_BIT |
-            VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT |
-            VK_BUFFER_CREATE_SPARSE_ALIASED_BIT))
+   if (!device->physical->has_sparse &&
+       INTEL_DEBUG(DEBUG_SPARSE) &&
+       pInfo->pCreateInfo->flags & (VK_BUFFER_CREATE_SPARSE_BINDING_BIT |
+                                    VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT |
+                                    VK_BUFFER_CREATE_SPARSE_ALIASED_BIT))
       fprintf(stderr, "=== %s %s:%d flags:0x%08x\n", __func__, __FILE__,
               __LINE__, pInfo->pCreateInfo->flags);
 
    anv_get_buffer_memory_requirements(device,
                                       pInfo->pCreateInfo->size,
                                       pInfo->pCreateInfo->usage,
+                                      is_sparse,
                                       pMemoryRequirements);
 }
 
@@ -4446,10 +4535,11 @@ VkResult anv_CreateBuffer(
    ANV_FROM_HANDLE(anv_device, device, _device);
    struct anv_buffer *buffer;
 
-   if (INTEL_DEBUG(DEBUG_SPARSE) && (pCreateInfo->flags &
-           (VK_BUFFER_CREATE_SPARSE_BINDING_BIT |
-            VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT |
-            VK_BUFFER_CREATE_SPARSE_ALIASED_BIT)))
+   if (!device->physical->has_sparse &&
+       INTEL_DEBUG(DEBUG_SPARSE) &&
+       pCreateInfo->flags & (VK_BUFFER_CREATE_SPARSE_BINDING_BIT |
+                             VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT |
+                             VK_BUFFER_CREATE_SPARSE_ALIASED_BIT))
       fprintf(stderr, "=== %s %s:%d flags:0x%08x\n", __func__, __FILE__,
               __LINE__, pCreateInfo->flags);
 
@@ -4467,6 +4557,27 @@ VkResult anv_CreateBuffer(
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    buffer->address = ANV_NULL_ADDRESS;
+   if (anv_buffer_is_sparse(buffer)) {
+      const VkBufferOpaqueCaptureAddressCreateInfo *opaque_addr_info =
+         vk_find_struct_const(pCreateInfo->pNext,
+                              BUFFER_OPAQUE_CAPTURE_ADDRESS_CREATE_INFO);
+      enum anv_bo_alloc_flags alloc_flags = 0;
+      uint64_t client_address = 0;
+
+      if (opaque_addr_info) {
+         alloc_flags = ANV_BO_ALLOC_CLIENT_VISIBLE_ADDRESS;
+         client_address = opaque_addr_info->opaqueCaptureAddress;
+      }
+
+      VkResult result = anv_init_sparse_bindings(device, buffer->vk.size,
+                                                 &buffer->sparse_data,
+                                                 alloc_flags, client_address,
+                                                 &buffer->address);
+      if (result != VK_SUCCESS) {
+         vk_buffer_destroy(&device->vk, pAllocator, &buffer->vk);
+         return result;
+      }
+   }
 
    *pBuffer = anv_buffer_to_handle(buffer);
 
@@ -4483,6 +4594,11 @@ void anv_DestroyBuffer(
 
    if (!buffer)
       return;
+
+   if (anv_buffer_is_sparse(buffer)) {
+      assert(buffer->address.offset == buffer->sparse_data.address);
+      anv_free_sparse_bindings(device, &buffer->sparse_data);
+   }
 
    vk_buffer_destroy(&device->vk, pAllocator, &buffer->vk);
 }
@@ -4502,7 +4618,9 @@ uint64_t anv_GetBufferOpaqueCaptureAddress(
     VkDevice                                    device,
     const VkBufferDeviceAddressInfo*            pInfo)
 {
-   return 0;
+   ANV_FROM_HANDLE(anv_buffer, buffer, pInfo->buffer);
+
+   return anv_address_physical(buffer->address);
 }
 
 uint64_t anv_GetDeviceMemoryOpaqueCaptureAddress(

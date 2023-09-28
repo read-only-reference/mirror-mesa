@@ -836,10 +836,10 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       case FAMILY_MDN:
          identify_chip2(MENDOCINO, RAPHAEL_MENDOCINO);
          break;
-      case FAMILY_GFX1100:
-         identify_chip(GFX1100);
-         identify_chip(GFX1101);
-         identify_chip(GFX1102);
+      case FAMILY_NV3:
+         identify_chip(NAVI31);
+         identify_chip(NAVI32);
+         identify_chip(NAVI33);
          break;
       case FAMILY_GFX1103:
          identify_chip(GFX1103_R1);
@@ -986,6 +986,7 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
    info->max_tcc_blocks = device_info.num_tcc_blocks;
    info->max_se = device_info.num_shader_engines;
    info->max_sa_per_se = device_info.num_shader_arrays_per_engine;
+   info->num_cu_per_sh = device_info.num_cu_per_sh;
    info->uvd_fw_version = info->ip[AMD_IP_UVD].num_queues ? uvd_version : 0;
    info->vce_fw_version = info->ip[AMD_IP_VCE].num_queues ? vce_version : 0;
 
@@ -1329,10 +1330,6 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
 
    if (info->gfx_level == GFX6)
       info->gfx_ib_pad_with_type2 = true;
-
-   /* GFX10 and maybe GFX9 need this alignment for cache coherency. */
-   if (info->gfx_level >= GFX9)
-      info->ib_alignment = MAX2(info->ib_alignment, info->tcc_cache_line_size);
 
    if (info->gfx_level >= GFX11) {
       /* With num_cu = 4 in gfx11 measured power for idle, video playback and observed
@@ -1770,7 +1767,7 @@ void ac_print_gpu_info(const struct radeon_info *info, FILE *f)
    fprintf(f, "Multimedia info:\n");
    fprintf(f, "    vce_encode = %u\n", info->ip[AMD_IP_VCE].num_queues);
 
-   if (info->family >= CHIP_GFX1100 || info->family == CHIP_GFX940)
+   if (info->family >= CHIP_NAVI31 || info->family == CHIP_GFX940)
       fprintf(f, "    vcn_unified = %u\n", info->ip[AMD_IP_VCN_UNIFIED].num_queues);
    else {
       fprintf(f, "    vcn_decode = %u\n", info->ip[AMD_IP_VCN_DEC].num_queues);
@@ -1828,6 +1825,7 @@ void ac_print_gpu_info(const struct radeon_info *info, FILE *f)
    fprintf(f, "    min_good_cu_per_sa = %i\n", info->min_good_cu_per_sa);
    fprintf(f, "    max_se = %i\n", info->max_se);
    fprintf(f, "    max_sa_per_se = %i\n", info->max_sa_per_se);
+   fprintf(f, "    num_cu_per_sh = %i\n", info->num_cu_per_sh);
    fprintf(f, "    max_wave64_per_simd = %i\n", info->max_wave64_per_simd);
    fprintf(f, "    num_physical_sgprs_per_simd = %i\n", info->num_physical_sgprs_per_simd);
    fprintf(f, "    num_physical_wave64_vgprs_per_simd = %i\n",

@@ -1,3 +1,7 @@
+/*
+ * Copyright © 2022 Collabora Ltd. and Red Hat Inc.
+ * SPDX-License-Identifier: MIT
+ */
 #include "nvk_cmd_buffer.h"
 
 #include "nvk_buffer.h"
@@ -6,9 +10,12 @@
 #include "nvk_descriptor_set_layout.h"
 #include "nvk_device.h"
 #include "nvk_device_memory.h"
+#include "nvk_entrypoints.h"
 #include "nvk_mme.h"
 #include "nvk_physical_device.h"
 #include "nvk_pipeline.h"
+
+#include "vk_pipeline_layout.h"
 
 #include "nouveau_context.h"
 
@@ -29,7 +36,6 @@ nvk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
    nvk_cmd_pool_free_bo_list(pool, &cmd->bos);
    nvk_cmd_pool_free_bo_list(pool, &cmd->gart_bos);
    util_dynarray_fini(&cmd->pushes);
-   util_dynarray_fini(&cmd->bo_refs);
    vk_command_buffer_finish(&cmd->vk);
    vk_free(&pool->vk.alloc, cmd);
 }
@@ -62,7 +68,6 @@ nvk_create_cmd_buffer(struct vk_command_pool *vk_pool,
    list_inithead(&cmd->bos);
    list_inithead(&cmd->gart_bos);
    util_dynarray_init(&cmd->pushes, NULL);
-   util_dynarray_init(&cmd->bo_refs, NULL);
 
    *cmd_buffer_out = &cmd->vk;
 
@@ -87,7 +92,6 @@ nvk_reset_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer,
    cmd->push = (struct nv_push) {0};
 
    util_dynarray_clear(&cmd->pushes);
-   util_dynarray_clear(&cmd->bo_refs);
 
    memset(&cmd->state, 0, sizeof(cmd->state));
 }
@@ -125,12 +129,7 @@ nvk_cmd_buffer_flush_push(struct nvk_cmd_buffer *cmd)
 
       struct nvk_cmd_push push = {
          .map = cmd->push.start,
-#if NVK_NEW_UAPI == 1
          .addr = cmd->push_bo->bo->offset + bo_offset,
-#else
-         .bo = cmd->push_bo->bo,
-         .bo_offset = bo_offset,
-#endif
          .range = nv_push_dw_count(&cmd->push) * 4,
       };
       util_dynarray_append(&cmd->pushes, struct nvk_cmd_push, push);
@@ -166,22 +165,11 @@ nvk_cmd_buffer_push_indirect_buffer(struct nvk_cmd_buffer *cmd,
 
    uint64_t addr = nvk_buffer_address(buffer, offset);
 
-#if NVK_NEW_UAPI == 1
    struct nvk_cmd_push push = {
       .addr = addr,
       .range = range,
       .no_prefetch = true,
    };
-#else
-   struct nouveau_ws_bo *bo = buffer->mem->bo;
-   uint64_t bo_offset = addr - bo->offset;
-   struct nvk_cmd_push push = {
-      .bo = bo,
-      .bo_offset = bo_offset,
-      .range = range,
-      .no_prefetch = true,
-   };
-#endif
 
    util_dynarray_append(&cmd->pushes, struct nvk_cmd_push, push);
 }
@@ -212,8 +200,6 @@ nvk_cmd_buffer_upload_alloc(struct nvk_cmd_buffer *cmd,
    VkResult result = nvk_cmd_buffer_alloc_bo(cmd, false, &bo);
    if (unlikely(result != VK_SUCCESS))
       return result;
-
-   nvk_cmd_buffer_ref_bo(cmd, bo->bo);
 
    *addr = bo->bo->offset;
    *ptr = bo->map;
@@ -269,8 +255,6 @@ nvk_cmd_buffer_cond_render_alloc(struct nvk_cmd_buffer *cmd,
    VkResult result = nvk_cmd_buffer_alloc_bo(cmd, true, &bo);
    if (unlikely(result != VK_SUCCESS))
       return result;
-
-   nvk_cmd_buffer_ref_bo(cmd, bo->bo);
 
    *addr = bo->bo->offset;
 
@@ -329,7 +313,7 @@ nvk_CmdExecuteCommands(VkCommandBuffer commandBuffer,
    for (uint32_t i = 0; i < commandBufferCount; i++) {
       VK_FROM_HANDLE(nvk_cmd_buffer, other, pCommandBuffers[i]);
 
-      /* We only need to copy the pushes and BO refs.  We do not copy the
+      /* We only need to copy the pushes.  We do not copy the
        * nvk_cmd_buffer::bos because that tracks ownership.  Instead, we
        * depend on the app to not discard secondaries while they are used by a
        * primary.  The Vulkan 1.3.227 spec for vkFreeCommandBuffers() says:
@@ -343,7 +327,6 @@ nvk_CmdExecuteCommands(VkCommandBuffer commandBuffer,
        * do with it is reset it.  vkResetCommandPool() has similar language.
        */
       util_dynarray_append_dynarray(&cmd->pushes, &other->pushes);
-      util_dynarray_append_dynarray(&cmd->bo_refs, &other->bo_refs);
    }
 }
 
@@ -356,8 +339,12 @@ nvk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(nvk_cmd_buffer, cmd, commandBuffer);
 
    /* TODO: We don't need to WFI all the time, do we? */
-   struct nv_push *p = nvk_cmd_buffer_push(cmd, 2);
+   struct nv_push *p = nvk_cmd_buffer_push(cmd, 4);
    P_IMMD(p, NV9097, WAIT_FOR_IDLE, 0);
+
+   P_IMMD(p, NV9097, INVALIDATE_TEXTURE_DATA_CACHE, {
+      .lines = LINES_ALL,
+   });
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -411,8 +398,6 @@ nvk_CmdBindDescriptorSets(VkCommandBuffer commandBuffer,
          vk_to_nvk_descriptor_set_layout(pipeline_layout->set_layouts[set_idx]);
 
       if (desc->sets[set_idx] != set) {
-         if (set->bo)
-            nvk_cmd_buffer_ref_bo(cmd, set->bo);
          desc->root.sets[set_idx] = nvk_descriptor_set_addr(set);
          desc->sets[set_idx] = set;
          desc->sets_dirty |= BITFIELD_BIT(set_idx);
@@ -548,11 +533,7 @@ nvk_cmd_buffer_dump(struct nvk_cmd_buffer *cmd, FILE *fp)
          };
          vk_push_print(fp, &push, &dev->pdev->info);
       } else {
-#if NVK_NEW_UAPI == 1
          const uint64_t addr = p->addr;
-#else
-         const uint64_t addr = p->bo->offset + p->bo_offset;
-#endif
          fprintf(fp, "<%u B of INDIRECT DATA at 0x%" PRIx64 ">\n",
                  p->range, addr);
       }

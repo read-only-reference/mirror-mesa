@@ -572,16 +572,6 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_shader_st
    };
    NIR_PASS(_, nir, nir_lower_compute_system_values, &csv_options);
 
-   if (nir->info.stage == MESA_SHADER_MESH) {
-      /* Mesh shaders only have a 1D "vertex index" which we use
-       * as "workgroup index" to emulate the 3D workgroup ID.
-       */
-      nir_lower_compute_system_values_options o = {
-         .lower_workgroup_id_to_index = true,
-      };
-      NIR_PASS(_, nir, nir_lower_compute_system_values, &o);
-   }
-
    /* Vulkan uses the separate-shader linking model */
    nir->info.separate_shader = true;
 
@@ -633,7 +623,13 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_shader_st
 
    NIR_PASS(_, nir, nir_lower_global_vars_to_local);
    NIR_PASS(_, nir, nir_remove_dead_variables, nir_var_function_temp, NULL);
+
    bool gfx7minus = device->physical_device->rad_info.gfx_level <= GFX7;
+   bool has_inverse_ballot = true;
+#if LLVM_AVAILABLE
+   has_inverse_ballot = !radv_use_llvm_for_stage(device, nir->info.stage) || LLVM_VERSION_MAJOR >= 17;
+#endif
+
    NIR_PASS(_, nir, nir_lower_subgroups,
             &(struct nir_lower_subgroups_options){
                .subgroup_size = subgroup_size,
@@ -648,6 +644,7 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_shader_st
                .lower_quad_broadcast_dynamic_to_const = gfx7minus,
                .lower_shuffle_to_swizzle_amd = 1,
                .lower_ballot_bit_count_to_mbcnt_amd = 1,
+               .lower_inverse_ballot = !has_inverse_ballot,
             });
 
    NIR_PASS(_, nir, nir_lower_load_const_to_scalar);
@@ -915,7 +912,7 @@ radv_lower_ngg(struct radv_device *device, struct radv_shader_stage *ngg_stage, 
       bool scratch_ring = false;
       NIR_PASS_V(nir, ac_nir_lower_ngg_ms, options.gfx_level, options.clipdist_enable_mask,
                  options.vs_output_param_offset, options.has_param_exports, &scratch_ring, info->wave_size,
-                 pl_key->has_multiview_view_index);
+                 pl_key->has_multiview_view_index, info->ms.has_query);
       ngg_stage->info.ms.needs_ms_scratch_ring = scratch_ring;
    } else {
       unreachable("invalid SW stage passed to radv_lower_ngg");
@@ -2383,11 +2380,12 @@ radv_shader_nir_to_asm(struct radv_device *device, struct radv_shader_stage *pl_
 }
 
 void
-radv_shader_generate_debug_info(struct radv_device *device, bool dump_shader, struct radv_shader_binary *binary,
-                                struct radv_shader *shader, struct nir_shader *const *shaders, int shader_count,
-                                struct radv_shader_info *info)
+radv_shader_generate_debug_info(struct radv_device *device, bool dump_shader, bool keep_shader_info,
+                                struct radv_shader_binary *binary, struct radv_shader *shader,
+                                struct nir_shader *const *shaders, int shader_count, struct radv_shader_info *info)
 {
-   radv_capture_shader_executable_info(device, shader, shaders, shader_count, binary);
+   if (dump_shader || keep_shader_info)
+      radv_capture_shader_executable_info(device, shader, shaders, shader_count, binary);
 
    if (dump_shader) {
       fprintf(stderr, "%s", radv_get_shader_name(info, shaders[0]->info.stage));

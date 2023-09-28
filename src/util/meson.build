@@ -295,7 +295,7 @@ idep_mesautil = declare_dependency(
 
 # Only install the drirc file if we build with support for parsing drirc files
 if use_xmlconfig
-   install_data(files_drirc, install_dir : join_paths(get_option('datadir'), 'drirc.d'))
+   install_data(files_drirc, install_dir : join_paths(get_option('datadir'), 'drirc.d'), install_tag : 'runtime')
 endif
 
 xmlconfig_deps = []
@@ -361,6 +361,7 @@ if with_tests
     'tests/gc_alloc_tests.cpp',
     'tests/half_float_test.cpp',
     'tests/int_min_max.cpp',
+    'tests/linear_test.cpp',
     'tests/mesa-sha1_test.cpp',
     'tests/os_mman_test.cpp',
     'tests/perf/u_trace_test.cpp',

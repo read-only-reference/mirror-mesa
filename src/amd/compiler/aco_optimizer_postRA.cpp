@@ -211,6 +211,8 @@ is_overwritten_since(pr_opt_ctx& ctx, PhysReg reg, RegClass rc, const Idx& since
          return true;
       else if (i == overwritten_untrackable || i == not_written_yet)
          continue;
+      else if (i == overwritten_subdword)
+         return true;
 
       assert(i.found());
 
@@ -503,6 +505,11 @@ try_combine_dpp(pr_opt_ctx& ctx, aco_ptr<Instruction>& instr)
 
       /* Don't propagate DPP if the source register is overwritten since the move. */
       if (is_overwritten_since(ctx, mov->operands[0], op_instr_idx))
+         continue;
+
+      /* GFX8/9 don't have fetch-inactive. */
+      if (ctx.program->gfx_level < GFX10 &&
+          is_overwritten_since(ctx, Operand(exec, ctx.program->lane_mask), op_instr_idx))
          continue;
 
       /* We won't eliminate the DPP mov if the operand is used twice */

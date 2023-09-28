@@ -194,6 +194,13 @@ vlVaHandleVAEncSequenceParameterBufferTypeH264(vlVaDriver *drv, vlVaContext *con
          return VA_STATUS_ERROR_ALLOCATION_FAILED;
 
       getEncParamPresetH264(context);
+      context->desc.h264enc.rate_ctrl[0].vbv_buffer_size = 20000000;
+      context->desc.h264enc.rate_ctrl[0].vbv_buf_lv = 48;
+      context->desc.h264enc.rate_ctrl[0].fill_data_enable = 1;
+      context->desc.h264enc.rate_ctrl[0].enforce_hrd = 1;
+      context->desc.h264enc.rate_ctrl[0].max_qp = 51;
+      context->desc.h264enc.rate_ctrl[0].min_qp = 0;
+      context->desc.h264enc.enable_vui = false;
    }
 
    context->desc.h264enc.intra_idr_period =
@@ -399,6 +406,12 @@ static void parseEncSpsParamsH264(vlVaContext *context, struct vl_rbsp *rbsp)
             context->desc.h264enc.seq.matrix_coefficients = vl_rbsp_u(rbsp, 8);
          }
       }
+
+      context->desc.h264enc.seq.vui_flags.chroma_loc_info_present_flag = vl_rbsp_u(rbsp, 1);
+      if (context->desc.h264enc.seq.vui_flags.chroma_loc_info_present_flag) {
+         context->desc.h264enc.seq.chroma_sample_loc_type_top_field = vl_rbsp_ue(rbsp);
+         context->desc.h264enc.seq.chroma_sample_loc_type_bottom_field = vl_rbsp_ue(rbsp);
+      }
    }
 }
 
@@ -488,13 +501,6 @@ vlVaHandleVAEncMiscParameterTypeHRDH264(vlVaContext *context, VAEncMiscParameter
 void getEncParamPresetH264(vlVaContext *context)
 {
    //rate control
-   context->desc.h264enc.rate_ctrl[0].vbv_buffer_size = 20000000;
-   context->desc.h264enc.rate_ctrl[0].vbv_buf_lv = 48;
-   context->desc.h264enc.rate_ctrl[0].fill_data_enable = 1;
-   context->desc.h264enc.rate_ctrl[0].enforce_hrd = 1;
-   context->desc.h264enc.rate_ctrl[0].max_qp = 51;
-   context->desc.h264enc.rate_ctrl[0].min_qp = 0;
-   context->desc.h264enc.enable_vui = false;
    if (context->desc.h264enc.rate_ctrl[0].frame_rate_num == 0 ||
        context->desc.h264enc.rate_ctrl[0].frame_rate_den == 0) {
          context->desc.h264enc.rate_ctrl[0].frame_rate_num = 30;

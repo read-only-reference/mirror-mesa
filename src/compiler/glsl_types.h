@@ -34,7 +34,6 @@
 #include "util/blob.h"
 #include "util/format/u_format.h"
 #include "util/macros.h"
-#include "util/simple_mtx.h"
 
 struct glsl_type;
 
@@ -46,10 +45,10 @@ struct _mesa_glsl_parse_state;
 struct glsl_symbol_table;
 
 extern void
-glsl_type_singleton_init_or_ref();
+glsl_type_singleton_init_or_ref(void);
 
 extern void
-glsl_type_singleton_decref();
+glsl_type_singleton_decref(void);
 
 extern void
 _mesa_glsl_initialize_types(struct _mesa_glsl_parse_state *state);
@@ -77,6 +76,7 @@ enum glsl_base_type {
    GLSL_TYPE_UINT64,
    GLSL_TYPE_INT64,
    GLSL_TYPE_BOOL,
+   GLSL_TYPE_COOPERATIVE_MATRIX,
    GLSL_TYPE_SAMPLER,
    GLSL_TYPE_TEXTURE,
    GLSL_TYPE_IMAGE,
@@ -86,7 +86,6 @@ enum glsl_base_type {
    GLSL_TYPE_ARRAY,
    GLSL_TYPE_VOID,
    GLSL_TYPE_SUBROUTINE,
-   GLSL_TYPE_FUNCTION,
    GLSL_TYPE_ERROR
 };
 
@@ -169,6 +168,7 @@ glsl_base_type_get_bit_size(const enum glsl_base_type base_type)
    case GLSL_TYPE_UINT:
    case GLSL_TYPE_FLOAT: /* TODO handle mediump */
    case GLSL_TYPE_SUBROUTINE:
+   case GLSL_TYPE_COOPERATIVE_MATRIX:
       return 32;
 
    case GLSL_TYPE_FLOAT16:
@@ -281,28 +281,43 @@ enum {
    GLSL_PRECISION_LOW
 };
 
-#ifdef __cplusplus
-} /* extern "C" */
-#endif
+enum glsl_cmat_use {
+   GLSL_CMAT_USE_NONE = 0,
+   GLSL_CMAT_USE_A,
+   GLSL_CMAT_USE_B,
+   GLSL_CMAT_USE_ACCUMULATOR,
+};
 
-/* C++ struct types for glsl */
-#ifdef __cplusplus
+struct glsl_cmat_description {
+   /* MSVC can't merge bitfields of different types and also sign extend enums,
+    * so use uint8_t for those cases.
+    */
+   uint8_t element_type:5; /* enum glsl_base_type */
+   uint8_t scope:3; /* mesa_scope */
+   uint8_t rows;
+   uint8_t cols;
+   uint8_t use; /* enum glsl_cmat_use */
+};
+
+const char *glsl_get_type_name(const struct glsl_type *type);
 
 struct glsl_type {
    uint32_t gl_type;
-   glsl_base_type base_type:8;
+   enum glsl_base_type base_type:8;
 
-   glsl_base_type sampled_type:8; /**< Type of data returned using this
-                                   * sampler or image.  Only \c
-                                   * GLSL_TYPE_FLOAT, \c GLSL_TYPE_INT,
-                                   * and \c GLSL_TYPE_UINT are valid.
-                                   */
+   enum glsl_base_type sampled_type:8; /**< Type of data returned using this
+                                        * sampler or image.  Only \c
+                                        * GLSL_TYPE_FLOAT, \c GLSL_TYPE_INT,
+                                        * and \c GLSL_TYPE_UINT are valid.
+                                        */
 
    unsigned sampler_dimensionality:4; /**< \see glsl_sampler_dim */
    unsigned sampler_shadow:1;
    unsigned sampler_array:1;
    unsigned interface_packing:2;
    unsigned interface_row_major:1;
+
+   struct glsl_cmat_description cmat_desc;
 
    /**
     * For \c GLSL_TYPE_STRUCT this specifies if the struct is packed or not.
@@ -311,13 +326,8 @@ struct glsl_type {
     */
    unsigned packed:1;
 
-private:
-   glsl_type() : mem_ctx(NULL)
-   {
-      // Dummy constructor, just for the sake of ASSERT_BITFIELD_SIZE.
-   }
+   unsigned has_builtin_name:1;
 
-public:
    /**
     * \name Vector and matrix element counts
     *
@@ -338,11 +348,11 @@ public:
    unsigned length;
 
    /**
-    * Name of the data type
+    * Identifier to the name of the data type
     *
-    * Will never be \c NULL.
+    * Use glsl_get_type_name() to access the actual name.
     */
-   const char *name;
+   uintptr_t name_id;
 
    /**
     * Explicit array, matrix, or vector stride.  This is used to communicate
@@ -363,21 +373,18 @@ public:
     */
    union {
       const struct glsl_type *array;            /**< Type of array elements. */
-      struct glsl_function_param *parameters;   /**< Parameters to function. */
-      struct glsl_struct_field *structure;      /**< List of struct fields. */
+      const struct glsl_struct_field *structure;      /**< List of struct fields. */
    } fields;
 
+/* C++ parts of glsl_type. */
+#ifdef __cplusplus
    /**
     * \name Pointers to various public type singletons
     */
    /*@{*/
-#undef  DECL_TYPE
-#define DECL_TYPE(NAME, ...) \
-   static const glsl_type *const NAME##_type;
-#undef  STRUCT_TYPE
-#define STRUCT_TYPE(NAME) \
-   static const glsl_type *const struct_##NAME##_type;
-#include "compiler/builtin_type_macros.h"
+#define BUILTIN_TYPES_CPP_DECLARATIONS
+#include "builtin_types_cpp.h"
+#undef BUILTIN_TYPES_CPP_DECLARATIONS
    /*@}*/
 
    /**
@@ -472,6 +479,11 @@ public:
                                               unsigned explicit_stride = 0);
 
    /**
+    * Get the instance of a cooperative matrix type
+    */
+   static const glsl_type *get_cmat_instance(const struct glsl_cmat_description desc);
+
+   /**
     * Get the instance of a record type
     */
    static const glsl_type *get_struct_instance(const glsl_struct_field *fields,
@@ -493,13 +505,6 @@ public:
     * Get the instance of an subroutine type
     */
    static const glsl_type *get_subroutine_instance(const char *subroutine_name);
-
-   /**
-    * Get the instance of a function type
-    */
-   static const glsl_type *get_function_instance(const struct glsl_type *return_type,
-                                                 const glsl_function_param *parameters,
-                                                 unsigned num_params);
 
    /**
     * Get the type resulting from a multiplication of \p type_a * \p type_b
@@ -953,6 +958,11 @@ public:
       return is_array() && fields.array->is_array();
    }
 
+   bool is_cmat() const
+   {
+      return base_type == GLSL_TYPE_COOPERATIVE_MATRIX;
+   }
+
    /**
     * Query whether or not a type is a record
     */
@@ -997,7 +1007,7 @@ public:
 
    bool is_anonymous() const
    {
-      return !strncmp(name, "#anon", 5);
+      return !strncmp(glsl_get_type_name(this), "#anon", 5);
    }
 
    /**
@@ -1234,102 +1244,10 @@ public:
       return (bool) interface_row_major;
    }
 
-   ~glsl_type();
-
-private:
-
-   static simple_mtx_t hash_mutex;
-
-   /**
-    * ralloc context for the type itself.
-    */
-   void *mem_ctx;
-
-   /** Constructor for vector and matrix types */
-   glsl_type(uint32_t gl_type,
-             glsl_base_type base_type, unsigned vector_elements,
-             unsigned matrix_columns, const char *name,
-             unsigned explicit_stride = 0, bool row_major = false,
-             unsigned explicit_alignment = 0);
-
-   /** Constructor for sampler or image types */
-   glsl_type(uint32_t gl_type, glsl_base_type base_type,
-	     enum glsl_sampler_dim dim, bool shadow, bool array,
-	     glsl_base_type type, const char *name);
-
-   /** Constructor for record types */
-   glsl_type(const glsl_struct_field *fields, unsigned num_fields,
-	     const char *name, bool packed = false,
-	     unsigned explicit_alignment = 0);
-
-   /** Constructor for interface types */
-   glsl_type(const glsl_struct_field *fields, unsigned num_fields,
-	     enum glsl_interface_packing packing,
-	     bool row_major, const char *name);
-
-   /** Constructor for interface types */
-   glsl_type(const glsl_type *return_type,
-             const glsl_function_param *params, unsigned num_params);
-
-   /** Constructors for array types */
-   glsl_type(const glsl_type *array, unsigned length, unsigned explicit_stride);
-
-   /** Constructor for subroutine types */
-   glsl_type(const char *name);
-
-   /** Hash table containing the known explicit matrix and vector types. */
-   static struct hash_table *explicit_matrix_types;
-
-   /** Hash table containing the known array types. */
-   static struct hash_table *array_types;
-
-   /** Hash table containing the known struct types. */
-   static struct hash_table *struct_types;
-
-   /** Hash table containing the known interface types. */
-   static struct hash_table *interface_types;
-
-   /** Hash table containing the known subroutine types. */
-   static struct hash_table *subroutine_types;
-
-   /** Hash table containing the known function types. */
-   static struct hash_table *function_types;
-
-   static bool record_key_compare(const void *a, const void *b);
-   static unsigned record_key_hash(const void *key);
-
-   /**
-    * \name Built-in type flyweights
-    */
-   /*@{*/
-#undef  DECL_TYPE
-#define DECL_TYPE(NAME, ...) static const glsl_type _##NAME##_type;
-#undef  STRUCT_TYPE
-#define STRUCT_TYPE(NAME)        static const glsl_type _struct_##NAME##_type;
-#include "compiler/builtin_type_macros.h"
-   /*@}*/
-
-   /**
-    * \name Friend functions.
-    *
-    * These functions are friends because they must have C linkage and the
-    * need to call various private methods or access various private static
-    * data.
-    */
-   /*@{*/
-   friend void glsl_type_singleton_init_or_ref(void);
-   friend void glsl_type_singleton_decref(void);
-   friend void _mesa_glsl_initialize_types(struct _mesa_glsl_parse_state *);
-   /*@}*/
-
-   static const glsl_type *get_explicit_matrix_instance(unsigned int base_type, unsigned int rows, unsigned int columns,
-                                                        unsigned int explicit_stride, bool row_major,
-                                                        unsigned int explicit_alignment);
+#endif /* __cplusplus */
 };
 
-#undef DECL_TYPE
-#undef STRUCT_TYPE
-#endif /* __cplusplus */
+#include "builtin_types.h"
 
 struct glsl_struct_field {
    const struct glsl_type *type;
@@ -1463,11 +1381,14 @@ struct glsl_struct_field {
 #endif
 };
 
-struct glsl_function_param {
-   const struct glsl_type *type;
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
-   bool in;
-   bool out;
-};
+#ifdef __cplusplus
+#define BUILTIN_TYPES_CPP_DEFINITIONS
+#include "builtin_types_cpp.h"
+#undef BUILTIN_TYPES_CPP_DEFINITIONS
+#endif
 
 #endif /* GLSL_TYPES_H */

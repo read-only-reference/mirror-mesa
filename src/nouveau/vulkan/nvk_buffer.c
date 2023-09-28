@@ -1,5 +1,10 @@
+/*
+ * Copyright © 2022 Collabora Ltd. and Red Hat Inc.
+ * SPDX-License-Identifier: MIT
+ */
 #include "nvk_buffer.h"
 
+#include "nvk_entrypoints.h"
 #include "nvk_device.h"
 #include "nvk_device_memory.h"
 #include "nvk_physical_device.h"
@@ -41,7 +46,6 @@ nvk_CreateBuffer(VkDevice device,
    if (!buffer)
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
 
-#if NVK_NEW_UAPI == 1
    if (buffer->vk.create_flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT) {
       const uint32_t alignment =
          nvk_get_buffer_alignment(&nvk_device_physical(dev)->info,
@@ -56,7 +60,6 @@ nvk_CreateBuffer(VkDevice device,
       buffer->addr = nouveau_ws_alloc_vma(dev->ws_dev, buffer->vma_size_B,
                                           alignment, sparse_residency);
    }
-#endif
 
    *pBuffer = nvk_buffer_to_handle(buffer);
 
@@ -74,7 +77,6 @@ nvk_DestroyBuffer(VkDevice device,
    if (!buffer)
       return;
 
-#if NVK_NEW_UAPI == 1
    if (buffer->vma_size_B > 0) {
       const bool sparse_residency =
          buffer->vk.create_flags & VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT;
@@ -83,7 +85,6 @@ nvk_DestroyBuffer(VkDevice device,
       nouveau_ws_free_vma(dev->ws_dev, buffer->addr, buffer->vma_size_B,
                           sparse_residency);
    }
-#endif
 
    vk_buffer_destroy(&dev->vk, pAllocator, &buffer->vk);
 }
@@ -177,7 +178,6 @@ nvk_BindBufferMemory2(VkDevice device,
       VK_FROM_HANDLE(nvk_buffer, buffer, pBindInfos[i].buffer);
 
       buffer->is_local = !(mem->bo->flags & NOUVEAU_WS_BO_GART);
-#if NVK_NEW_UAPI == 1
       if (buffer->vma_size_B) {
          VK_FROM_HANDLE(nvk_device, dev, device);
          nouveau_ws_bo_bind_vma(dev->ws_dev,
@@ -189,10 +189,6 @@ nvk_BindBufferMemory2(VkDevice device,
       } else {
          buffer->addr = mem->bo->offset + pBindInfos[i].memoryOffset;
       }
-#else
-      buffer->mem = mem;
-      buffer->addr = mem->bo->offset + pBindInfos[i].memoryOffset;
-#endif
    }
    return VK_SUCCESS;
 }

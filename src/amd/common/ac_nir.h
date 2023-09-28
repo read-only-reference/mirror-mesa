@@ -83,6 +83,7 @@ ac_nir_export_position(nir_builder *b,
                        uint32_t clip_cull_mask,
                        bool no_param_export,
                        bool force_vrs,
+                       bool done,
                        uint64_t outputs_written,
                        nir_def *(*outputs)[4]);
 
@@ -194,12 +195,14 @@ ac_nir_lower_ngg_ms(nir_shader *shader,
                     bool has_param_exports,
                     bool *out_needs_scratch_ring,
                     unsigned wave_size,
-                    bool multiview);
+                    bool multiview,
+                    bool has_query);
 
 void
 ac_nir_lower_task_outputs_to_mem(nir_shader *shader,
                                  unsigned task_payload_entry_bytes,
-                                 unsigned task_num_entries);
+                                 unsigned task_num_entries,
+                                 bool has_query);
 
 void
 ac_nir_lower_mesh_inputs_to_mem(nir_shader *shader,
