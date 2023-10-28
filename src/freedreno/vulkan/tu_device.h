@@ -89,6 +89,11 @@ struct tu_physical_device
    uint32_t ccu_offset_gmem;
    uint32_t ccu_offset_bypass;
 
+   /* Amount of usable descriptor sets, this excludes any reserved set */
+   uint32_t usable_sets;
+   /* Index of the reserved descriptor set, may be -1 if unset */
+   int32_t reserved_set_idx;
+
    bool has_set_iova;
    uint64_t va_start;
    uint64_t va_size;
@@ -142,6 +147,13 @@ struct tu_instance
     * suffer a performance loss with conservative LRZ.
     */
    bool conservative_lrz;
+
+   /* If to internally reserve a descriptor set for descriptor set
+    * dynamic offsets, a descriptor set can be freed at the cost of
+    * being unable to use the feature. As it is a part of the Vulkan
+    * core, this is enabled by default.
+    */
+   bool reserve_descriptor_set;
 };
 VK_DEFINE_HANDLE_CASTS(tu_instance, vk.base, VkInstance,
                        VK_OBJECT_TYPE_INSTANCE)
@@ -275,6 +287,12 @@ struct tu_device
     */
    struct tu_suballocator autotune_suballoc;
    mtx_t autotune_mutex;
+
+   /* KGSL requires a small chunk of GPU mem to retrieve raw GPU time on
+    * each submission.
+    */
+   struct tu_suballocator kgsl_profiling_suballoc;
+   mtx_t kgsl_profiling_mutex;
 
    /* the blob seems to always use 8K factor and 128K param sizes, copy them */
 #define TU_TESS_FACTOR_SIZE (8 * 1024)
@@ -521,6 +539,14 @@ struct tu_u_trace_submission_data
    uint32_t cmd_buffer_count;
    uint32_t last_buffer_with_tracepoints;
    struct tu_u_trace_cmd_data *cmd_trace_data;
+
+   /* GPU time is reset on GPU power cycle and the GPU time
+    * offset may change between submissions due to power cycle.
+    */
+   uint64_t gpu_ts_offset;
+
+   /* KGSL needs a GPU memory to write submission timestamps into */
+   struct tu_suballoc_bo kgsl_timestamp_bo;
 };
 
 VkResult

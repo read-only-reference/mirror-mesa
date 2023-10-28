@@ -9,15 +9,6 @@ set -e
 set -o xtrace
 
 EPHEMERAL=(
-    autoconf
-    automake
-    bzip2
-    libtool
-    libepoxy-dev
-    libtbb-dev
-    make
-    openssl-dev
-    unzip
 )
 
 
@@ -55,7 +46,7 @@ DEPS=(
     wayland-protocols
 )
 
-apk add "${DEPS[@]}" "${EPHEMERAL[@]}"
+apk --no-cache add "${DEPS[@]}" "${EPHEMERAL[@]}"
 
 . .gitlab-ci/container/container_pre_build.sh
 

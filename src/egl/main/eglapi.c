@@ -682,7 +682,6 @@ eglInitialize(EGLDisplay dpy, EGLint *major, EGLint *minor)
 
       const char *env = getenv("MESA_LOADER_DRIVER_OVERRIDE");
       disp->Options.Zink = env && !strcmp(env, "zink");
-      disp->Options.ForceSoftware |= disp->Options.Zink;
 
       const char *gallium_hud_env = getenv("GALLIUM_HUD");
       disp->Options.GalliumHudWarn =
@@ -696,9 +695,17 @@ eglInitialize(EGLDisplay dpy, EGLint *major, EGLint *minor)
          if (disp->Options.ForceSoftware)
             RETURN_EGL_ERROR(disp, EGL_NOT_INITIALIZED, EGL_FALSE);
          else {
-            disp->Options.ForceSoftware = EGL_TRUE;
-            if (!_eglDriver.Initialize(disp))
-               RETURN_EGL_ERROR(disp, EGL_NOT_INITIALIZED, EGL_FALSE);
+            bool success = disp->Options.Zink;
+            if (!disp->Options.Zink && !getenv("GALLIUM_DRIVER")) {
+               disp->Options.Zink = EGL_TRUE;
+               success = _eglDriver.Initialize(disp);
+            }
+            if (!success) {
+               disp->Options.Zink = EGL_FALSE;
+               disp->Options.ForceSoftware = EGL_TRUE;
+               if (!_eglDriver.Initialize(disp))
+                  RETURN_EGL_ERROR(disp, EGL_NOT_INITIALIZED, EGL_FALSE);
+            }
          }
       }
 

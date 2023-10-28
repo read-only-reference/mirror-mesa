@@ -23,12 +23,14 @@
 #include "r600_pipe.h"
 #include "r600_public.h"
 #include "r600_isa.h"
+#include "r600_sfn.h"
 #include "evergreen_compute.h"
 #include "r600d.h"
 
 #include <errno.h>
 #include "pipe/p_shader_tokens.h"
 #include "util/u_debug.h"
+#include "util/u_endian.h"
 #include "util/u_memory.h"
 #include "util/u_screen.h"
 #include "util/u_simple_shaders.h"
@@ -213,7 +215,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen,
                             0, PIPE_USAGE_DEFAULT, 0, false);
 
 	rctx->isa = calloc(1, sizeof(struct r600_isa));
-	if (!rctx->isa || r600_isa_init(rctx, rctx->isa))
+	if (!rctx->isa || r600_isa_init(rctx->b.gfx_level, rctx->isa))
 		goto fail;
 
 	if (rscreen->b.debug_flags & DBG_FORCE_DMA)
@@ -324,7 +326,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 1;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
-		return !R600_BIG_ENDIAN && rscreen->b.info.has_userptr;
+		return !UTIL_ARCH_BIG_ENDIAN && rscreen->b.info.has_userptr;
 
 	case PIPE_CAP_COMPUTE:
 		return rscreen->b.gfx_level > R700;
@@ -407,11 +409,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_TWO_SIDED_COLOR:
 		return 0;
-	case PIPE_CAP_INT64_DIVMOD:
-		/* it is actually not supported, but the nir lowering handles this correctly whereas
-		 * the glsl lowering path seems to not initialize the buildins correctly.
-		 */
-		return 1;
 	case PIPE_CAP_CULL_DISTANCE:
 		return 1;
 
@@ -619,8 +616,6 @@ static int r600_get_shader_param(struct pipe_screen* pscreen,
 		ir |= 1 << PIPE_SHADER_IR_NIR;
 		return ir;
 	}
-	case PIPE_SHADER_CAP_DROUND_SUPPORTED:
-		return 0;
 	case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
 	case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
 		if (rscreen->b.family >= CHIP_CEDAR &&
@@ -668,9 +663,6 @@ static struct pipe_resource *r600_resource_create(struct pipe_screen *screen,
 
 	return r600_resource_create_common(screen, templ);
 }
-
-char *
-r600_finalize_nir(struct pipe_screen *screen, void *shader);
 
 struct pipe_screen *r600_screen_create(struct radeon_winsys *ws,
 				       const struct pipe_screen_config *config)

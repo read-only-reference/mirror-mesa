@@ -380,6 +380,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .KHR_8bit_storage = true,
       .KHR_16bit_storage = true,
       .KHR_acceleration_structure = radv_enable_rt(device, false),
+      .KHR_cooperative_matrix = device->rad_info.gfx_level >= GFX11 && !device->use_llvm,
       .KHR_bind_memory2 = true,
       .KHR_buffer_device_address = true,
       .KHR_copy_commands2 = true,
@@ -497,6 +498,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .EXT_graphics_pipeline_library = !device->use_llvm && !(device->instance->debug_flags & RADV_DEBUG_NO_GPL),
       .EXT_host_query_reset = true,
       .EXT_image_2d_view_of_3d = true,
+      .EXT_image_compression_control = true,
       .EXT_image_drm_format_modifier = device->rad_info.gfx_level >= GFX9,
       .EXT_image_robustness = true,
       .EXT_image_sliced_view_of_3d = device->rad_info.gfx_level >= GFX10,
@@ -619,7 +621,7 @@ radv_physical_device_get_features(const struct radv_physical_device *pdevice, st
       .multiViewport = true,
       .samplerAnisotropy = true,
       .textureCompressionETC2 = radv_device_supports_etc(pdevice) || pdevice->emulate_etc2,
-      .textureCompressionASTC_LDR = false,
+      .textureCompressionASTC_LDR = pdevice->emulate_astc,
       .textureCompressionBC = true,
       .occlusionQueryPrecise = true,
       .pipelineStatisticsQuery = true,
@@ -1038,6 +1040,13 @@ radv_physical_device_get_features(const struct radv_physical_device *pdevice, st
       .deviceGeneratedCompute = true,
       .deviceGeneratedComputePipelines = false,
       .deviceGeneratedComputeCaptureReplay = false,
+
+      /* VK_KHR_cooperative_matrix */
+      .cooperativeMatrix = pdevice->rad_info.gfx_level >= GFX11 && !pdevice->use_llvm,
+      .cooperativeMatrixRobustBufferAccess = pdevice->rad_info.gfx_level >= GFX11 && !pdevice->use_llvm,
+
+      /* VK_EXT_image_compression_control */
+      .imageCompressionControl = true,
    };
 }
 
@@ -1710,6 +1719,9 @@ radv_get_physical_device_properties(struct radv_physical_device *pdevice)
    p->polygonModePointSize = true;
    p->nonStrictSinglePixelWideLinesUseParallelogram = false;
    p->nonStrictWideLinesUseParallelogram = false;
+
+   /* VK_KHR_cooperative_matrix */
+   p->cooperativeMatrixSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT;
 }
 
 static VkResult
@@ -1824,9 +1836,11 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
 
 #ifdef ANDROID
    device->emulate_etc2 = !radv_device_supports_etc(device);
+   device->emulate_astc = true;
 #else
    device->emulate_etc2 =
-      !radv_device_supports_etc(device) && driQueryOptionb(&device->instance->dri_options, "radv_require_etc2");
+      !radv_device_supports_etc(device) && driQueryOptionb(&device->instance->dri_options, "vk_require_etc2");
+   device->emulate_astc = driQueryOptionb(&device->instance->dri_options, "vk_require_astc");
 #endif
 
    snprintf(device->name, sizeof(device->name), "AMD RADV %s%s", device->rad_info.name,
@@ -1868,8 +1882,7 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
       (device->rad_info.gfx_level == GFX10_3 || (device->instance->perftest_flags & RADV_PERFTEST_NGGC)) &&
       !(device->instance->debug_flags & RADV_DEBUG_NO_NGGC);
 
-   device->use_ngg_streamout = device->use_ngg && (device->rad_info.gfx_level >= GFX11 ||
-                                                   (device->instance->perftest_flags & RADV_PERFTEST_NGG_STREAMOUT));
+   device->use_ngg_streamout = device->rad_info.gfx_level >= GFX11;
 
    device->emulate_ngg_gs_query_pipeline_stat = device->use_ngg && device->rad_info.gfx_level < GFX11;
 
@@ -2430,6 +2443,68 @@ radv_GetPhysicalDeviceToolProperties(VkPhysicalDevice physicalDevice, uint32_t *
          .purposes = VK_TOOL_PURPOSE_PROFILING_BIT | VK_TOOL_PURPOSE_TRACING_BIT,
       };
       vk_outarray_append_typed(VkPhysicalDeviceToolProperties, &out, t) *t = tool;
+   }
+
+   return vk_outarray_status(&out);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+radv_GetPhysicalDeviceCooperativeMatrixPropertiesKHR(VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount,
+                                                     VkCooperativeMatrixPropertiesKHR *pProperties)
+{
+   VK_OUTARRAY_MAKE_TYPED(VkCooperativeMatrixPropertiesKHR, out, pProperties, pPropertyCount);
+
+   vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p)
+   {
+      *p = (struct VkCooperativeMatrixPropertiesKHR){.sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
+                                                     .MSize = 16,
+                                                     .NSize = 16,
+                                                     .KSize = 16,
+                                                     .AType = VK_COMPONENT_TYPE_FLOAT16_KHR,
+                                                     .BType = VK_COMPONENT_TYPE_FLOAT16_KHR,
+                                                     .CType = VK_COMPONENT_TYPE_FLOAT16_KHR,
+                                                     .ResultType = VK_COMPONENT_TYPE_FLOAT16_KHR,
+                                                     .saturatingAccumulation = false,
+                                                     .scope = VK_SCOPE_SUBGROUP_KHR};
+   }
+
+   vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p)
+   {
+      *p = (struct VkCooperativeMatrixPropertiesKHR){.sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
+                                                     .MSize = 16,
+                                                     .NSize = 16,
+                                                     .KSize = 16,
+                                                     .AType = VK_COMPONENT_TYPE_FLOAT16_KHR,
+                                                     .BType = VK_COMPONENT_TYPE_FLOAT16_KHR,
+                                                     .CType = VK_COMPONENT_TYPE_FLOAT32_KHR,
+                                                     .ResultType = VK_COMPONENT_TYPE_FLOAT32_KHR,
+                                                     .saturatingAccumulation = false,
+                                                     .scope = VK_SCOPE_SUBGROUP_KHR};
+   }
+
+   for (unsigned asigned = 0; asigned < 2; asigned++) {
+      for (unsigned bsigned = 0; bsigned < 2; bsigned++) {
+         for (unsigned csigned = 0; csigned < 2; csigned++) {
+            for (unsigned saturate = 0; saturate < 2; saturate++) {
+               if (!csigned && saturate)
+                  continue; /* The HW only supports signed acc. */
+               vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p)
+               {
+                  *p = (struct VkCooperativeMatrixPropertiesKHR){
+                     .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
+                     .MSize = 16,
+                     .NSize = 16,
+                     .KSize = 16,
+                     .AType = asigned ? VK_COMPONENT_TYPE_SINT8_KHR : VK_COMPONENT_TYPE_UINT8_KHR,
+                     .BType = bsigned ? VK_COMPONENT_TYPE_SINT8_KHR : VK_COMPONENT_TYPE_UINT8_KHR,
+                     .CType = csigned ? VK_COMPONENT_TYPE_SINT32_KHR : VK_COMPONENT_TYPE_UINT32_KHR,
+                     .ResultType = csigned ? VK_COMPONENT_TYPE_SINT32_KHR : VK_COMPONENT_TYPE_UINT32_KHR,
+                     .saturatingAccumulation = saturate,
+                     .scope = VK_SCOPE_SUBGROUP_KHR};
+               }
+            }
+         }
+      }
    }
 
    return vk_outarray_status(&out);

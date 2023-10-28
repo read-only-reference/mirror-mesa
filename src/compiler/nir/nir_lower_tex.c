@@ -906,17 +906,17 @@ lower_txb_to_txl(nir_builder *b, nir_tex_instr *tex)
    txl->is_new_style_shadow = tex->is_new_style_shadow;
 
    /* reuse all but bias src */
-   for (int i = 0; i < 2; i++) {
+   for (int i = 0; i < tex->num_srcs; i++) {
       if (tex->src[i].src_type != nir_tex_src_bias) {
          txl->src[i].src = nir_src_for_ssa(tex->src[i].src.ssa);
          txl->src[i].src_type = tex->src[i].src_type;
       }
    }
-   nir_def *lod = nir_get_texture_lod(b, txl);
+   nir_def *lod = nir_get_texture_lod(b, tex);
 
    int bias_idx = nir_tex_instr_src_index(tex, nir_tex_src_bias);
    assert(bias_idx >= 0);
-   lod = nir_fadd(b, nir_channel(b, lod, 1), tex->src[bias_idx].src.ssa);
+   lod = nir_fadd(b, lod, tex->src[bias_idx].src.ssa);
    txl->src[tex->num_srcs - 1] = nir_tex_src_for_ssa(nir_tex_src_lod, lod);
 
    nir_def_init(&txl->instr, &txl->def,
@@ -1612,6 +1612,7 @@ nir_lower_tex_block(nir_block *block, nir_builder *b,
 
       if (tex->op == nir_texop_txd &&
           (options->lower_txd ||
+           (options->lower_txd_clamp && has_min_lod) ||
            (options->lower_txd_shadow && tex->is_shadow) ||
            (options->lower_txd_shadow_clamp && tex->is_shadow && has_min_lod) ||
            (options->lower_txd_offset_clamp && has_offset && has_min_lod) ||

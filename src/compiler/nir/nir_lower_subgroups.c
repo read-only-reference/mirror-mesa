@@ -144,18 +144,18 @@ lower_vote_eq_to_scalar(nir_builder *b, nir_intrinsic_instr *intrin)
 
    nir_def *result = NULL;
    for (unsigned i = 0; i < intrin->num_components; i++) {
-      nir_intrinsic_instr *chan_intrin =
-         nir_intrinsic_instr_create(b->shader, intrin->intrinsic);
-      nir_def_init(&chan_intrin->instr, &chan_intrin->def, 1,
-                   intrin->def.bit_size);
-      chan_intrin->num_components = 1;
-      chan_intrin->src[0] = nir_src_for_ssa(nir_channel(b, value, i));
-      nir_builder_instr_insert(b, &chan_intrin->instr);
+      nir_def* chan = nir_channel(b, value, i);
+
+      if (intrin->intrinsic == nir_intrinsic_vote_feq) {
+         chan = nir_vote_feq(b, intrin->def.bit_size, chan);
+      } else {
+         chan = nir_vote_ieq(b, intrin->def.bit_size, chan);
+      }
 
       if (result) {
-         result = nir_iand(b, result, &chan_intrin->def);
+         result = nir_iand(b, result, chan);
       } else {
-         result = &chan_intrin->def;
+         result = chan;
       }
    }
 
@@ -197,16 +197,9 @@ lower_shuffle_to_swizzle(nir_builder *b, nir_intrinsic_instr *intrin)
    if (mask >= 32)
       return NULL;
 
-   nir_intrinsic_instr *swizzle = nir_intrinsic_instr_create(
-      b->shader, nir_intrinsic_masked_swizzle_amd);
-   swizzle->num_components = intrin->num_components;
-   swizzle->src[0] = nir_src_for_ssa(intrin->src[0].ssa);
-   nir_intrinsic_set_swizzle_mask(swizzle, (mask << 10) | 0x1f);
-   nir_def_init(&swizzle->instr, &swizzle->def,
-                intrin->def.num_components, intrin->def.bit_size);
-
-   nir_builder_instr_insert(b, &swizzle->instr);
-   return &swizzle->def;
+   return nir_masked_swizzle_amd(b, intrin->src[0].ssa,
+                                 .swizzle_mask = (mask << 10) | 0x1f,
+                                 .fetch_inactive = true);
 }
 
 /* Lowers "specialized" shuffles to a generic nir_intrinsic_shuffle. */
@@ -277,16 +270,7 @@ lower_to_shuffle(nir_builder *b, nir_intrinsic_instr *intrin,
       unreachable("Invalid intrinsic");
    }
 
-   nir_intrinsic_instr *shuffle =
-      nir_intrinsic_instr_create(b->shader, nir_intrinsic_shuffle);
-   shuffle->num_components = intrin->num_components;
-   shuffle->src[0] = nir_src_for_ssa(intrin->src[0].ssa);
-   shuffle->src[1] = nir_src_for_ssa(index);
-   nir_def_init(&shuffle->instr, &shuffle->def,
-                intrin->def.num_components, intrin->def.bit_size);
-
-   nir_builder_instr_insert(b, &shuffle->instr);
-   return &shuffle->def;
+   return nir_shuffle(b, intrin->src[0].ssa, index);
 }
 
 static const struct glsl_type *
@@ -552,32 +536,30 @@ lower_dynamic_quad_broadcast(nir_builder *b, nir_intrinsic_instr *intrin,
    nir_def *dst = NULL;
 
    for (unsigned i = 0; i < 4; ++i) {
-      nir_intrinsic_instr *qbcst =
-         nir_intrinsic_instr_create(b->shader, nir_intrinsic_quad_broadcast);
-
-      qbcst->num_components = intrin->num_components;
-      qbcst->src[1] = nir_src_for_ssa(nir_imm_int(b, i));
-      qbcst->src[0] = nir_src_for_ssa(intrin->src[0].ssa);
-      nir_def_init(&qbcst->instr, &qbcst->def,
-                   intrin->def.num_components, intrin->def.bit_size);
-
-      nir_def *qbcst_dst = NULL;
-
-      if (options->lower_to_scalar && qbcst->num_components > 1) {
-         qbcst_dst = lower_subgroup_op_to_scalar(b, qbcst);
-      } else {
-         nir_builder_instr_insert(b, &qbcst->instr);
-         qbcst_dst = &qbcst->def;
-      }
+      nir_def *qbcst = nir_quad_broadcast(b, intrin->src[0].ssa,
+                                              nir_imm_int(b, i));
 
       if (i)
          dst = nir_bcsel(b, nir_ieq_imm(b, intrin->src[1].ssa, i),
-                         qbcst_dst, dst);
+                         qbcst, dst);
       else
-         dst = qbcst_dst;
+         dst = qbcst;
    }
 
    return dst;
+}
+
+static nir_def *
+lower_first_invocation_to_ballot(nir_builder *b, nir_intrinsic_instr *intrin,
+                                 const nir_lower_subgroups_options *options)
+{
+   return nir_ballot_find_lsb(b, 32, nir_ballot(b, 4, 32, nir_imm_true(b)));
+}
+
+static nir_def *
+lower_read_first_invocation(nir_builder *b, nir_intrinsic_instr *intrin)
+{
+   return nir_read_invocation(b, intrin->src[0].ssa, nir_first_invocation(b));
 }
 
 static nir_def *
@@ -607,8 +589,13 @@ lower_subgroups_instr(nir_builder *b, nir_instr *instr, void *_options)
       if (options->lower_vote_trivial)
          return nir_imm_true(b);
 
-      if (options->lower_vote_eq)
-         return lower_vote_eq(b, intrin);
+      if (nir_src_bit_size(intrin->src[0]) == 1) {
+         if (options->lower_vote_bool_eq)
+            return lower_vote_eq(b, intrin);
+      } else {
+         if (options->lower_vote_eq)
+            return lower_vote_eq(b, intrin);
+      }
 
       if (options->lower_to_scalar && intrin->num_components > 1)
          return lower_vote_eq_to_scalar(b, intrin);
@@ -617,6 +604,15 @@ lower_subgroups_instr(nir_builder *b, nir_instr *instr, void *_options)
    case nir_intrinsic_load_subgroup_size:
       if (options->subgroup_size)
          return nir_imm_int(b, options->subgroup_size);
+      break;
+
+   case nir_intrinsic_first_invocation:
+      if (options->subgroup_size == 1)
+         return nir_imm_int(b, 0);
+
+      if (options->lower_first_invocation_to_ballot)
+         return lower_first_invocation_to_ballot(b, intrin, options);
+
       break;
 
    case nir_intrinsic_read_invocation:
@@ -631,6 +627,9 @@ lower_subgroups_instr(nir_builder *b, nir_instr *instr, void *_options)
    case nir_intrinsic_read_first_invocation:
       if (options->lower_to_scalar && intrin->num_components > 1)
          return lower_subgroup_op_to_scalar(b, intrin);
+
+      if (options->lower_read_first_invocation)
+         return lower_read_first_invocation(b, intrin);
       break;
 
    case nir_intrinsic_load_subgroup_eq_mask:
@@ -840,6 +839,13 @@ lower_subgroups_instr(nir_builder *b, nir_instr *instr, void *_options)
             return lower_subgroup_op_to_scalar(b, intrin);
          else if (options->lower_shuffle_to_32bit && intrin->src[0].ssa->bit_size == 64)
             return lower_subgroup_op_to_32bit(b, intrin);
+      }
+      break;
+   case nir_intrinsic_masked_swizzle_amd:
+      if (options->lower_to_scalar && intrin->num_components > 1) {
+         return lower_subgroup_op_to_scalar(b, intrin);
+      } else if (options->lower_shuffle_to_32bit && intrin->src[0].ssa->bit_size == 64) {
+         return lower_subgroup_op_to_32bit(b, intrin);
       }
       break;
 

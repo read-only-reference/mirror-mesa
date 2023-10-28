@@ -224,6 +224,9 @@ index("nir_alu_type", "dest_type")
 # The swizzle mask for quad_swizzle_amd & masked_swizzle_amd
 index("unsigned", "swizzle_mask")
 
+# Allow FI=1 for quad_swizzle_amd & masked_swizzle_amd
+index("bool", "fetch_inactive")
+
 # Offsets for load_shared2_amd/store_shared2_amd
 index("uint8_t", "offset0")
 index("uint8_t", "offset1")
@@ -491,10 +494,10 @@ intrinsic("shuffle_up", src_comp=[0, 1], dest_comp=0, bit_sizes=src0, flags=[CAN
 intrinsic("shuffle_down", src_comp=[0, 1], dest_comp=0, bit_sizes=src0, flags=[CAN_ELIMINATE])
 
 # Quad operations from SPIR-V.
-intrinsic("quad_broadcast", src_comp=[0, 1], dest_comp=0, flags=[CAN_ELIMINATE])
-intrinsic("quad_swap_horizontal", src_comp=[0], dest_comp=0, flags=[CAN_ELIMINATE])
-intrinsic("quad_swap_vertical", src_comp=[0], dest_comp=0, flags=[CAN_ELIMINATE])
-intrinsic("quad_swap_diagonal", src_comp=[0], dest_comp=0, flags=[CAN_ELIMINATE])
+intrinsic("quad_broadcast", src_comp=[0, 1], dest_comp=0, bit_sizes=src0, flags=[CAN_ELIMINATE])
+intrinsic("quad_swap_horizontal", src_comp=[0], dest_comp=0, bit_sizes=src0, flags=[CAN_ELIMINATE])
+intrinsic("quad_swap_vertical", src_comp=[0], dest_comp=0, bit_sizes=src0, flags=[CAN_ELIMINATE])
+intrinsic("quad_swap_diagonal", src_comp=[0], dest_comp=0, bit_sizes=src0, flags=[CAN_ELIMINATE])
 
 # Rotate operation from SPIR-V: SpvOpGroupNonUniformRotateKHR.
 intrinsic("rotate", src_comp=[0, 1], dest_comp=0, bit_sizes=src0,
@@ -509,9 +512,9 @@ intrinsic("exclusive_scan", src_comp=[0], dest_comp=0, bit_sizes=src0,
 
 # AMD shader ballot operations
 intrinsic("quad_swizzle_amd", src_comp=[0], dest_comp=0, bit_sizes=src0,
-          indices=[SWIZZLE_MASK], flags=[CAN_ELIMINATE])
+          indices=[SWIZZLE_MASK, FETCH_INACTIVE], flags=[CAN_ELIMINATE])
 intrinsic("masked_swizzle_amd", src_comp=[0], dest_comp=0, bit_sizes=src0,
-          indices=[SWIZZLE_MASK], flags=[CAN_ELIMINATE])
+          indices=[SWIZZLE_MASK, FETCH_INACTIVE], flags=[CAN_ELIMINATE])
 intrinsic("write_invocation_amd", src_comp=[0, 0, 1], dest_comp=0, bit_sizes=src0,
           flags=[CAN_ELIMINATE])
 # src = [ mask, addition ]
@@ -1011,6 +1014,7 @@ barycentric("at_sample", 2, [1])
 barycentric("coord_at_sample", 3, [1])
 # src[] = { offset.xy }.
 barycentric("at_offset", 2, [2])
+barycentric("at_offset_nv", 2, [1])
 barycentric("coord_at_offset", 3, [2])
 
 # Load sample position:
@@ -1078,11 +1082,11 @@ load("ubo", [-1, 1], [ACCESS, ALIGN_MUL, ALIGN_OFFSET, RANGE_BASE, RANGE], flags
 # src[] = { buffer_index, offset in vec4 units }.  base is also in vec4 units.
 load("ubo_vec4", [-1, 1], [ACCESS, BASE, COMPONENT], flags=[CAN_ELIMINATE, CAN_REORDER])
 # src[] = { offset }.
-load("input", [1], [BASE, COMPONENT, DEST_TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
+load("input", [1], [BASE, RANGE, COMPONENT, DEST_TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
 # src[] = { vertex_id, offset }.
 load("input_vertex", [1, 1], [BASE, COMPONENT, DEST_TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
 # src[] = { vertex, offset }.
-load("per_vertex_input", [1, 1], [BASE, COMPONENT, DEST_TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
+load("per_vertex_input", [1, 1], [BASE, RANGE, COMPONENT, DEST_TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
 # src[] = { barycoord, offset }.
 load("interpolated_input", [2, 1], [BASE, COMPONENT, DEST_TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
 
@@ -1091,9 +1095,9 @@ load("ssbo", [-1, 1], [ACCESS, ALIGN_MUL, ALIGN_OFFSET], [CAN_ELIMINATE])
 # src[] = { buffer_index }
 load("ssbo_address", [1], [], [CAN_ELIMINATE, CAN_REORDER])
 # src[] = { offset }.
-load("output", [1], [BASE, COMPONENT, DEST_TYPE, IO_SEMANTICS], flags=[CAN_ELIMINATE])
+load("output", [1], [BASE, RANGE, COMPONENT, DEST_TYPE, IO_SEMANTICS], flags=[CAN_ELIMINATE])
 # src[] = { vertex, offset }.
-load("per_vertex_output", [1, 1], [BASE, COMPONENT, DEST_TYPE, IO_SEMANTICS], [CAN_ELIMINATE])
+load("per_vertex_output", [1, 1], [BASE, RANGE, COMPONENT, DEST_TYPE, IO_SEMANTICS], [CAN_ELIMINATE])
 # src[] = { primitive, offset }.
 load("per_primitive_output", [1, 1], [BASE, COMPONENT, DEST_TYPE, IO_SEMANTICS], [CAN_ELIMINATE])
 # src[] = { offset }.
@@ -1132,11 +1136,11 @@ def store(name, srcs, indices=[], flags=[]):
     intrinsic("store_" + name, [0] + srcs, indices=indices, flags=flags)
 
 # src[] = { value, offset }.
-store("output", [1], [BASE, WRITE_MASK, COMPONENT, SRC_TYPE, IO_SEMANTICS, IO_XFB, IO_XFB2])
+store("output", [1], [BASE, RANGE, WRITE_MASK, COMPONENT, SRC_TYPE, IO_SEMANTICS, IO_XFB, IO_XFB2])
 # src[] = { value, vertex, offset }.
-store("per_vertex_output", [1, 1], [BASE, WRITE_MASK, COMPONENT, SRC_TYPE, IO_SEMANTICS])
+store("per_vertex_output", [1, 1], [BASE, RANGE, WRITE_MASK, COMPONENT, SRC_TYPE, IO_SEMANTICS])
 # src[] = { value, primitive, offset }.
-store("per_primitive_output", [1, 1], [BASE, WRITE_MASK, COMPONENT, SRC_TYPE, IO_SEMANTICS])
+store("per_primitive_output", [1, 1], [BASE, RANGE, WRITE_MASK, COMPONENT, SRC_TYPE, IO_SEMANTICS])
 # src[] = { value, block_index, offset }
 store("ssbo", [-1, 1], [WRITE_MASK, ACCESS, ALIGN_MUL, ALIGN_OFFSET])
 # src[] = { value, offset }.
@@ -1328,6 +1332,10 @@ store("uniform_ir3", [], indices=[BASE])
 # base is the const file base in components, range is the amount to copy in
 # vec4's.
 intrinsic("copy_ubo_to_uniform_ir3", [1, 1], indices=[BASE, RANGE])
+
+# IR3-specific intrinsic for stsc. Loads from push consts to constant file
+# Should be used in the shader preamble.
+intrinsic("copy_push_const_to_uniform_ir3", [1], indices=[BASE, RANGE])
 
 # Intrinsics used by the Midgard/Bifrost blend pipeline. These are defined
 # within a blend shader to read/write the raw value from the tile buffer,
@@ -1644,10 +1652,11 @@ system_value("lds_ngg_scratch_base_amd", 1)
 system_value("lds_ngg_gs_out_vertex_base_amd", 1)
 
 # AMD GPU shader output export instruction
-# src[] = { export_value }
+# src[] = { export_value, row }
 # BASE = export target
 # FLAGS = AC_EXP_FLAG_*
 intrinsic("export_amd", [0], indices=[BASE, WRITE_MASK, FLAGS])
+intrinsic("export_row_amd", [0, 1], indices=[BASE, WRITE_MASK, FLAGS])
 
 # Export dual source blend outputs with swizzle operation
 # src[] = { mrt0, mrt1 }
@@ -1663,6 +1672,9 @@ system_value("barycentric_optimize_amd", dest_comp=1, bit_sizes=[1])
 # This should only be used directly for texture sources.
 intrinsic("strict_wqm_coord_amd", src_comp=[0], dest_comp=0, bit_sizes=[32], indices=[BASE],
           flags=[CAN_ELIMINATE])
+
+intrinsic("cmat_muladd_amd", src_comp=[16, 16, 0], dest_comp=0, bit_sizes=src2,
+          indices=[SATURATE, CMAT_SIGNED_MASK], flags=[CAN_ELIMINATE])
 
 # V3D-specific instrinc for tile buffer color reads.
 #
@@ -1694,6 +1706,11 @@ intrinsic("load_coefficients_agx",
           dest_comp = 3,
           indices=[COMPONENT, IO_SEMANTICS, INTERP_MODE],
           flags=[CAN_ELIMINATE, CAN_REORDER])
+
+# In a fragment shader, boolean system value that is true if the last vertex
+# stage writes the layer ID. If false, layer IDs are defined to read back zero.
+# This system value facilitates that. 16-bit 0/~0 bool allows easy masking.
+system_value("layer_id_written_agx", 1, bit_sizes=[16])
 
 # Load/store a pixel in local memory. This operation is formatted, with
 # conversion between the specified format and the implied register format of the
@@ -1739,9 +1756,9 @@ intrinsic("store_zs_agx", [1, 1, 1], indices=[BASE], flags=[])
 # The image dimension is used to distinguish multisampled images from
 # non-multisampled images. It must be 2D or MS.
 #
-# src[] = { image index, logical offset within shared memory }
-intrinsic("block_image_store_agx", [1, 1], bit_sizes=[32, 16],
-          indices=[FORMAT, IMAGE_DIM], flags=[CAN_REORDER])
+# src[] = { image index, logical offset within shared memory, layer }
+intrinsic("block_image_store_agx", [1, 1, 1], bit_sizes=[32, 16, 16],
+          indices=[FORMAT, IMAGE_DIM, IMAGE_ARRAY], flags=[CAN_REORDER])
 
 # Formatted load/store. The format is the pipe_format in memory (see
 # agx_internal_formats.h for the supported list). This accesses:
@@ -1937,6 +1954,30 @@ system_value("leaf_procedural_intel", 1, bit_sizes=[1])
 #  3: Intersection
 system_value("btd_shader_type_intel", 1)
 system_value("ray_query_global_intel", 1, bit_sizes=[64])
+
+# NVIDIA-specific intrinsics
+intrinsic("load_sysval_nv", dest_comp=1, src_comp=[], bit_sizes=[32, 64],
+          indices=[ACCESS, BASE], flags=[CAN_ELIMINATE])
+intrinsic("isberd_nv", dest_comp=1, src_comp=[1], bit_sizes=[32],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
+intrinsic("al2p_nv", dest_comp=1, src_comp=[1], bit_sizes=[32],
+          indices=[BASE, FLAGS], flags=[CAN_ELIMINATE, CAN_REORDER])
+# src[] = { vtx, offset }.
+# FLAGS is struct nak_nir_attr_io_flags
+intrinsic("ald_nv", dest_comp=0, src_comp=[1, 1], bit_sizes=[32],
+          indices=[BASE, RANGE_BASE, RANGE, FLAGS, ACCESS],
+          flags=[CAN_ELIMINATE])
+# src[] = { data, vtx, offset }.
+# FLAGS is struct nak_nir_attr_io_flags
+intrinsic("ast_nv", src_comp=[0, 1, 1],
+          indices=[BASE, RANGE_BASE, RANGE, FLAGS], flags=[])
+
+# NVIDIA-specific Geometry Shader intrinsics.
+# These contain an additional integer source and destination with the primitive handle input/output.
+intrinsic("emit_vertex_nv", dest_comp=1, src_comp=[1], indices=[STREAM_ID])
+intrinsic("end_primitive_nv", dest_comp=1, src_comp=[1], indices=[STREAM_ID])
+# Contains the final primitive handle and indicate the end of emission.
+intrinsic("final_primitive_nv", src_comp=[1])
 
 # In order to deal with flipped render targets, gl_PointCoord may be flipped
 # in the shader requiring a shader key or extra instructions or it may be

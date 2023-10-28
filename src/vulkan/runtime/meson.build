@@ -109,6 +109,8 @@ vulkan_runtime_files = files(
   'vk_sync_timeline.c',
   'vk_sync_timeline.h',
   'vk_synchronization2.c',
+  'vk_texcompress_etc2.c',
+  'vk_texcompress_etc2.h',
   'vk_video.c',
   'vk_video.h',
   'vk_ycbcr_conversion.c',
@@ -131,6 +133,16 @@ endif
 if with_platform_android
   vulkan_runtime_files += files('vk_android.c', 'vk_android.h')
   vulkan_runtime_deps += dep_android
+endif
+
+if prog_glslang.found()
+  vulkan_runtime_files += files('vk_texcompress_astc.c', 'vk_texcompress_astc.h')
+  vulkan_runtime_files += custom_target(
+    'astc_spv.h',
+    input : astc_decoder_glsl_file,
+    output : 'astc_spv.h',
+    command : [prog_glslang, '-V', '-S', 'comp', '-x', '-o', '@OUTPUT@', '@INPUT@'] + glslang_quiet,
+    )
 endif
 
 vk_common_entrypoints = custom_target(
@@ -222,7 +234,7 @@ libvulkan_runtime = static_library(
    vk_cmd_queue, vk_cmd_enqueue_entrypoints,
    vk_dispatch_trampolines, vk_physical_device_features,
    vk_physical_device_properties, vk_format_info],
-  include_directories : [inc_include, inc_src, inc_gallium],
+  include_directories : [inc_include, inc_src],
   dependencies : vulkan_runtime_deps,
   c_args : c_msvc_compat_args,
   gnu_symbol_visibility : 'hidden',

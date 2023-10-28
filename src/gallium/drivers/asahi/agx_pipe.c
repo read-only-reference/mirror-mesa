@@ -1754,6 +1754,9 @@ agx_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MAP_UNSYNCHRONIZED_THREAD_SAFE:
       return 1;
 
+   case PIPE_CAP_VS_LAYER_VIEWPORT:
+      return is_deqp;
+
    default:
       return u_pipe_screen_get_param_defaults(pscreen, param);
    }
@@ -1845,7 +1848,7 @@ agx_get_shader_param(struct pipe_screen *pscreen, enum pipe_shader_type shader,
       return 16;
 
    case PIPE_SHADER_CAP_CONT_SUPPORTED:
-      return 0;
+      return 1;
 
    case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
    case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
@@ -1868,7 +1871,6 @@ agx_get_shader_param(struct pipe_screen *pscreen, enum pipe_shader_type shader,
       return false;
 
    case PIPE_SHADER_CAP_INT64_ATOMICS:
-   case PIPE_SHADER_CAP_DROUND_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
       return 0;
 

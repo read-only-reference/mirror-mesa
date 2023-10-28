@@ -741,7 +741,7 @@ compile_shader(struct tu_device *dev, struct nir_shader *nir,
    ir3_finalize_nir(dev->compiler, nir);
 
    const struct ir3_shader_options options = {
-      .reserved_user_consts = align(consts, 4),
+      .num_reserved_user_consts = align(consts, 4),
       .api_wavesize = IR3_SINGLE_OR_DOUBLE,
       .real_wavesize = IR3_SINGLE_OR_DOUBLE,
    };
@@ -825,8 +825,8 @@ r3d_common(struct tu_cmd_buffer *cmd, struct tu_cs *cs, bool blit,
          .cs_ibo = true,
          .gfx_ibo = true,
          .gfx_shared_const = true,
-         .cs_bindless = 0x1f,
-         .gfx_bindless = 0x1f,));
+         .cs_bindless = CHIP == A6XX ? 0x1f : 0xff,
+         .gfx_bindless = CHIP == A6XX ? 0x1f : 0xff,));
 
    tu6_emit_xs_config<CHIP>(cs, MESA_SHADER_VERTEX, vs);
    tu6_emit_xs_config<CHIP>(cs, MESA_SHADER_TESS_CTRL, NULL);
@@ -839,6 +839,9 @@ r3d_common(struct tu_cmd_buffer *cmd, struct tu_cs *cs, bool blit,
    tu6_emit_xs(cs, MESA_SHADER_FRAGMENT, fs, &pvtmem, fs_iova);
 
    tu_cs_emit_regs(cs, A6XX_PC_PRIMITIVE_CNTL_0());
+   if (CHIP == A7XX) {
+      tu_cs_emit_regs(cs, A7XX_VPC_PRIMITIVE_CNTL_0());
+   }
 
    tu6_emit_vpc<CHIP>(cs, vs, NULL, NULL, NULL, fs);
 

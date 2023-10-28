@@ -71,6 +71,8 @@ enum intel_ds_queue_stage {
    INTEL_DS_QUEUE_STAGE_INTERNAL_OPS,
    INTEL_DS_QUEUE_STAGE_STALL,
    INTEL_DS_QUEUE_STAGE_COMPUTE,
+   INTEL_DS_QUEUE_STAGE_AS,
+   INTEL_DS_QUEUE_STAGE_RT,
    INTEL_DS_QUEUE_STAGE_RENDER_PASS,
    INTEL_DS_QUEUE_STAGE_BLORP,
    INTEL_DS_QUEUE_STAGE_DRAW,
@@ -111,6 +113,9 @@ struct intel_ds_device {
     * IntelRenderpassDataSource::Trace)
     */
    uint64_t event_id;
+
+   /* Tracepoint name perfetto identifiers for each of the events. */
+   uint64_t tracepoint_iids[64];
 
    /* Protects submissions of u_trace data to trace_context */
    simple_mtx_t trace_context_mutex;

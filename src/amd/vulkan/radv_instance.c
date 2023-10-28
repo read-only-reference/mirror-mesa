@@ -43,7 +43,6 @@ static const struct debug_control radv_debug_options[] = {{"nofastclears", RADV_
                                                           {"allbos", RADV_DEBUG_ALL_BOS},
                                                           {"noibs", RADV_DEBUG_NO_IBS},
                                                           {"spirv", RADV_DEBUG_DUMP_SPIRV},
-                                                          {"vmfaults", RADV_DEBUG_VM_FAULTS},
                                                           {"zerovram", RADV_DEBUG_ZERO_VRAM},
                                                           {"syncshaders", RADV_DEBUG_SYNC_SHADERS},
                                                           {"preoptir", RADV_DEBUG_PREOPTIR},
@@ -97,7 +96,6 @@ static const struct debug_control radv_perftest_options[] = {{"localbos", RADV_P
                                                              {"nggc", RADV_PERFTEST_NGGC},
                                                              {"emulate_rt", RADV_PERFTEST_EMULATE_RT},
                                                              {"rtwave64", RADV_PERFTEST_RT_WAVE_64},
-                                                             {"ngg_streamout", RADV_PERFTEST_NGG_STREAMOUT},
                                                              {"video_decode", RADV_PERFTEST_VIDEO_DECODE},
                                                              {"dmashaders", RADV_PERFTEST_DMA_SHADERS},
                                                              {NULL, 0}};
@@ -135,13 +133,14 @@ static const driOptionDescription radv_dri_options[] = {
       DRI_CONF_OVERRIDE_VRAM_SIZE()
       DRI_CONF_VK_WSI_FORCE_BGRA8_UNORM_FIRST(false)
       DRI_CONF_VK_WSI_FORCE_SWAPCHAIN_TO_CURRENT_EXTENT(false)
+      DRI_CONF_VK_REQUIRE_ETC2(false)
+      DRI_CONF_VK_REQUIRE_ASTC(false)
       DRI_CONF_RADV_ZERO_VRAM(false)
       DRI_CONF_RADV_LOWER_DISCARD_TO_DEMOTE(false)
       DRI_CONF_RADV_INVARIANT_GEOM(false)
       DRI_CONF_RADV_SPLIT_FMA(false)
       DRI_CONF_RADV_DISABLE_TC_COMPAT_HTILE_GENERAL(false)
       DRI_CONF_RADV_DISABLE_DCC(false)
-      DRI_CONF_RADV_REQUIRE_ETC2(false)
       DRI_CONF_RADV_DISABLE_ANISO_SINGLE_LEVEL(false)
       DRI_CONF_RADV_DISABLE_SINKING_LOAD_INPUT_FS(false)
       DRI_CONF_RADV_DGC(false)

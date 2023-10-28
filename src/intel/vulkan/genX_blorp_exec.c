@@ -139,14 +139,13 @@ blorp_alloc_general_state(struct blorp_batch *batch,
    struct anv_cmd_buffer *cmd_buffer = batch->driver_batch;
 
    struct anv_state state =
-      anv_state_stream_alloc(&cmd_buffer->general_state_stream, size,
-                             alignment);
+      anv_cmd_buffer_alloc_general_state(cmd_buffer, size, alignment);
 
    *offset = state.offset;
    return state.map;
 }
 
-static void
+static bool
 blorp_alloc_binding_table(struct blorp_batch *batch, unsigned num_entries,
                           unsigned state_size, unsigned state_alignment,
                           uint32_t *bt_offset,
@@ -161,18 +160,23 @@ blorp_alloc_binding_table(struct blorp_batch *batch, unsigned num_entries,
       anv_cmd_buffer_alloc_blorp_binding_table(cmd_buffer, num_entries,
                                                &state_offset, &bt_state);
    if (result != VK_SUCCESS)
-      return;
+      return false;
 
    uint32_t *bt_map = bt_state.map;
    *bt_offset = bt_state.offset;
 
    for (unsigned i = 0; i < num_entries; i++) {
       struct anv_state surface_state =
-         anv_cmd_buffer_alloc_surface_state(cmd_buffer);
+         anv_cmd_buffer_alloc_surface_states(cmd_buffer, 1);
+      if (surface_state.map == NULL)
+         return false;
+
       bt_map[i] = surface_state.offset + state_offset;
       surface_offsets[i] = surface_state.offset;
       surface_maps[i] = surface_state.map;
    }
+
+   return true;
 }
 
 static uint32_t
@@ -189,10 +193,13 @@ blorp_alloc_vertex_buffer(struct blorp_batch *batch, uint32_t size,
    struct anv_cmd_buffer *cmd_buffer = batch->driver_batch;
    struct anv_state vb_state =
       anv_cmd_buffer_alloc_dynamic_state(cmd_buffer, size, 64);
+   struct anv_address vb_addr =
+      anv_state_pool_state_address(&cmd_buffer->device->dynamic_state_pool,
+                                   vb_state);
 
    *addr = (struct blorp_address) {
-      .buffer = cmd_buffer->device->dynamic_state_pool.block_pool.bo,
-      .offset = vb_state.offset,
+      .buffer = vb_addr.bo,
+      .offset = vb_addr.offset,
       .mocs = isl_mocs(&cmd_buffer->device->isl_dev,
                        ISL_SURF_USAGE_VERTEX_BUFFER_BIT, false),
    };
@@ -297,7 +304,7 @@ blorp_exec_on_render(struct blorp_batch *batch,
    }
 #endif
 
-#if INTEL_NEEDS_WA_18019816803
+#if GFX_VERx10 >= 125
    /* Check if blorp ds state matches ours. */
    if (intel_needs_workaround(cmd_buffer->device->info, 18019816803)) {
       bool blorp_ds_state = params->depth.enabled || params->stencil.enabled;
@@ -414,6 +421,18 @@ blorp_exec_on_compute(struct blorp_batch *batch,
    cmd_buffer->state.push_constants_dirty |= VK_SHADER_STAGE_COMPUTE_BIT;
 }
 
+static void
+blorp_exec_on_blitter(struct blorp_batch *batch,
+                      const struct blorp_params *params)
+{
+   assert(batch->flags & BLORP_BATCH_USE_BLITTER);
+
+   struct anv_cmd_buffer *cmd_buffer = batch->driver_batch;
+   assert(cmd_buffer->queue_family->queueFlags == VK_QUEUE_TRANSFER_BIT);
+
+   blorp_exec(batch, params);
+}
+
 void
 genX(blorp_exec)(struct blorp_batch *batch,
                  const struct blorp_params *params)
@@ -430,7 +449,9 @@ genX(blorp_exec)(struct blorp_batch *batch,
       genX(cmd_buffer_config_l3)(cmd_buffer, cfg);
    }
 
-   if (batch->flags & BLORP_BATCH_USE_COMPUTE)
+   if (batch->flags & BLORP_BATCH_USE_BLITTER)
+      blorp_exec_on_blitter(batch, params);
+   else if (batch->flags & BLORP_BATCH_USE_COMPUTE)
       blorp_exec_on_compute(batch, params);
    else
       blorp_exec_on_render(batch, params);

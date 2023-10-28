@@ -618,6 +618,18 @@ radv_is_filter_minmax_format_supported(VkFormat format)
 }
 
 bool
+radv_is_format_emulated(const struct radv_physical_device *physical_device, VkFormat format)
+{
+   if (physical_device->emulate_etc2 && vk_texcompress_etc2_emulation_format(format) != VK_FORMAT_UNDEFINED)
+      return true;
+
+   if (physical_device->emulate_astc && vk_texcompress_astc_emulation_format(format) != VK_FORMAT_UNDEFINED)
+      return true;
+
+   return false;
+}
+
+bool
 radv_device_supports_etc(const struct radv_physical_device *physical_device)
 {
    return physical_device->rad_info.family == CHIP_VEGA10 || physical_device->rad_info.family == CHIP_RAVEN ||
@@ -640,8 +652,14 @@ radv_physical_device_get_format_properties(struct radv_physical_device *physical
       return;
    }
 
-   if (desc->layout == UTIL_FORMAT_LAYOUT_ETC && !radv_device_supports_etc(physical_device) &&
-       !physical_device->emulate_etc2) {
+   if ((desc->layout == UTIL_FORMAT_LAYOUT_ETC && !radv_device_supports_etc(physical_device)) ||
+       desc->layout == UTIL_FORMAT_LAYOUT_ASTC) {
+      if (radv_is_format_emulated(physical_device, format)) {
+         /* required features for compressed formats */
+         tiled = VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
+                 VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT |
+                 VK_FORMAT_FEATURE_2_BLIT_SRC_BIT;
+      }
       out_properties->linearTilingFeatures = linear;
       out_properties->optimalTilingFeatures = tiled;
       out_properties->bufferFeatures = buffer;
@@ -1076,7 +1094,8 @@ radv_get_modifier_flags(struct radv_physical_device *dev, VkFormat format, uint6
       /* Only disable support for STORAGE_IMAGE on modifiers that
        * do not support DCC image stores.
        */
-      if (!ac_modifier_supports_dcc_image_stores(modifier) || radv_is_atomic_format_supported(format))
+      if (!ac_modifier_supports_dcc_image_stores(dev->rad_info.gfx_level, modifier) ||
+          radv_is_atomic_format_supported(format))
          features &= ~VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT;
 
       if (dev->instance->debug_flags & (RADV_DEBUG_NO_DCC | RADV_DEBUG_NO_DISPLAY_DCC))
@@ -1201,13 +1220,12 @@ static VkResult
 radv_check_modifier_support(struct radv_physical_device *dev, const VkPhysicalDeviceImageFormatInfo2 *info,
                             VkImageFormatProperties *props, VkFormat format, uint64_t modifier)
 {
-   const struct util_format_description *desc = vk_format_description(format);
    uint32_t max_width, max_height;
 
    if (info->type != VK_IMAGE_TYPE_2D)
       return VK_ERROR_FORMAT_NOT_SUPPORTED;
 
-   if (desc->layout == UTIL_FORMAT_LAYOUT_ETC && dev->emulate_etc2)
+   if (radv_is_format_emulated(dev, format))
       return VK_ERROR_FORMAT_NOT_SUPPORTED;
 
    /* We did not add modifiers for sparse textures. */
@@ -1335,6 +1353,8 @@ radv_get_image_format_properties(struct radv_physical_device *physical_device,
    if (format_feature_flags == 0)
       goto unsupported;
 
+   if (info->type == VK_IMAGE_TYPE_1D && radv_is_format_emulated(physical_device, format))
+      goto unsupported;
    if (info->type != VK_IMAGE_TYPE_2D && vk_format_is_depth_or_stencil(format))
       goto unsupported;
 
@@ -1483,7 +1503,7 @@ radv_get_image_format_properties(struct radv_physical_device *physical_device,
    }
 
    if ((info->flags & (VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT | VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT)) &&
-       (desc->layout == UTIL_FORMAT_LAYOUT_ETC && physical_device->emulate_etc2)) {
+       radv_is_format_emulated(physical_device, format)) {
       goto unsupported;
    }
 
@@ -1529,9 +1549,8 @@ get_external_image_format_properties(struct radv_physical_device *physical_devic
    VkExternalMemoryFeatureFlagBits flags = 0;
    VkExternalMemoryHandleTypeFlags export_flags = 0;
    VkExternalMemoryHandleTypeFlags compat_flags = 0;
-   const struct util_format_description *desc = vk_format_description(pImageFormatInfo->format);
 
-   if (desc->layout == UTIL_FORMAT_LAYOUT_ETC && physical_device->emulate_etc2)
+   if (radv_is_format_emulated(physical_device, pImageFormatInfo->format))
       return;
 
    if (pImageFormatInfo->flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT)
@@ -1601,6 +1620,7 @@ radv_GetPhysicalDeviceImageFormatProperties2(VkPhysicalDevice physicalDevice,
    struct VkAndroidHardwareBufferUsageANDROID *android_usage = NULL;
    VkSamplerYcbcrConversionImageFormatProperties *ycbcr_props = NULL;
    VkTextureLODGatherFormatPropertiesAMD *texture_lod_props = NULL;
+   VkImageCompressionPropertiesEXT *image_compression_props = NULL;
    VkResult result;
    VkFormat format = radv_select_android_external_format(base_info->pNext, base_info->format);
 
@@ -1633,6 +1653,9 @@ radv_GetPhysicalDeviceImageFormatProperties2(VkPhysicalDevice physicalDevice,
          break;
       case VK_STRUCTURE_TYPE_TEXTURE_LOD_GATHER_FORMAT_PROPERTIES_AMD:
          texture_lod_props = (void *)s;
+         break;
+      case VK_STRUCTURE_TYPE_IMAGE_COMPRESSION_PROPERTIES_EXT:
+         image_compression_props = (void *)s;
          break;
       default:
          break;
@@ -1684,6 +1707,21 @@ radv_GetPhysicalDeviceImageFormatProperties2(VkPhysicalDevice physicalDevice,
          texture_lod_props->supportsTextureGatherLODBiasAMD = true;
       } else {
          texture_lod_props->supportsTextureGatherLODBiasAMD = !vk_format_is_int(format);
+      }
+   }
+
+   if (image_compression_props) {
+      image_compression_props->imageCompressionFixedRateFlags = VK_IMAGE_COMPRESSION_FIXED_RATE_NONE_EXT;
+
+      if (vk_format_is_depth_or_stencil(format)) {
+         image_compression_props->imageCompressionFlags = (physical_device->instance->debug_flags & RADV_DEBUG_NO_HIZ)
+                                                             ? VK_IMAGE_COMPRESSION_DISABLED_EXT
+                                                             : VK_IMAGE_COMPRESSION_DEFAULT_EXT;
+      } else {
+         image_compression_props->imageCompressionFlags =
+            ((physical_device->instance->debug_flags & RADV_DEBUG_NO_DCC) || physical_device->rad_info.gfx_level < GFX8)
+               ? VK_IMAGE_COMPRESSION_DISABLED_EXT
+               : VK_IMAGE_COMPRESSION_DEFAULT_EXT;
       }
    }
 
