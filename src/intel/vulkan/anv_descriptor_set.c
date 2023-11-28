@@ -1121,7 +1121,7 @@ VkResult anv_CreateDescriptorPool(
                                                descriptor_bo_size,
                                                ANV_BO_ALLOC_CAPTURE |
                                                ANV_BO_ALLOC_MAPPED |
-                                               ANV_BO_ALLOC_SNOOPED |
+                                               ANV_BO_ALLOC_HOST_CACHED_COHERENT |
                                                ANV_BO_ALLOC_DESCRIPTOR_POOL,
                                                0 /* explicit_address */,
                                                &pool->bo);
@@ -1984,7 +1984,7 @@ anv_descriptor_set_write_buffer(struct anv_device *device,
       isl_buffer_fill_state(&device->isl_dev, desc_map,
                             .address = anv_address_physical(bind_addr),
                             .mocs = isl_mocs(&device->isl_dev, usage,
-                                             bind_addr.bo && bind_addr.bo->is_external),
+                                             bind_addr.bo && anv_bo_is_external(bind_addr.bo)),
                             .size_B = desc->bind_range,
                             .format = format,
                             .swizzle = ISL_SWIZZLE_IDENTITY,

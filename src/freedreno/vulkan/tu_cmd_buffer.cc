@@ -1274,6 +1274,15 @@ tu6_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
                       A6XX_TPL1_BICUBIC_WEIGHTS_TABLE_4(0x3f0243f0), );
    }
 
+   if (phys_dev->info->a7xx.cmdbuf_start_a725_quirk) {
+      tu_cs_reserve(cs, 3 + 4);
+      tu_cs_emit_pkt7(cs, CP_COND_REG_EXEC, 2);
+      tu_cs_emit(cs, CP_COND_REG_EXEC_0_MODE(THREAD_MODE) |
+                     CP_COND_REG_EXEC_0_BR | CP_COND_REG_EXEC_0_LPAC);
+      tu_cs_emit(cs, RENDER_MODE_CP_COND_REG_EXEC_1_DWORDS(4));
+      tu_cs_emit_ib(cs, dev->cmdbuf_start_a725_quirk_entry);
+   }
+
    tu_cs_sanity_check(cs);
 }
 
@@ -4976,10 +4985,12 @@ tu6_emit_vs_params(struct tu_cmd_buffer *cmd,
    uint32_t offset = vs_params_offset(cmd);
 
    /* Beside re-emitting params when they are changed, we should re-emit
-    * them after constants are invalidated via HLSQ_INVALIDATE_CMD.
+    * them after constants are invalidated via HLSQ_INVALIDATE_CMD or after we
+    * emit an empty vs params.
     */
    if (!(cmd->state.dirty & (TU_CMD_DIRTY_DRAW_STATE | TU_CMD_DIRTY_VS_PARAMS |
                              TU_CMD_DIRTY_PROGRAM)) &&
+       cmd->state.vs_params.iova &&
        (offset == 0 || draw_id == cmd->state.last_vs_params.draw_id) &&
        vertex_offset == cmd->state.last_vs_params.vertex_offset &&
        first_instance == cmd->state.last_vs_params.first_instance) {

@@ -87,18 +87,13 @@ convert_pc_to_bits(struct GENX(PIPE_CONTROL) *pc) {
       fprintf(stdout, ") reason: %s\n", reason); \
    }
 
-ALWAYS_INLINE static void
-genX(emit_dummy_post_sync_op)(struct anv_cmd_buffer *cmd_buffer,
-                              uint32_t vertex_count)
-{
-   genX(batch_emit_dummy_post_sync_op)(&cmd_buffer->batch, cmd_buffer->device,
-                                       cmd_buffer->state.gfx.primitive_topology,
-                                       vertex_count);
-}
-
 void
 genX(cmd_buffer_emit_state_base_address)(struct anv_cmd_buffer *cmd_buffer)
 {
+   if (anv_cmd_buffer_is_blitter_queue(cmd_buffer) ||
+       anv_cmd_buffer_is_video_queue(cmd_buffer))
+      return;
+
    struct anv_device *device = cmd_buffer->device;
    uint32_t mocs = isl_mocs(&device->isl_dev, 0, false);
 
@@ -825,8 +820,8 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
                         uint32_t base_layer, uint32_t layer_count,
                         VkImageLayout initial_layout,
                         VkImageLayout final_layout,
-                        uint64_t src_queue_family,
-                        uint64_t dst_queue_family,
+                        uint32_t src_queue_family,
+                        uint32_t dst_queue_family,
                         bool will_full_fast_clear)
 {
    struct anv_device *device = cmd_buffer->device;
@@ -1767,8 +1762,9 @@ genX(cmd_buffer_apply_pipe_flushes)(struct anv_cmd_buffer *cmd_buffer)
 static void
 cmd_buffer_alloc_gfx_push_constants(struct anv_cmd_buffer *cmd_buffer)
 {
-   VkShaderStageFlags stages =
-      cmd_buffer->state.gfx.pipeline->base.base.active_stages;
+   struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(cmd_buffer->state.gfx.base.pipeline);
+   VkShaderStageFlags stages = pipeline->base.base.active_stages;
 
    /* In order to avoid thrash, we assume that vertex and fragment stages
     * always exist.  In the rare case where one is missing *and* the other
@@ -1776,7 +1772,7 @@ cmd_buffer_alloc_gfx_push_constants(struct anv_cmd_buffer *cmd_buffer)
     * seems more important.
     */
    stages |= VK_SHADER_STAGE_FRAGMENT_BIT;
-   if (anv_pipeline_is_primitive(cmd_buffer->state.gfx.pipeline))
+   if (anv_pipeline_is_primitive(pipeline))
       stages |= VK_SHADER_STAGE_VERTEX_BIT;
 
    if (stages == cmd_buffer->state.gfx.push_constant_stages)
@@ -1785,7 +1781,7 @@ cmd_buffer_alloc_gfx_push_constants(struct anv_cmd_buffer *cmd_buffer)
    unsigned push_constant_kb;
 
    const struct intel_device_info *devinfo = cmd_buffer->device->info;
-   if (anv_pipeline_is_mesh(cmd_buffer->state.gfx.pipeline))
+   if (anv_pipeline_is_mesh(pipeline))
       push_constant_kb = devinfo->mesh_max_constant_urb_size_kb;
    else
       push_constant_kb = devinfo->max_constant_urb_size_kb;
@@ -2540,7 +2536,8 @@ cmd_buffer_emit_push_constant(struct anv_cmd_buffer *cmd_buffer,
                               unsigned buffer_count)
 {
    const struct anv_cmd_graphics_state *gfx_state = &cmd_buffer->state.gfx;
-   const struct anv_graphics_pipeline *pipeline = gfx_state->pipeline;
+   const struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(gfx_state->base.pipeline);
 
    static const uint32_t push_constant_opcodes[] = {
       [MESA_SHADER_VERTEX]                      = 21,
@@ -2616,7 +2613,8 @@ cmd_buffer_emit_push_constant_all(struct anv_cmd_buffer *cmd_buffer,
    }
 
    const struct anv_cmd_graphics_state *gfx_state = &cmd_buffer->state.gfx;
-   const struct anv_graphics_pipeline *pipeline = gfx_state->pipeline;
+   const struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(gfx_state->base.pipeline);
 
    gl_shader_stage stage = vk_to_mesa_shader_stage(shader_mask);
 
@@ -2652,7 +2650,8 @@ cmd_buffer_flush_gfx_push_constants(struct anv_cmd_buffer *cmd_buffer,
 {
    VkShaderStageFlags flushed = 0;
    struct anv_cmd_graphics_state *gfx_state = &cmd_buffer->state.gfx;
-   const struct anv_graphics_pipeline *pipeline = gfx_state->pipeline;
+   const struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(gfx_state->base.pipeline);
 
 #if GFX_VER >= 12
    uint32_t nobuffer_stages = 0;
@@ -2779,7 +2778,8 @@ cmd_buffer_flush_mesh_inline_data(struct anv_cmd_buffer *cmd_buffer,
                                   VkShaderStageFlags dirty_stages)
 {
    struct anv_cmd_graphics_state *gfx_state = &cmd_buffer->state.gfx;
-   const struct anv_graphics_pipeline *pipeline = gfx_state->pipeline;
+   const struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(gfx_state->base.pipeline);
 
    if (dirty_stages & VK_SHADER_STAGE_TASK_BIT_EXT &&
        anv_pipeline_has_stage(pipeline, MESA_SHADER_TASK)) {
@@ -2858,6 +2858,10 @@ genX(batch_emit_pipe_control_write)(struct anv_batch *batch,
                                     enum anv_pipe_bits bits,
                                     const char *reason)
 {
+   if ((batch->engine_class == INTEL_ENGINE_CLASS_COPY) ||
+       (batch->engine_class == INTEL_ENGINE_CLASS_VIDEO))
+      unreachable("Trying to emit unsupported PIPE_CONTROL command.");
+
    /* XXX - insert all workarounds and GFX specific things below. */
 
    /* Wa_14014966230: For COMPUTE Workload - Any PIPE_CONTROL command with
@@ -2972,7 +2976,8 @@ genX(cmd_buffer_set_preemption)(struct anv_cmd_buffer *cmd_buffer, bool value)
 ALWAYS_INLINE static void
 genX(emit_hs)(struct anv_cmd_buffer *cmd_buffer)
 {
-   struct anv_graphics_pipeline *pipeline = cmd_buffer->state.gfx.pipeline;
+   struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(cmd_buffer->state.gfx.base.pipeline);
    if (!anv_pipeline_has_stage(pipeline, MESA_SHADER_TESS_EVAL))
       return;
 
@@ -2997,7 +3002,8 @@ genX(emit_ds)(struct anv_cmd_buffer *cmd_buffer)
     *
     * FIXME: Use INTEL_NEEDS_WA_14019750404 once the tool picks it up.
     */
-   struct anv_graphics_pipeline *pipeline = cmd_buffer->state.gfx.pipeline;
+   struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(cmd_buffer->state.gfx.base.pipeline);
    if (!anv_pipeline_has_stage(pipeline, MESA_SHADER_TESS_EVAL))
       return;
 
@@ -3008,7 +3014,8 @@ genX(emit_ds)(struct anv_cmd_buffer *cmd_buffer)
 ALWAYS_INLINE static void
 genX(cmd_buffer_flush_gfx_state)(struct anv_cmd_buffer *cmd_buffer)
 {
-   struct anv_graphics_pipeline *pipeline = cmd_buffer->state.gfx.pipeline;
+   struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(cmd_buffer->state.gfx.base.pipeline);
    const struct vk_dynamic_graphics_state *dyn =
       &cmd_buffer->vk.dynamic_graphics_state;
    uint32_t *p;
@@ -3028,8 +3035,7 @@ genX(cmd_buffer_flush_gfx_state)(struct anv_cmd_buffer *cmd_buffer)
    if (cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_PIPELINE) {
       if (anv_pipeline_is_primitive(pipeline)) {
          genX(apply_task_urb_workaround)(cmd_buffer);
-      } else if (anv_pipeline_has_stage(cmd_buffer->state.gfx.pipeline,
-                                        MESA_SHADER_TASK)) {
+      } else if (anv_pipeline_has_stage(pipeline, MESA_SHADER_TASK)) {
          cmd_buffer->state.gfx.used_task_shader = true;
       }
    }
@@ -3274,15 +3280,15 @@ ALWAYS_INLINE static bool
 anv_use_generated_draws(const struct anv_cmd_buffer *cmd_buffer, uint32_t count)
 {
    const struct anv_device *device = cmd_buffer->device;
+   const struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(cmd_buffer->state.gfx.base.pipeline);
 
    /* Limit generated draws to pipelines without HS stage. This makes things
     * simpler for implementing Wa_1306463417, Wa_16011107343.
     */
    if ((INTEL_NEEDS_WA_1306463417 || INTEL_NEEDS_WA_16011107343) &&
-       anv_pipeline_has_stage(cmd_buffer->state.gfx.pipeline,
-                              MESA_SHADER_TESS_CTRL)) {
+       anv_pipeline_has_stage(pipeline, MESA_SHADER_TESS_CTRL))
       return false;
-   }
 
    return device->physical->generated_indirect_draws &&
           count >= device->physical->instance->generated_indirect_threshold;
@@ -3327,11 +3333,32 @@ genX(BeginCommandBuffer)(
    if (cmd_buffer->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY)
       cmd_buffer->usage_flags &= ~VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
 
+   /* Assume the viewport has already been set in primary command buffers. */
+   if (cmd_buffer->vk.level == VK_COMMAND_BUFFER_LEVEL_SECONDARY)
+      cmd_buffer->state.gfx.viewport_set = true;
+
    trace_intel_begin_cmd_buffer(&cmd_buffer->trace);
 
    if (anv_cmd_buffer_is_video_queue(cmd_buffer) ||
        anv_cmd_buffer_is_blitter_queue(cmd_buffer))
       return VK_SUCCESS;
+
+#if GFX_VER >= 12
+   if (cmd_buffer->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY &&
+       cmd_buffer->vk.pool->flags & VK_COMMAND_POOL_CREATE_PROTECTED_BIT) {
+      anv_batch_emit(&cmd_buffer->batch, GENX(MI_SET_APPID), appid) {
+         /* Default value for single session. */
+         appid.ProtectedMemoryApplicationID = cmd_buffer->device->protected_session_id;
+         appid.ProtectedMemoryApplicationIDType = DISPLAY_APP;
+      }
+      anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
+         pc.CommandStreamerStallEnable = true;
+         pc.DCFlushEnable = true;
+         pc.RenderTargetCacheFlushEnable = true;
+         pc.ProtectedMemoryEnable = true;
+      }
+   }
+#endif
 
    genX(cmd_buffer_emit_state_base_address)(cmd_buffer);
 
@@ -3541,6 +3568,18 @@ end_command_buffer(struct anv_cmd_buffer *cmd_buffer)
 
    emit_isp_disable(cmd_buffer);
 
+#if GFX_VER >= 12
+   if (cmd_buffer->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY &&
+       cmd_buffer->vk.pool->flags & VK_COMMAND_POOL_CREATE_PROTECTED_BIT) {
+      anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
+         pc.CommandStreamerStallEnable = true;
+         pc.DCFlushEnable = true;
+         pc.RenderTargetCacheFlushEnable = true;
+         pc.ProtectedMemoryDisable = true;
+      }
+   }
+#endif
+
    trace_intel_end_cmd_buffer(&cmd_buffer->trace, cmd_buffer->vk.level);
 
    anv_cmd_buffer_end_batch_buffer(cmd_buffer);
@@ -3595,6 +3634,8 @@ genX(CmdExecuteCommands)(
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, container, commandBuffer);
 
+   struct anv_device *device = container->device;
+
    if (anv_batch_has_error(&container->batch))
       return;
 
@@ -3642,7 +3683,7 @@ genX(CmdExecuteCommands)(
              * regardless of conditional rendering being enabled in container.
              */
             struct mi_builder b;
-            mi_builder_init(&b, container->device->info, &container->batch);
+            mi_builder_init(&b, device->info, &container->batch);
             mi_store(&b, mi_reg64(ANV_PREDICATE_RESULT_REG),
                          mi_imm(UINT64_MAX));
          }
@@ -3660,9 +3701,9 @@ genX(CmdExecuteCommands)(
 
          genX(cmd_buffer_so_memcpy)(
             container,
-            anv_state_pool_state_address(&container->device->internal_surface_state_pool,
+            anv_state_pool_state_address(&device->internal_surface_state_pool,
                                          dst_state),
-            anv_state_pool_state_address(&container->device->internal_surface_state_pool,
+            anv_state_pool_state_address(&device->internal_surface_state_pool,
                                          src_state),
             src_state.alloc_size);
       }
@@ -3693,6 +3734,8 @@ genX(CmdExecuteCommands)(
       if (secondary->state.depth_reg_mode != ANV_DEPTH_REG_MODE_UNKNOWN)
          container->state.depth_reg_mode = secondary->state.depth_reg_mode;
 #endif
+
+      container->state.gfx.viewport_set |= secondary->state.gfx.viewport_set;
    }
 
    /* The secondary isn't counted in our VF cache tracking so we need to
@@ -3703,6 +3746,12 @@ genX(CmdExecuteCommands)(
                                 ANV_PIPE_CS_STALL_BIT | ANV_PIPE_VF_CACHE_INVALIDATE_BIT,
                                 "Secondary cmd buffer not tracked in VF cache");
    }
+
+#if INTEL_NEEDS_WA_16014538804
+   if (anv_cmd_buffer_is_render_queue(container) &&
+       intel_needs_workaround(device->info, 16014538804))
+      anv_batch_emit(&container->batch, GENX(PIPE_CONTROL), pc);
+#endif
 
    /* The secondary may have selected a different pipeline (3D or compute) and
     * may have changed the current L3$ configuration.  Reset our tracking
@@ -3716,7 +3765,7 @@ genX(CmdExecuteCommands)(
    container->state.gfx.push_constant_stages = 0;
    container->state.gfx.ds_write_state = false;
    memcpy(container->state.gfx.dyn_state.dirty,
-          container->device->gfx_dirty_state,
+          device->gfx_dirty_state,
           sizeof(container->state.gfx.dyn_state.dirty));
 
    /* Each of the secondary command buffers will use its own state base
@@ -3729,7 +3778,6 @@ genX(CmdExecuteCommands)(
    genX(cmd_buffer_emit_state_base_address)(container);
 
    /* Copy of utrace timestamp buffers from secondary into container */
-   struct anv_device *device = container->device;
    if (u_trace_enabled(&device->ds.trace_context)) {
       trace_intel_begin_trace_copy(&container->trace);
 
@@ -3968,6 +4016,11 @@ cmd_buffer_barrier_blitter(struct anv_cmd_buffer *cmd_buffer,
    }
 
    if (flush_ccs || flush_llc) {
+      /* Wa_16018063123 - emit fast color dummy blit before MI_FLUSH_DW. */
+      if (intel_needs_workaround(cmd_buffer->device->info, 16018063123)) {
+         genX(batch_emit_fast_color_dummy_blit)(&cmd_buffer->batch,
+                                                cmd_buffer->device);
+      }
       anv_batch_emit(&cmd_buffer->batch, GENX(MI_FLUSH_DW), fd) {
          fd.FlushCCS = flush_ccs;
          fd.FlushLLC = flush_llc;
@@ -4193,7 +4246,8 @@ void genX(CmdDraw)(
     uint32_t                                    firstInstance)
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   struct anv_graphics_pipeline *pipeline = cmd_buffer->state.gfx.pipeline;
+   struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(cmd_buffer->state.gfx.base.pipeline);
 
    if (anv_batch_has_error(&cmd_buffer->batch))
       return;
@@ -4246,11 +4300,11 @@ void genX(CmdDraw)(
 #endif
    }
 
+   genX(batch_emit_post_3dprimitive_was)(&cmd_buffer->batch,
+                                         cmd_buffer->device,
+                                         cmd_buffer->state.gfx.primitive_topology,
+                                         vertexCount);
    genX(emit_breakpoint)(&cmd_buffer->batch, cmd_buffer->device, false);
-
-#if GFX_VERx10 == 125
-   genX(emit_dummy_post_sync_op)(cmd_buffer, vertexCount);
-#endif
 
    update_dirty_vbs_for_gfx8_vb_flush(cmd_buffer, SEQUENTIAL);
 
@@ -4266,7 +4320,8 @@ void genX(CmdDrawMultiEXT)(
     uint32_t                                    stride)
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   UNUSED struct anv_graphics_pipeline *pipeline = cmd_buffer->state.gfx.pipeline;
+   UNUSED struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(cmd_buffer->state.gfx.base.pipeline);
 
    if (anv_batch_has_error(&cmd_buffer->batch))
       return;
@@ -4303,6 +4358,12 @@ void genX(CmdDrawMultiEXT)(
          prim.StartInstanceLocation    = firstInstance;
          prim.BaseVertexLocation       = 0;
       }
+
+      genX(batch_emit_post_3dprimitive_was)(&cmd_buffer->batch,
+                                            cmd_buffer->device,
+                                            cmd_buffer->state.gfx.primitive_topology,
+                                            drawCount == 0 ? 0 :
+                                            pVertexInfo[drawCount - 1].vertexCount);
 
       genX(emit_breakpoint)(&cmd_buffer->batch, cmd_buffer->device, false);
       trace_intel_end_draw_multi(&cmd_buffer->trace, count);
@@ -4342,16 +4403,17 @@ void genX(CmdDrawMultiEXT)(
          prim.ExtendedParameter2       = i;
       }
 
+      genX(batch_emit_post_3dprimitive_was)(&cmd_buffer->batch,
+                                            cmd_buffer->device,
+                                            cmd_buffer->state.gfx.primitive_topology,
+                                            drawCount == 0 ? 0 :
+                                            pVertexInfo[drawCount - 1].vertexCount);
+
       genX(emit_breakpoint)(&cmd_buffer->batch, cmd_buffer->device, false);
       trace_intel_end_draw_multi(&cmd_buffer->trace, count);
    }
 #endif
 
-#if GFX_VERx10 == 125
-   genX(emit_dummy_post_sync_op)(cmd_buffer,
-                                 drawCount == 0 ? 0 :
-                                 pVertexInfo[drawCount - 1].vertexCount);
-#endif
    update_dirty_vbs_for_gfx8_vb_flush(cmd_buffer, SEQUENTIAL);
 }
 
@@ -4364,7 +4426,8 @@ void genX(CmdDrawIndexed)(
     uint32_t                                    firstInstance)
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   struct anv_graphics_pipeline *pipeline = cmd_buffer->state.gfx.pipeline;
+   struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(cmd_buffer->state.gfx.base.pipeline);
 
    if (anv_batch_has_error(&cmd_buffer->batch))
       return;
@@ -4416,11 +4479,11 @@ void genX(CmdDrawIndexed)(
 #endif
    }
 
+   genX(batch_emit_post_3dprimitive_was)(&cmd_buffer->batch,
+                                         cmd_buffer->device,
+                                         cmd_buffer->state.gfx.primitive_topology,
+                                         indexCount);
    genX(emit_breakpoint)(&cmd_buffer->batch, cmd_buffer->device, false);
-
-#if GFX_VERx10 == 125
-   genX(emit_dummy_post_sync_op)(cmd_buffer, indexCount);
-#endif
 
    update_dirty_vbs_for_gfx8_vb_flush(cmd_buffer, RANDOM);
 
@@ -4437,7 +4500,8 @@ void genX(CmdDrawMultiIndexedEXT)(
     const int32_t                              *pVertexOffset)
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   struct anv_graphics_pipeline *pipeline = cmd_buffer->state.gfx.pipeline;
+   struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(cmd_buffer->state.gfx.base.pipeline);
 
    if (anv_batch_has_error(&cmd_buffer->batch))
       return;
@@ -4489,6 +4553,13 @@ void genX(CmdDrawMultiIndexedEXT)(
                prim.StartInstanceLocation    = firstInstance;
                prim.BaseVertexLocation       = *pVertexOffset;
             }
+
+            genX(batch_emit_post_3dprimitive_was)(&cmd_buffer->batch,
+                                                  cmd_buffer->device,
+                                                  cmd_buffer->state.gfx.primitive_topology,
+                                                  drawCount == 0 ? 0 :
+                                                  pIndexInfo[drawCount - 1].indexCount);
+
             genX(emit_breakpoint)(&cmd_buffer->batch, cmd_buffer->device,
                                   false);
             trace_intel_end_draw_indexed_multi(&cmd_buffer->trace, count);
@@ -4524,6 +4595,13 @@ void genX(CmdDrawMultiIndexedEXT)(
                prim.StartInstanceLocation    = firstInstance;
                prim.BaseVertexLocation       = *pVertexOffset;
             }
+
+            genX(batch_emit_post_3dprimitive_was)(&cmd_buffer->batch,
+                                                  cmd_buffer->device,
+                                                  cmd_buffer->state.gfx.primitive_topology,
+                                                  drawCount == 0 ? 0 :
+                                                  pIndexInfo[drawCount - 1].indexCount);
+
             genX(emit_breakpoint)(&cmd_buffer->batch, cmd_buffer->device,
                                   false);
             trace_intel_end_draw_indexed_multi(&cmd_buffer->trace, count);
@@ -4554,6 +4632,13 @@ void genX(CmdDrawMultiIndexedEXT)(
             prim.StartInstanceLocation    = firstInstance;
             prim.BaseVertexLocation       = draw->vertexOffset;
          }
+
+         genX(batch_emit_post_3dprimitive_was)(&cmd_buffer->batch,
+                                               cmd_buffer->device,
+                                               cmd_buffer->state.gfx.primitive_topology,
+                                               drawCount == 0 ? 0 :
+                                               pIndexInfo[drawCount - 1].indexCount);
+
          genX(emit_breakpoint)(&cmd_buffer->batch, cmd_buffer->device, false);
          trace_intel_end_draw_indexed_multi(&cmd_buffer->trace, count);
       }
@@ -4590,20 +4675,22 @@ void genX(CmdDrawMultiIndexedEXT)(
          prim.StartInstanceLocation    = firstInstance;
          prim.BaseVertexLocation       = pVertexOffset ? *pVertexOffset : draw->vertexOffset;
          prim.ExtendedParametersPresent = true;
-         prim.ExtendedParameter0       = draw->vertexOffset;
+         prim.ExtendedParameter0       = pVertexOffset ? *pVertexOffset : draw->vertexOffset;
          prim.ExtendedParameter1       = firstInstance;
          prim.ExtendedParameter2       = i;
       }
+
+      genX(batch_emit_post_3dprimitive_was)(&cmd_buffer->batch,
+                                            cmd_buffer->device,
+                                            cmd_buffer->state.gfx.primitive_topology,
+                                            drawCount == 0 ? 0 :
+                                            pIndexInfo[drawCount - 1].indexCount);
+
       genX(emit_breakpoint)(&cmd_buffer->batch, cmd_buffer->device, false);
       trace_intel_end_draw_indexed_multi(&cmd_buffer->trace, count);
    }
 #endif
 
-#if GFX_VERx10 == 125
-   genX(emit_dummy_post_sync_op)(cmd_buffer,
-                                 drawCount == 0 ? 0 :
-                                 pIndexInfo[drawCount - 1].indexCount);
-#endif
    update_dirty_vbs_for_gfx8_vb_flush(cmd_buffer, RANDOM);
 }
 
@@ -4645,7 +4732,8 @@ void genX(CmdDrawIndirectByteCountEXT)(
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    ANV_FROM_HANDLE(anv_buffer, counter_buffer, counterBuffer);
-   struct anv_graphics_pipeline *pipeline = cmd_buffer->state.gfx.pipeline;
+   struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(cmd_buffer->state.gfx.base.pipeline);
 
    /* firstVertex is always zero for this draw function */
    const uint32_t firstVertex = 0;
@@ -4717,10 +4805,11 @@ void genX(CmdDrawIndirectByteCountEXT)(
 #endif
    }
 
+   genX(batch_emit_post_3dprimitive_was)(&cmd_buffer->batch,
+                                         cmd_buffer->device,
+                                         cmd_buffer->state.gfx.primitive_topology,
+                                         1);
    genX(emit_breakpoint)(&cmd_buffer->batch, cmd_buffer->device, false);
-#if GFX_VERx10 == 125
-   genX(emit_dummy_post_sync_op)(cmd_buffer, 1);
-#endif
 
    update_dirty_vbs_for_gfx8_vb_flush(cmd_buffer, SEQUENTIAL);
 
@@ -4734,7 +4823,8 @@ load_indirect_parameters(struct anv_cmd_buffer *cmd_buffer,
                          bool indexed,
                          uint32_t draw_id)
 {
-   struct anv_graphics_pipeline *pipeline = cmd_buffer->state.gfx.pipeline;
+   struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(cmd_buffer->state.gfx.base.pipeline);
 
    struct mi_builder b;
    mi_builder_init(&b, cmd_buffer->device->info, &cmd_buffer->batch);
@@ -4781,6 +4871,26 @@ load_indirect_parameters(struct anv_cmd_buffer *cmd_buffer,
 #endif
 }
 
+static const bool
+execute_indirect_draw_supported(struct anv_cmd_buffer *cmd_buffer)
+{
+#if GFX_VERx10 >= 125
+   const struct intel_device_info *devinfo = cmd_buffer->device->info;
+   struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(cmd_buffer->state.gfx.base.pipeline);
+   const struct brw_vs_prog_data *vs_prog_data = get_vs_prog_data(pipeline);
+   const bool is_multiview = pipeline->instance_multiplier > 1;
+
+   return (devinfo->has_indirect_unroll &&
+           !is_multiview &&
+           !vs_prog_data->uses_firstvertex &&
+           !vs_prog_data->uses_baseinstance &&
+           !vs_prog_data->uses_drawid);
+#else
+   return false;
+#endif
+}
+
 static void
 emit_indirect_draws(struct anv_cmd_buffer *cmd_buffer,
                     struct anv_address indirect_data_addr,
@@ -4789,9 +4899,16 @@ emit_indirect_draws(struct anv_cmd_buffer *cmd_buffer,
                     bool indexed)
 {
 #if GFX_VER < 11
-   struct anv_graphics_pipeline *pipeline = cmd_buffer->state.gfx.pipeline;
+   struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(cmd_buffer->state.gfx.base.pipeline);
    const struct brw_vs_prog_data *vs_prog_data = get_vs_prog_data(pipeline);
 #endif
+   UNUSED const struct intel_device_info *devinfo = cmd_buffer->device->info;
+   UNUSED const bool aligned_stride =
+      (indirect_data_stride == 0 ||
+       indirect_data_stride == sizeof(VkDrawIndirectCommand));
+   UNUSED const bool execute_indirect_supported =
+      execute_indirect_draw_supported(cmd_buffer);
 
    genX(cmd_buffer_flush_gfx_state)(cmd_buffer);
 
@@ -4827,8 +4944,6 @@ emit_indirect_draws(struct anv_cmd_buffer *cmd_buffer,
        */
       genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
 
-      load_indirect_parameters(cmd_buffer, draw, indexed, i);
-
       /* Wa_1306463417, Wa_16011107343 - Send HS state for every primitive,
        * first one was handled by cmd_buffer_flush_gfx_state.
        */
@@ -4836,23 +4951,52 @@ emit_indirect_draws(struct anv_cmd_buffer *cmd_buffer,
          genX(emit_hs)(cmd_buffer);
       genX(emit_ds)(cmd_buffer);
 
-      genX(emit_breakpoint)(&cmd_buffer->batch, cmd_buffer->device, true);
-      anv_batch_emit(&cmd_buffer->batch, _3DPRIMITIVE_DIRECT, prim) {
+      if (execute_indirect_supported) {
 #if GFX_VERx10 >= 125
-         prim.TBIMREnable = cmd_buffer->state.gfx.dyn_state.use_tbimr;
+         genX(emit_breakpoint)(&cmd_buffer->batch, cmd_buffer->device, true);
+         anv_batch_emit(&cmd_buffer->batch, GENX(EXECUTE_INDIRECT_DRAW), ind) {
+            ind.ArgumentFormat             = DRAW;
+            ind.TBIMREnabled               = cmd_buffer->state.gfx.dyn_state.use_tbimr;
+            ind.PredicateEnable            =
+               cmd_buffer->state.conditional_render_enabled;
+            ind.MaxCount                   = aligned_stride ? draw_count : 1;
+            ind.ArgumentBufferStartAddress = draw;
+            ind.MOCS                       =
+               anv_mocs(cmd_buffer->device, draw.bo, 0);
+         }
+         /* If all the indirect structures are aligned, then we can let the HW
+          * do the unrolling and we only need one instruction. Otherwise we
+          * need to emit one instruction per draw, but we're still avoiding
+          * the register loads with MI commands.
+          */
+         if (aligned_stride)
+            break;
+#else
+         unreachable("EXECUTE_INDIRECT_DRAW instruction expectation mismatch");
 #endif
-         prim.IndirectParameterEnable  = true;
-         prim.PredicateEnable          = cmd_buffer->state.conditional_render_enabled;
-         prim.VertexAccessType         = indexed ? RANDOM : SEQUENTIAL;
+      } else {
+         load_indirect_parameters(cmd_buffer, draw, indexed, i);
+
+         genX(emit_breakpoint)(&cmd_buffer->batch, cmd_buffer->device, true);
+         anv_batch_emit(&cmd_buffer->batch, _3DPRIMITIVE_DIRECT, prim) {
+#if GFX_VERx10 >= 125
+            prim.TBIMREnable = cmd_buffer->state.gfx.dyn_state.use_tbimr;
+#endif
+            prim.IndirectParameterEnable  = true;
+            prim.PredicateEnable          = cmd_buffer->state.conditional_render_enabled;
+            prim.VertexAccessType         = indexed ? RANDOM : SEQUENTIAL;
 #if GFX_VER >= 11
-         prim.ExtendedParametersPresent = true;
+            prim.ExtendedParametersPresent = true;
 #endif
+         }
       }
 
+      genX(batch_emit_post_3dprimitive_was)(&cmd_buffer->batch,
+                                            cmd_buffer->device,
+                                            cmd_buffer->state.gfx.primitive_topology,
+                                            1);
+
       genX(emit_breakpoint)(&cmd_buffer->batch, cmd_buffer->device, false);
-#if GFX_VERx10 == 125
-      genX(emit_dummy_post_sync_op)(cmd_buffer, 1);
-#endif
 
       update_dirty_vbs_for_gfx8_vb_flush(cmd_buffer,
                                          indexed ? RANDOM : SEQUENTIAL);
@@ -5020,7 +5164,8 @@ emit_indirect_count_draws(struct anv_cmd_buffer *cmd_buffer,
                           bool indexed)
 {
 #if GFX_VER < 11
-   struct anv_graphics_pipeline *pipeline = cmd_buffer->state.gfx.pipeline;
+   struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(cmd_buffer->state.gfx.base.pipeline);
    const struct brw_vs_prog_data *vs_prog_data = get_vs_prog_data(pipeline);
 #endif
 
@@ -5076,10 +5221,11 @@ emit_indirect_count_draws(struct anv_cmd_buffer *cmd_buffer,
 #endif
       }
 
+      genX(batch_emit_post_3dprimitive_was)(&cmd_buffer->batch,
+                                            cmd_buffer->device,
+                                            cmd_buffer->state.gfx.primitive_topology,
+                                            1);
       genX(emit_breakpoint)(&cmd_buffer->batch, cmd_buffer->device, false);
-#if GFX_VERx10 == 125
-      genX(emit_dummy_post_sync_op)(cmd_buffer, 1);
-#endif
 
       update_dirty_vbs_for_gfx8_vb_flush(cmd_buffer, SEQUENTIAL);
    }
@@ -5380,7 +5526,8 @@ genX(CmdDrawMeshTasksIndirectEXT)(
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    ANV_FROM_HANDLE(anv_buffer, buffer, _buffer);
-   struct anv_graphics_pipeline *pipeline = cmd_buffer->state.gfx.pipeline;
+   struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(cmd_buffer->state.gfx.base.pipeline);
    const struct brw_task_prog_data *task_prog_data = get_task_prog_data(pipeline);
    const struct brw_mesh_prog_data *mesh_prog_data = get_mesh_prog_data(pipeline);
    struct anv_cmd_state *cmd_state = &cmd_buffer->state;
@@ -5431,7 +5578,8 @@ genX(CmdDrawMeshTasksIndirectCountEXT)(
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    ANV_FROM_HANDLE(anv_buffer, buffer, _buffer);
    ANV_FROM_HANDLE(anv_buffer, count_buffer, _countBuffer);
-   struct anv_graphics_pipeline *pipeline = cmd_buffer->state.gfx.pipeline;
+   struct anv_graphics_pipeline *pipeline =
+      anv_pipeline_to_graphics(cmd_buffer->state.gfx.base.pipeline);
    const struct brw_task_prog_data *task_prog_data = get_task_prog_data(pipeline);
    const struct brw_mesh_prog_data *mesh_prog_data = get_mesh_prog_data(pipeline);
 
@@ -5522,7 +5670,8 @@ static void
 genX(cmd_buffer_flush_compute_state)(struct anv_cmd_buffer *cmd_buffer)
 {
    struct anv_cmd_compute_state *comp_state = &cmd_buffer->state.compute;
-   struct anv_compute_pipeline *pipeline = comp_state->pipeline;
+   struct anv_compute_pipeline *pipeline =
+      anv_pipeline_to_compute(comp_state->base.pipeline);
    const UNUSED struct intel_device_info *devinfo = cmd_buffer->device->info;
 
    assert(pipeline->cs);
@@ -5653,7 +5802,111 @@ anv_cmd_buffer_push_base_group_id(struct anv_cmd_buffer *cmd_buffer,
    }
 }
 
+#define GPGPU_DISPATCHDIMX 0x2500
+#define GPGPU_DISPATCHDIMY 0x2504
+#define GPGPU_DISPATCHDIMZ 0x2508
+
+static void
+compute_load_indirect_params(struct anv_cmd_buffer *cmd_buffer,
+                             const struct anv_address indirect_addr)
+{
+   struct mi_builder b;
+   mi_builder_init(&b, cmd_buffer->device->info, &cmd_buffer->batch);
+
+   struct mi_value size_x = mi_mem32(anv_address_add(indirect_addr, 0));
+   struct mi_value size_y = mi_mem32(anv_address_add(indirect_addr, 4));
+   struct mi_value size_z = mi_mem32(anv_address_add(indirect_addr, 8));
+
+   mi_store(&b, mi_reg32(GPGPU_DISPATCHDIMX), size_x);
+   mi_store(&b, mi_reg32(GPGPU_DISPATCHDIMY), size_y);
+   mi_store(&b, mi_reg32(GPGPU_DISPATCHDIMZ), size_z);
+}
+
+static void
+compute_store_indirect_params(struct anv_cmd_buffer *cmd_buffer,
+                             const struct anv_address indirect_addr)
+{
+   struct mi_builder b;
+   mi_builder_init(&b, cmd_buffer->device->info, &cmd_buffer->batch);
+
+   struct mi_value size_x = mi_mem32(anv_address_add(indirect_addr, 0));
+   struct mi_value size_y = mi_mem32(anv_address_add(indirect_addr, 4));
+   struct mi_value size_z = mi_mem32(anv_address_add(indirect_addr, 8));
+
+   mi_store(&b, size_x, mi_reg32(GPGPU_DISPATCHDIMX));
+   mi_store(&b, size_y, mi_reg32(GPGPU_DISPATCHDIMY));
+   mi_store(&b, size_z, mi_reg32(GPGPU_DISPATCHDIMZ));
+}
+
+
 #if GFX_VERx10 >= 125
+
+static inline struct GENX(INTERFACE_DESCRIPTOR_DATA)
+get_interface_descriptor_data(struct anv_cmd_buffer *cmd_buffer,
+                              const struct anv_shader_bin *shader,
+                              const struct brw_cs_prog_data *prog_data,
+                              const struct brw_cs_dispatch_info *dispatch)
+{
+   const struct intel_device_info *devinfo = cmd_buffer->device->info;
+
+   return (struct GENX(INTERFACE_DESCRIPTOR_DATA)) {
+      .KernelStartPointer = shader->kernel.offset,
+      .SamplerStatePointer = cmd_buffer->state.samplers[MESA_SHADER_COMPUTE].offset,
+      .BindingTablePointer = cmd_buffer->state.binding_tables[MESA_SHADER_COMPUTE].offset,
+      /* Typically set to 0 to avoid prefetching on every thread dispatch. */
+      .BindingTableEntryCount = devinfo->verx10 == 125 ?
+         0 : 1 + MIN2(shader->bind_map.surface_count, 30),
+      .NumberofThreadsinGPGPUThreadGroup = dispatch->threads,
+      .SharedLocalMemorySize = encode_slm_size(GFX_VER, prog_data->base.total_shared),
+      .PreferredSLMAllocationSize = preferred_slm_allocation_size(devinfo),
+      .NumberOfBarriers = prog_data->uses_barrier,
+   };
+}
+
+static inline void
+emit_indirect_compute_walker(struct anv_cmd_buffer *cmd_buffer,
+                             const struct anv_shader_bin *shader,
+                             const struct brw_cs_prog_data *prog_data,
+                             struct anv_address indirect_addr)
+{
+   const struct intel_device_info *devinfo = cmd_buffer->device->info;
+   assert(devinfo->has_indirect_unroll);
+
+   struct anv_cmd_compute_state *comp_state = &cmd_buffer->state.compute;
+   bool predicate = cmd_buffer->state.conditional_render_enabled;
+
+   const struct brw_cs_dispatch_info dispatch =
+      brw_cs_get_dispatch_info(devinfo, prog_data, NULL);
+   const int dispatch_size = dispatch.simd_size / 16;
+
+   struct GENX(COMPUTE_WALKER_BODY) body =  {
+      .SIMDSize                 = dispatch_size,
+      .MessageSIMD              = dispatch_size,
+      .IndirectDataStartAddress = comp_state->push_data.offset,
+      .IndirectDataLength       = comp_state->push_data.alloc_size,
+      .LocalXMaximum            = prog_data->local_size[0] - 1,
+      .LocalYMaximum            = prog_data->local_size[1] - 1,
+      .LocalZMaximum            = prog_data->local_size[2] - 1,
+      .ExecutionMask            = dispatch.right_mask,
+      .PostSync.MOCS            = anv_mocs(cmd_buffer->device, NULL, 0),
+      .InterfaceDescriptor =
+         get_interface_descriptor_data(cmd_buffer, shader, prog_data,
+                                       &dispatch),
+   };
+
+   cmd_buffer->last_indirect_dispatch =
+      anv_batch_emitn(
+         &cmd_buffer->batch,
+         GENX(EXECUTE_INDIRECT_DISPATCH_length),
+         GENX(EXECUTE_INDIRECT_DISPATCH),
+         .PredicateEnable            = predicate,
+         .MaxCount                   = 1,
+         .COMPUTE_WALKER_BODY        = body,
+         .ArgumentBufferStartAddress = indirect_addr,
+         .MOCS                       = anv_mocs(cmd_buffer->device,
+                                                indirect_addr.bo, 0),
+      );
+}
 
 static inline void
 emit_compute_walker(struct anv_cmd_buffer *cmd_buffer,
@@ -5663,7 +5916,6 @@ emit_compute_walker(struct anv_cmd_buffer *cmd_buffer,
                     uint32_t groupCountZ)
 {
    const struct anv_cmd_compute_state *comp_state = &cmd_buffer->state.compute;
-   const struct anv_shader_bin *cs_bin = pipeline->cs;
    const bool predicate = cmd_buffer->state.conditional_render_enabled;
 
    const struct intel_device_info *devinfo = pipeline->base.device->info;
@@ -5690,22 +5942,10 @@ emit_compute_walker(struct anv_cmd_buffer *cmd_buffer,
          .PostSync                       = {
             .MOCS                        = anv_mocs(pipeline->base.device, NULL, 0),
          },
-
-         .InterfaceDescriptor            = (struct GENX(INTERFACE_DESCRIPTOR_DATA)) {
-            .KernelStartPointer                = cs_bin->kernel.offset,
-            .SamplerStatePointer               = cmd_buffer->state.samplers[
-               MESA_SHADER_COMPUTE].offset,
-            .BindingTablePointer               = cmd_buffer->state.binding_tables[
-               MESA_SHADER_COMPUTE].offset,
-            /* Typically set to 0 to avoid prefetching on every thread dispatch. */
-            .BindingTableEntryCount            = devinfo->verx10 == 125 ?
-               0 : 1 + MIN2(pipeline->cs->bind_map.surface_count, 30),
-            .NumberofThreadsinGPGPUThreadGroup = dispatch.threads,
-            .SharedLocalMemorySize             = encode_slm_size(
-               GFX_VER, prog_data->base.total_shared),
-            .PreferredSLMAllocationSize        = preferred_slm_allocation_size(devinfo),
-            .NumberOfBarriers                  = prog_data->uses_barrier,
-         });
+         .InterfaceDescriptor =
+            get_interface_descriptor_data(cmd_buffer, pipeline->cs,
+                                          prog_data, &dispatch),
+      );
 }
 
 #else /* #if GFX_VERx10 >= 125 */
@@ -5744,17 +5984,30 @@ emit_gpgpu_walker(struct anv_cmd_buffer *cmd_buffer,
 
 static inline void
 emit_cs_walker(struct anv_cmd_buffer *cmd_buffer,
-               const struct anv_compute_pipeline *pipeline, bool indirect,
+               const struct anv_compute_pipeline *pipeline,
                const struct brw_cs_prog_data *prog_data,
-               uint32_t groupCountX, uint32_t groupCountY,
-               uint32_t groupCountZ)
+               struct anv_address indirect_addr,
+               uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
 {
+   bool is_indirect = !anv_address_is_null(indirect_addr);
+
 #if GFX_VERx10 >= 125
-   emit_compute_walker(cmd_buffer, pipeline, indirect, prog_data, groupCountX,
-                       groupCountY, groupCountZ);
+   if (is_indirect && cmd_buffer->device->info->has_indirect_unroll) {
+      emit_indirect_compute_walker(cmd_buffer, pipeline->cs, prog_data,
+                                   indirect_addr);
+      return;
+   }
+#endif
+
+   if (is_indirect)
+      compute_load_indirect_params(cmd_buffer, indirect_addr);
+
+#if GFX_VERx10 >= 125
+   emit_compute_walker(cmd_buffer, pipeline, is_indirect, prog_data,
+                       groupCountX, groupCountY, groupCountZ);
 #else
-   emit_gpgpu_walker(cmd_buffer, pipeline, indirect, prog_data, groupCountX,
-                     groupCountY, groupCountZ);
+   emit_gpgpu_walker(cmd_buffer, pipeline, is_indirect, prog_data,
+                     groupCountX, groupCountY, groupCountZ);
 #endif
 }
 
@@ -5768,7 +6021,8 @@ void genX(CmdDispatchBase)(
     uint32_t                                    groupCountZ)
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   struct anv_compute_pipeline *pipeline = cmd_buffer->state.compute.pipeline;
+   struct anv_compute_pipeline *pipeline =
+      anv_pipeline_to_compute(cmd_buffer->state.compute.base.pipeline);
    const struct brw_cs_prog_data *prog_data = get_cs_prog_data(pipeline);
 
    anv_cmd_buffer_push_base_group_id(cmd_buffer, baseGroupX,
@@ -5806,16 +6060,13 @@ void genX(CmdDispatchBase)(
    if (cmd_buffer->state.conditional_render_enabled)
       genX(cmd_emit_conditional_render_predicate)(cmd_buffer);
 
-   emit_cs_walker(cmd_buffer, pipeline, false, prog_data, groupCountX,
-                  groupCountY, groupCountZ);
+   emit_cs_walker(cmd_buffer, pipeline, prog_data,
+                  ANV_NULL_ADDRESS /* no indirect data */,
+                  groupCountX, groupCountY, groupCountZ);
 
    trace_intel_end_compute(&cmd_buffer->trace,
                            groupCountX, groupCountY, groupCountZ);
 }
-
-#define GPGPU_DISPATCHDIMX 0x2500
-#define GPGPU_DISPATCHDIMY 0x2504
-#define GPGPU_DISPATCHDIMZ 0x2508
 
 void genX(CmdDispatchIndirect)(
     VkCommandBuffer                             commandBuffer,
@@ -5824,7 +6075,8 @@ void genX(CmdDispatchIndirect)(
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    ANV_FROM_HANDLE(anv_buffer, buffer, _buffer);
-   struct anv_compute_pipeline *pipeline = cmd_buffer->state.compute.pipeline;
+   struct anv_compute_pipeline *pipeline =
+      anv_pipeline_to_compute(cmd_buffer->state.compute.base.pipeline);
    const struct brw_cs_prog_data *prog_data = get_cs_prog_data(pipeline);
    struct anv_address addr = anv_address_add(buffer->address, offset);
    UNUSED struct anv_batch *batch = &cmd_buffer->batch;
@@ -5846,21 +6098,10 @@ void genX(CmdDispatchIndirect)(
 
    genX(cmd_buffer_flush_compute_state)(cmd_buffer);
 
-   struct mi_builder b;
-   mi_builder_init(&b, cmd_buffer->device->info, &cmd_buffer->batch);
-
-   struct mi_value size_x = mi_mem32(anv_address_add(addr, 0));
-   struct mi_value size_y = mi_mem32(anv_address_add(addr, 4));
-   struct mi_value size_z = mi_mem32(anv_address_add(addr, 8));
-
-   mi_store(&b, mi_reg32(GPGPU_DISPATCHDIMX), size_x);
-   mi_store(&b, mi_reg32(GPGPU_DISPATCHDIMY), size_y);
-   mi_store(&b, mi_reg32(GPGPU_DISPATCHDIMZ), size_z);
-
    if (cmd_buffer->state.conditional_render_enabled)
       genX(cmd_emit_conditional_render_predicate)(cmd_buffer);
 
-   emit_cs_walker(cmd_buffer, pipeline, true, prog_data, 0, 0, 0);
+   emit_cs_walker(cmd_buffer, pipeline, prog_data, addr, 0, 0, 0);
 
    trace_intel_end_compute(&cmd_buffer->trace, 0, 0, 0);
 }
@@ -5941,24 +6182,15 @@ genX(cmd_buffer_dispatch_kernel)(struct anv_cmd_buffer *cmd_buffer,
    if (global_size != NULL) {
       for (unsigned i = 0; i < 3; i++)
          sysvals.num_work_groups[i] = global_size[i];
+      memcpy(indirect_data.map, &sysvals, sizeof(sysvals));
    } else {
-      struct mi_builder b;
-      mi_builder_init(&b, cmd_buffer->device->info, &cmd_buffer->batch);
-
       struct anv_address sysvals_addr = {
          .bo = NULL, /* General state buffer is always 0. */
          .offset = indirect_data.offset,
       };
 
-      mi_store(&b, mi_mem32(anv_address_add(sysvals_addr, 0)),
-                   mi_reg32(GPGPU_DISPATCHDIMX));
-      mi_store(&b, mi_mem32(anv_address_add(sysvals_addr, 4)),
-                   mi_reg32(GPGPU_DISPATCHDIMY));
-      mi_store(&b, mi_mem32(anv_address_add(sysvals_addr, 8)),
-                   mi_reg32(GPGPU_DISPATCHDIMZ));
+      compute_store_indirect_params(cmd_buffer, sysvals_addr);
    }
-
-   memcpy(indirect_data.map, &sysvals, sizeof(sysvals));
 
    void *args_map = indirect_data.map + sizeof(sysvals);
    for (unsigned i = 0; i < kernel->bin->bind_map.kernel_arg_count; i++) {
@@ -5996,14 +6228,11 @@ genX(cmd_buffer_dispatch_kernel)(struct anv_cmd_buffer *cmd_buffer,
          cw.IndirectParameterEnable     = true;
       }
 
-      struct GENX(INTERFACE_DESCRIPTOR_DATA) idd = {
-         .KernelStartPointer = kernel->bin->kernel.offset,
-         .NumberofThreadsinGPGPUThreadGroup = dispatch.threads,
-         .SharedLocalMemorySize =
-            encode_slm_size(GFX_VER, cs_prog_data->base.total_shared),
-         .NumberOfBarriers = cs_prog_data->uses_barrier,
-      };
-      cw.InterfaceDescriptor = idd;
+      cw.InterfaceDescriptor =
+         get_interface_descriptor_data(cmd_buffer,
+                                       kernel->bin,
+                                       cs_prog_data,
+                                       &dispatch);
    }
 
    /* We just blew away the compute pipeline state */
@@ -6205,7 +6434,8 @@ cmd_buffer_trace_rays(struct anv_cmd_buffer *cmd_buffer,
 {
    struct anv_device *device = cmd_buffer->device;
    struct anv_cmd_ray_tracing_state *rt = &cmd_buffer->state.rt;
-   struct anv_ray_tracing_pipeline *pipeline = rt->pipeline;
+   struct anv_ray_tracing_pipeline *pipeline =
+      anv_pipeline_to_ray_tracing(rt->base.pipeline);
 
    if (anv_batch_has_error(&cmd_buffer->batch))
       return;
@@ -6308,6 +6538,7 @@ cmd_buffer_trace_rays(struct anv_cmd_buffer *cmd_buffer,
       mi_store(&b, mi_reg32(GPGPU_DISPATCHDIMX), launch_size[0]);
       mi_store(&b, mi_reg32(GPGPU_DISPATCHDIMY), launch_size[1]);
       mi_store(&b, mi_reg32(GPGPU_DISPATCHDIMZ), launch_size[2]);
+
    } else {
       calc_local_trace_size(local_size_log2, params->launch_size);
 
@@ -8133,7 +8364,8 @@ void genX(cmd_emit_timestamp)(struct anv_batch *batch,
     * ANV_TIMESTAMP_REWRITE_COMPUTE_WALKER capture type are not set for
     * transfer queue.
     */
-   if (batch->engine_class == INTEL_ENGINE_CLASS_COPY) {
+   if ((batch->engine_class == INTEL_ENGINE_CLASS_COPY) ||
+       (batch->engine_class == INTEL_ENGINE_CLASS_VIDEO)) {
       assert(type != ANV_TIMESTAMP_CAPTURE_AT_CS_STALL &&
              type != ANV_TIMESTAMP_REWRITE_COMPUTE_WALKER);
    }
@@ -8147,7 +8379,11 @@ void genX(cmd_emit_timestamp)(struct anv_batch *batch,
    }
 
    case ANV_TIMESTAMP_CAPTURE_END_OF_PIPE: {
-      if (batch->engine_class == INTEL_ENGINE_CLASS_COPY) {
+      if ((batch->engine_class == INTEL_ENGINE_CLASS_COPY) ||
+          (batch->engine_class == INTEL_ENGINE_CLASS_VIDEO)) {
+         /* Wa_16018063123 - emit fast color dummy blit before MI_FLUSH_DW. */
+         if (intel_needs_workaround(device->info, 16018063123))
+            genX(batch_emit_fast_color_dummy_blit)(batch, device);
          anv_batch_emit(batch, GENX(MI_FLUSH_DW), fd) {
             fd.PostSyncOperation = WriteTimestamp;
             fd.Address = addr;
@@ -8181,6 +8417,26 @@ void genX(cmd_emit_timestamp)(struct anv_batch *batch,
          ((uint32_t *)data)[i] |= dwords[i];
       break;
    }
+
+   case ANV_TIMESTAMP_REWRITE_INDIRECT_DISPATCH: {
+      uint32_t dwords[GENX(EXECUTE_INDIRECT_DISPATCH_length)];
+
+      GENX(EXECUTE_INDIRECT_DISPATCH_pack)
+      (batch, dwords, &(struct GENX(EXECUTE_INDIRECT_DISPATCH)) {
+            .MOCS = anv_mocs(device, NULL, 0),
+            .COMPUTE_WALKER_BODY = {
+               .PostSync = (struct GENX(POSTSYNC_DATA)) {
+                  .Operation = WriteTimestamp,
+                  .DestinationAddress = addr,
+                  .MOCS = anv_mocs(device, NULL, 0),
+               },
+            }
+      });
+
+      for (uint32_t i = 0; i < ARRAY_SIZE(dwords); i++)
+         ((uint32_t *)data)[i] |= dwords[i];
+      break;
+   }
 #endif
 
    default:
@@ -8189,15 +8445,14 @@ void genX(cmd_emit_timestamp)(struct anv_batch *batch,
 }
 
 void
-genX(batch_emit_dummy_post_sync_op)(struct anv_batch *batch,
-                                    struct anv_device *device,
-                                    uint32_t primitive_topology,
-                                    uint32_t vertex_count)
+genX(batch_emit_post_3dprimitive_was)(struct anv_batch *batch,
+                                      const struct anv_device *device,
+                                      uint32_t primitive_topology,
+                                      uint32_t vertex_count)
 {
-   if (!intel_needs_workaround(device->info, 22014412737))
-      return;
-
-   if ((primitive_topology == _3DPRIM_POINTLIST ||
+#if INTEL_NEEDS_WA_22014412737 || INTEL_NEEDS_WA_16014538804
+   if (intel_needs_workaround(device->info, 22014412737) &&
+       (primitive_topology == _3DPRIM_POINTLIST ||
         primitive_topology == _3DPRIM_LINELIST ||
         primitive_topology == _3DPRIM_LINESTRIP ||
         primitive_topology == _3DPRIM_LINELIST_ADJ ||
@@ -8212,7 +8467,41 @@ genX(batch_emit_dummy_post_sync_op)(struct anv_batch *batch,
          (batch, device->info, 0, WriteImmediateData,
           device->workaround_address, 0, 0);
 
+      /* Reset counter because we just emitted a PC */
+      batch->num_3d_primitives_emitted = 0;
+   } else if (intel_needs_workaround(device->info, 16014538804)) {
+      batch->num_3d_primitives_emitted++;
+      /* WA 16014538804:
+       *    After every 3 3D_Primitive command,
+       *    atleast 1 pipe_control must be inserted.
+       */
+      if (batch->num_3d_primitives_emitted == 3) {
+         anv_batch_emit(batch, GENX(PIPE_CONTROL), pc);
+         batch->num_3d_primitives_emitted = 0;
+      }
    }
+#endif
+}
+
+/* Wa_16018063123 */
+ALWAYS_INLINE void
+genX(batch_emit_fast_color_dummy_blit)(struct anv_batch *batch,
+                                      struct anv_device *device)
+{
+#if GFX_VERx10 >= 125
+   anv_batch_emit(batch, GENX(XY_FAST_COLOR_BLT), blt) {
+      blt.DestinationBaseAddress = device->workaround_address;
+      blt.DestinationMOCS = device->isl_dev.mocs.blitter_dst;
+      blt.DestinationPitch = 63;
+      blt.DestinationX2 = 1;
+      blt.DestinationY2 = 4;
+      blt.DestinationSurfaceWidth = 1;
+      blt.DestinationSurfaceHeight = 4;
+      blt.DestinationSurfaceType = XY_SURFTYPE_2D;
+      blt.DestinationSurfaceQPitch = 4;
+      blt.DestinationTiling = XY_TILE_LINEAR;
+   }
+#endif
 }
 
 struct anv_state
@@ -8247,6 +8536,11 @@ genX(cmd_buffer_begin_companion_rcs_syncpoint)(
                                 "post main cmd buffer invalidate");
       genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
    } else if (anv_cmd_buffer_is_blitter_queue(cmd_buffer)) {
+      /* Wa_16018063123 - emit fast color dummy blit before MI_FLUSH_DW. */
+      if (intel_needs_workaround(cmd_buffer->device->info, 16018063123)) {
+         genX(batch_emit_fast_color_dummy_blit)(&cmd_buffer->batch,
+                                                cmd_buffer->device);
+      }
       anv_batch_emit(&cmd_buffer->batch, GENX(MI_FLUSH_DW), fd) {
          fd.FlushCCS = true; /* Maybe handle Flush LLC */
       }
@@ -8321,4 +8615,158 @@ genX(cmd_buffer_end_companion_rcs_syncpoint)(struct anv_cmd_buffer *cmd_buffer,
 #else
    unreachable("Not implemented");
 #endif
+}
+
+VkResult
+genX(write_trtt_entries)(struct anv_trtt_submission *submit)
+{
+#if GFX_VER >= 12
+   size_t batch_size = submit->l3l2_binds_len * 20 +
+                       submit->l1_binds_len * 16 + 8;
+   STACK_ARRAY(uint32_t, cmds, batch_size);
+   struct anv_batch batch = {
+      .start = cmds,
+      .next = cmds,
+      .end = (void *)cmds + batch_size,
+   };
+
+   /* BSpec says:
+    *   "DWord Length programmed must not exceed 0x3FE."
+    * For a single dword write the programmed length is 2, and for a single
+    * qword it's 3. This is the value we actually write to the register field,
+    * so it's not considering the bias.
+    */
+   uint32_t dword_write_len = 2;
+   uint32_t qword_write_len = 3;
+   uint32_t max_dword_extra_writes = 0x3FE - dword_write_len;
+   uint32_t max_qword_extra_writes = (0x3FE - qword_write_len) / 2;
+
+   /* What makes the code below quite complicated is the fact that we can
+    * write multiple values with MI_STORE_DATA_IMM as long as the writes go to
+    * contiguous addresses.
+    */
+
+   for (int i = 0; i < submit->l3l2_binds_len; i++) {
+      int extra_writes = 0;
+      for (int j = i + 1;
+           j < submit->l3l2_binds_len &&
+            extra_writes <= max_qword_extra_writes;
+           j++) {
+         if (submit->l3l2_binds[i].pte_addr + (j - i) * 8 ==
+             submit->l3l2_binds[j].pte_addr) {
+            extra_writes++;
+         } else {
+            break;
+         }
+      }
+      bool is_last_write = submit->l1_binds_len == 0 &&
+                           i + extra_writes + 1 == submit->l3l2_binds_len;
+
+      uint32_t total_len = GENX(MI_STORE_DATA_IMM_length_bias) +
+                           qword_write_len + (extra_writes * 2);
+      uint32_t *dw;
+      dw = anv_batch_emitn(&batch, total_len, GENX(MI_STORE_DATA_IMM),
+         .ForceWriteCompletionCheck = is_last_write,
+         .StoreQword = true,
+         .Address = anv_address_from_u64(submit->l3l2_binds[i].pte_addr),
+      );
+      dw += 3;
+      for (int j = 0; j < extra_writes + 1; j++) {
+         uint64_t entry_addr_64b = submit->l3l2_binds[i + j].entry_addr;
+         *dw = entry_addr_64b & 0xFFFFFFFF;
+         dw++;
+         *dw = (entry_addr_64b >> 32) & 0xFFFFFFFF;
+         dw++;
+      }
+      assert(dw == batch.next);
+
+      i += extra_writes;
+   }
+
+   for (int i = 0; i < submit->l1_binds_len; i++) {
+      int extra_writes = 0;
+      for (int j = i + 1;
+           j < submit->l1_binds_len && extra_writes <= max_dword_extra_writes;
+           j++) {
+         if (submit->l1_binds[i].pte_addr + (j - i) * 4 ==
+             submit->l1_binds[j].pte_addr) {
+            extra_writes++;
+         } else {
+            break;
+         }
+      }
+
+      bool is_last_write = i + extra_writes + 1 == submit->l1_binds_len;
+
+      uint32_t total_len = GENX(MI_STORE_DATA_IMM_length_bias) +
+                           dword_write_len + extra_writes;
+      uint32_t *dw;
+      dw = anv_batch_emitn(&batch, total_len, GENX(MI_STORE_DATA_IMM),
+         .ForceWriteCompletionCheck = is_last_write,
+         .Address = anv_address_from_u64(submit->l1_binds[i].pte_addr),
+      );
+      dw += 3;
+      for (int j = 0; j < extra_writes + 1; j++) {
+         *dw = (submit->l1_binds[i + j].entry_addr >> 16) & 0xFFFFFFFF;
+         dw++;
+      }
+      assert(dw == batch.next);
+
+      i += extra_writes;
+   }
+
+   anv_batch_emit(&batch, GENX(MI_BATCH_BUFFER_END), bbe);
+
+   assert(batch.next <= batch.end);
+
+   VkResult result = anv_queue_submit_trtt_batch(submit->sparse, &batch);
+   STACK_ARRAY_FINISH(cmds);
+
+   return result;
+
+#endif
+   return VK_SUCCESS;
+}
+
+void
+genX(CmdWriteBufferMarker2AMD)(VkCommandBuffer commandBuffer,
+                               VkPipelineStageFlags2KHR stage,
+                               VkBuffer dstBuffer,
+                               VkDeviceSize dstOffset,
+                               uint32_t marker)
+{
+   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
+   ANV_FROM_HANDLE(anv_buffer, buffer, dstBuffer);
+
+   /* The barriers inserted by the application to make dstBuffer writable
+    * should already have the L1/L2 cache flushes. On platforms where the
+    * command streamer is not coherent with L3, we need an additional set of
+    * cache flushes.
+    */
+   enum anv_pipe_bits bits =
+#if GFX_VERx10 < 125
+      ANV_PIPE_DATA_CACHE_FLUSH_BIT |
+      ANV_PIPE_TILE_CACHE_FLUSH_BIT |
+#endif
+      ANV_PIPE_END_OF_PIPE_SYNC_BIT;
+
+   trace_intel_begin_write_buffer_marker(&cmd_buffer->trace);
+
+   anv_add_pending_pipe_bits(cmd_buffer, bits, "write buffer marker");
+   genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
+
+   struct mi_builder b;
+   mi_builder_init(&b, cmd_buffer->device->info, &cmd_buffer->batch);
+
+   /* Emitting a PIPE_CONTROL with Post-Sync Op = Write Immediate Data
+    * would be the logical way to implement this extension, as it could
+    * do a pipelined marker write.  Unfortunately, it requires writing
+    * whole 64-bit QWords, and VK_AMD_buffer_marker requires writing a
+    * 32-bit value.  MI_STORE_DATA_IMM is the only good way to do that,
+    * and unfortunately it requires stalling.
+    */
+   mi_store(&b, mi_mem32(anv_address_add(buffer->address, dstOffset)),
+                mi_imm(marker));
+
+   trace_intel_end_write_buffer_marker(&cmd_buffer->trace);
 }

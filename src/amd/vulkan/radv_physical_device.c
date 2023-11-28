@@ -64,6 +64,9 @@ radv_perf_query_supported(const struct radv_physical_device *pdev)
 static bool
 radv_taskmesh_enabled(const struct radv_physical_device *pdevice)
 {
+   if (pdevice->instance->debug_flags & RADV_DEBUG_NO_MESH_SHADER)
+      return false;
+
    return pdevice->use_ngg && !pdevice->use_llvm && pdevice->rad_info.gfx_level >= GFX10_3 &&
           !(pdevice->instance->debug_flags & RADV_DEBUG_NO_COMPUTE_QUEUE) && pdevice->rad_info.has_gang_submit;
 }
@@ -170,6 +173,9 @@ radv_physical_device_init_queue_table(struct radv_physical_device *pdevice)
          idx++;
       }
    }
+
+   pdevice->vk_queue_to_radv[idx++] = RADV_QUEUE_SPARSE;
+
    pdevice->num_queues = idx;
 }
 
@@ -367,8 +373,16 @@ radv_find_memory_index(const struct radv_physical_device *pdevice, VkMemoryPrope
 static void
 radv_get_binning_settings(const struct radv_physical_device *pdevice, struct radv_binning_settings *settings)
 {
-   settings->context_states_per_bin = 1;
-   settings->persistent_states_per_bin = 1;
+   if ((pdevice->rad_info.has_dedicated_vram && pdevice->rad_info.max_render_backends > 4) ||
+       pdevice->rad_info.gfx_level >= GFX10) {
+      /* Using higher settings on GFX10+ can cause random GPU hangs. */
+      settings->context_states_per_bin = 1;
+      settings->persistent_states_per_bin = 1;
+   } else {
+      settings->context_states_per_bin = pdevice->rad_info.has_gfx9_scissor_bug ? 1 : 3;
+      settings->persistent_states_per_bin = 1;
+   }
+
    settings->fpovs_per_batch = 63;
 }
 
@@ -481,6 +495,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .EXT_depth_range_unrestricted = true,
       .EXT_descriptor_buffer = true,
       .EXT_descriptor_indexing = true,
+      .EXT_device_fault = device->rad_info.has_gpuvm_fault_query,
       .EXT_discard_rectangles = true,
 #ifdef VK_USE_PLATFORM_DISPLAY_KHR
       .EXT_display_control = true,
@@ -645,7 +660,7 @@ radv_physical_device_get_features(const struct radv_physical_device *pdevice, st
       .sparseBinding = true,
       .sparseResidencyBuffer = pdevice->rad_info.family >= CHIP_POLARIS10,
       .sparseResidencyImage2D = pdevice->rad_info.family >= CHIP_POLARIS10,
-      .sparseResidencyImage3D = pdevice->rad_info.gfx_level >= GFX9,
+      .sparseResidencyImage3D = pdevice->rad_info.family >= CHIP_POLARIS10,
       .sparseResidencyAliased = pdevice->rad_info.family >= CHIP_POLARIS10,
       .variableMultisampleRate = true,
       .shaderResourceMinLod = true,
@@ -917,7 +932,7 @@ radv_physical_device_get_features(const struct radv_physical_device *pdevice, st
       .taskShader = taskmesh_en,
       .multiviewMeshShader = taskmesh_en,
       .primitiveFragmentShadingRateMeshShader = taskmesh_en,
-      .meshShaderQueries = false,
+      .meshShaderQueries = pdevice->rad_info.gfx_level == GFX10_3,
 
       /* VK_VALVE_descriptor_set_host_mapping */
       .descriptorSetHostMapping = true,
@@ -1047,6 +1062,10 @@ radv_physical_device_get_features(const struct radv_physical_device *pdevice, st
 
       /* VK_EXT_image_compression_control */
       .imageCompressionControl = true,
+
+      /* VK_EXT_device_fault */
+      .deviceFault = true,
+      .deviceFaultVendorBinary = false,
    };
 }
 
@@ -1886,6 +1905,8 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
 
    device->emulate_ngg_gs_query_pipeline_stat = device->use_ngg && device->rad_info.gfx_level < GFX11;
 
+   device->emulate_mesh_shader_queries = device->rad_info.gfx_level == GFX10_3;
+
    /* Determine the number of threads per wave for all stages. */
    device->cs_wave_size = 64;
    device->ps_wave_size = 64;
@@ -2046,7 +2067,7 @@ static void
 radv_get_physical_device_queue_family_properties(struct radv_physical_device *pdevice, uint32_t *pCount,
                                                  VkQueueFamilyProperties **pQueueFamilyProperties)
 {
-   int num_queue_families = 1;
+   int num_queue_families = 2;
    int idx;
    if (pdevice->rad_info.ip[AMD_IP_COMPUTE].num_queues > 0 &&
        !(pdevice->instance->debug_flags & RADV_DEBUG_NO_COMPUTE_QUEUE))
@@ -2068,8 +2089,7 @@ radv_get_physical_device_queue_family_properties(struct radv_physical_device *pd
    idx = 0;
    if (*pCount >= 1) {
       *pQueueFamilyProperties[idx] = (VkQueueFamilyProperties){
-         .queueFlags =
-            VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT | VK_QUEUE_SPARSE_BINDING_BIT,
+         .queueFlags = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT,
          .queueCount = 1,
          .timestampValidBits = 64,
          .minImageTransferGranularity = (VkExtent3D){1, 1, 1},
@@ -2081,7 +2101,7 @@ radv_get_physical_device_queue_family_properties(struct radv_physical_device *pd
        !(pdevice->instance->debug_flags & RADV_DEBUG_NO_COMPUTE_QUEUE)) {
       if (*pCount > idx) {
          *pQueueFamilyProperties[idx] = (VkQueueFamilyProperties){
-            .queueFlags = VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT | VK_QUEUE_SPARSE_BINDING_BIT,
+            .queueFlags = VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT,
             .queueCount = pdevice->rad_info.ip[AMD_IP_COMPUTE].num_queues,
             .timestampValidBits = 64,
             .minImageTransferGranularity = (VkExtent3D){1, 1, 1},
@@ -2102,6 +2122,16 @@ radv_get_physical_device_queue_family_properties(struct radv_physical_device *pd
             idx++;
          }
       }
+   }
+
+   if (*pCount > idx) {
+      *pQueueFamilyProperties[idx] = (VkQueueFamilyProperties){
+         .queueFlags = VK_QUEUE_SPARSE_BINDING_BIT,
+         .queueCount = 1,
+         .timestampValidBits = 64,
+         .minImageTransferGranularity = (VkExtent3D){1, 1, 1},
+      };
+      idx++;
    }
 
    *pCount = idx;
@@ -2127,9 +2157,10 @@ radv_GetPhysicalDeviceQueueFamilyProperties2(VkPhysicalDevice physicalDevice, ui
       &pQueueFamilyProperties[0].queueFamilyProperties,
       &pQueueFamilyProperties[1].queueFamilyProperties,
       &pQueueFamilyProperties[2].queueFamilyProperties,
+      &pQueueFamilyProperties[3].queueFamilyProperties,
    };
    radv_get_physical_device_queue_family_properties(pdevice, pCount, properties);
-   assert(*pCount <= 3);
+   assert(*pCount <= 4);
 
    for (uint32_t i = 0; i < *pCount; i++) {
       vk_foreach_struct (ext, pQueueFamilyProperties[i].pNext) {

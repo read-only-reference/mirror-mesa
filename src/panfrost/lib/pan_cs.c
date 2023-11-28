@@ -77,25 +77,6 @@ mali_sampling_mode(const struct pan_image_view *view)
    return MALI_MSAA_SINGLE;
 }
 
-#if PAN_ARCH >= 5
-static inline enum mali_sample_pattern
-pan_sample_pattern(unsigned samples)
-{
-   switch (samples) {
-   case 1:
-      return MALI_SAMPLE_PATTERN_SINGLE_SAMPLED;
-   case 4:
-      return MALI_SAMPLE_PATTERN_ROTATED_4X_GRID;
-   case 8:
-      return MALI_SAMPLE_PATTERN_D3D_8X_GRID;
-   case 16:
-      return MALI_SAMPLE_PATTERN_D3D_16X_GRID;
-   default:
-      unreachable("Unsupported sample count");
-   }
-}
-#endif
-
 int
 GENX(pan_select_crc_rt)(const struct pan_fb_info *fb, unsigned tile_size)
 {
@@ -326,9 +307,10 @@ pan_emit_zs_crc_ext(const struct pan_fb_info *fb, int rt_crc, void *zs_crc_ext)
 /* Measure format as it appears in the tile buffer */
 
 static unsigned
-pan_bytes_per_pixel_tib(enum pipe_format format)
+pan_bytes_per_pixel_tib(const struct panfrost_device *dev,
+                        enum pipe_format format)
 {
-   if (panfrost_blendable_formats_v7[format].internal) {
+   if (dev->blendable_formats[format].internal) {
       /* Blendable formats are always 32-bits in the tile buffer,
        * extra bits are used as padding or to dither */
       return 4;
@@ -341,7 +323,8 @@ pan_bytes_per_pixel_tib(enum pipe_format format)
 }
 
 static unsigned
-pan_cbuf_bytes_per_pixel(const struct pan_fb_info *fb)
+pan_cbuf_bytes_per_pixel(const struct panfrost_device *dev,
+                         const struct pan_fb_info *fb)
 {
    unsigned sum = 0;
 
@@ -351,7 +334,7 @@ pan_cbuf_bytes_per_pixel(const struct pan_fb_info *fb)
       if (!rt)
          continue;
 
-      sum += pan_bytes_per_pixel_tib(rt->format) * rt->nr_samples;
+      sum += pan_bytes_per_pixel_tib(dev, rt->format) * rt->nr_samples;
    }
 
    return sum;
@@ -401,7 +384,8 @@ pan_mfbd_raw_format(unsigned bits)
 }
 
 static void
-pan_rt_init_format(const struct pan_image_view *rt,
+pan_rt_init_format(const struct panfrost_device *dev,
+                   const struct pan_image_view *rt,
                    struct MALI_RENDER_TARGET *cfg)
 {
    /* Explode details on the format */
@@ -423,7 +407,7 @@ pan_rt_init_format(const struct pan_image_view *rt,
    if (desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB)
       cfg->srgb = true;
 
-   struct pan_blendable_format fmt = panfrost_blendable_formats_v7[rt->format];
+   struct pan_blendable_format fmt = dev->blendable_formats[rt->format];
 
    if (fmt.internal) {
       cfg->internal_format = fmt.internal;
@@ -481,7 +465,8 @@ pan_afbc_compression_mode(enum pipe_format format)
 #endif
 
 static void
-pan_prepare_rt(const struct pan_fb_info *fb, unsigned idx, unsigned cbuf_offset,
+pan_prepare_rt(const struct panfrost_device *dev, const struct pan_fb_info *fb,
+               unsigned idx, unsigned cbuf_offset,
                struct MALI_RENDER_TARGET *cfg)
 {
    cfg->clean_pixel_write_enable = fb->rts[idx].clear;
@@ -523,7 +508,7 @@ pan_prepare_rt(const struct pan_fb_info *fb, unsigned idx, unsigned cbuf_offset,
 
    cfg->writeback_msaa = mali_sampling_mode(rt);
 
-   pan_rt_init_format(rt, cfg);
+   pan_rt_init_format(dev, rt, cfg);
 
    cfg->writeback_block_format = mod_to_block_fmt(image->layout.modifier);
 
@@ -649,11 +634,11 @@ pan_emit_midgard_tiler(const struct panfrost_device *dev,
 
 #if PAN_ARCH >= 5
 static void
-pan_emit_rt(const struct pan_fb_info *fb, unsigned idx, unsigned cbuf_offset,
-            void *out)
+pan_emit_rt(const struct panfrost_device *dev, const struct pan_fb_info *fb,
+            unsigned idx, unsigned cbuf_offset, void *out)
 {
    pan_pack(out, RENDER_TARGET, cfg) {
-      pan_prepare_rt(fb, idx, cbuf_offset, &cfg);
+      pan_prepare_rt(dev, fb, idx, cbuf_offset, &cfg);
    }
 }
 
@@ -733,7 +718,7 @@ GENX(pan_emit_fbd)(const struct panfrost_device *dev,
    GENX(pan_emit_tls)(tls, pan_section_ptr(fbd, FRAMEBUFFER, LOCAL_STORAGE));
 #endif
 
-   unsigned bytes_per_pixel = pan_cbuf_bytes_per_pixel(fb);
+   unsigned bytes_per_pixel = pan_cbuf_bytes_per_pixel(dev, fb);
    unsigned tile_size =
       pan_select_max_tile_size(dev->optimal_tib_size, bytes_per_pixel);
 
@@ -828,12 +813,12 @@ GENX(pan_emit_fbd)(const struct panfrost_device *dev,
    unsigned rt_count = MAX2(fb->rt_count, 1);
    unsigned cbuf_offset = 0;
    for (unsigned i = 0; i < rt_count; i++) {
-      pan_emit_rt(fb, i, cbuf_offset, rtd);
+      pan_emit_rt(dev, fb, i, cbuf_offset, rtd);
       rtd += pan_size(RENDER_TARGET);
       if (!fb->rts[i].view)
          continue;
 
-      cbuf_offset += pan_bytes_per_pixel_tib(fb->rts[i].view->format) *
+      cbuf_offset += pan_bytes_per_pixel_tib(dev, fb->rts[i].view->format) *
                      tile_size * pan_image_view_get_nr_samples(fb->rts[i].view);
 
       if (i != crc_rt)
@@ -887,8 +872,7 @@ GENX(pan_emit_fbd)(const struct panfrost_device *dev,
          panfrost_invert_swizzle(desc->swizzle, swizzle);
          cfg.swizzle = panfrost_translate_swizzle_4(swizzle);
 
-         struct pan_blendable_format fmt =
-            panfrost_blendable_formats_v7[rt->format];
+         struct pan_blendable_format fmt = dev->blendable_formats[rt->format];
          if (fmt.internal) {
             cfg.internal_format = fmt.internal;
             cfg.color_writeback_format = fmt.writeback;
@@ -957,49 +941,6 @@ GENX(pan_emit_fbd)(const struct panfrost_device *dev,
    pan_section_pack(fbd, FRAMEBUFFER, PADDING_2, padding)
       ;
    return 0;
-}
-#endif
-
-#if PAN_ARCH >= 6
-void
-GENX(pan_emit_tiler_heap)(const struct panfrost_device *dev, void *out)
-{
-   pan_pack(out, TILER_HEAP, heap) {
-      heap.size = dev->tiler_heap->size;
-      heap.base = dev->tiler_heap->ptr.gpu;
-      heap.bottom = dev->tiler_heap->ptr.gpu;
-      heap.top = dev->tiler_heap->ptr.gpu + dev->tiler_heap->size;
-   }
-}
-
-void
-GENX(pan_emit_tiler_ctx)(const struct panfrost_device *dev, unsigned fb_width,
-                         unsigned fb_height, unsigned nr_samples,
-                         bool first_provoking_vertex, mali_ptr heap, void *out)
-{
-   unsigned max_levels = dev->tiler_features.max_levels;
-   assert(max_levels >= 2);
-
-   pan_pack(out, TILER_CONTEXT, tiler) {
-      /* TODO: Select hierarchy mask more effectively */
-      tiler.hierarchy_mask = (max_levels >= 8) ? 0xFF : 0x28;
-
-      /* For large framebuffers, disable the smallest bin size to
-       * avoid pathological tiler memory usage. Required to avoid OOM
-       * on dEQP-GLES31.functional.fbo.no_attachments.maximums.all on
-       * Mali-G57.
-       */
-      if (MAX2(fb_width, fb_height) >= 4096)
-         tiler.hierarchy_mask &= ~1;
-
-      tiler.fb_width = fb_width;
-      tiler.fb_height = fb_height;
-      tiler.heap = heap;
-      tiler.sample_pattern = pan_sample_pattern(nr_samples);
-#if PAN_ARCH >= 9
-      tiler.first_provoking_vertex = first_provoking_vertex;
-#endif
-   }
 }
 #endif
 

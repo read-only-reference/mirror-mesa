@@ -156,32 +156,6 @@ vir_is_tex(const struct v3d_device_info *devinfo, struct qinst *inst)
 }
 
 bool
-vir_writes_r3_implicitly(const struct v3d_device_info *devinfo,
-                         struct qinst *inst)
-{
-        if (!devinfo->has_accumulators)
-                return false;
-
-        for (int i = 0; i < vir_get_nsrc(inst); i++) {
-                switch (inst->src[i].file) {
-                case QFILE_VPM:
-                        return true;
-                default:
-                        break;
-                }
-        }
-
-        if (devinfo->ver < 41 && (inst->qpu.sig.ldvary ||
-                                  inst->qpu.sig.ldtlb ||
-                                  inst->qpu.sig.ldtlbu ||
-                                  inst->qpu.sig.ldvpm)) {
-                return true;
-        }
-
-        return false;
-}
-
-bool
 vir_writes_r4_implicitly(const struct v3d_device_info *devinfo,
                          struct qinst *inst)
 {
@@ -202,9 +176,6 @@ vir_writes_r4_implicitly(const struct v3d_device_info *devinfo,
         default:
                 break;
         }
-
-        if (devinfo->ver < 41 && inst->qpu.sig.ldtmu)
-                return true;
 
         return false;
 }
@@ -1599,7 +1570,7 @@ v3d_attempt_compile(struct v3d_compile *c)
 
         NIR_PASS(_, c->s, v3d_nir_lower_io, c);
         NIR_PASS(_, c->s, v3d_nir_lower_txf_ms);
-        NIR_PASS(_, c->s, v3d_nir_lower_image_load_store);
+        NIR_PASS(_, c->s, v3d_nir_lower_image_load_store, c);
 
         NIR_PASS(_, c->s, nir_opt_idiv_const, 8);
         nir_lower_idiv_options idiv_options = {

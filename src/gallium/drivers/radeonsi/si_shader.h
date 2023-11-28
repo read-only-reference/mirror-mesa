@@ -436,8 +436,8 @@ struct si_shader_info {
    uint64_t inputs_read; /* "get_unique_index" bits */
    uint64_t tcs_vgpr_only_inputs; /* TCS inputs that are only in VGPRs, not LDS. */
 
+   uint64_t outputs_written_before_tes_gs; /* "get_unique_index" bits */
    uint64_t outputs_written_before_ps; /* "get_unique_index" bits */
-   uint64_t outputs_written;           /* "get_unique_index" bits */
    uint32_t patch_outputs_written;     /* "get_unique_index_patch" bits */
 
    uint8_t clipdist_mask;
@@ -504,6 +504,7 @@ struct si_shader_info {
    bool uses_indirect_descriptor;
    bool has_divergent_loop;
    bool uses_sampleid;
+   bool uses_layer_id;
    bool has_non_uniform_tex_access;
 
    bool uses_vmem_sampler_or_bvh;
@@ -742,6 +743,7 @@ struct si_shader_key_ge {
       uint64_t kill_outputs; /* "get_unique_index" bits */
       unsigned kill_clip_distances : 8;
       unsigned kill_pointsize : 1;
+      unsigned kill_layer : 1;
       unsigned remove_streamout : 1;
 
       /* For NGG VS and TES. */
@@ -931,7 +933,6 @@ struct si_shader {
          uint16_t hw_max_esverts;
          uint16_t max_gsprims;
          uint16_t max_out_verts;
-         uint16_t prim_amp_factor;
          bool max_vert_out_per_gs_instance;
          /* Register values. */
          unsigned ge_max_output_per_subgroup;
@@ -941,7 +942,6 @@ struct si_shader {
          unsigned vgt_gs_instance_cnt;
          unsigned esgs_vertex_stride;
          unsigned spi_vs_out_config;
-         unsigned spi_shader_idx_format;
          unsigned spi_shader_pos_format;
          unsigned pa_cl_vte_cntl;
          unsigned vgt_gs_max_vert_out; /* for API GS */

@@ -259,14 +259,15 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_PREFER_BACK_BUFFER_REUSE:
-      return 0;
-
-   case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
-      return enable_sparse ? RADEON_SPARSE_PAGE_SIZE : 0;
-
    case PIPE_CAP_UMA:
    case PIPE_CAP_PREFER_IMM_ARRAYS_AS_CONSTBUF:
       return 0;
+
+   case PIPE_CAP_PERFORMANCE_MONITOR:
+      return sscreen->info.gfx_level >= GFX7 && sscreen->info.gfx_level <= GFX10_3;
+
+   case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
+      return enable_sparse ? RADEON_SPARSE_PAGE_SIZE : 0;
 
    case PIPE_CAP_CONTEXT_PRIORITY_MASK:
       if (!(sscreen->info.is_amdgpu && sscreen->info.drm_minor >= 22))
@@ -293,6 +294,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 30;
 
    case PIPE_CAP_MAX_VARYINGS:
+   case PIPE_CAP_MAX_GS_INVOCATIONS:
       return 32;
 
    case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
@@ -311,9 +313,6 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 256;
    case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
       return 4095;
-   case PIPE_CAP_MAX_GS_INVOCATIONS:
-      /* Even though the hw supports more, we officially wanna expose only 32. */
-      return 32;
 
    case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
       return 2048;
@@ -758,6 +757,16 @@ static int si_get_video_param(struct pipe_screen *screen, enum pipe_video_profil
             return refPicList0 | (refPicList1 << 16);
          } else
             return 1;
+
+      case PIPE_VIDEO_CAP_ENC_INTRA_REFRESH:
+         if (sscreen->info.vcn_ip_version >= VCN_1_0_0) {
+            int value = PIPE_VIDEO_ENC_INTRA_REFRESH_ROW |
+                        PIPE_VIDEO_ENC_INTRA_REFRESH_COLUMN |
+                        PIPE_VIDEO_ENC_INTRA_REFRESH_P_FRAME;
+            return value;
+         }
+         else
+            return 0;
 
       default:
          return 0;
@@ -1371,6 +1380,16 @@ void si_init_screen_get_functions(struct si_screen *sscreen)
          nir_lower_imul64 | nir_lower_imul_high64 | nir_lower_imul_2x32_64 |
          nir_lower_divmod64 | nir_lower_minmax64 | nir_lower_iabs64 |
          nir_lower_iadd_sat64 | nir_lower_conv64,
+
+      /* For OpenGL, rounding mode is undefined. We want fast packing with v_cvt_pkrtz_f16,
+       * but if we use it, all f32->f16 conversions have to round towards zero,
+       * because both scalar and vec2 down-conversions have to round equally.
+       *
+       * For OpenCL, rounding mode is explicit. This will only lower f2f16 to f2f16_rtz
+       * when execution mode is rtz instead of rtne.
+       */
+      .force_f2f16_rtz = true,
+      .lower_layer_fs_input_to_sysval = true,
    };
    *sscreen->nir_options = nir_options;
 }

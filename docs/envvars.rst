@@ -1259,6 +1259,8 @@ RADV driver environment variables
       disable directly recording command buffers in GPU-visible memory
    ``nomemorycache``
       disable memory shaders cache
+   ``nomeshshader``
+      disable mesh shader support on GFX10.3+
    ``nongg``
       disable NGG for GFX10 and GFX10.3
    ``nonggc``
@@ -1340,6 +1342,8 @@ RADV driver environment variables
       enable wave64 for ray tracing shaders (GFX10+)
    ``video_decode``
       enable experimental video decoding support
+   ``gsfastlaunch2``
+      use GS_FAST_LAUNCH=2 for Mesh shaders (GFX11+)
 
 .. envvar:: RADV_TEX_ANISO
 
@@ -1352,11 +1356,15 @@ RADV driver environment variables
 
 .. envvar:: RADV_THREAD_TRACE_CACHE_COUNTERS
 
-   enable/disable SQTT/RGP cache counters on GFX10+ (disabled by default)
+   enable/disable SQTT/RGP cache counters on GFX10+ (enabled by default)
 
 .. envvar:: RADV_THREAD_TRACE_INSTRUCTION_TIMING
 
    enable/disable SQTT/RGP instruction timing (enabled by default)
+
+.. envvar:: RADV_THREAD_TRACE_QUEUE_EVENTS
+
+   enable/disable SQTT/RGP queue events (enabled by default)
 
 .. envvar:: RADV_RRA_TRACE_VALIDATE
 
@@ -1420,6 +1428,8 @@ RadeonSI driver environment variables
       Disable DCC for MSAA
    ``nodpbb``
       Disable DPBB. Overrules the dpbb enable option.
+   ``noefc``
+      Disable hardware based encoder colour format conversion
    ``notiling``
       Disable tiling
    ``nofmask``
@@ -1474,14 +1484,14 @@ RadeonSI driver environment variables
       Use old-style monolithic shaders compiled on demand
    ``nooptvariant``
       Disable compiling optimized shader variants.
+   ``useaco``
+      Use ACO as shader compiler when possible
    ``nowc``
       Disable GTT write combining
    ``check_vm``
       Check VM faults and dump debug info.
    ``reserve_vmid``
       Force VMID reservation per context.
-   ``nogfx``
-      Disable graphics. Only multimedia compute paths can be used.
    ``nongg``
       Disable NGG and use the legacy pipeline.
    ``nggc``

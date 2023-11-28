@@ -9,7 +9,13 @@
       - src/gallium/winsys/amdgpu/**/*
       - src/amd/*
       - src/amd/addrlib/**/*
-      - src/amd/ci/*
+      - src/amd/ci/gitlab-ci.yml
+      - src/amd/ci/gitlab-ci-inc.yml
+      - src/amd/ci/deqp-$DEQP_SUITE.toml
+      - src/amd/ci/$GPU_VERSION-fails.txt
+      - src/amd/ci/$GPU_VERSION-flakes.txt
+      - src/amd/ci/$GPU_VERSION-skips.txt
+      - src/amd/ci/$PIGLIT_TRACES_FILE
       - src/amd/common/**/*
       - src/amd/llvm/**/*
       - src/amd/registers/**/*
@@ -178,7 +184,7 @@
     - .lava-piglit-traces:x86_64
   variables:
     PIGLIT_PLATFORM: mixed_glx_egl  # TODO, take wine/VK in account
-    PIGLIT_REPLAY_DESCRIPTION_FILE: "/install/traces-amd.yml"
+    PIGLIT_TRACES_FILE: traces-amd.yml
 
 ############### Valve Infra
 .test-radv:
@@ -211,6 +217,7 @@
     RUNNER_FARM_LOCATION: mupuf
     B2C_KERNEL_CMDLINE_EXTRAS: 'b2c.swap=8g'
   tags:
+    - farm:$RUNNER_FARM_LOCATION
     - amdgpu:codename:KABINI
 
 .polaris10-test-valve:
@@ -221,6 +228,7 @@
     #    TSC found unstable after boot, most likely due to broken BIOS. Use 'tsc=unstable'.
     B2C_KERNEL_CMDLINE_EXTRAS: 'b2c.swap=16g tsc=unstable'
   tags:
+    - farm:$RUNNER_FARM_LOCATION
     - amdgpu:codename:POLARIS10
 
 .polaris10-test-valve-mupuf:
@@ -239,6 +247,7 @@
     FDO_CI_CONCURRENT: 16
     B2C_KERNEL_CMDLINE_EXTRAS: 'b2c.swap=16g'
   tags:
+    - farm:$RUNNER_FARM_LOCATION
     - amdgpu:codename:VEGA10
 
 .renoir-test-valve:
@@ -249,6 +258,7 @@
     B2C_TIMEOUT_BOOT_MINUTES: 60
     B2C_TIMEOUT_OVERALL_MINUTES: 120
   tags:
+    - farm:$RUNNER_FARM_LOCATION
     - amdgpu:codename:RENOIR
 
 .navi10-test-valve:
@@ -259,6 +269,7 @@
     # MSI IRQs leading to GPU hangs on amdgpu.
     B2C_KERNEL_CMDLINE_EXTRAS: 'b2c.swap=16g noapic'
   tags:
+    - farm:$RUNNER_FARM_LOCATION
     - amdgpu:codename:NAVI10
 
 .navi10-test-valve-mupuf:
@@ -281,6 +292,7 @@
     FDO_CI_CONCURRENT: 32
     B2C_KERNEL_CMDLINE_EXTRAS: 'b2c.swap=16g'
   tags:
+    - farm:$RUNNER_FARM_LOCATION
     - amdgpu:codename:NAVI21
 
 .vangogh-test-valve:
@@ -291,6 +303,7 @@
     B2C_TIMEOUT_OVERALL_MINUTES: 120
     B2C_KERNEL_CMDLINE_EXTRAS: 'b2c.swap=16g'
   tags:
+    - farm:$RUNNER_FARM_LOCATION
     - amdgpu:codename:VANGOGH
     - $VALVE_INFRA_VANGOGH_JOB_PRIORITY
 
@@ -301,6 +314,7 @@
     B2C_KERNEL_CMDLINE_EXTRAS: 'b2c.swap=16g'
     B2C_KERNEL_URL: 'https://gitlab.freedesktop.org/mupuf/boot2container/-/releases/v0.9.10/downloads/linux-x86_64'  # Linux 6.3
   tags:
+    - farm:$RUNNER_FARM_LOCATION
     - amdgpu:codename:NAVI31
 
 ############### VKCTS tests ###############

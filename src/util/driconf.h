@@ -649,6 +649,10 @@
   DRI_CONF_OPT_B(radv_disable_aniso_single_level, def, \
                  "Disable anisotropic filtering for single level images")
 
+#define DRI_CONF_RADV_DISABLE_TRUNC_COORD(def) \
+  DRI_CONF_OPT_B(radv_disable_trunc_coord, def, \
+                 "Disable TRUNC_COORD to use D3D10/11/12 point sampling behaviour. This has special behaviour for DXVK.")
+
 #define DRI_CONF_RADV_DISABLE_SINKING_LOAD_INPUT_FS(def) \
    DRI_CONF_OPT_B(radv_disable_sinking_load_input_fs, def, \
                   "Disable sinking load inputs for fragment shaders")
@@ -677,6 +681,23 @@
 #define DRI_CONF_RADV_RT_WAVE64(def) \
    DRI_CONF_OPT_B(radv_rt_wave64, def, \
                   "Force wave64 in RT shaders")
+
+/**
+ * Overrides for forcing re-compilation of pipelines when RADV_BUILD_ID_OVERRIDE is enabled.
+ * These need to be bumped every time a compiler bugfix is backported (up to 8 shader
+ * versions are supported).
+ */
+#define DRI_CONF_RADV_OVERRIDE_GRAPHICS_SHADER_VERSION(def) \
+   DRI_CONF_OPT_I(radv_override_graphics_shader_version, def, 0, 7, \
+                  "Override the shader version of graphics pipelines to force re-compilation. (0 = default)")
+
+#define DRI_CONF_RADV_OVERRIDE_COMPUTE_SHADER_VERSION(def) \
+   DRI_CONF_OPT_I(radv_override_compute_shader_version, def, 0, 7, \
+                  "Override the shader version of compute pipelines to force re-compilation. (0 = default)")
+
+#define DRI_CONF_RADV_OVERRIDE_RAY_TRACING_SHADER_VERSION(def) \
+   DRI_CONF_OPT_I(radv_override_ray_tracing_shader_version, def, 0, 7, \
+                  "Override the shader version of ray tracing pipelines to force re-compilation. (0 = default)")
 
 #define DRI_CONF_RADV_APP_LAYER() DRI_CONF_OPT_S_NODEF(radv_app_layer, "Select an application layer.")
 
@@ -724,6 +745,10 @@
 #define DRI_CONF_ANV_FORCE_INDIRECT_DESCRIPTORS(def) \
    DRI_CONF_OPT_B(force_indirect_descriptors, def, \
                   "Use an indirection to access buffer/image/texture/sampler handles")
+
+#define DRI_CONF_ANV_DISABLE_FCV(def) \
+   DRI_CONF_OPT_B(anv_disable_fcv, def, \
+                  "Disable FCV optimization")
 
 /**
  * \brief DZN specific configuration options

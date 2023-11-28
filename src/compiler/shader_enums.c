@@ -333,6 +333,7 @@ gl_system_value_name(gl_system_value sysval)
      ENUM(SYSTEM_VALUE_SAMPLE_ID),
      ENUM(SYSTEM_VALUE_SAMPLE_POS),
      ENUM(SYSTEM_VALUE_SAMPLE_MASK_IN),
+     ENUM(SYSTEM_VALUE_LAYER_ID),
      ENUM(SYSTEM_VALUE_HELPER_INVOCATION),
      ENUM(SYSTEM_VALUE_COLOR0),
      ENUM(SYSTEM_VALUE_COLOR1),
@@ -431,44 +432,6 @@ gl_frag_result_name(gl_frag_result result)
    };
    STATIC_ASSERT(ARRAY_SIZE(names) == FRAG_RESULT_MAX);
    return NAME(result);
-}
-
-unsigned
-mesa_vertices_per_prim(enum mesa_prim prim)
-{
-   switch(prim) {
-   case MESA_PRIM_POINTS:
-      return 1;
-   case MESA_PRIM_LINES:
-   case MESA_PRIM_LINE_LOOP:
-   case MESA_PRIM_LINE_STRIP:
-      return 2;
-   case MESA_PRIM_TRIANGLES:
-   case MESA_PRIM_TRIANGLE_STRIP:
-   case MESA_PRIM_TRIANGLE_FAN:
-      return 3;
-   case MESA_PRIM_LINES_ADJACENCY:
-   case MESA_PRIM_LINE_STRIP_ADJACENCY:
-      return 4;
-   case MESA_PRIM_TRIANGLES_ADJACENCY:
-   case MESA_PRIM_TRIANGLE_STRIP_ADJACENCY:
-      return 6;
-
-   case MESA_PRIM_QUADS:
-   case MESA_PRIM_QUAD_STRIP:
-      /* These won't be seen from geometry shaders but prim assembly might for
-       * prim id.
-       */
-      return 4;
-
-   /* The following primitives should never be used with geometry or mesh
-    * shaders and their size is undefined.
-    */
-   case MESA_PRIM_POLYGON:
-   default:
-      debug_printf("Unrecognized geometry or mesh shader primitive");
-      return 3;
-   }
 }
 
 const char *

@@ -71,6 +71,7 @@ enum {
    RADV_DEBUG_NO_GPL = 1ull << 40,
    RADV_DEBUG_VIDEO_ARRAY_PATH = 1ull << 41,
    RADV_DEBUG_NO_RT = 1ull << 42,
+   RADV_DEBUG_NO_MESH_SHADER = 1ull << 43,
 };
 
 enum {
@@ -87,6 +88,7 @@ enum {
    RADV_PERFTEST_RT_WAVE_64 = 1u << 10,
    RADV_PERFTEST_VIDEO_DECODE = 1u << 11,
    RADV_PERFTEST_DMA_SHADERS = 1u << 12,
+   RADV_PERFTEST_GS_FAST_LAUNCH_2 = 1u << 13,
 };
 
 bool radv_init_trace(struct radv_device *device);

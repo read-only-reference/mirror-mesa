@@ -1520,10 +1520,14 @@ zink_destroy_screen(struct pipe_screen *pscreen)
    if (screen->dev)
       VKSCR(DestroyDevice)(screen->dev, NULL);
 
-   VKSCR(DestroyInstance)(screen->instance, NULL);
+   if (screen->instance)
+      VKSCR(DestroyInstance)(screen->instance, NULL);
+
    util_idalloc_mt_fini(&screen->buffer_ids);
 
-   util_dl_close(screen->loader_lib);
+   if (screen->loader_lib)
+      util_dl_close(screen->loader_lib);
+
    if (screen->drm_fd != -1)
       close(screen->drm_fd);
 
@@ -1627,6 +1631,12 @@ choose_pdev(struct zink_screen *screen, int64_t dev_major, int64_t dev_minor)
       screen->pdev = pdev;
    }
    VKSCR(GetPhysicalDeviceProperties)(screen->pdev, &screen->info.props);
+
+   /* allow software rendering only if forced by the user */
+   if (!cpu && screen->info.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) {
+      screen->pdev = VK_NULL_HANDLE;
+      return;
+   }
 
    screen->info.device_version = screen->info.props.apiVersion;
 
@@ -2875,6 +2885,7 @@ init_driver_workarounds(struct zink_screen *screen)
    /* these drivers can successfully do INVALID <-> LINEAR dri3 modifier swap */
    switch (screen->info.driver_props.driverID) {
    case VK_DRIVER_ID_MESA_TURNIP:
+   case VK_DRIVER_ID_MESA_VENUS:
       screen->driver_workarounds.can_do_invalid_linear_modifier = true;
       break;
    default:
@@ -3114,6 +3125,8 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
       mesa_loge("ZINK: failed to allocate screen");
       return NULL;
    }
+
+   screen->drm_fd = -1;
 
    glsl_type_singleton_init_or_ref();
    zink_debug = debug_get_option_zink_debug();

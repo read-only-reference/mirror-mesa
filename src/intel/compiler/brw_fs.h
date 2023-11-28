@@ -121,7 +121,7 @@ struct tes_thread_payload : public thread_payload {
 };
 
 struct gs_thread_payload : public thread_payload {
-   gs_thread_payload(const fs_visitor &v);
+   gs_thread_payload(fs_visitor &v);
 
    fs_reg urb_handles;
    fs_reg primitive_id;
@@ -154,7 +154,7 @@ protected:
 };
 
 struct task_mesh_thread_payload : public cs_thread_payload {
-   task_mesh_thread_payload(const fs_visitor &v);
+   task_mesh_thread_payload(fs_visitor &v);
 
    fs_reg extended_parameter_0;
    fs_reg local_index;
@@ -182,6 +182,8 @@ struct brw_fs_bind_info {
    unsigned set;
    unsigned binding;
 };
+
+class fs_instruction_scheduler;
 
 /**
  * The fragment shader front-end.
@@ -279,7 +281,11 @@ public:
    bool remove_duplicate_mrf_writes();
    bool remove_extra_rounding_modes();
 
-   void schedule_instructions(instruction_scheduler_mode mode);
+   fs_instruction_scheduler *prepare_scheduler(void *mem_ctx);
+   void schedule_instructions_pre_ra(fs_instruction_scheduler *sched,
+                                     instruction_scheduler_mode mode);
+   void schedule_instructions_post_ra();
+
    void insert_gfx4_send_dependency_workarounds();
    void insert_gfx4_pre_send_dependency_workarounds(bblock_t *block,
                                                     fs_inst *inst);

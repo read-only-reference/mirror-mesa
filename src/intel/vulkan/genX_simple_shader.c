@@ -313,6 +313,7 @@ genX(emit_simpler_shader_init_fragment)(struct anv_simple_shader *state)
    BITSET_SET(hw_state->dirty, ANV_GFX_STATE_PRIMITIVE_REPLICATION);
 #endif
    BITSET_SET(hw_state->dirty, ANV_GFX_STATE_STREAMOUT);
+   BITSET_SET(hw_state->dirty, ANV_GFX_STATE_VIEWPORT_CC);
    BITSET_SET(hw_state->dirty, ANV_GFX_STATE_CLIP);
    BITSET_SET(hw_state->dirty, ANV_GFX_STATE_RASTER);
    BITSET_SET(hw_state->dirty, ANV_GFX_STATE_SAMPLE_MASK);
@@ -524,8 +525,8 @@ genX(emit_simple_shader_dispatch)(struct anv_simple_shader *state,
          prim.VertexCountPerInstance   = 3;
          prim.InstanceCount            = 1;
       }
+      genX(batch_emit_post_3dprimitive_was)(batch, device, _3DPRIM_RECTLIST, 3);
       genX(emit_breakpoint)(batch, device, false);
-      genX(batch_emit_dummy_post_sync_op)(batch, device, _3DPRIM_RECTLIST, 3);
    } else {
       const struct intel_device_info *devinfo = device->info;
       const struct brw_cs_prog_data *prog_data =

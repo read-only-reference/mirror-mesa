@@ -26,6 +26,7 @@
 #include "util/u_memory.h"
 #include "util/format/u_format.h"
 #include "util/u_inlines.h"
+#include "util/u_resource.h"
 #include "util/u_surface.h"
 #include "util/u_transfer_helper.h"
 #include "util/u_upload_mgr.h"
@@ -36,7 +37,8 @@
 #include "v3d_screen.h"
 #include "v3d_context.h"
 #include "v3d_resource.h"
-#include "broadcom/cle/v3d_packet_v33_pack.h"
+/* The packets used here the same across V3D versions. */
+#include "broadcom/cle/v3d_packet_v42_pack.h"
 
 static void
 v3d_debug_resource_layout(struct v3d_resource *rsc, const char *caller)
@@ -473,17 +475,21 @@ v3d_resource_get_param(struct pipe_screen *pscreen,
                        enum pipe_resource_param param,
                        unsigned usage, uint64_t *value)
 {
-        struct v3d_resource *rsc = v3d_resource(prsc);
+        struct v3d_resource *rsc =
+                (struct v3d_resource *)util_resource_at_index(prsc, plane);
 
         switch (param) {
         case PIPE_RESOURCE_PARAM_STRIDE:
                 *value = rsc->slices[level].stride;
                 return true;
         case PIPE_RESOURCE_PARAM_OFFSET:
-                *value = 0;
+                *value = rsc->slices[level].offset;
                 return true;
         case PIPE_RESOURCE_PARAM_MODIFIER:
                 *value = v3d_resource_modifier(rsc);
+                return true;
+        case PIPE_RESOURCE_PARAM_NPLANES:
+                *value = util_resource_num(prsc);
                 return true;
         default:
                 return false;
@@ -747,8 +753,6 @@ static struct v3d_resource *
 v3d_resource_setup(struct pipe_screen *pscreen,
                    const struct pipe_resource *tmpl)
 {
-        struct v3d_screen *screen = v3d_screen(pscreen);
-        struct v3d_device_info *devinfo = &screen->devinfo;
         struct v3d_resource *rsc = CALLOC_STRUCT(v3d_resource);
 
         if (!rsc)
@@ -760,34 +764,7 @@ v3d_resource_setup(struct pipe_screen *pscreen,
         pipe_reference_init(&prsc->reference, 1);
         prsc->screen = pscreen;
 
-        if (prsc->nr_samples <= 1 ||
-            devinfo->ver >= 40 ||
-            util_format_is_depth_or_stencil(prsc->format)) {
-                rsc->cpp = util_format_get_blocksize(prsc->format);
-                if (devinfo->ver < 40 && prsc->nr_samples > 1)
-                        rsc->cpp *= prsc->nr_samples;
-        } else {
-                assert(v3d_rt_format_supported(devinfo, prsc->format));
-                uint32_t output_image_format =
-                        v3d_get_rt_format(devinfo, prsc->format);
-                uint32_t internal_type;
-                uint32_t internal_bpp;
-                v3d_X(devinfo, get_internal_type_bpp_for_output_format)
-                   (output_image_format, &internal_type, &internal_bpp);
-
-                switch (internal_bpp) {
-                case V3D_INTERNAL_BPP_32:
-                        rsc->cpp = 4;
-                        break;
-                case V3D_INTERNAL_BPP_64:
-                        rsc->cpp = 8;
-                        break;
-                case V3D_INTERNAL_BPP_128:
-                        rsc->cpp = 16;
-                        break;
-                }
-        }
-
+        rsc->cpp = util_format_get_blocksize(prsc->format);
         rsc->serial_id++;
 
         assert(rsc->cpp);
@@ -1016,6 +993,9 @@ v3d_resource_from_handle(struct pipe_screen *pscreen,
         } else if (!rsc->tiled) {
                 slice->stride = whandle->stride;
         }
+
+        /* Prevent implicit clearing of the imported buffer contents. */
+        rsc->writes = 1;
 
         return prsc;
 

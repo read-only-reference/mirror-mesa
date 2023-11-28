@@ -124,9 +124,11 @@ blorp_emit_pipeline(struct blorp_batch *batch,
                     const struct blorp_params *params);
 
 static void
-blorp_emit_breakpoint_pre_draw(struct blorp_batch *batch);
+blorp_emit_pre_draw(struct blorp_batch *batch,
+                    const struct blorp_params *params);
 static void
-blorp_emit_breakpoint_post_draw(struct blorp_batch *batch);
+blorp_emit_post_draw(struct blorp_batch *batch,
+                     const struct blorp_params *params);
 
 /***** BEGIN blorp_exec implementation ******/
 
@@ -1257,18 +1259,6 @@ blorp_emit_depth_stencil_state(struct blorp_batch *batch,
       return 0;
 
    GENX(3DSTATE_WM_DEPTH_STENCIL_pack)(NULL, dw, &ds);
-
-#if GFX_VERx10 >= 125
-   /* Check if need PSS Stall sync. */
-   if (intel_needs_workaround(batch->blorp->compiler->devinfo, 18019816803) &&
-       batch->flags & BLORP_BATCH_NEED_PSS_STALL_SYNC) {
-      blorp_emit(batch, GENX(PIPE_CONTROL), pc) {
-            pc.PSSStallSyncEnable = true;
-      }
-      batch->flags &= ~BLORP_BATCH_NEED_PSS_STALL_SYNC;
-   }
-#endif
-
 #else
    uint32_t offset;
    void *state = blorp_alloc_dynamic_state(batch,
@@ -2014,6 +2004,16 @@ blorp_update_clear_color(UNUSED struct blorp_batch *batch,
 #endif
 }
 
+static bool
+blorp_uses_bti_rt_writes(const struct blorp_batch *batch, const struct blorp_params *params)
+{
+   if (batch->flags & (BLORP_BATCH_USE_BLITTER | BLORP_BATCH_USE_COMPUTE))
+      return false;
+
+   /* HIZ clears use WM_HZ ops rather than a clear shader using RT writes. */
+   return params->hiz_op == ISL_AUX_OP_NONE;
+}
+
 static void
 blorp_exec_3d(struct blorp_batch *batch, const struct blorp_params *params)
 {
@@ -2036,8 +2036,6 @@ blorp_exec_3d(struct blorp_batch *batch, const struct blorp_params *params)
    }
 #endif
 
-   blorp_measure_start(batch, params);
-
    blorp_emit_vertex_buffers(batch, params);
    blorp_emit_vertex_elements(batch, params);
 
@@ -2049,8 +2047,7 @@ blorp_exec_3d(struct blorp_batch *batch, const struct blorp_params *params)
       blorp_emit_depth_stencil_config(batch, params);
 
    const UNUSED bool use_tbimr = false;
-
-   blorp_emit_breakpoint_pre_draw(batch);
+   blorp_emit_pre_draw(batch, params);
    blorp_emit(batch, GENX(3DPRIMITIVE), prim) {
       prim.VertexAccessType = SEQUENTIAL;
       prim.PrimitiveTopologyType = _3DPRIM_RECTLIST;
@@ -2063,8 +2060,7 @@ blorp_exec_3d(struct blorp_batch *batch, const struct blorp_params *params)
       prim.VertexCountPerInstance = 3;
       prim.InstanceCount = params->num_layers;
    }
-   blorp_emit_breakpoint_post_draw(batch);
-   blorp_measure_end(batch, params);
+   blorp_emit_post_draw(batch, params);
 }
 
 #if GFX_VER >= 7

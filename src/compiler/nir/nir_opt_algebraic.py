@@ -656,6 +656,10 @@ optimizations.extend([
    (('fneu', ('b2f', 'a@1'), 0.0), a),
    (('ieq', ('b2i', 'a@1'), 0),   ('inot', a)),
    (('ine', ('b2i', 'a@1'), 0),   a),
+   (('ieq', 'a@1', False), ('inot', a)),
+   (('ieq', 'a@1', True), a),
+   (('ine', 'a@1', False), a),
+   (('ine', 'a@1', True), ('inot', a)),
 
    (('fneu', ('u2f', a), 0.0), ('ine', a, 0)),
    (('feq', ('u2f', a), 0.0), ('ieq', a, 0)),
@@ -3276,6 +3280,8 @@ late_optimizations += [
   (('i2imp', a), ('u2u16', a), "!options->preserve_mediump"),
   (('u2fmp', a), ('u2f16', a), "!options->preserve_mediump"),
   (('fisfinite', a), ('flt', ('fabs', a), float("inf"))),
+
+  (('f2f16', a), ('f2f16_rtz', a), "options->force_f2f16_rtz && !nir_is_rounding_mode_rtne(info->float_controls_execution_mode, 16)"),
 
   (('fcsel', ('slt', 0, a), b, c), ('fcsel_gt', a, b, c), "options->has_fused_comp_and_csel"),
   (('fcsel', ('slt', a, 0), b, c), ('fcsel_gt', ('fneg', a), b, c), "options->has_fused_comp_and_csel"),

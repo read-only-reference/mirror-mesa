@@ -211,12 +211,13 @@ typedef enum {
                                    nir_var_system_value | nir_var_mem_constant |
                                    nir_var_mem_ubo,
    /* Modes where vector derefs can be indexed as arrays. nir_var_shader_out
-    * is only for mesh stages.
+    * is only for mesh stages. nir_var_system_value is only for kernel stages.
     */
-   nir_var_vec_indexable_modes   = nir_var_mem_ubo | nir_var_mem_ssbo |
+   nir_var_vec_indexable_modes   = nir_var_shader_temp | nir_var_function_temp |
+                                 nir_var_mem_ubo | nir_var_mem_ssbo |
                                  nir_var_mem_shared | nir_var_mem_global |
                                  nir_var_mem_push_const | nir_var_mem_task_payload |
-                                 nir_var_shader_out,
+                                 nir_var_shader_out | nir_var_system_value,
    nir_num_variable_modes        = 18,
    nir_var_all                   = (1 << nir_num_variable_modes) - 1,
 } nir_variable_mode;
@@ -1574,10 +1575,6 @@ typedef struct nir_alu_instr {
 
 void nir_alu_src_copy(nir_alu_src *dest, const nir_alu_src *src);
 
-/* is this source channel used? */
-bool
-nir_alu_instr_channel_used(const nir_alu_instr *instr, unsigned src,
-                           unsigned channel);
 nir_component_mask_t
 nir_alu_instr_src_read_mask(const nir_alu_instr *instr, unsigned src);
 /**
@@ -1585,6 +1582,14 @@ nir_alu_instr_src_read_mask(const nir_alu_instr *instr, unsigned src);
  */
 unsigned
 nir_ssa_alu_instr_src_components(const nir_alu_instr *instr, unsigned src);
+
+/* is this source channel used? */
+static inline bool
+nir_alu_instr_channel_used(const nir_alu_instr *instr, unsigned src,
+                           unsigned channel)
+{
+   return channel < nir_ssa_alu_instr_src_components(instr, src);
+}
 
 bool
 nir_alu_instr_is_comparison(const nir_alu_instr *instr);
@@ -3465,6 +3470,8 @@ typedef struct nir_function {
    nir_function_impl *impl;
 
    bool is_entrypoint;
+   /* from SPIR-V linkage, only for libraries */
+   bool is_exported;
    bool is_preamble;
    /* from SPIR-V function control */
    bool should_inline;
@@ -4009,6 +4016,12 @@ typedef struct nir_shader_compiler_options {
 
    /** lowers fquantize2f16 to alu ops. */
    bool lower_fquantize2f16;
+
+   /** Lower f2f16 to f2f16_rtz when execution mode is not rtne. */
+   bool force_f2f16_rtz;
+
+   /** Lower VARYING_SLOT_LAYER in FS to SYSTEM_VALUE_LAYER_ID. */
+   bool lower_layer_fs_input_to_sysval;
 } nir_shader_compiler_options;
 
 typedef struct nir_shader {
@@ -4148,7 +4161,12 @@ nir_shader_get_function_for_name(const nir_shader *shader, const char *name)
    return NULL;
 }
 
+/*
+ * After all functions are forcibly inlined, these passes remove redundant
+ * functions from a shader and library respectively.
+ */
 void nir_remove_non_entrypoints(nir_shader *shader);
+void nir_remove_non_exported(nir_shader *shader);
 
 nir_shader *nir_shader_create(void *mem_ctx,
                               gl_shader_stage stage,
@@ -4883,6 +4901,51 @@ should_print_nir(UNUSED nir_shader *shader)
       nir_print_shader(nir, stdout);                         \
 })
 
+#define _NIR_LOOP_PASS(progress, idempotent, skip, nir, pass, ...)   \
+do {                                                                 \
+   bool nir_loop_pass_progress = false;                              \
+   if (!_mesa_set_search(skip, (void (*)())&pass))                   \
+      NIR_PASS(nir_loop_pass_progress, nir, pass, ##__VA_ARGS__);    \
+   if (nir_loop_pass_progress)                                       \
+      _mesa_set_clear(skip, NULL);                                   \
+   if (idempotent || !nir_loop_pass_progress)                        \
+      _mesa_set_add(skip, (void (*)())&pass);                        \
+   UNUSED bool _ = false;                                            \
+   progress |= nir_loop_pass_progress;                               \
+} while (0)
+
+/* Helper to skip a pass if no different passes have made progress since it was
+ * previously run. Note that two passes are considered the same if they have
+ * the same function pointer, even if they used different options.
+ *
+ * The usage of this is mostly identical to NIR_PASS. "skip" is a "struct set *"
+ * (created by _mesa_pointer_set_create) which the macro uses to keep track of
+ * already run passes.
+ *
+ * Example:
+ * bool progress = true;
+ * struct set *skip = _mesa_pointer_set_create(NULL);
+ * while (progress) {
+ *    progress = false;
+ *    NIR_LOOP_PASS(progress, skip, nir, pass1);
+ *    NIR_LOOP_PASS_NOT_IDEMPOTENT(progress, skip, nir, nir_opt_algebraic);
+ *    NIR_LOOP_PASS(progress, skip, nir, pass2);
+ *    ...
+ * }
+ * _mesa_set_destroy(skip, NULL);
+ *
+ * You shouldn't mix usage of this with the NIR_PASS set of helpers, without
+ * using a new "skip" in-between.
+ */
+#define NIR_LOOP_PASS(progress, skip, nir, pass, ...) \
+   _NIR_LOOP_PASS(progress, true, skip, nir, pass, ##__VA_ARGS__)
+
+/* Like NIR_LOOP_PASS, but use this for passes which may make further progress
+ * when repeated.
+ */
+#define NIR_LOOP_PASS_NOT_IDEMPOTENT(progress, skip, nir, pass, ...) \
+   _NIR_LOOP_PASS(progress, false, skip, nir, pass, ##__VA_ARGS__)
+
 #define NIR_SKIP(name) should_skip_nir(#name)
 
 /** An instruction filtering callback with writemask
@@ -4970,6 +5033,7 @@ void nir_dump_cfg(nir_shader *shader, FILE *fp);
 void nir_gs_count_vertices_and_primitives(const nir_shader *shader,
                                           int *out_vtxcnt,
                                           int *out_prmcnt,
+                                          int *out_decomposed_prmcnt,
                                           unsigned num_streams);
 
 typedef enum {
@@ -5084,7 +5148,7 @@ bool nir_slot_is_varying(gl_varying_slot slot);
 bool nir_slot_is_sysval_output_and_varying(gl_varying_slot slot,
                                            gl_shader_stage next_shader);
 bool nir_remove_varying(nir_intrinsic_instr *intr, gl_shader_stage next_shader);
-void nir_remove_sysval_output(nir_intrinsic_instr *intr);
+bool nir_remove_sysval_output(nir_intrinsic_instr *intr);
 
 bool nir_lower_amul(nir_shader *shader,
                     int (*type_size)(const struct glsl_type *, bool));
@@ -5543,6 +5607,7 @@ typedef struct nir_lower_subgroups_options {
    bool lower_rotate_to_shuffle : 1;
    bool lower_ballot_bit_count_to_mbcnt_amd : 1;
    bool lower_inverse_ballot : 1;
+   bool lower_boolean_reduce : 1;
 } nir_lower_subgroups_options;
 
 bool nir_lower_subgroups(nir_shader *shader,
@@ -5628,6 +5693,15 @@ typedef struct nir_lower_tex_options {
     * texture dims to normalize.
     */
    bool lower_rect;
+
+   /**
+    * If true, lower 1D textures to 2D. This requires the GL/VK driver to map 1D
+    * textures to 2D textures with height=1.
+    *
+    * lower_1d_shadow does this lowering for shadow textures only.
+    */
+   bool lower_1d;
+   bool lower_1d_shadow;
 
    /**
     * If true, convert yuv to rgb.
@@ -5912,6 +5986,8 @@ bool nir_lower_clip_gs(nir_shader *shader, unsigned ucp_enables,
                        const gl_state_index16 clipplane_state_tokens[][STATE_LENGTH]);
 bool nir_lower_clip_fs(nir_shader *shader, unsigned ucp_enables,
                        bool use_clipdist_array);
+
+void nir_lower_clip_cull_distance_to_vec4s(nir_shader *shader);
 bool nir_lower_clip_cull_distance_arrays(nir_shader *nir);
 bool nir_lower_clip_disable(nir_shader *shader, unsigned clip_plane_enable);
 
@@ -5976,6 +6052,8 @@ typedef enum {
    nir_lower_gs_intrinsics_count_primitives = 1 << 1,
    nir_lower_gs_intrinsics_count_vertices_per_primitive = 1 << 2,
    nir_lower_gs_intrinsics_overwrite_incomplete = 1 << 3,
+   nir_lower_gs_intrinsics_always_end_primitive = 1 << 4,
+   nir_lower_gs_intrinsics_count_decomposed_primitives = 1 << 5,
 } nir_lower_gs_intrinsics_flags;
 
 bool nir_lower_gs_intrinsics(nir_shader *shader, nir_lower_gs_intrinsics_flags options);
@@ -6088,6 +6166,7 @@ typedef enum {
    nir_lower_fp16_ru = (1 << 2),
    nir_lower_fp16_rd = (1 << 3),
    nir_lower_fp16_all = 0xf,
+   nir_lower_fp16_split_fp64 = (1 << 4),
 } nir_lower_fp16_cast_options;
 bool nir_lower_fp16_casts(nir_shader *shader, nir_lower_fp16_cast_options options);
 bool nir_normalize_cubemap_coords(nir_shader *shader);
@@ -6200,6 +6279,7 @@ bool nir_opt_idiv_const(nir_shader *shader, unsigned min_bit_size);
 typedef enum {
    nir_opt_if_aggressive_last_continue = (1 << 0),
    nir_opt_if_optimize_phi_true_false = (1 << 1),
+   nir_opt_if_avoid_64bit_phis = (1 << 2),
 } nir_opt_if_options;
 
 bool nir_opt_if(nir_shader *shader, nir_opt_if_options options);

@@ -290,15 +290,28 @@ vec4_instruction::can_do_writemask(const struct intel_device_info *devinfo)
    case TES_OPCODE_ADD_INDIRECT_URB_OFFSET:
    case VEC4_OPCODE_URB_READ:
    case SHADER_OPCODE_MOV_INDIRECT:
+   case SHADER_OPCODE_TEX:
+   case FS_OPCODE_TXB:
+   case SHADER_OPCODE_TXD:
+   case SHADER_OPCODE_TXF:
+   case SHADER_OPCODE_TXF_LZ:
+   case SHADER_OPCODE_TXF_CMS:
+   case SHADER_OPCODE_TXF_CMS_W:
+   case SHADER_OPCODE_TXF_UMS:
+   case SHADER_OPCODE_TXF_MCS:
+   case SHADER_OPCODE_TXL:
+   case SHADER_OPCODE_TXL_LZ:
+   case SHADER_OPCODE_TXS:
+   case SHADER_OPCODE_LOD:
+   case SHADER_OPCODE_TG4:
+   case SHADER_OPCODE_TG4_OFFSET:
+   case SHADER_OPCODE_SAMPLEINFO:
       return false;
    default:
       /* The MATH instruction on Gfx6 only executes in align1 mode, which does
        * not support writemasking.
        */
       if (devinfo->ver == 6 && is_math())
-         return false;
-
-      if (is_tex())
          return false;
 
       return true;
@@ -2379,6 +2392,7 @@ vec4_visitor::run()
    emit_thread_end();
 
    calculate_cfg();
+   cfg->validate(_mesa_shader_stage_to_abbrev(stage));
 
    /* Before any optimization, push array accesses out to scratch
     * space where we need them to be.  This pass may allocate new
@@ -2404,6 +2418,7 @@ vec4_visitor::run()
          backend_shader::dump_instructions(filename);                  \
       }                                                                \
                                                                        \
+      cfg->validate(_mesa_shader_stage_to_abbrev(stage));              \
       progress = progress || this_progress;                            \
       this_progress;                                                   \
    })

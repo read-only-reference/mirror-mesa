@@ -261,16 +261,6 @@ blorp_get_l3_config(struct blorp_batch *batch)
    return cmd_buffer->state.current_l3_config;
 }
 
-static bool
-blorp_uses_bti_rt_writes(const struct blorp_batch *batch, const struct blorp_params *params)
-{
-   if (batch->flags & (BLORP_BATCH_USE_BLITTER | BLORP_BATCH_USE_COMPUTE))
-      return false;
-
-   /* HIZ clears use WM_HZ ops rather than a clear shader using RT writes. */
-   return params->hiz_op == ISL_AUX_OP_NONE;
-}
-
 static void
 blorp_exec_on_render(struct blorp_batch *batch,
                      const struct blorp_params *params)
@@ -309,9 +299,18 @@ blorp_exec_on_render(struct blorp_batch *batch,
    if (intel_needs_workaround(cmd_buffer->device->info, 18019816803)) {
       bool blorp_ds_state = params->depth.enabled || params->stencil.enabled;
       if (cmd_buffer->state.gfx.ds_write_state != blorp_ds_state) {
-         batch->flags |= BLORP_BATCH_NEED_PSS_STALL_SYNC;
+         /* Flag the change in ds_write_state so that the next pipeline use
+          * will trigger a PIPE_CONTROL too.
+          */
          cmd_buffer->state.gfx.ds_write_state = blorp_ds_state;
          BITSET_SET(hw_state->dirty, ANV_GFX_STATE_WA_18019816803);
+
+         /* Add the stall that will flush prior to the blorp operation by
+          * genX(cmd_buffer_apply_pipe_flushes)
+          */
+         anv_add_pending_pipe_bits(cmd_buffer,
+                                   ANV_PIPE_PSS_STALL_SYNC_BIT,
+                                   "Wa_18019816803");
       }
    }
 #endif
@@ -365,6 +364,7 @@ blorp_exec_on_render(struct blorp_batch *batch,
 #if GFX_VER >= 12
    BITSET_SET(hw_state->dirty, ANV_GFX_STATE_PRIMITIVE_REPLICATION);
 #endif
+   BITSET_SET(hw_state->dirty, ANV_GFX_STATE_VIEWPORT_CC);
    BITSET_SET(hw_state->dirty, ANV_GFX_STATE_STREAMOUT);
    BITSET_SET(hw_state->dirty, ANV_GFX_STATE_RASTER);
    BITSET_SET(hw_state->dirty, ANV_GFX_STATE_CLIP);
@@ -393,8 +393,7 @@ blorp_exec_on_render(struct blorp_batch *batch,
       BITSET_SET(hw_state->dirty, ANV_GFX_STATE_PS_BLEND);
    }
 
-   anv_cmd_dirty_mask_t dirty = ~(ANV_CMD_DIRTY_PIPELINE |
-                                  ANV_CMD_DIRTY_INDEX_BUFFER |
+   anv_cmd_dirty_mask_t dirty = ~(ANV_CMD_DIRTY_INDEX_BUFFER |
                                   ANV_CMD_DIRTY_XFB_ENABLE);
 
    cmd_buffer->state.gfx.vb_dirty = ~0;
@@ -458,15 +457,23 @@ genX(blorp_exec)(struct blorp_batch *batch,
 }
 
 static void
-blorp_emit_breakpoint_pre_draw(struct blorp_batch *batch)
+blorp_emit_pre_draw(struct blorp_batch *batch, const struct blorp_params *params)
 {
    struct anv_cmd_buffer *cmd_buffer = batch->driver_batch;
+   blorp_measure_start(batch, params);
    genX(emit_breakpoint)(&cmd_buffer->batch, cmd_buffer->device, true);
 }
 
 static void
-blorp_emit_breakpoint_post_draw(struct blorp_batch *batch)
+blorp_emit_post_draw(struct blorp_batch *batch, const struct blorp_params *params)
 {
    struct anv_cmd_buffer *cmd_buffer = batch->driver_batch;
+
+   genX(batch_emit_post_3dprimitive_was)(&cmd_buffer->batch,
+                                         cmd_buffer->device,
+                                         _3DPRIM_RECTLIST,
+                                         3);
+
    genX(emit_breakpoint)(&cmd_buffer->batch, cmd_buffer->device, false);
+   blorp_measure_end(batch, params);
 }
