@@ -152,6 +152,15 @@ enum pipe_video_cap
     * intra-refresh wave (e.g pipe_enc_intra_refresh.offset is 0 again)
    */
    PIPE_VIDEO_CAP_ENC_INTRA_REFRESH_MAX_DURATION = 46,
+   PIPE_VIDEO_CAP_ENC_H264_SUPPORTS_CABAC_ENCODE = 47,
+   /*
+      crop and partial decode support
+   */
+   PIPE_VIDEO_CAP_ROI_CROP_DEC = 48,
+   /*
+    * Encoding Region Of Interest feature
+    */
+   PIPE_VIDEO_CAP_ENC_ROI = 49,
 };
 
 enum pipe_video_h264_enc_dbk_filter_mode_flags
@@ -193,6 +202,7 @@ enum pipe_video_feedback_metadata_type
    PIPE_VIDEO_FEEDBACK_METADATA_TYPE_CODEC_UNIT_LOCATION      = 0x2,
    PIPE_VIDEO_FEEDBACK_METADATA_TYPE_MAX_FRAME_SIZE_OVERFLOW  = 0x4,
    PIPE_VIDEO_FEEDBACK_METADATA_TYPE_MAX_SLICE_SIZE_OVERFLOW  = 0x8,
+   PIPE_VIDEO_FEEDBACK_METADATA_TYPE_AVERAGE_FRAME_QP         = 0x10,
 };
 
 enum pipe_video_av1_enc_filter_mode
@@ -228,6 +238,35 @@ enum pipe_video_vpp_blend_mode
 {
    PIPE_VIDEO_VPP_BLEND_MODE_NONE = 0x0,
    PIPE_VIDEO_VPP_BLEND_MODE_GLOBAL_ALPHA = 0x1,
+};
+
+/* To be used for VPP state*/
+enum pipe_video_vpp_color_standard_type
+{
+   PIPE_VIDEO_VPP_COLOR_STANDARD_TYPE_NONE = 0x0,
+   PIPE_VIDEO_VPP_COLOR_STANDARD_TYPE_BT601 = 0x1,
+   PIPE_VIDEO_VPP_COLOR_STANDARD_TYPE_BT709 = 0x2,
+   PIPE_VIDEO_VPP_COLOR_STANDARD_TYPE_BT2020 = 0xC,
+   PIPE_VIDEO_VPP_COLOR_STANDARD_TYPE_COUNT,
+};
+
+/* To be used for VPP state*/
+enum pipe_video_vpp_color_range
+{
+   PIPE_VIDEO_VPP_CHROMA_COLOR_RANGE_NONE     = 0x00,
+   PIPE_VIDEO_VPP_CHROMA_COLOR_RANGE_REDUCED  = 0x01,
+   PIPE_VIDEO_VPP_CHROMA_COLOR_RANGE_FULL     = 0x02,
+};
+
+/* To be used for VPP state*/
+enum pipe_video_vpp_chroma_siting
+{
+   PIPE_VIDEO_VPP_CHROMA_SITING_NONE              = 0x00,
+   PIPE_VIDEO_VPP_CHROMA_SITING_VERTICAL_TOP      = 0x01,
+   PIPE_VIDEO_VPP_CHROMA_SITING_VERTICAL_CENTER   = 0x02,
+   PIPE_VIDEO_VPP_CHROMA_SITING_VERTICAL_BOTTOM   = 0x04,
+   PIPE_VIDEO_VPP_CHROMA_SITING_HORIZONTAL_LEFT   = 0x10,
+   PIPE_VIDEO_VPP_CHROMA_SITING_HORIZONTAL_CENTER = 0x20,
 };
 
 
