@@ -84,6 +84,7 @@ get_level_resolution_video_decode_support(D3D12_VIDEO_DECODE_CONFIGURATION decod
    }
 
    d3d12_video_resolution_to_level_mapping_entry resolutionsLevelList[] = {
+      { { 8192, 4352 }, 61 },   // 8k
       { { 8192, 4320 }, 61 },   // 8k
       { { 7680, 4800 }, 61 },   // 8k - alternative
       { { 7680, 4320 }, 61 },   // 8k - alternative
@@ -98,6 +99,7 @@ get_level_resolution_video_decode_support(D3D12_VIDEO_DECODE_CONFIGURATION decod
       { { 352, 240 }, 2 },
       { { 176, 144 }, 11 },
       { { 128, 96 }, 11 },
+      { { 64, 64 }, 11 },
    };
 
    D3D12_FEATURE_DATA_VIDEO_DECODE_SUPPORT decodeSupport = {};
@@ -1716,6 +1718,7 @@ d3d12_screen_get_video_param_encode(struct pipe_screen *pscreen,
       case PIPE_VIDEO_CAP_ENC_MAX_TILE_ROWS:
       case PIPE_VIDEO_CAP_ENC_MAX_TILE_COLS:
       case PIPE_VIDEO_CAP_ENC_INTRA_REFRESH_MAX_DURATION:
+      case PIPE_VIDEO_CAP_ENC_INTRA_REFRESH:
       case PIPE_VIDEO_CAP_ENC_H264_DISABLE_DBK_FILTER_MODES_SUPPORTED:
       case PIPE_VIDEO_CAP_ENC_H264_SUPPORTS_CABAC_ENCODE:
       case PIPE_VIDEO_CAP_ENC_ROI:
@@ -1766,6 +1769,14 @@ d3d12_screen_get_video_param_encode(struct pipe_screen *pscreen,
                   return maxReferencesPerFrame;
                } else if (param == PIPE_VIDEO_CAP_ENC_INTRA_REFRESH_MAX_DURATION) {
                   return maxIRDuration;
+               } else if (param == PIPE_VIDEO_CAP_ENC_INTRA_REFRESH) {
+                  return (maxIRDuration == 0) ? 0 :
+                         (PIPE_VIDEO_ENC_INTRA_REFRESH_ROW |
+                          PIPE_VIDEO_ENC_INTRA_REFRESH_ADAPTIVE |
+                          PIPE_VIDEO_ENC_INTRA_REFRESH_CYCLIC |
+                          PIPE_VIDEO_ENC_INTRA_REFRESH_P_FRAME |
+                          PIPE_VIDEO_ENC_INTRA_REFRESH_B_FRAME |
+                          PIPE_VIDEO_ENC_INTRA_REFRESH_MULTI_REF);
                } else if (param == PIPE_VIDEO_CAP_ENC_SUPPORTS_MAX_FRAME_SIZE) {
                   return isRCMaxFrameSizeSupported;
                } else if (param == PIPE_VIDEO_CAP_ENC_HEVC_FEATURE_FLAGS) {

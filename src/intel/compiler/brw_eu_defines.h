@@ -1032,6 +1032,8 @@ enum ENUM_PACKED brw_predicate {
    BRW_PREDICATE_ALIGN16_REPLICATE_W =  5,
    BRW_PREDICATE_ALIGN16_ANY4H       =  6,
    BRW_PREDICATE_ALIGN16_ALL4H       =  7,
+   XE2_PREDICATE_ANY = 2,
+   XE2_PREDICATE_ALL = 3
 };
 
 enum ENUM_PACKED brw_reg_file {
@@ -1396,6 +1398,7 @@ enum tgl_sync_function {
    TGL_SYNC_NOP = 0x0,
    TGL_SYNC_ALLRD = 0x2,
    TGL_SYNC_ALLWR = 0x3,
+   TGL_SYNC_FENCE = 0xd,
    TGL_SYNC_BAR = 0xe,
    TGL_SYNC_HOST = 0xf
 };

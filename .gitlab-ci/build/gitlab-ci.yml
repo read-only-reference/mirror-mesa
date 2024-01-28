@@ -76,7 +76,7 @@ debian-testing:
       -D dri3=enabled
       -D gallium-va=enabled
       -D gallium-rusticl=true
-    GALLIUM_DRIVERS: "swrast,virgl,radeonsi,zink,crocus,iris,i915"
+    GALLIUM_DRIVERS: "swrast,virgl,radeonsi,zink,crocus,iris,i915,r300"
     VULKAN_DRIVERS: "swrast,amd,intel,intel_hasvk,virtio,nouveau-experimental"
     BUILDTYPE: "debugoptimized"
     EXTRA_OPTION: >
@@ -267,6 +267,7 @@ fedora-release:
       -D vulkan-layers=device-select,overlay
       -D intel-clc=enabled
       -D imagination-srv=true
+      -D teflon=true
     GALLIUM_DRIVERS: "crocus,etnaviv,freedreno,i915,iris,kmsro,lima,nouveau,panfrost,r300,r600,radeonsi,svga,swrast,tegra,v3d,vc4,virgl,zink"
     GALLIUM_ST: >
       -D dri3=enabled
@@ -416,6 +417,7 @@ debian-arm64:
       -D imagination-srv=true
       -D perfetto=true
       -D freedreno-kmds=msm,virtio
+      -D teflon=true
     S3_ARTIFACT_NAME: mesa-arm64-default-${BUILDTYPE}
   script:
     - .gitlab-ci/meson/build.sh
@@ -469,6 +471,7 @@ debian-clang:
       -Wno-error=enum-conversion
       -Wno-error=initializer-overrides
       -Wno-error=sometimes-uninitialized
+      -Werror=misleading-indentation
     CPP_ARGS: >
       -Wno-error=c99-designator
       -Wno-error=overloaded-virtual
@@ -506,6 +509,7 @@ debian-clang:
       -D build-aco-tests=true
       -D intel-clc=enabled
       -D imagination-srv=true
+      -D teflon=true
     CC: clang-${LLVM_VERSION}
     CXX: clang++-${LLVM_VERSION}
 

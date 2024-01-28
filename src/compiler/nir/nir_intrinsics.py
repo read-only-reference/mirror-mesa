@@ -446,6 +446,14 @@ intrinsic("ballot", src_comp=[1], dest_comp=0, flags=[CAN_ELIMINATE])
 intrinsic("read_invocation", src_comp=[0, 1], dest_comp=0, bit_sizes=src0, flags=[CAN_ELIMINATE])
 intrinsic("read_first_invocation", src_comp=[0], dest_comp=0, bit_sizes=src0, flags=[CAN_ELIMINATE])
 
+# Same as ballot, but inactive invocations contribute undefined bits.
+intrinsic("ballot_relaxed", src_comp=[1], dest_comp=0, flags=[CAN_ELIMINATE])
+
+# Allows the backend compiler to move this value to an uniform register.
+# Result is undefined if src is not uniform.
+# Unlike read_first_invocation, it may be replaced by a divergent move or CSE'd.
+intrinsic("as_uniform", src_comp=[0], dest_comp=0, bit_sizes=src0, flags=[CAN_ELIMINATE])
+
 # Returns the value of the first source for the lane where the second source is
 # true. The second source must be true for exactly one lane.
 intrinsic("read_invocation_cond_ir3", src_comp=[0, 1], dest_comp=0, flags=[CAN_ELIMINATE])
@@ -1210,10 +1218,10 @@ load("mesh_view_indices", [1], [BASE, RANGE], [CAN_ELIMINATE, CAN_REORDER])
 load("preamble", [], indices=[BASE], flags=[CAN_ELIMINATE, CAN_REORDER])
 store("preamble", [], indices=[BASE])
 
-# A 32 bits bitfield storing 1 in bits corresponding to varyings
-# that have the flat interpolation specifier in the fragment shader
-# and 0 otherwise
-system_value("flat_mask", 1)
+# A 64-bit bitfield indexed by I/O location storing 1 in bits corresponding to
+# varyings that have the flat interpolation specifier in the fragment shader and
+# 0 otherwise
+system_value("flat_mask", 1, bit_sizes=[64])
 
 # Whether provoking vertex mode is last
 system_value("provoking_last", 1)
@@ -1849,6 +1857,9 @@ system_value("sample_positions_agx", 1, bit_sizes=[32])
 # Loads the fixed-function glPointSize() value
 system_value("fixed_point_size_agx", 1, bit_sizes=[32])
 
+# Bit mask of TEX locations that are replaced with point sprites
+system_value("tex_sprite_mask_agx", 1, bit_sizes=[16])
+
 # Image loads go through the texture cache, which is not coherent with the PBE
 # or memory access, so fencing is necessary for writes to become visible.
 
@@ -2062,6 +2073,15 @@ intrinsic("bar_set_nv", dest_comp=1, bit_sizes=[32], flags=[CAN_ELIMINATE])
 intrinsic("bar_break_nv", dest_comp=1, bit_sizes=[32], src_comp=[1])
 # src[] = { bar, bar_set }
 intrinsic("bar_sync_nv", src_comp=[1, 1])
+
+# Stall until the given SSA value is available
+intrinsic("ssa_bar_nv", src_comp=[1])
+
+# NVIDIA-specific system values
+system_value("warps_per_sm_nv", 1, bit_sizes=[32])
+system_value("sm_count_nv", 1, bit_sizes=[32])
+system_value("warp_id_nv", 1, bit_sizes=[32])
+system_value("sm_id_nv", 1, bit_sizes=[32])
 
 # In order to deal with flipped render targets, gl_PointCoord may be flipped
 # in the shader requiring a shader key or extra instructions or it may be

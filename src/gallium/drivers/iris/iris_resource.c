@@ -1156,14 +1156,14 @@ iris_resource_create_for_image(struct pipe_screen *pscreen,
 
    /* Allocate space for the aux buffer. */
    if (res->aux.surf.size_B > 0) {
-      res->aux.offset = ALIGN(bo_size, res->aux.surf.alignment_B);
+      res->aux.offset = (uint32_t)align64(bo_size, res->aux.surf.alignment_B);
       bo_size = res->aux.offset + res->aux.surf.size_B;
    }
 
    /* Allocate space for the extra aux buffer. */
    if (res->aux.extra_aux.surf.size_B > 0) {
       res->aux.extra_aux.offset =
-         ALIGN(bo_size, res->aux.extra_aux.surf.alignment_B);
+         (uint32_t)align64(bo_size, res->aux.extra_aux.surf.alignment_B);
       bo_size = res->aux.extra_aux.offset + res->aux.extra_aux.surf.size_B;
    }
 
@@ -1174,7 +1174,7 @@ iris_resource_create_for_image(struct pipe_screen *pscreen,
     * to lack of testing we will leave this as 4K for now.
     */
    if (iris_get_aux_clear_color_state_size(screen, res) > 0) {
-      res->aux.clear_color_offset = ALIGN(bo_size, 4096);
+      res->aux.clear_color_offset = align64(bo_size, 4096);
       bo_size = res->aux.clear_color_offset +
                 iris_get_aux_clear_color_state_size(screen, res);
    }
@@ -1280,7 +1280,7 @@ iris_resource_from_user_memory(struct pipe_screen *pscreen,
     * pointer.
     */
    size_t page_size = getpagesize();
-   assert(util_is_power_of_two_nonzero(page_size));
+   assert(util_is_power_of_two_nonzero_uintptr(page_size));
    size_t offset = (uintptr_t)user_memory & (page_size - 1);
    void *mem_start = (char *)user_memory - offset;
    size_t mem_size = offset + res_size;
@@ -1517,7 +1517,7 @@ iris_resource_from_memobj_wrapper(struct pipe_screen *pscreen,
 
    /* Stencil offset in the buffer without aux. */
    uint64_t s_offset = offset +
-      ALIGN(res->surf.size_B, res->surf.alignment_B);
+      align64(res->surf.size_B, res->surf.alignment_B);
 
    prsc->format = format; /* frob the format back to the "external" format */
 
@@ -2587,7 +2587,7 @@ iris_transfer_map(struct pipe_context *ctx,
       usage |= PIPE_MAP_DIRECTLY;
 
    /* TODO: Teach iris_map_tiled_memcpy about Tile64... */
-   if (res->surf.tiling == ISL_TILING_64)
+   if (isl_tiling_is_64(res->surf.tiling))
       usage &= ~PIPE_MAP_DIRECTLY;
 
    if (!(usage & PIPE_MAP_DIRECTLY)) {
@@ -2715,7 +2715,7 @@ iris_texture_subdata(struct pipe_context *ctx,
     * TODO: Teach isl_memcpy_linear_to_tiled about Tile64...
     */
    if (surf->tiling == ISL_TILING_LINEAR ||
-       surf->tiling == ISL_TILING_64 ||
+       isl_tiling_is_64(res->surf.tiling) ||
        isl_aux_usage_has_compression(res->aux.usage) ||
        resource_is_busy(ice, res) ||
        iris_bo_mmap_mode(res->bo) == IRIS_MMAP_NONE) {

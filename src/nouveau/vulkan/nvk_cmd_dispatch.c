@@ -63,6 +63,12 @@ nvk_cmd_buffer_begin_compute(struct nvk_cmd_buffer *cmd,
    }
 }
 
+void
+nvk_cmd_invalidate_compute_state(struct nvk_cmd_buffer *cmd)
+{
+   memset(&cmd->state.cs, 0, sizeof(cmd->state.cs));
+}
+
 static void
 nva0c0_qmd_set_dispatch_size(UNUSED struct nvk_device *dev, uint32_t *qmd,
                              uint32_t x, uint32_t y, uint32_t z)
@@ -148,7 +154,7 @@ nvk_compute_local_size(struct nvk_cmd_buffer *cmd)
 {
    const struct nvk_compute_pipeline *pipeline = cmd->state.cs.pipeline;
    const struct nvk_shader *shader =
-      &pipeline->base.shaders[MESA_SHADER_COMPUTE];
+      pipeline->base.shaders[MESA_SHADER_COMPUTE];
 
    return shader->info.cs.local_size[0] *
           shader->info.cs.local_size[1] *
@@ -211,7 +217,7 @@ nvk_flush_compute_state(struct nvk_cmd_buffer *cmd,
    }
 
    const struct nvk_shader *shader =
-      &pipeline->base.shaders[MESA_SHADER_COMPUTE];
+      pipeline->base.shaders[MESA_SHADER_COMPUTE];
    for (uint32_t c = 0; c < shader->cbuf_map.cbuf_count; c++) {
       const struct nvk_cbuf *cbuf = &shader->cbuf_map.cbufs[c];
 
@@ -223,7 +229,7 @@ nvk_flush_compute_state(struct nvk_cmd_buffer *cmd,
          };
       } else {
          ASSERTED bool direct_descriptor =
-            nvk_cmd_buffer_get_cbuf_descriptor(cmd, desc, cbuf, &ba);
+            nvk_cmd_buffer_get_cbuf_descriptor(cmd, desc, shader, cbuf, &ba);
          assert(direct_descriptor);
       }
 

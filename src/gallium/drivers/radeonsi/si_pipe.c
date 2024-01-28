@@ -351,7 +351,7 @@ static void si_destroy_context(struct pipe_context *context)
 
    u_suballocator_destroy(&sctx->allocator_zeroed_memory);
 
-   sctx->ws->fence_reference(&sctx->last_gfx_fence, NULL);
+   sctx->ws->fence_reference(sctx->ws, &sctx->last_gfx_fence, NULL);
    si_resource_reference(&sctx->eop_bug_scratch, NULL);
    si_resource_reference(&sctx->eop_bug_scratch_tmz, NULL);
    si_resource_reference(&sctx->shadowing.registers, NULL);
@@ -470,7 +470,7 @@ static void si_set_context_param(struct pipe_context *ctx, enum pipe_context_par
    struct radeon_winsys *ws = ((struct si_context *)ctx)->ws;
 
    switch (param) {
-   case PIPE_CONTEXT_PARAM_PIN_THREADS_TO_L3_CACHE:
+   case PIPE_CONTEXT_PARAM_UPDATE_THREAD_SCHEDULING:
       ws->pin_threads_to_L3_cache(ws, value);
       break;
    default:;
@@ -980,6 +980,9 @@ static void si_destroy_screen(struct pipe_screen *pscreen)
 
    si_resource_reference(&sscreen->attribute_ring, NULL);
 
+   util_queue_destroy(&sscreen->shader_compiler_queue);
+   util_queue_destroy(&sscreen->shader_compiler_queue_opt_variants);
+
    for (unsigned i = 0; i < ARRAY_SIZE(sscreen->aux_contexts); i++) {
       if (!sscreen->aux_contexts[i].ctx)
          continue;
@@ -1001,9 +1004,6 @@ static void si_destroy_screen(struct pipe_screen *pscreen)
    if (sscreen->async_compute_context) {
       sscreen->async_compute_context->destroy(sscreen->async_compute_context);
    }
-
-   util_queue_destroy(&sscreen->shader_compiler_queue);
-   util_queue_destroy(&sscreen->shader_compiler_queue_opt_variants);
 
    /* Release the reference on glsl types of the compiler threads. */
    glsl_type_singleton_decref();
@@ -1087,7 +1087,7 @@ static void si_test_gds_memory_management(struct si_context *sctx, unsigned allo
 {
    struct radeon_winsys *ws = sctx->ws;
    struct radeon_cmdbuf cs[8];
-   struct pb_buffer *gds_bo[ARRAY_SIZE(cs)];
+   struct pb_buffer_lean *gds_bo[ARRAY_SIZE(cs)];
 
    for (unsigned i = 0; i < ARRAY_SIZE(cs); i++) {
       ws->cs_create(&cs[i], sctx->ctx, AMD_IP_COMPUTE, NULL, NULL);

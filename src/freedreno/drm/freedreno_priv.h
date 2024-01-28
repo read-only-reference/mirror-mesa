@@ -401,6 +401,7 @@ struct fd_submit_funcs {
 struct fd_submit {
    int32_t refcnt;
    struct fd_pipe *pipe;
+   struct fd_device *dev;
    const struct fd_submit_funcs *funcs;
 
    struct fd_ringbuffer *primary;
@@ -556,6 +557,12 @@ VG_BO_OBTAIN(struct fd_bo *bo)
       VALGRIND_MALLOCLIKE_BLOCK(bo->map, bo->size, 0, 1);
    }
 }
+/* special case for fd_bo_upload */
+static inline void
+VG_BO_MAPPED(struct fd_bo *bo)
+{
+   VALGRIND_MALLOCLIKE_BLOCK(bo->map, bo->size, 0, 1);
+}
 #else
 static inline void
 VG_BO_ALLOC(struct fd_bo *bo)
@@ -571,6 +578,10 @@ VG_BO_RELEASE(struct fd_bo *bo)
 }
 static inline void
 VG_BO_OBTAIN(struct fd_bo *bo)
+{
+}
+static inline void
+VG_BO_MAPPED(struct fd_bo *bo)
 {
 }
 #endif

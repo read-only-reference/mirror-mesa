@@ -227,6 +227,12 @@ static const char *const pred_ctrl_align1[16] = {
    [BRW_PREDICATE_ALIGN1_ALL32H] = ".all32h",
 };
 
+static const char *const xe2_pred_ctrl[4] = {
+   [BRW_PREDICATE_NORMAL]        = "",
+   [XE2_PREDICATE_ANY]           = ".any",
+   [XE2_PREDICATE_ALL]           = ".all",
+};
+
 static const char *const thread_ctrl[4] = {
    [BRW_THREAD_NORMAL] = "",
    [BRW_THREAD_ATOMIC] = "atomic",
@@ -523,6 +529,7 @@ static const char *const sync_function[16] = {
    [TGL_SYNC_NOP] = "nop",
    [TGL_SYNC_ALLRD] = "allrd",
    [TGL_SYNC_ALLWR] = "allwr",
+   [TGL_SYNC_FENCE] = "fence",
    [TGL_SYNC_BAR] = "bar",
    [TGL_SYNC_HOST] = "host",
 };
@@ -1054,8 +1061,7 @@ static int
 dest_dpas_3src(FILE *file, const struct intel_device_info *devinfo,
                const brw_inst *inst)
 {
-   uint32_t reg_file =
-      reg_file = brw_inst_dpas_3src_dst_reg_file(devinfo, inst);
+   uint32_t reg_file = brw_inst_dpas_3src_dst_reg_file(devinfo, inst);
 
    if (reg(file, reg_file, brw_inst_dpas_3src_dst_reg_nr(devinfo, inst)) == -1)
       return 0;
@@ -1550,8 +1556,7 @@ static int
 src0_dpas_3src(FILE *file, const struct intel_device_info *devinfo,
                const brw_inst *inst)
 {
-   uint32_t reg_file =
-      reg_file = brw_inst_dpas_3src_src0_reg_file(devinfo, inst);
+   uint32_t reg_file = brw_inst_dpas_3src_src0_reg_file(devinfo, inst);
 
    if (reg(file, reg_file, brw_inst_dpas_3src_src0_reg_nr(devinfo, inst)) == -1)
       return 0;
@@ -1572,8 +1577,7 @@ static int
 src1_dpas_3src(FILE *file, const struct intel_device_info *devinfo,
                const brw_inst *inst)
 {
-   uint32_t reg_file =
-      reg_file = brw_inst_dpas_3src_src1_reg_file(devinfo, inst);
+   uint32_t reg_file = brw_inst_dpas_3src_src1_reg_file(devinfo, inst);
 
    if (reg(file, reg_file, brw_inst_dpas_3src_src1_reg_nr(devinfo, inst)) == -1)
       return 0;
@@ -1594,8 +1598,7 @@ static int
 src2_dpas_3src(FILE *file, const struct intel_device_info *devinfo,
                const brw_inst *inst)
 {
-   uint32_t reg_file =
-      reg_file = brw_inst_dpas_3src_src2_reg_file(devinfo, inst);
+   uint32_t reg_file = brw_inst_dpas_3src_src2_reg_file(devinfo, inst);
 
    if (reg(file, reg_file, brw_inst_dpas_3src_src2_reg_nr(devinfo, inst)) == -1)
       return 0;
@@ -1672,7 +1675,11 @@ imm(FILE *file, const struct brw_isa_info *isa, enum brw_reg_type type,
       format(file, "/* %-gDF */", brw_inst_imm_df(devinfo, inst));
       break;
    case BRW_REGISTER_TYPE_HF:
-      string(file, "Half Float IMM");
+      format(file, "0x%04xHF",
+             (uint16_t) brw_inst_imm_ud(devinfo, inst));
+      pad(file, 48);
+      format(file, "/* %-gHF */",
+             _mesa_half_to_float((uint16_t) brw_inst_imm_ud(devinfo, inst)));
       break;
    case BRW_REGISTER_TYPE_NF:
    case BRW_REGISTER_TYPE_UB:
@@ -2054,7 +2061,10 @@ brw_disassemble_inst(FILE *file, const struct brw_isa_info *isa,
       format(file, "f%"PRIu64".%"PRIu64,
              devinfo->ver >= 7 ? brw_inst_flag_reg_nr(devinfo, inst) : 0,
              brw_inst_flag_subreg_nr(devinfo, inst));
-      if (brw_inst_access_mode(devinfo, inst) == BRW_ALIGN_1) {
+      if (devinfo->ver >= 20) {
+         err |= control(file, "predicate control", xe2_pred_ctrl,
+                        brw_inst_pred_control(devinfo, inst), NULL);
+      } else if (brw_inst_access_mode(devinfo, inst) == BRW_ALIGN_1) {
          err |= control(file, "predicate control align1", pred_ctrl_align1,
                         brw_inst_pred_control(devinfo, inst), NULL);
       } else {
@@ -2533,7 +2543,11 @@ brw_disassemble_inst(FILE *file, const struct brw_isa_info *isa,
             }
             format(file, " dst_len = %u,", lsc_msg_desc_dest_len(devinfo, imm_desc));
             format(file, " src0_len = %u,", lsc_msg_desc_src0_len(devinfo, imm_desc));
-            format(file, " src1_len = %d", brw_message_ex_desc_ex_mlen(devinfo, imm_ex_desc));
+
+            if (!brw_inst_send_sel_reg32_ex_desc(devinfo, inst))
+               format(file, " src1_len = %d",
+                      brw_message_ex_desc_ex_mlen(devinfo, imm_ex_desc));
+
             err |= control(file, "address_type", lsc_addr_surface_type,
                            lsc_msg_desc_addr_type(devinfo, imm_desc), &space);
             format(file, " )");
@@ -2668,8 +2682,14 @@ brw_disassemble_inst(FILE *file, const struct brw_isa_info *isa,
          if (space)
             string(file, " ");
       }
-      if (devinfo->verx10 >= 125 && brw_inst_send_ex_bso(devinfo, inst))
+      if (devinfo->verx10 >= 125 &&
+          brw_inst_send_sel_reg32_ex_desc(devinfo, inst) &&
+          brw_inst_send_ex_bso(devinfo, inst)) {
+         format(file, " src1_len = %u",
+                (unsigned) brw_inst_send_src1_len(devinfo, inst));
+
          format(file, " ex_bso");
+      }
       if (brw_sfid_is_lsc(sfid)) {
             lsc_disassemble_ex_desc(devinfo, imm_desc, imm_ex_desc, file);
       } else {

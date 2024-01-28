@@ -251,6 +251,20 @@ with_microsoft_vk = _vulkan_drivers.contains('microsoft-experimental')
 with_nouveau_vk = _vulkan_drivers.contains('nouveau-experimental')
 with_any_vk = _vulkan_drivers.length() != 0
 
+with_vk_compiler = [
+  with_intel_vk,
+  with_intel_hasvk,
+  with_amd_vk,
+  with_freedreno_vk,
+  with_panfrost_vk,
+  with_swrast_vk,
+  with_broadcom_vk,
+  with_imagination_vk,
+  with_microsoft_vk,
+  with_nouveau_vk,
+].contains(true)
+pre_args += '-DUSE_VK_COMPILER=@0@'.format(with_vk_compiler ? '1' : '0')
+
 freedreno_kmds = get_option('freedreno-kmds')
 if freedreno_kmds.length() != 0 and freedreno_kmds != [ 'msm' ] and with_freedreno_vk
   if freedreno_kmds.contains('msm')
@@ -813,8 +827,8 @@ if with_gallium_rusticl
     error('rusticl requires at least one gallium driver.')
   endif
 
-  if meson.version().version_compare('< 1.3')
-    error('rusticl requires meson 1.3.0 or newer')
+  if meson.version().version_compare('< 1.3.1')
+    error('rusticl requires meson 1.3.1 or newer')
   endif
 
   add_languages('rust', required: true)
@@ -1364,6 +1378,7 @@ functions_to_detect = {
   'getrandom': '',
   'qsort_s': '',
   'posix_fallocate': '',
+  'secure_getenv': '',
 }
 
 foreach f, prefix: functions_to_detect
@@ -1455,8 +1470,8 @@ if cc.links('''
       locale_t loc = newlocale(LC_CTYPE_MASK, "C", NULL);
       const char *s = "1.0";
       char *end;
-      double d = strtod_l(s, end, loc);
-      float f = strtof_l(s, end, loc);
+      double d = strtod_l(s, &end, loc);
+      float f = strtof_l(s, &end, loc);
       freelocale(loc);
       return 0;
     }''',
@@ -1625,7 +1640,7 @@ dep_libdrm_radeon = null_dep
 dep_libdrm_nouveau = null_dep
 dep_libdrm_intel = null_dep
 
-_drm_amdgpu_ver = '2.4.110'
+_drm_amdgpu_ver = '2.4.119'
 _drm_radeon_ver = '2.4.71'
 _drm_nouveau_ver = '2.4.102'
 _drm_intel_ver = '2.4.75'
@@ -1717,14 +1732,10 @@ if draw_with_llvm
   llvm_optional_modules += ['lto']
 endif
 
-if with_amd_vk or with_gallium_radeonsi
+if with_amd_vk or with_gallium_radeonsi or with_clc
   _llvm_version = '>= 15.0.0'
-elif with_intel_clc
-  _llvm_version = '>= 13.0.0'
 elif with_gallium_opencl
   _llvm_version = '>= 11.0.0'
-elif with_clc
-  _llvm_version = '>= 10.0.0'
 else
   _llvm_version = '>= 5.0.0'
 endif
@@ -1816,8 +1827,8 @@ if with_opencl_spirv
   # does not have the required API and those are only available starting from
   # 8.0.1.3.
   _llvmspirvlib_min_version = '>= 8.0.1.3'
-  if with_intel_clc
-    _llvmspirvlib_min_version = '>= 13.0.0.0'
+  if with_clc
+    _llvmspirvlib_min_version = '>= 15.0.0.0'
   endif
 
   _llvmspirvlib_version = [
@@ -2134,6 +2145,13 @@ if with_perfetto
   pre_args += '-DHAVE_PERFETTO'
 endif
 
+with_teflon = get_option('teflon')
+if with_teflon and with_tests
+  dep_xtensor = dependency('xtensor')
+  dep_flatbuffers = dependency('flatbuffers')
+  prog_flatc = find_program('flatc')
+endif
+
 with_gpuvis = get_option('gpuvis')
 if with_gpuvis
   pre_args += '-DHAVE_GPUVIS'
@@ -2352,3 +2370,6 @@ if with_perfetto and with_any_datasource
   perfetto_summary += {'Data source': with_datasources}
 endif
 summary(perfetto_summary, section: 'Perfetto', bool_yn: true, list_sep: ' ')
+
+teflon_summary = {'Enabled': with_teflon}
+summary(teflon_summary, section: 'Teflon (TensorFlow Lite delegate)', bool_yn: true, list_sep: ' ')

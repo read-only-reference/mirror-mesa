@@ -666,6 +666,9 @@ iris_rewrite_compute_walker_pc(struct iris_batch *batch,
 static void
 emit_pipeline_select(struct iris_batch *batch, uint32_t pipeline)
 {
+   /* Bspec 55860: Xe2+ no longer requires PIPELINE_SELECT */
+#if GFX_VER < 20
+
 #if GFX_VER >= 8 && GFX_VER < 10
    /* From the Broadwell PRM, Volume 2a: Instructions, PIPELINE_SELECT:
     *
@@ -751,6 +754,7 @@ emit_pipeline_select(struct iris_batch *batch, uint32_t pipeline)
 #endif /* if GFX_VER >= 9 */
       sel.PipelineSelection = pipeline;
    }
+#endif /* if GFX_VER < 20 */
 }
 
 UNUSED static void
@@ -829,6 +833,7 @@ static void
 iris_emit_l3_config(struct iris_batch *batch,
                     const struct intel_l3_config *cfg)
 {
+#if GFX_VER < 20
    assert(cfg || GFX_VER >= 12);
 
 #if GFX_VER >= 12
@@ -866,6 +871,7 @@ iris_emit_l3_config(struct iris_batch *batch,
 #endif
       }
    }
+#endif /* GFX_VER < 20 */
 }
 
 #if GFX_VER == 9
@@ -4004,7 +4010,6 @@ iris_delete_state(struct pipe_context *ctx, void *state)
 static void
 iris_set_vertex_buffers(struct pipe_context *ctx,
                         unsigned count,
-                        unsigned unbind_num_trailing_slots,
                         bool take_ownership,
                         const struct pipe_vertex_buffer *buffers)
 {
@@ -4012,8 +4017,8 @@ iris_set_vertex_buffers(struct pipe_context *ctx,
    struct iris_screen *screen = (struct iris_screen *)ctx->screen;
    struct iris_genx_state *genx = ice->state.genx;
 
-   ice->state.bound_vertex_buffers &=
-      ~u_bit_consecutive64(0, count + unbind_num_trailing_slots);
+   unsigned last_count = util_last_bit64(ice->state.bound_vertex_buffers);
+   ice->state.bound_vertex_buffers = 0;
 
    for (unsigned i = 0; i < count; i++) {
       const struct pipe_vertex_buffer *buffer = buffers ? &buffers[i] : NULL;
@@ -4068,9 +4073,9 @@ iris_set_vertex_buffers(struct pipe_context *ctx,
       }
    }
 
-   for (unsigned i = 0; i < unbind_num_trailing_slots; i++) {
+   for (unsigned i = count; i < last_count; i++) {
       struct iris_vertex_buffer_state *state =
-         &genx->vertex_buffers[count + i];
+         &genx->vertex_buffers[i];
 
       pipe_resource_reference(&state->resource, NULL);
    }
@@ -6673,11 +6678,7 @@ iris_upload_dirty_render_state(struct iris_context *ice,
       iris_bufmgr_get_border_color_pool(screen->bufmgr);
 
    /* Re-emit 3DSTATE_DS before any 3DPRIMITIVE when tessellation is on */
-   /* FIXME: WA framework doesn't know about 14019750404 yet.
-    * if (intel_needs_workaround(batch->screen->devinfo, 14019750404) &&
-    *     ice->shaders.prog[MESA_SHADER_TESS_EVAL])
-    */
-   if (batch->screen->devinfo->has_mesh_shading &&
+   if (intel_needs_workaround(batch->screen->devinfo, 22018402687) &&
        ice->shaders.prog[MESA_SHADER_TESS_EVAL])
       ice->state.stage_dirty |= IRIS_STAGE_DIRTY_TES;
 
@@ -8114,7 +8115,7 @@ genX(emit_3dprimitive_was)(struct iris_batch *batch,
    UNUSED const struct intel_device_info *devinfo = batch->screen->devinfo;
    UNUSED const struct iris_context *ice = batch->ice;
 
-#if INTEL_NEEDS_WA_22014412737 || INTEL_NEEDS_WA_16014538804
+#if INTEL_WA_22014412737_GFX_VER || INTEL_WA_16014538804_GFX_VER
    if (intel_needs_workaround(devinfo, 22014412737) &&
        (point_or_line_list(primitive_type) || indirect ||
         (vertex_count == 1 || vertex_count == 2))) {
@@ -8675,6 +8676,14 @@ iris_upload_compute_walker(struct iris_context *ice,
          cw.ExecutionMask                  = dispatch.right_mask;
          cw.PostSync.MOCS                  = iris_mocs(NULL, &screen->isl_dev, 0);
          cw.InterfaceDescriptor            = idd;
+
+#if GFX_VERx10 >= 125
+         cw.GenerateLocalID = cs_prog_data->generate_local_id != 0;
+         cw.EmitLocal       = cs_prog_data->generate_local_id;
+         cw.WalkOrder       = cs_prog_data->walk_order;
+         cw.TileLayout = cs_prog_data->walk_order == BRW_WALK_ORDER_YXZ ?
+                         TileY32bpe : Linear;
+#endif
 
          assert(brw_cs_push_const_total_size(cs_prog_data, dispatch.threads) == 0);
       }
@@ -9631,6 +9640,22 @@ iris_emit_raw_pipe_control(struct iris_batch *batch,
                                  PIPE_CONTROL_CS_STALL, NULL, 0, 0);
    }
 
+   batch_mark_sync_for_pipe_control(batch, flags);
+
+#if INTEL_NEEDS_WA_14010840176
+   /* "If the intention of “constant cache invalidate” is
+    *  to invalidate the L1 cache (which can cache constants), use “HDC
+    *  pipeline flush” instead of Constant Cache invalidate command."
+    *
+    * "If L3 invalidate is needed, the w/a should be to set state invalidate
+    * in the pipe control command, in addition to the HDC pipeline flush."
+    */
+   if (flags & PIPE_CONTROL_CONST_CACHE_INVALIDATE) {
+      flags &= ~PIPE_CONTROL_CONST_CACHE_INVALIDATE;
+      flags |= PIPE_CONTROL_FLUSH_HDC | PIPE_CONTROL_STATE_CACHE_INVALIDATE;
+   }
+#endif
+
    /* Emit --------------------------------------------------------------- */
 
    if (INTEL_DEBUG(DEBUG_PIPE_CONTROL)) {
@@ -9666,7 +9691,6 @@ iris_emit_raw_pipe_control(struct iris_batch *batch,
               imm, reason);
    }
 
-   batch_mark_sync_for_pipe_control(batch, flags);
    iris_batch_sync_region_start(batch);
 
    const bool trace_pc =
