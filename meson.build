@@ -23,7 +23,7 @@ project(
   ['c', 'cpp'],
   version : files('VERSION'),
   license : 'MIT',
-  meson_version : '>= 0.60',
+  meson_version : '>= 1.1.0',
   default_options : [
     'buildtype=debugoptimized',
     'b_ndebug=if-release',
@@ -36,6 +36,8 @@ project(
 
 cc = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
+
+sizeof_pointer = meson.get_compiler('c', native : true).sizeof('void*').to_string()
 
 null_dep = dependency('', required : false)
 
@@ -137,26 +139,29 @@ if gallium_drivers.contains('auto')
     if ['x86', 'x86_64'].contains(host_machine.cpu_family())
       gallium_drivers = [
         'r300', 'r600', 'radeonsi', 'nouveau', 'virgl', 'svga', 'swrast',
-        'iris', 'crocus', 'i915'
+        'iris', 'crocus', 'i915', 'zink'
       ]
     elif ['arm', 'aarch64'].contains(host_machine.cpu_family())
       gallium_drivers = [
         'v3d', 'vc4', 'freedreno', 'etnaviv', 'nouveau', 'svga',
-        'tegra', 'virgl', 'lima', 'panfrost', 'swrast', 'iris'
+        'tegra', 'virgl', 'lima', 'panfrost', 'swrast', 'iris',
+        'zink'
       ]
     elif ['mips', 'mips64', 'riscv32', 'riscv64'].contains(host_machine.cpu_family())
       gallium_drivers = [
-        'r300', 'r600', 'radeonsi', 'nouveau', 'virgl', 'swrast'
+        'r300', 'r600', 'radeonsi', 'nouveau', 'virgl', 'swrast', 'zink'
       ]
     elif ['loongarch64'].contains(host_machine.cpu_family())
       gallium_drivers = [
-        'r300', 'r600', 'radeonsi', 'nouveau', 'virgl', 'etnaviv', 'swrast'
+        'r300', 'r600', 'radeonsi', 'nouveau', 'virgl', 'etnaviv', 'swrast', 'zink'
       ]
     else
       error('Unknown architecture @0@. Please pass -Dgallium-drivers to set driver options. Patches gladly accepted to fix this.'.format(
             host_machine.cpu_family()))
     endif
-  elif ['darwin', 'windows', 'cygwin', 'haiku'].contains(host_machine.system())
+  elif ['windows'].contains(host_machine.system())
+    gallium_drivers = ['swrast', 'zink', 'd3d12']
+  elif ['darwin', 'cygwin', 'haiku'].contains(host_machine.system())
     gallium_drivers = ['swrast']
   else
     error('Unknown OS @0@. Please pass -Dgallium-drivers to set driver options. Patches gladly accepted to fix this.'.format(
@@ -211,7 +216,7 @@ _vulkan_drivers = get_option('vulkan-drivers')
 if _vulkan_drivers.contains('auto')
   if system_has_kms_drm
     if host_machine.cpu_family().startswith('x86')
-      _vulkan_drivers = ['amd', 'intel', 'intel_hasvk', 'swrast']
+      _vulkan_drivers = ['amd', 'intel', 'intel_hasvk', 'nouveau', 'swrast']
     elif ['arm', 'aarch64'].contains(host_machine.cpu_family())
       _vulkan_drivers = ['swrast', 'intel']
     elif ['mips', 'mips64', 'riscv32', 'riscv64'].contains(host_machine.cpu_family())
@@ -234,7 +239,7 @@ elif _vulkan_drivers.contains('all')
    _vulkan_drivers = ['amd', 'intel', 'intel_hasvk', 'swrast',
                       'freedreno', 'panfrost', 'virtio', 'broadcom',
                       'imagination-experimental', 'microsoft-experimental',
-                      'nouveau-experimental']
+                      'nouveau']
 endif
 
 with_intel_vk = _vulkan_drivers.contains('intel')
@@ -248,7 +253,7 @@ with_broadcom_vk = _vulkan_drivers.contains('broadcom')
 with_imagination_vk = _vulkan_drivers.contains('imagination-experimental')
 with_imagination_srv = get_option('imagination-srv')
 with_microsoft_vk = _vulkan_drivers.contains('microsoft-experimental')
-with_nouveau_vk = _vulkan_drivers.contains('nouveau-experimental')
+with_nouveau_vk = _vulkan_drivers.contains('nouveau')
 with_any_vk = _vulkan_drivers.length() != 0
 
 with_vk_compiler = [
@@ -295,13 +300,18 @@ with_any_broadcom = [
   with_broadcom_vk,
 ].contains(true)
 
-if ['x86_64'].contains(host_machine.cpu_family())
-  with_intel_clc = get_option('intel-clc') == 'enabled'
-  with_intel_vk_rt = with_intel_vk and get_option('intel-clc') != 'disabled'
+if get_option('intel-clc') != 'system'
+  # Require intel-clc with Anv & Iris (for internal shaders)
+  with_intel_clc = get_option('intel-clc') == 'enabled' or \
+                   with_intel_vk or with_gallium_iris
 else
   with_intel_clc = false
-  with_intel_vk_rt = false
 endif
+
+with_intel_vk_rt = get_option('intel-rt') \
+  .disable_auto_if(not with_intel_vk) \
+  .disable_if(host_machine.cpu_family() != 'x86_64', error_message : 'Intel Ray Tracing is only supported on x86_64') \
+  .allowed()
 
 with_any_intel = [
   with_gallium_crocus,
@@ -313,6 +323,11 @@ with_any_intel = [
   with_intel_vk,
 ].contains(true)
 with_any_nouveau = with_gallium_nouveau or with_nouveau_vk
+
+# needed in the loader
+if with_nouveau_vk
+  pre_args += '-DHAVE_NVK'
+endif
 
 if with_swrast_vk and not with_gallium_softpipe
   error('swrast vulkan requires gallium swrast')
@@ -601,9 +616,9 @@ _vdpau_drivers = [
 vdpau = get_option('gallium-vdpau') \
   .require(system_has_kms_drm, error_message : 'VDPAU state tracker can only be build on unix-like OSes.') \
   .require(with_platform_x11, error_message : 'VDPAU state tracker requires X11 support.') \
-  .require(_vdpau_drivers.contains(true), error_message : 'VDPAU state tracker requires at least one of the following gallium drivers: r600, radeonsi, nouveau, d3d12 (with option gallium-d3d12-video, virgl).') 
+  .require(_vdpau_drivers.contains(true), error_message : 'VDPAU state tracker requires at least one of the following gallium drivers: r600, radeonsi, nouveau, d3d12 (with option gallium-d3d12-video, virgl).')
 
-dep_vdpau = dependency('vdpau', version : '>= 1.1', required : vdpau)
+dep_vdpau = dependency('vdpau', version : '>= 1.4', required : vdpau)
 if dep_vdpau.found()
   dep_vdpau = dep_vdpau.partial_dependency(compile_args : true)
   pre_args += '-DHAVE_ST_VDPAU'
@@ -813,7 +828,6 @@ if _opencl != 'disabled'
     error('The Clover OpenCL state tracker requires rtti')
   endif
 
-  with_clc = true
   with_gallium_opencl = true
   with_opencl_icd = _opencl == 'icd'
 else
@@ -838,7 +852,7 @@ if with_gallium_rusticl
 endif
 
 dep_clc = null_dep
-if with_clc
+if with_gallium_opencl or with_clc
   dep_clc = dependency('libclc')
 endif
 
@@ -902,10 +916,7 @@ if with_platform_android
       dep_android_mapper4 = dependency('android.hardware.graphics.mapper', version : '>= 4.0', required : false)
     endif
   endif
-  pre_args += [
-    '-DANDROID',
-    '-DANDROID_API_LEVEL=' + get_option('platform-sdk-version').to_string()
-  ]
+  pre_args += '-DANDROID_API_LEVEL=' + get_option('platform-sdk-version').to_string()
   if get_option('android-strict')
     pre_args += '-DANDROID_STRICT'
   endif
@@ -952,7 +963,7 @@ endif
 
 with_shader_cache = get_option('shader-cache') \
   .require(host_machine.system() != 'windows', error_message : 'Shader Cache does not currently work on Windows') \
-  .allowed() 
+  .allowed()
 
 if with_shader_cache
   pre_args += '-DENABLE_SHADER_CACHE'
@@ -1540,7 +1551,7 @@ else
   dep_clock = cc.find_library('rt')
 endif
 
-dep_zlib = dependency('zlib', version : '>= 1.2.3',
+dep_zlib = dependency('zlib', version : '>= 1.2.9',
                       allow_fallback: true,
                       required : get_option('zlib'))
 if dep_zlib.found()
@@ -1600,7 +1611,7 @@ use_xmlconfig = get_option('xmlconfig') \
   .require(dep_expat.found(),
            error_message : 'requires expat') \
   .allowed()
-  
+
 # Predefined macros for windows
 if host_machine.system() == 'windows'
   pre_args += '-DWIN32_LEAN_AND_MEAN' # http://msdn2.microsoft.com/en-us/library/6dwk3a1z.aspx
@@ -1884,6 +1895,8 @@ if not with_platform_windows and not dep_elf.found()
 endif
 if dep_elf.found()
   pre_args += '-DUSE_LIBELF'
+elif with_gallium_radeonsi
+  error('Gallium driver radeonsi requires libelf')
 endif
 
 dep_glvnd = null_dep
@@ -2001,6 +2014,18 @@ if with_platform_wayland
     dep_wayland_egl_headers = dep_wayland_egl.partial_dependency(compile_args : true)
   endif
   pre_args += '-DWL_HIDE_DEPRECATED'
+  if cc.has_function(
+      'wl_display_dispatch_queue_timeout',
+      prefix : '#include <wayland-client.h>',
+      dependencies: dep_wayland_client)
+    pre_args += ['-DHAVE_WL_DISPATCH_QUEUE_TIMEOUT']
+  endif
+  if cc.has_function(
+      'wl_display_create_queue_with_name',
+      prefix : '#include <wayland-client.h>',
+      dependencies: dep_wayland_client)
+    pre_args += ['-DHAVE_WL_CREATE_QUEUE_WITH_NAME']
+  endif
 endif
 
 dep_x11 = null_dep

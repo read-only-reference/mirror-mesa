@@ -27,7 +27,7 @@
 
 #include "brw_cfg.h"
 #include "util/u_dynarray.h"
-#include "brw_shader.h"
+#include "brw_fs.h"
 
 /** @file brw_cfg.cpp
  *
@@ -157,10 +157,10 @@ bblock_t::combine_with(bblock_t *that)
 void
 bblock_t::dump(FILE *file) const
 {
-   const backend_shader *s = this->cfg->s;
+   const fs_visitor *s = this->cfg->s;
 
    int ip = this->start_ip;
-   foreach_inst_in_block(backend_instruction, inst, this) {
+   foreach_inst_in_block(fs_inst, inst, this) {
       fprintf(file, "%5d: ", ip);
       s->dump_instruction(inst, file);
       ip++;
@@ -189,7 +189,7 @@ bblock_t::unlink_list(exec_list *list)
    }
 }
 
-cfg_t::cfg_t(const backend_shader *s, exec_list *instructions) :
+cfg_t::cfg_t(const fs_visitor *s, exec_list *instructions) :
    s(s)
 {
    mem_ctx = ralloc_context(NULL);
@@ -658,7 +658,7 @@ cfg_t::dump(FILE *file)
  * (less than 1000 nodes) that this algorithm is significantly faster than
  * others like Lengauer-Tarjan.
  */
-idom_tree::idom_tree(const backend_shader *s) :
+idom_tree::idom_tree(const fs_visitor *s) :
    num_parents(s->cfg->num_blocks),
    parents(new bblock_t *[num_parents]())
 {
@@ -732,6 +732,14 @@ cfg_t::dump_cfg()
       }
    }
    printf("}\n");
+}
+
+void
+fs_visitor::calculate_cfg()
+{
+   if (this->cfg)
+      return;
+   cfg = new(mem_ctx) cfg_t(this, &this->instructions);
 }
 
 #define cfgv_assert(assertion)                                          \

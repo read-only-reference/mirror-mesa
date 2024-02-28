@@ -91,7 +91,7 @@ radv_get_sequence_size_graphics(const struct radv_indirect_command_layout *layou
    } else {
       if (layout->draw_mesh_tasks) {
          /* userdata writes + instance count + non-indexed draw */
-         *cmd_size += (6 + 2 + (device->mesh_fast_launch_2 ? 5 : 3)) * 4;
+         *cmd_size += (6 + 2 + (device->physical_device->mesh_fast_launch_2 ? 5 : 3)) * 4;
       } else {
          /* userdata writes + instance count + non-indexed draw */
          *cmd_size += (5 + 2 + 3) * 4;
@@ -230,6 +230,11 @@ struct radv_dgc_params {
 
    uint8_t is_dispatch;
    uint8_t use_preamble;
+
+   /* For conditional rendering on ACE. */
+   uint8_t predicating;
+   uint8_t predication_type;
+   uint64_t predication_va;
 };
 
 enum {
@@ -1168,7 +1173,7 @@ dgc_emit_draw_mesh_tasks(nir_builder *b, struct dgc_cmdbuf *cs, nir_def *stream_
    nir_def *vtx_base_sgpr = load_param16(b, vtx_base_sgpr);
    nir_def *stream_offset = nir_iadd(b, draw_params_offset, stream_base);
 
-   nir_def *draw_data = nir_load_ssbo(b, 4, 32, stream_buf, stream_offset);
+   nir_def *draw_data = nir_load_ssbo(b, 3, 32, stream_buf, stream_offset);
    nir_def *x = nir_channel(b, draw_data, 0);
    nir_def *y = nir_channel(b, draw_data, 1);
    nir_def *z = nir_channel(b, draw_data, 2);
@@ -1181,7 +1186,7 @@ dgc_emit_draw_mesh_tasks(nir_builder *b, struct dgc_cmdbuf *cs, nir_def *stream_
       dgc_emit_userdata_mesh(b, cs, vtx_base_sgpr, x, y, z, sequence_id, device);
       dgc_emit_instance_count(b, cs, nir_imm_int(b, 1));
 
-      if (device->mesh_fast_launch_2) {
+      if (device->physical_device->mesh_fast_launch_2) {
          dgc_emit_dispatch_mesh_direct(b, cs, x, y, z);
       } else {
          nir_def *vertex_count = nir_imul(b, x, nir_imul(b, y, z));
@@ -1192,6 +1197,28 @@ dgc_emit_draw_mesh_tasks(nir_builder *b, struct dgc_cmdbuf *cs, nir_def *stream_
       dgc_emit_sqtt_end_api_marker(b, cs, ApiCmdDrawMeshTasksEXT);
    }
    nir_pop_if(b, NULL);
+}
+
+static nir_def *
+dgc_is_cond_render_enabled(nir_builder *b)
+{
+   nir_def *res1, *res2;
+
+   nir_push_if(b, nir_ieq_imm(b, load_param8(b, predicating), 1));
+   {
+      nir_def *val = nir_load_global(b, load_param64(b, predication_va), 4, 1, 32);
+      /* By default, all rendering commands are discarded if the 32-bit value is zero. If the
+       * inverted flag is set, they are discarded if the value is non-zero.
+       */
+      res1 = nir_ixor(b, nir_i2b(b, load_param8(b, predication_type)), nir_ine_imm(b, val, 0));
+   }
+   nir_push_else(b, 0);
+   {
+      res2 = nir_imm_bool(b, false);
+   }
+   nir_pop_if(b, 0);
+
+   return nir_if_phi(b, res1, res2);
 }
 
 static nir_shader *
@@ -1228,6 +1255,15 @@ build_dgc_prepare_shader(struct radv_device *dev)
        * and we have to ensure these threads write NOP packets to pad out the IB. */
       cnt = nir_umin(&b, cnt, sequence_count);
       nir_store_var(&b, count_var, cnt, 0x1);
+   }
+   nir_pop_if(&b, NULL);
+
+   nir_push_if(&b, dgc_is_cond_render_enabled(&b));
+   {
+      /* Reset the number of sequences when conditional rendering is enabled in order to skip the
+       * entire shader and pad the cmdbuf with NOPs.
+       */
+      nir_store_var(&b, count_var, nir_imm_int(&b, 0), 0x1);
    }
    nir_pop_if(&b, NULL);
 
@@ -1628,23 +1664,16 @@ radv_CmdPreprocessGeneratedCommandsNV(VkCommandBuffer commandBuffer,
    if (!radv_dgc_can_preprocess(layout, pipeline))
       return;
 
-   const bool use_predication = radv_use_dgc_predication(cmd_buffer, pGeneratedCommandsInfo);
+   /* VK_EXT_conditional_rendering says that copy commands should not be
+    * affected by conditional rendering.
+    */
+   const bool old_predicating = cmd_buffer->state.predicating;
+   cmd_buffer->state.predicating = false;
 
-   if (use_predication) {
-      VK_FROM_HANDLE(radv_buffer, seq_count_buffer, pGeneratedCommandsInfo->sequencesCountBuffer);
-      const uint64_t va = radv_buffer_get_va(seq_count_buffer->bo) + seq_count_buffer->offset +
-                          pGeneratedCommandsInfo->sequencesCountOffset;
+   radv_prepare_dgc(cmd_buffer, pGeneratedCommandsInfo, false);
 
-      radv_begin_conditional_rendering(cmd_buffer, va, true);
-      cmd_buffer->state.predicating = true;
-   }
-
-   radv_prepare_dgc(cmd_buffer, pGeneratedCommandsInfo);
-
-   if (use_predication) {
-      cmd_buffer->state.predicating = false;
-      radv_end_conditional_rendering(cmd_buffer);
-   }
+   /* Restore conditional rendering. */
+   cmd_buffer->state.predicating = old_predicating;
 }
 
 /* Always need to call this directly before draw due to dependence on bound state. */
@@ -1723,7 +1752,7 @@ radv_prepare_dgc_graphics(struct radv_cmd_buffer *cmd_buffer, const VkGeneratedC
 static void
 radv_prepare_dgc_compute(struct radv_cmd_buffer *cmd_buffer, const VkGeneratedCommandsInfoNV *pGeneratedCommandsInfo,
                          unsigned *upload_size, unsigned *upload_offset, void **upload_data,
-                         struct radv_dgc_params *params)
+                         struct radv_dgc_params *params, bool cond_render_enabled)
 {
    VK_FROM_HANDLE(radv_indirect_command_layout, layout, pGeneratedCommandsInfo->indirectCommandsLayout);
    VK_FROM_HANDLE(radv_pipeline, pipeline, pGeneratedCommandsInfo->pipeline);
@@ -1748,6 +1777,12 @@ radv_prepare_dgc_compute(struct radv_cmd_buffer *cmd_buffer, const VkGeneratedCo
    params->dispatch_initiator = dispatch_initiator;
    params->is_dispatch = 1;
 
+   if (cond_render_enabled) {
+      params->predicating = true;
+      params->predication_va = cmd_buffer->state.predication_va;
+      params->predication_type = cmd_buffer->state.predication_type;
+   }
+
    const struct radv_userdata_info *loc = radv_get_user_sgpr(cs, AC_UD_CS_GRID_SIZE);
    if (loc->sgpr_idx != -1) {
       params->grid_base_sgpr = (cs->info.user_data_0 + 4 * loc->sgpr_idx - SI_SH_REG_OFFSET) >> 2;
@@ -1755,7 +1790,8 @@ radv_prepare_dgc_compute(struct radv_cmd_buffer *cmd_buffer, const VkGeneratedCo
 }
 
 void
-radv_prepare_dgc(struct radv_cmd_buffer *cmd_buffer, const VkGeneratedCommandsInfoNV *pGeneratedCommandsInfo)
+radv_prepare_dgc(struct radv_cmd_buffer *cmd_buffer, const VkGeneratedCommandsInfoNV *pGeneratedCommandsInfo,
+                 bool cond_render_enabled)
 {
    VK_FROM_HANDLE(radv_indirect_command_layout, layout, pGeneratedCommandsInfo->indirectCommandsLayout);
    VK_FROM_HANDLE(radv_pipeline, pipeline, pGeneratedCommandsInfo->pipeline);
@@ -1799,7 +1835,8 @@ radv_prepare_dgc(struct radv_cmd_buffer *cmd_buffer, const VkGeneratedCommandsIn
                                 &params);
    } else {
       assert(layout->pipeline_bind_point == VK_PIPELINE_BIND_POINT_COMPUTE);
-      radv_prepare_dgc_compute(cmd_buffer, pGeneratedCommandsInfo, &upload_size, &upload_offset, &upload_data, &params);
+      radv_prepare_dgc_compute(cmd_buffer, pGeneratedCommandsInfo, &upload_size, &upload_offset, &upload_data, &params,
+                               cond_render_enabled);
    }
 
    if (layout->push_constant_mask) {

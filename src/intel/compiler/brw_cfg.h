@@ -73,7 +73,7 @@ struct bblock_link {
    enum bblock_link_kind kind;
 };
 
-struct backend_shader;
+struct fs_visitor;
 struct cfg_t;
 
 struct bblock_t {
@@ -325,7 +325,7 @@ struct cfg_t {
 #ifdef __cplusplus
    DECLARE_RALLOC_CXX_OPERATORS(cfg_t)
 
-   cfg_t(const backend_shader *s, exec_list *instructions);
+   cfg_t(const fs_visitor *s, exec_list *instructions);
    ~cfg_t();
 
    void remove_block(bblock_t *block);
@@ -354,7 +354,7 @@ struct cfg_t {
    inline void adjust_block_ips();
 
 #endif
-   const struct backend_shader *s;
+   const struct fs_visitor *s;
    void *mem_ctx;
 
    /** Ordered list (by ip) of basic blocks */
@@ -486,11 +486,11 @@ namespace brw {
     * Immediate dominator tree analysis of a shader.
     */
    struct idom_tree {
-      idom_tree(const backend_shader *s);
+      idom_tree(const fs_visitor *s);
       ~idom_tree();
 
       bool
-      validate(const backend_shader *) const
+      validate(const fs_visitor *) const
       {
          /* FINISHME */
          return true;

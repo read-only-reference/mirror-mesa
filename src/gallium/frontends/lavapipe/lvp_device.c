@@ -88,6 +88,9 @@ static const struct vk_instance_extension_table lvp_instance_extensions_supporte
 #ifdef VK_USE_PLATFORM_XLIB_KHR
    .KHR_xlib_surface                         = true,
 #endif
+#ifndef VK_USE_PLATFORM_WIN32_KHR
+   .EXT_headless_surface                     = true,
+#endif
 };
 
 static const struct vk_device_extension_table lvp_device_extensions_supported = {
@@ -142,6 +145,7 @@ static const struct vk_device_extension_table lvp_device_extensions_supported = 
    .KHR_shader_expect_assume              = true,
    .KHR_shader_float16_int8               = true,
    .KHR_shader_integer_dot_product        = true,
+   .KHR_shader_maximal_reconvergence      = true,
    .KHR_shader_non_semantic_info          = true,
    .KHR_shader_subgroup_extended_types    = true,
    .KHR_shader_terminate_invocation       = true,
@@ -618,6 +622,9 @@ lvp_get_features(const struct lvp_physical_device *pdevice,
 
       /* VK_KHR_shader_expect_assume */
       .shaderExpectAssume = true,
+
+      /* VK_KHR_shader_maximal_reconvergence */
+      .shaderMaximalReconvergence = true,
 
       /* VK_AMDX_shader_enqueue */
 #ifdef VK_ENABLE_BETA_EXTENSIONS

@@ -1647,7 +1647,8 @@ radv_queue_submit_normal(struct radv_queue *queue, struct vk_queue_submit *submi
          queue->device->ws->cs_unchain(cmd_buffer->cs);
          if (!chainable || !queue->device->ws->cs_chain(chainable, cmd_buffer->cs, queue->state.uses_shadow_regs)) {
             /* don't submit empty command buffers to the kernel. */
-            if (radv_queue_ring(queue) != AMD_IP_VCN_ENC || cmd_buffer->cs->cdw != 0)
+            if ((radv_queue_ring(queue) != AMD_IP_VCN_ENC && radv_queue_ring(queue) != AMD_IP_UVD) ||
+                cmd_buffer->cs->cdw != 0)
                cs_array[num_submitted_cs++] = cmd_buffer->cs;
          }
 
@@ -1750,7 +1751,7 @@ radv_queue_submit(struct vk_queue *vqueue, struct vk_queue_submit *submission)
    struct radv_queue *queue = (struct radv_queue *)vqueue;
    VkResult result;
 
-   if (queue->device->instance->drirc.legacy_sparse_binding) {
+   if (!radv_sparse_queue_enabled(queue->device->physical_device)) {
       result = radv_queue_submit_bind_sparse_memory(queue->device, submission);
       if (result != VK_SUCCESS)
          goto fail;

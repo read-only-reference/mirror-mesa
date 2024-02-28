@@ -53,7 +53,7 @@ static bool
 upload_blorp_shader(struct blorp_batch *batch, uint32_t stage,
                     const void *key, uint32_t key_size,
                     const void *kernel, uint32_t kernel_size,
-                    const struct brw_stage_prog_data *prog_data,
+                    const void *prog_data,
                     uint32_t prog_data_size,
                     uint32_t *kernel_out, void *prog_data_out)
 {
@@ -100,8 +100,8 @@ anv_device_init_blorp(struct anv_device *device)
          device->vk.enabled_extensions.EXT_depth_range_unrestricted,
    };
 
-   blorp_init(&device->blorp, device, &device->isl_dev, &config);
-   device->blorp.compiler = device->physical->compiler;
+   blorp_init_brw(&device->blorp, device, &device->isl_dev,
+                  device->physical->compiler, &config);
    device->blorp.lookup_shader = lookup_blorp_shader;
    device->blorp.upload_shader = upload_blorp_shader;
    device->blorp.enable_tbimr = device->physical->instance->enable_tbimr;
@@ -1052,12 +1052,14 @@ void anv_CmdUpdateBuffer(
 
       struct anv_state tmp_data =
          anv_cmd_buffer_alloc_dynamic_state(cmd_buffer, copy_size, 64);
+      struct anv_address tmp_addr =
+         anv_cmd_buffer_dynamic_state_address(cmd_buffer, tmp_data);
 
       memcpy(tmp_data.map, pData, copy_size);
 
       struct blorp_address src = {
-         .buffer = cmd_buffer->device->dynamic_state_pool.block_pool.bo,
-         .offset = tmp_data.offset,
+         .buffer = tmp_addr.bo,
+         .offset = tmp_addr.offset,
          .mocs = isl_mocs(&cmd_buffer->device->isl_dev,
                           ISL_SURF_USAGE_TEXTURE_BIT, false)
       };
@@ -1345,7 +1347,7 @@ anv_cmd_buffer_alloc_blorp_binding_table(struct anv_cmd_buffer *cmd_buffer,
       /* Re-emit state base addresses so we get the new surface state base
        * address before we start emitting binding tables etc.
        */
-      anv_cmd_buffer_emit_state_base_address(cmd_buffer);
+      anv_cmd_buffer_emit_bt_pool_base_address(cmd_buffer);
 
       *bt_state = anv_cmd_buffer_alloc_binding_table(cmd_buffer, num_entries,
                                                      state_offset);

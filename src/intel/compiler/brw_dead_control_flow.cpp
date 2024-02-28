@@ -26,7 +26,7 @@
  * This file implements the dead control flow elimination optimization pass.
  */
 
-#include "brw_shader.h"
+#include "brw_fs.h"
 #include "brw_cfg.h"
 
 using namespace brw;
@@ -38,11 +38,11 @@ using namespace brw;
  *   - then in if/else/endif
  */
 bool
-dead_control_flow_eliminate(backend_shader *s)
+brw_fs_opt_dead_control_flow_eliminate(fs_visitor &s)
 {
    bool progress = false;
 
-   foreach_block_safe (block, s->cfg) {
+   foreach_block_safe (block, s.cfg) {
       bblock_t *prev_block = block->prev();
 
       if (!prev_block)
@@ -115,7 +115,7 @@ dead_control_flow_eliminate(backend_shader *s)
    }
 
    if (progress)
-      s->invalidate_analysis(DEPENDENCY_BLOCKS | DEPENDENCY_INSTRUCTIONS);
+      s.invalidate_analysis(DEPENDENCY_BLOCKS | DEPENDENCY_INSTRUCTIONS);
 
    return progress;
 }

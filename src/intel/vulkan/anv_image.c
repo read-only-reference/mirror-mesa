@@ -203,12 +203,22 @@ memory_range_merge(struct anv_image_memory_range *a,
 }
 
 isl_surf_usage_flags_t
-anv_image_choose_isl_surf_usage(VkImageCreateFlags vk_create_flags,
+anv_image_choose_isl_surf_usage(struct anv_physical_device *device,
+                                VkImageCreateFlags vk_create_flags,
                                 VkImageUsageFlags vk_usage,
                                 isl_surf_usage_flags_t isl_extra_usage,
                                 VkImageAspectFlagBits aspect)
 {
    isl_surf_usage_flags_t isl_usage = isl_extra_usage;
+
+   /* On platform like MTL, we choose to allocate additional CCS memory at the
+    * back of the VkDeviceMemory objects since different images can share the
+    * AUX-TT PTE because the HW doesn't care about the image format in the
+    * PTE. That means we can always ignore the AUX-TT alignment requirement
+    * from an ISL point of view.
+    */
+   if (device->alloc_aux_tt_mem)
+      isl_usage |= ISL_SURF_USAGE_NO_AUX_TT_ALIGNMENT_BIT;
 
    if (vk_usage & VK_IMAGE_USAGE_SAMPLED_BIT)
       isl_usage |= ISL_SURF_USAGE_TEXTURE_BIT;
@@ -1312,7 +1322,8 @@ add_all_surfaces_implicit_layout(
 
       VkImageUsageFlags vk_usage = vk_image_usage(&image->vk, aspect);
       isl_surf_usage_flags_t isl_usage =
-         anv_image_choose_isl_surf_usage(image->vk.create_flags, vk_usage,
+         anv_image_choose_isl_surf_usage(device->physical,
+                                         image->vk.create_flags, vk_usage,
                                          isl_extra_usage_flags, aspect);
 
       result = add_primary_surface(device, image, plane, plane_format,
@@ -1320,11 +1331,6 @@ add_all_surfaces_implicit_layout(
                                    isl_tiling_flags, isl_usage);
       if (result != VK_SUCCESS)
          return result;
-
-      /* Disable aux if image supports export without modifiers. */
-      if (image->vk.external_handle_types != 0 &&
-          image->vk.tiling != VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT)
-         continue;
 
       result = add_aux_surface_if_supported(device, image, plane, plane_format,
                                             format_list_info,
@@ -1639,7 +1645,7 @@ anv_image_init(struct anv_device *device, struct anv_image *image,
    if (image->vk.external_handle_types &
        VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID) {
       image->from_ahb = true;
-#ifdef ANDROID
+#if DETECT_OS_ANDROID
       image->vk.ahb_format = anv_ahb_format_for_vk_format(image->vk.format);
 #endif
       return VK_SUCCESS;
@@ -1682,6 +1688,11 @@ anv_image_init(struct anv_device *device, struct anv_image *image,
       isl_extra_usage_flags |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
    }
 
+   /* Disable aux if image supports export without modifiers. */
+   if (image->vk.external_handle_types != 0 &&
+       image->vk.tiling != VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT)
+      isl_extra_usage_flags |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
+
    const isl_tiling_flags_t isl_tiling_flags =
       choose_isl_tiling_flags(device->info, create_info, isl_mod_info,
                               image->vk.wsi_legacy_scanout);
@@ -1710,8 +1721,8 @@ anv_image_init(struct anv_device *device, struct anv_image *image,
             devinfo, image->emu_plane_format, 0, image->vk.tiling);
 
       isl_surf_usage_flags_t isl_usage = anv_image_choose_isl_surf_usage(
-            image->vk.create_flags, image->vk.usage, isl_extra_usage_flags,
-            VK_IMAGE_ASPECT_COLOR_BIT);
+         device->physical, image->vk.create_flags, image->vk.usage,
+         isl_extra_usage_flags, VK_IMAGE_ASPECT_COLOR_BIT);
 
       r = add_primary_surface(device, image, plane, plane_format,
                               ANV_OFFSET_IMPLICIT, 0,
@@ -1933,7 +1944,7 @@ resolve_ahw_image(struct anv_device *device,
                   struct anv_image *image,
                   struct anv_device_memory *mem)
 {
-#if defined(ANDROID) && ANDROID_API_LEVEL >= 26
+#if DETECT_OS_ANDROID && ANDROID_API_LEVEL >= 26
    assert(mem->vk.ahardware_buffer);
    AHardwareBuffer_Desc desc;
    AHardwareBuffer_describe(mem->vk.ahardware_buffer, &desc);
@@ -1975,18 +1986,10 @@ anv_image_get_memory_requirements(struct anv_device *device,
     *    only if the memory type `i` in the VkPhysicalDeviceMemoryProperties
     *    structure for the physical device is supported.
     */
-   uint32_t memory_types = 0;
-   for (uint32_t i = 0; i < device->physical->memory.type_count; i++) {
-      /* Have the protected image bit match only the memory types with the
-       * equivalent bit.
-       */
-      if (!!(image->vk.create_flags & VK_IMAGE_CREATE_PROTECTED_BIT) !=
-          !!(device->physical->memory.types[i].propertyFlags &
-             VK_MEMORY_PROPERTY_PROTECTED_BIT))
-         continue;
-
-      memory_types |= 1ull << i;
-   }
+   uint32_t memory_types =
+      (image->vk.create_flags & VK_IMAGE_CREATE_PROTECTED_BIT) ?
+      device->physical->memory.protected_mem_types :
+      device->physical->memory.default_buffer_mem_types;
 
    vk_foreach_struct(ext, pMemoryRequirements->pNext) {
       switch (ext->sType) {
@@ -2261,22 +2264,64 @@ anv_image_map_aux_tt(struct anv_device *device,
    struct anv_bo *bo = main_addr.bo;
    assert(bo != NULL);
 
-   if (anv_address_allows_aux_map(device, main_addr)) {
-      const struct anv_address aux_addr =
-         anv_image_address(image,
-                           &image->planes[plane].compr_ctrl_memory_range);
-      const struct isl_surf *surf =
-         &image->planes[plane].primary_surface.isl;
+   /* If the additional memory padding was added at the end of the BO for CCS
+    * data, map this region at the granularity of the main/CCS pages.
+    *
+    * Otherwise the image should have additional CCS data at the computed
+    * offset.
+    */
+   if (device->physical->alloc_aux_tt_mem &&
+       (bo->alloc_flags & ANV_BO_ALLOC_AUX_CCS)) {
+      uint64_t main_aux_alignment =
+         intel_aux_map_get_alignment(device->aux_map_ctx);
+      assert(bo->offset % main_aux_alignment == 0);
+      const struct anv_address start_addr = (struct anv_address) {
+         .bo = bo,
+         .offset = ROUND_DOWN_TO(main_addr.offset, main_aux_alignment),
+      };
+      const struct anv_address aux_addr = (struct anv_address) {
+         .bo = bo,
+         .offset = bo->ccs_offset +
+                   intel_aux_main_to_aux_offset(device->aux_map_ctx,
+                                                start_addr.offset),
+      };
+      const struct isl_surf *surf = &image->planes[plane].primary_surface.isl;
       const uint64_t format_bits =
          intel_aux_map_format_bits_for_isl_surf(surf);
+      /* Make sure to have the mapping cover the entire image from the aux
+       * aligned start.
+       */
+      const uint64_t main_size = align(
+         (main_addr.offset - start_addr.offset) + surf->size_B,
+         main_aux_alignment);
+
       if (intel_aux_map_add_mapping(device->aux_map_ctx,
-                                    anv_address_physical(main_addr),
+                                    anv_address_physical(start_addr),
                                     anv_address_physical(aux_addr),
-                                    surf->size_B, format_bits)) {
-         image->planes[plane].aux_tt.addr = anv_address_physical(main_addr);
-         image->planes[plane].aux_tt.size = surf->size_B;
+                                    main_size, format_bits)) {
          image->planes[plane].aux_tt.mapped = true;
+         image->planes[plane].aux_tt.addr = anv_address_physical(start_addr);
+         image->planes[plane].aux_tt.size = main_size;
          return true;
+      }
+   } else {
+      if (anv_address_allows_aux_map(device, main_addr)) {
+         const struct anv_address aux_addr =
+            anv_image_address(image,
+                              &image->planes[plane].compr_ctrl_memory_range);
+         const struct isl_surf *surf =
+            &image->planes[plane].primary_surface.isl;
+         const uint64_t format_bits =
+            intel_aux_map_format_bits_for_isl_surf(surf);
+         if (intel_aux_map_add_mapping(device->aux_map_ctx,
+                                       anv_address_physical(main_addr),
+                                       anv_address_physical(aux_addr),
+                                       surf->size_B, format_bits)) {
+            image->planes[plane].aux_tt.mapped = true;
+            image->planes[plane].aux_tt.addr = anv_address_physical(main_addr);
+            image->planes[plane].aux_tt.size = surf->size_B;
+            return true;
+         }
       }
    }
 

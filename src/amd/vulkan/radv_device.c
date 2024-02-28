@@ -598,6 +598,7 @@ init_dispatch_tables(struct radv_device *device, struct radv_physical_device *ph
    b.tables[RADV_RGP_DISPATCH_TABLE] = &device->layer_dispatch.rgp;
    b.tables[RADV_RRA_DISPATCH_TABLE] = &device->layer_dispatch.rra;
    b.tables[RADV_RMV_DISPATCH_TABLE] = &device->layer_dispatch.rmv;
+   b.tables[RADV_CTX_ROLL_DISPATCH_TABLE] = &device->layer_dispatch.ctx_roll;
 
    if (!strcmp(physical_device->instance->drirc.app_layer, "metroexodus")) {
       add_entrypoints(&b, &metro_exodus_device_entrypoints, RADV_APP_DISPATCH_TABLE);
@@ -618,6 +619,9 @@ init_dispatch_tables(struct radv_device *device, struct radv_physical_device *ph
       add_entrypoints(&b, &rmv_device_entrypoints, RADV_RMV_DISPATCH_TABLE);
 #endif
 
+   if (physical_device->instance->vk.trace_mode & RADV_TRACE_MODE_CTX_ROLLS)
+      add_entrypoints(&b, &ctx_roll_device_entrypoints, RADV_CTX_ROLL_DISPATCH_TABLE);
+
    add_entrypoints(&b, &radv_device_entrypoints, RADV_DISPATCH_TABLE_COUNT);
    add_entrypoints(&b, &wsi_device_entrypoints, RADV_DISPATCH_TABLE_COUNT);
    add_entrypoints(&b, &vk_common_device_entrypoints, RADV_DISPATCH_TABLE_COUNT);
@@ -630,28 +634,8 @@ capture_trace(VkQueue _queue)
 
    VkResult result = VK_SUCCESS;
 
-   char filename[2048];
-   struct tm now;
-   time_t t;
-
-   t = time(NULL);
-   now = *localtime(&t);
-
-   if (queue->device->instance->vk.trace_mode & RADV_TRACE_MODE_RRA) {
-      if (_mesa_hash_table_num_entries(queue->device->rra_trace.accel_structs) == 0) {
-         fprintf(stderr, "radv: No acceleration structures captured, not saving RRA trace.\n");
-      } else {
-         snprintf(filename, sizeof(filename), "/tmp/%s_%04d.%02d.%02d_%02d.%02d.%02d.rra", util_get_process_name(),
-                  1900 + now.tm_year, now.tm_mon + 1, now.tm_mday, now.tm_hour, now.tm_min, now.tm_sec);
-
-         result = radv_rra_dump_trace(_queue, filename);
-
-         if (result == VK_SUCCESS)
-            fprintf(stderr, "radv: RRA capture saved to '%s'\n", filename);
-         else
-            fprintf(stderr, "radv: Failed to save RRA capture!\n");
-      }
-   }
+   if (queue->device->instance->vk.trace_mode & RADV_TRACE_MODE_RRA)
+      queue->device->rra_trace.triggered = true;
 
    if (queue->device->vk.memory_trace_data.is_enabled) {
       simple_mtx_lock(&queue->device->vk.memory_trace_data.token_mtx);
@@ -663,6 +647,22 @@ capture_trace(VkQueue _queue)
    if (queue->device->instance->vk.trace_mode & RADV_TRACE_MODE_RGP)
       queue->device->sqtt_triggered = true;
 
+   if (queue->device->instance->vk.trace_mode & RADV_TRACE_MODE_CTX_ROLLS) {
+      char filename[2048];
+      time_t t = time(NULL);
+      struct tm now = *localtime(&t);
+      snprintf(filename, sizeof(filename), "/tmp/%s_%04d.%02d.%02d_%02d.%02d.%02d.ctxroll", util_get_process_name(),
+               1900 + now.tm_year, now.tm_mon + 1, now.tm_mday, now.tm_hour, now.tm_min, now.tm_sec);
+
+      simple_mtx_lock(&queue->device->ctx_roll_mtx);
+
+      queue->device->ctx_roll_file = fopen(filename, "w");
+      if (queue->device->ctx_roll_file)
+         fprintf(stderr, "radv: Writing context rolls to '%s'...\n", filename);
+
+      simple_mtx_unlock(&queue->device->ctx_roll_mtx);
+   }
+
    return result;
 }
 
@@ -671,33 +671,24 @@ radv_device_init_cache_key(struct radv_device *device)
 {
    struct radv_device_cache_key *key = &device->cache_key;
 
-   key->clear_lds = device->instance->drirc.clear_lds;
-   key->cs_wave32 = device->physical_device->cs_wave_size == 32;
-   key->disable_aniso_single_level =
-      device->instance->drirc.disable_aniso_single_level && device->physical_device->rad_info.gfx_level < GFX8;
-   key->disable_shrink_image_store = device->instance->drirc.disable_shrink_image_store;
-   key->disable_sinking_load_input_fs = device->instance->drirc.disable_sinking_load_input_fs;
    key->disable_trunc_coord = device->disable_trunc_coord;
-   key->dual_color_blend_by_location = device->instance->drirc.dual_color_blend_by_location;
-   key->emulate_rt = !!(device->instance->perftest_flags & RADV_PERFTEST_EMULATE_RT);
-   key->ge_wave32 = device->physical_device->ge_wave_size == 32;
    key->image_2d_view_of_3d =
       device->vk.enabled_features.image2DViewOf3D && device->physical_device->rad_info.gfx_level == GFX9;
-   key->invariant_geom = !!(device->instance->debug_flags & RADV_DEBUG_INVARIANT_GEOM);
-   key->lower_discard_to_demote = !!(device->instance->debug_flags & RADV_DEBUG_DISCARD_TO_DEMOTE);
-   key->mesh_fast_launch_2 = device->mesh_fast_launch_2;
    key->mesh_shader_queries = device->vk.enabled_features.meshShaderQueries;
-   key->no_fmask = !!(device->instance->debug_flags & RADV_DEBUG_NO_FMASK);
-   key->no_rt = !!(device->instance->debug_flags & RADV_DEBUG_NO_RT);
    key->primitives_generated_query = radv_uses_primitives_generated_query(device);
-   key->ps_wave32 = device->physical_device->ps_wave_size == 32;
-   key->rt_wave64 = device->physical_device->rt_wave_size == 64;
-   key->split_fma = !!(device->instance->debug_flags & RADV_DEBUG_SPLIT_FMA);
-   key->ssbo_non_uniform = device->instance->drirc.ssbo_non_uniform;
-   key->tex_non_uniform = device->instance->drirc.tex_non_uniform;
-   key->use_llvm = device->physical_device->use_llvm;
-   key->use_ngg = device->physical_device->use_ngg;
-   key->use_ngg_culling = device->physical_device->use_ngg_culling;
+
+   /* The Vulkan spec says:
+    *  "Binary shaders retrieved from a physical device with a certain shaderBinaryUUID are
+    *   guaranteed to be compatible with all other physical devices reporting the same
+    *   shaderBinaryUUID and the same or higher shaderBinaryVersion."
+    *
+    * That means the driver should compile shaders for the "worst" case of all features being
+    * enabled, regardless of what features are actually enabled on the logical device.
+    */
+   if (device->vk.enabled_features.shaderObject) {
+      key->image_2d_view_of_3d = device->physical_device->rad_info.gfx_level == GFX9;
+      key->primitives_generated_query = true;
+   }
 
    _mesa_blake3_compute(key, sizeof(*key), device->cache_hash);
 }
@@ -745,6 +736,7 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
 
    device->instance = physical_device->instance;
    device->physical_device = physical_device;
+   simple_mtx_init(&device->ctx_roll_mtx, mtx_plain);
    simple_mtx_init(&device->trace_mtx, mtx_plain);
    simple_mtx_init(&device->pstate_mtx, mtx_plain);
    simple_mtx_init(&device->rt_handles_mtx, mtx_plain);
@@ -827,9 +819,6 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
 
    device->pbb_allowed =
       device->physical_device->rad_info.gfx_level >= GFX9 && !(device->instance->debug_flags & RADV_DEBUG_NOBINNING);
-
-   device->mesh_fast_launch_2 = (device->instance->perftest_flags & RADV_PERFTEST_GS_FAST_LAUNCH_2) &&
-                                device->physical_device->rad_info.gfx_level >= GFX11;
 
    device->disable_trunc_coord = device->instance->drirc.disable_trunc_coord;
 
@@ -1064,7 +1053,9 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
    }
 
    if ((device->instance->vk.trace_mode & RADV_TRACE_MODE_RRA) && radv_enable_rt(physical_device, false)) {
-      radv_rra_trace_init(device);
+      result = radv_rra_trace_init(device);
+      if (result != VK_SUCCESS)
+         goto fail;
    }
 
    if (device->vk.enabled_features.rayTracingPipelineShaderGroupHandleCaptureReplay) {
@@ -1086,6 +1077,8 @@ fail:
    radv_printf_data_finish(device);
 
    radv_sqtt_finish(device);
+
+   radv_rra_trace_finish(radv_device_to_handle(device), &device->rra_trace);
 
    radv_spm_finish(device);
 
@@ -1125,6 +1118,7 @@ fail_queue:
 
    _mesa_hash_table_destroy(device->rt_handles, NULL);
 
+   simple_mtx_destroy(&device->ctx_roll_mtx);
    simple_mtx_destroy(&device->pstate_mtx);
    simple_mtx_destroy(&device->trace_mtx);
    simple_mtx_destroy(&device->rt_handles_mtx);
@@ -1187,6 +1181,7 @@ radv_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    }
 
    mtx_destroy(&device->overallocation_mutex);
+   simple_mtx_destroy(&device->ctx_roll_mtx);
    simple_mtx_destroy(&device->pstate_mtx);
    simple_mtx_destroy(&device->trace_mtx);
    simple_mtx_destroy(&device->rt_handles_mtx);
@@ -1863,20 +1858,18 @@ radv_gfx11_set_db_render_control(const struct radv_device *device, unsigned num_
 
    if (pdevice->rad_info.has_dedicated_vram) {
       if (num_samples == 8)
-         max_allowed_tiles_in_wave = 7;
+         max_allowed_tiles_in_wave = 6;
       else if (num_samples == 4)
-         max_allowed_tiles_in_wave = 14;
+         max_allowed_tiles_in_wave = 13;
+      else
+         max_allowed_tiles_in_wave = 0;
    } else {
       if (num_samples == 8)
-         max_allowed_tiles_in_wave = 8;
-   }
-
-   /* TODO: We may want to disable this workaround for future chips. */
-   if (num_samples >= 4) {
-      if (max_allowed_tiles_in_wave)
-         max_allowed_tiles_in_wave--;
-      else
+         max_allowed_tiles_in_wave = 7;
+      else if (num_samples == 4)
          max_allowed_tiles_in_wave = 15;
+      else
+         max_allowed_tiles_in_wave = 0;
    }
 
    *db_render_control |= S_028000_MAX_ALLOWED_TILES_IN_WAVE(max_allowed_tiles_in_wave);

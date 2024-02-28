@@ -26,7 +26,6 @@
 #define BRW_FS_BUILDER_H
 
 #include "brw_ir_fs.h"
-#include "brw_shader.h"
 #include "brw_eu.h"
 #include "brw_fs.h"
 
@@ -280,20 +279,7 @@ namespace brw {
       instruction *
       emit(enum opcode opcode, const dst_reg &dst, const src_reg &src0) const
       {
-         switch (opcode) {
-         case SHADER_OPCODE_RCP:
-         case SHADER_OPCODE_RSQ:
-         case SHADER_OPCODE_SQRT:
-         case SHADER_OPCODE_EXP2:
-         case SHADER_OPCODE_LOG2:
-         case SHADER_OPCODE_SIN:
-         case SHADER_OPCODE_COS:
-            return emit(instruction(opcode, dispatch_width(), dst,
-                                    fix_math_operand(src0)));
-
-         default:
-            return emit(instruction(opcode, dispatch_width(), dst, src0));
-         }
+         return emit(instruction(opcode, dispatch_width(), dst, src0));
       }
 
       /**
@@ -303,19 +289,8 @@ namespace brw {
       emit(enum opcode opcode, const dst_reg &dst, const src_reg &src0,
            const src_reg &src1) const
       {
-         switch (opcode) {
-         case SHADER_OPCODE_POW:
-         case SHADER_OPCODE_INT_QUOTIENT:
-         case SHADER_OPCODE_INT_REMAINDER:
-            return emit(instruction(opcode, dispatch_width(), dst,
-                                    fix_math_operand(src0),
-                                    fix_math_operand(src1)));
-
-         default:
-            return emit(instruction(opcode, dispatch_width(), dst,
-                                    src0, src1));
-
-         }
+         return emit(instruction(opcode, dispatch_width(), dst,
+                                 src0, src1));
       }
 
       /**
@@ -627,7 +602,6 @@ namespace brw {
       ALU3(BFI2)
       ALU1(BFREV)
       ALU1(CBIT)
-      ALU1(DIM)
       ALU2(DP2)
       ALU2(DP3)
       ALU2(DP4)
@@ -664,36 +638,6 @@ namespace brw {
 #undef ALU2_ACC
 #undef ALU2
 #undef ALU1
-
-      instruction *
-      F32TO16(const dst_reg &dst, const src_reg &src) const
-      {
-         assert(dst.type == BRW_REGISTER_TYPE_HF);
-         assert(src.type == BRW_REGISTER_TYPE_F);
-
-         if (shader->devinfo->ver >= 8) {
-            return MOV(dst, src);
-         } else {
-            assert(shader->devinfo->ver == 7);
-            return emit(BRW_OPCODE_F32TO16,
-                        retype(dst, BRW_REGISTER_TYPE_W), src);
-         }
-      }
-
-      instruction *
-      F16TO32(const dst_reg &dst, const src_reg &src) const
-      {
-         assert(dst.type == BRW_REGISTER_TYPE_F);
-         assert(src.type == BRW_REGISTER_TYPE_HF);
-
-         if (shader->devinfo->ver >= 8) {
-            return MOV(dst, src);
-         } else {
-            assert(shader->devinfo->ver == 7);
-            return emit(BRW_OPCODE_F16TO32,
-                        dst, retype(src, BRW_REGISTER_TYPE_W));
-         }
-      }
       /** @} */
 
       /**
@@ -785,7 +729,7 @@ namespace brw {
       LRP(const dst_reg &dst, const src_reg &x, const src_reg &y,
           const src_reg &a) const
       {
-         if (shader->devinfo->ver >= 6 && shader->devinfo->ver <= 10) {
+         if (shader->devinfo->ver <= 10) {
             /* The LRP instruction actually does op1 * op0 + op2 * (1 - op0), so
              * we need to reorder the operands.
              */
@@ -909,36 +853,6 @@ namespace brw {
          dst_reg expanded = vgrf(src.type);
          MOV(expanded, src);
          return expanded;
-      }
-
-      /**
-       * Workaround for source register modes not supported by the math
-       * instruction.
-       */
-      src_reg
-      fix_math_operand(const src_reg &src) const
-      {
-         /* Can't do hstride == 0 args on gfx6 math, so expand it out. We
-          * might be able to do better by doing execsize = 1 math and then
-          * expanding that result out, but we would need to be careful with
-          * masking.
-          *
-          * Gfx6 hardware ignores source modifiers (negate and abs) on math
-          * instructions, so we also move to a temp to set those up.
-          *
-          * Gfx7 relaxes most of the above restrictions, but still can't use IMM
-          * operands to math
-          */
-         if ((shader->devinfo->ver == 6 &&
-              (src.file == IMM || src.file == UNIFORM ||
-               src.abs || src.negate)) ||
-             (shader->devinfo->ver == 7 && src.file == IMM)) {
-            const dst_reg tmp = vgrf(src.type);
-            MOV(tmp, src);
-            return tmp;
-         } else {
-            return src;
-         }
       }
 
       bblock_t *block;

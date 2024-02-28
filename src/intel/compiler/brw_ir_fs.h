@@ -25,7 +25,8 @@
 #ifndef BRW_IR_FS_H
 #define BRW_IR_FS_H
 
-#include "brw_shader.h"
+#include "brw_ir.h"
+#include "brw_ir_allocator.h"
 
 class fs_inst;
 
@@ -80,12 +81,6 @@ byte_offset(fs_reg reg, unsigned delta)
    case UNIFORM:
       reg.offset += delta;
       break;
-   case MRF: {
-      const unsigned suboffset = reg.offset + delta;
-      reg.nr += suboffset / REG_SIZE;
-      reg.offset = suboffset % REG_SIZE;
-      break;
-   }
    case ARF:
    case FIXED_GRF: {
       const unsigned suboffset = reg.subnr + delta;
@@ -113,7 +108,6 @@ horiz_offset(const fs_reg &reg, unsigned delta)
        */
       return reg;
    case VGRF:
-   case MRF:
    case ATTR:
       return byte_offset(reg, delta * reg.stride * type_sz(reg.type));
    case ARF:
@@ -144,7 +138,6 @@ offset(fs_reg reg, unsigned width, unsigned delta)
       break;
    case ARF:
    case FIXED_GRF:
-   case MRF:
    case VGRF:
    case ATTR:
    case UNIFORM:
@@ -212,31 +205,6 @@ reg_padding(const fs_reg &r)
    return (MAX2(1, stride) - 1) * type_sz(r.type);
 }
 
-/* Do not call this directly. Call regions_overlap() instead. */
-static inline bool
-regions_overlap_MRF(const fs_reg &r, unsigned dr, const fs_reg &s, unsigned ds)
-{
-   if (r.nr & BRW_MRF_COMPR4) {
-      fs_reg t = r;
-      t.nr &= ~BRW_MRF_COMPR4;
-      /* COMPR4 regions are translated by the hardware during decompression
-       * into two separate half-regions 4 MRFs apart from each other.
-       *
-       * Note: swapping s and t in this parameter list eliminates one possible
-       * level of recursion (since the s in the called versions of
-       * regions_overlap_MRF can't be COMPR4), and that makes the compiled
-       * code a lot smaller.
-       */
-      return regions_overlap_MRF(s, ds, t, dr / 2) ||
-             regions_overlap_MRF(s, ds, byte_offset(t, 4 * REG_SIZE), dr / 2);
-   } else if (s.nr & BRW_MRF_COMPR4) {
-      return regions_overlap_MRF(s, ds, r, dr);
-   }
-
-   return !((r.nr * REG_SIZE + r.offset + dr) <= (s.nr * REG_SIZE + s.offset) ||
-            (s.nr * REG_SIZE + s.offset + ds) <= (r.nr * REG_SIZE + r.offset));
-}
-
 /**
  * Return whether the register region starting at \p r and spanning \p dr
  * bytes could potentially overlap the register region starting at \p s and
@@ -251,11 +219,9 @@ regions_overlap(const fs_reg &r, unsigned dr, const fs_reg &s, unsigned ds)
    if (r.file == VGRF) {
       return r.nr == s.nr &&
              !(r.offset + dr <= s.offset || s.offset + ds <= r.offset);
-   } else if (r.file != MRF) {
+   } else {
       return !(reg_offset(r) + dr <= reg_offset(s) ||
                reg_offset(s) + ds <= reg_offset(r));
-   } else {
-      return regions_overlap_MRF(r, dr, s, ds);
    }
 }
 
@@ -392,7 +358,6 @@ public:
    bool can_do_cmod();
    bool can_change_types() const;
    bool has_source_and_destination_hazard() const;
-   unsigned implied_mrf_writes() const;
 
    /**
     * Return whether \p arg is a control source of a virtual instruction which
@@ -429,6 +394,9 @@ public:
    bool keep_payload_trailing_zeros;
 
    tgl_swsb sched; /**< Scheduling info. */
+
+   /* Hint that this instruction has combined LOD/LOD bias with array index */
+   bool has_packed_lod_ai_src;
 };
 
 /**
@@ -733,5 +701,37 @@ is_coalescing_payload(const brw::simple_allocator &alloc, const fs_inst *inst)
 
 bool
 has_bank_conflict(const struct brw_isa_info *isa, const fs_inst *inst);
+
+/* Return the subset of flag registers that an instruction could
+ * potentially read or write based on the execution controls and flag
+ * subregister number of the instruction.
+ */
+static inline unsigned
+brw_fs_flag_mask(const fs_inst *inst, unsigned width)
+{
+   assert(util_is_power_of_two_nonzero(width));
+   const unsigned start = (inst->flag_subreg * 16 + inst->group) &
+                          ~(width - 1);
+  const unsigned end = start + ALIGN(inst->exec_size, width);
+   return ((1 << DIV_ROUND_UP(end, 8)) - 1) & ~((1 << (start / 8)) - 1);
+}
+
+static inline unsigned
+brw_fs_bit_mask(unsigned n)
+{
+   return (n >= CHAR_BIT * sizeof(brw_fs_bit_mask(n)) ? ~0u : (1u << n) - 1);
+}
+
+static inline unsigned
+brw_fs_flag_mask(const fs_reg &r, unsigned sz)
+{
+   if (r.file == ARF) {
+      const unsigned start = (r.nr - BRW_ARF_FLAG) * 4 + r.subnr;
+      const unsigned end = start + sz;
+      return brw_fs_bit_mask(end) & ~brw_fs_bit_mask(start);
+   } else {
+      return 0;
+   }
+}
 
 #endif
