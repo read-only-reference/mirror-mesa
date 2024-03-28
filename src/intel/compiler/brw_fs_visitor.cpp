@@ -615,8 +615,12 @@ fs_visitor::emit_fb_writes()
        * "Output Stencil is not supported with SIMD16 Render Target Write
        * Messages."
        */
-      limit_dispatch_width(8, "gl_FragStencilRefARB unsupported "
-                           "in SIMD16+ mode.\n");
+      if (devinfo->ver >= 20)
+         limit_dispatch_width(16, "gl_FragStencilRefARB unsupported "
+                              "in SIMD32+ mode.\n");
+      else
+         limit_dispatch_width(8, "gl_FragStencilRefARB unsupported "
+                              "in SIMD16+ mode.\n");
    }
 
    /* ANV doesn't know about sample mask output during the wm key creation
@@ -650,8 +654,12 @@ fs_visitor::emit_fb_writes()
        * dispatch on ICL due some unknown reasons, see
        * https://gitlab.freedesktop.org/mesa/mesa/-/issues/2183
        */
-      limit_dispatch_width(8, "Dual source blending unsupported "
-                           "in SIMD16 and SIMD32 modes.\n");
+      if (devinfo->ver >= 20)
+         limit_dispatch_width(16, "Dual source blending unsupported "
+                              "in SIMD32 mode.\n");
+      else
+         limit_dispatch_width(8, "Dual source blending unsupported "
+                              "in SIMD16 and SIMD32 modes.\n");
    }
 
    do_emit_fb_writes(key->nr_color_regions, replicate_alpha);
@@ -705,13 +713,21 @@ fs_visitor::emit_urb_writes(const fs_reg &gs_vertex_count)
       const int output_vertex_size_owords =
          gs_prog_data->output_vertex_size_hwords * 2;
 
+      /* On Xe2+ platform, LSC can operate on the Dword data element with byte
+       * offset granularity, so convert per slot offset in bytes since it's in
+       * Owords (16-bytes) unit else keep per slot offset in oword unit for
+       * previous platforms.
+       */
+      const int output_vertex_size = devinfo->ver >= 20 ?
+                                     output_vertex_size_owords * 16 :
+                                     output_vertex_size_owords;
       if (gs_vertex_count.file == IMM) {
-         per_slot_offsets = brw_imm_ud(output_vertex_size_owords *
+         per_slot_offsets = brw_imm_ud(output_vertex_size *
                                        gs_vertex_count.ud);
       } else {
          per_slot_offsets = vgrf(glsl_uint_type());
          bld.MUL(per_slot_offsets, gs_vertex_count,
-                 brw_imm_ud(output_vertex_size_owords));
+                 brw_imm_ud(output_vertex_size));
       }
    }
 
@@ -962,20 +978,45 @@ fs_visitor::emit_urb_fence()
 void
 fs_visitor::emit_cs_terminate()
 {
-   const fs_builder bld = fs_builder(this).at_end();
+   const fs_builder ubld = fs_builder(this).at_end().exec_all();
 
    /* We can't directly send from g0, since sends with EOT have to use
     * g112-127. So, copy it to a virtual register, The register allocator will
     * make sure it uses the appropriate register range.
     */
    struct brw_reg g0 = retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD);
-   fs_reg payload = fs_reg(VGRF, alloc.allocate(1), BRW_REGISTER_TYPE_UD);
-   bld.group(8, 0).exec_all().MOV(payload, g0);
+   fs_reg payload = fs_reg(VGRF, alloc.allocate(reg_unit(devinfo)),
+                           BRW_REGISTER_TYPE_UD);
+   ubld.group(8 * reg_unit(devinfo), 0).MOV(payload, g0);
 
-   /* Send a message to the thread spawner to terminate the thread. */
-   fs_inst *inst = bld.exec_all()
-                      .emit(CS_OPCODE_CS_TERMINATE, reg_undef, payload);
-   inst->eot = true;
+   /* Set the descriptor to "Dereference Resource" and "Root Thread" */
+   unsigned desc = 0;
+
+   /* Set Resource Select to "Do not dereference URB" on Gfx < 11.
+    *
+    * Note that even though the thread has a URB resource associated with it,
+    * we set the "do not dereference URB" bit, because the URB resource is
+    * managed by the fixed-function unit, so it will free it automatically.
+    */
+   if (devinfo->ver < 11)
+      desc |= (1 << 4); /* Do not dereference URB */
+
+   fs_reg srcs[4] = {
+      brw_imm_ud(desc), /* desc */
+      brw_imm_ud(0), /* ex_desc */
+      payload,       /* payload */
+      fs_reg(),      /* payload2 */
+   };
+
+   fs_inst *send = ubld.emit(SHADER_OPCODE_SEND, reg_undef, srcs, 4);
+
+   /* On Alchemist and later, send an EOT message to the message gateway to
+    * terminate a compute shader.  For older GPUs, send to the thread spawner.
+    */
+   send->sfid = devinfo->verx10 >= 125 ? BRW_SFID_MESSAGE_GATEWAY
+                                       : BRW_SFID_THREAD_SPAWNER;
+   send->mlen = reg_unit(devinfo);
+   send->eot = true;
 }
 
 fs_visitor::fs_visitor(const struct brw_compiler *compiler,

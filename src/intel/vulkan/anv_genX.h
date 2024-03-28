@@ -204,6 +204,8 @@ void genX(cmd_buffer_dispatch_kernel)(struct anv_cmd_buffer *cmd_buffer,
                                       uint32_t arg_count,
                                       const struct anv_kernel_arg *args);
 
+void genX(blorp_init_dynamic_states)(struct blorp_context *context);
+
 void genX(blorp_exec)(struct blorp_batch *batch,
                       const struct blorp_params *params);
 
@@ -301,6 +303,10 @@ genX(emit_breakpoint)(struct anv_batch *batch,
    if (INTEL_DEBUG(DEBUG_DRAW_BKP))
       genX(batch_emit_breakpoint)(batch, device, emit_before_draw);
 }
+
+void
+genX(cmd_buffer_begin_companion)(struct anv_cmd_buffer *buffer,
+                                 VkCommandBufferLevel level);
 
 struct anv_state
 genX(cmd_buffer_begin_companion_rcs_syncpoint)(struct anv_cmd_buffer *cmd_buffer);

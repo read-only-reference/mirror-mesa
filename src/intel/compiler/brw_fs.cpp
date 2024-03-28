@@ -47,19 +47,22 @@
 
 using namespace brw;
 
+static void
+initialize_sources(fs_inst *inst, const fs_reg src[], uint8_t num_sources);
+
 void
 fs_inst::init(enum opcode opcode, uint8_t exec_size, const fs_reg &dst,
               const fs_reg *src, unsigned sources)
 {
    memset((void*)this, 0, sizeof(*this));
 
-   this->src = new fs_reg[MAX2(sources, 3)];
+   initialize_sources(this, src, sources);
+
    for (unsigned i = 0; i < sources; i++)
       this->src[i] = src[i];
 
    this->opcode = opcode;
    this->dst = dst;
-   this->sources = sources;
    this->exec_size = exec_size;
 
    assert(dst.file != IMM && dst.file != UNIFORM);
@@ -132,31 +135,71 @@ fs_inst::fs_inst(enum opcode opcode, uint8_t exec_width, const fs_reg &dst,
 fs_inst::fs_inst(const fs_inst &that)
 {
    memcpy((void*)this, &that, sizeof(that));
-
-   this->src = new fs_reg[MAX2(that.sources, 3)];
-
-   for (unsigned i = 0; i < that.sources; i++)
-      this->src[i] = that.src[i];
+   initialize_sources(this, that.src, that.sources);
 }
 
 fs_inst::~fs_inst()
 {
-   delete[] this->src;
+   if (this->src != this->builtin_src)
+      delete[] this->src;
+}
+
+static void
+initialize_sources(fs_inst *inst, const fs_reg src[], uint8_t num_sources)
+{
+   if (num_sources > ARRAY_SIZE(inst->builtin_src))
+      inst->src = new fs_reg[num_sources];
+   else
+      inst->src = inst->builtin_src;
+
+   for (unsigned i = 0; i < num_sources; i++)
+      inst->src[i] = src[i];
+
+   inst->sources = num_sources;
 }
 
 void
 fs_inst::resize_sources(uint8_t num_sources)
 {
-   if (this->sources != num_sources) {
-      fs_reg *src = new fs_reg[MAX2(num_sources, 3)];
+   if (this->sources == num_sources)
+      return;
 
-      for (unsigned i = 0; i < MIN2(this->sources, num_sources); ++i)
-         src[i] = this->src[i];
+   fs_reg *old_src = this->src;
+   fs_reg *new_src;
 
-      delete[] this->src;
-      this->src = src;
-      this->sources = num_sources;
+   const unsigned builtin_size = ARRAY_SIZE(this->builtin_src);
+
+   if (old_src == this->builtin_src) {
+      if (num_sources > builtin_size) {
+         new_src = new fs_reg[num_sources];
+         for (unsigned i = 0; i < this->sources; i++)
+            new_src[i] = old_src[i];
+
+      } else {
+         new_src = old_src;
+      }
+   } else {
+      if (num_sources <= builtin_size) {
+         new_src = this->builtin_src;
+         assert(this->sources > num_sources);
+         for (unsigned i = 0; i < num_sources; i++)
+            new_src[i] = old_src[i];
+
+      } else if (num_sources < this->sources) {
+         new_src = old_src;
+
+      } else {
+         new_src = new fs_reg[num_sources];
+         for (unsigned i = 0; i < num_sources; i++)
+            new_src[i] = old_src[i];
+      }
+
+      if (old_src != new_src)
+         delete[] old_src;
    }
+
+   this->sources = num_sources;
+   this->src = new_src;
 }
 
 void
@@ -237,27 +280,6 @@ fs_inst::is_control_source(unsigned arg) const
 
    case SHADER_OPCODE_MOV_INDIRECT:
    case SHADER_OPCODE_CLUSTER_BROADCAST:
-   case SHADER_OPCODE_TEX:
-   case FS_OPCODE_TXB:
-   case SHADER_OPCODE_TXD:
-   case SHADER_OPCODE_TXF:
-   case SHADER_OPCODE_TXF_LZ:
-   case SHADER_OPCODE_TXF_CMS:
-   case SHADER_OPCODE_TXF_CMS_W:
-   case SHADER_OPCODE_TXF_UMS:
-   case SHADER_OPCODE_TXF_MCS:
-   case SHADER_OPCODE_TXL:
-   case SHADER_OPCODE_TXL_LZ:
-   case SHADER_OPCODE_TXS:
-   case SHADER_OPCODE_LOD:
-   case SHADER_OPCODE_TG4:
-   case SHADER_OPCODE_TG4_OFFSET:
-   case SHADER_OPCODE_TG4_BIAS:
-   case SHADER_OPCODE_TG4_EXPLICIT_LOD:
-   case SHADER_OPCODE_TG4_IMPLICIT_LOD:
-   case SHADER_OPCODE_TG4_OFFSET_LOD:
-   case SHADER_OPCODE_TG4_OFFSET_BIAS:
-   case SHADER_OPCODE_SAMPLEINFO:
       return arg == 1 || arg == 2;
 
    case SHADER_OPCODE_SEND:
@@ -279,27 +301,6 @@ fs_inst::is_payload(unsigned arg) const
    case SHADER_OPCODE_INTERLOCK:
    case SHADER_OPCODE_MEMORY_FENCE:
    case SHADER_OPCODE_BARRIER:
-   case SHADER_OPCODE_TEX:
-   case FS_OPCODE_TXB:
-   case SHADER_OPCODE_TXD:
-   case SHADER_OPCODE_TXF:
-   case SHADER_OPCODE_TXF_LZ:
-   case SHADER_OPCODE_TXF_CMS:
-   case SHADER_OPCODE_TXF_CMS_W:
-   case SHADER_OPCODE_TXF_UMS:
-   case SHADER_OPCODE_TXF_MCS:
-   case SHADER_OPCODE_TXL:
-   case SHADER_OPCODE_TXL_LZ:
-   case SHADER_OPCODE_TXS:
-   case SHADER_OPCODE_LOD:
-   case SHADER_OPCODE_TG4:
-   case SHADER_OPCODE_TG4_OFFSET:
-   case SHADER_OPCODE_TG4_BIAS:
-   case SHADER_OPCODE_TG4_EXPLICIT_LOD:
-   case SHADER_OPCODE_TG4_IMPLICIT_LOD:
-   case SHADER_OPCODE_TG4_OFFSET_LOD:
-   case SHADER_OPCODE_TG4_OFFSET_BIAS:
-   case SHADER_OPCODE_SAMPLEINFO:
       return arg == 0;
 
    case SHADER_OPCODE_SEND:
@@ -448,17 +449,75 @@ fs_inst::can_do_source_mods(const struct intel_device_info *devinfo) const
          return false;
    }
 
-   if (!backend_instruction::can_do_source_mods())
+   switch (opcode) {
+   case BRW_OPCODE_ADDC:
+   case BRW_OPCODE_BFE:
+   case BRW_OPCODE_BFI1:
+   case BRW_OPCODE_BFI2:
+   case BRW_OPCODE_BFREV:
+   case BRW_OPCODE_CBIT:
+   case BRW_OPCODE_FBH:
+   case BRW_OPCODE_FBL:
+   case BRW_OPCODE_ROL:
+   case BRW_OPCODE_ROR:
+   case BRW_OPCODE_SUBB:
+   case BRW_OPCODE_DP4A:
+   case BRW_OPCODE_DPAS:
+   case SHADER_OPCODE_BROADCAST:
+   case SHADER_OPCODE_CLUSTER_BROADCAST:
+   case SHADER_OPCODE_MOV_INDIRECT:
+   case SHADER_OPCODE_SHUFFLE:
+   case SHADER_OPCODE_INT_QUOTIENT:
+   case SHADER_OPCODE_INT_REMAINDER:
       return false;
-
-   return true;
+   default:
+      return true;
+   }
 }
 
 bool
-fs_inst::can_do_cmod()
+fs_inst::can_do_cmod() const
 {
-   if (!backend_instruction::can_do_cmod())
+   switch (opcode) {
+   case BRW_OPCODE_ADD:
+   case BRW_OPCODE_ADD3:
+   case BRW_OPCODE_ADDC:
+   case BRW_OPCODE_AND:
+   case BRW_OPCODE_ASR:
+   case BRW_OPCODE_AVG:
+   case BRW_OPCODE_CMP:
+   case BRW_OPCODE_CMPN:
+   case BRW_OPCODE_DP2:
+   case BRW_OPCODE_DP3:
+   case BRW_OPCODE_DP4:
+   case BRW_OPCODE_DPH:
+   case BRW_OPCODE_FRC:
+   case BRW_OPCODE_LINE:
+   case BRW_OPCODE_LRP:
+   case BRW_OPCODE_LZD:
+   case BRW_OPCODE_MAC:
+   case BRW_OPCODE_MACH:
+   case BRW_OPCODE_MAD:
+   case BRW_OPCODE_MOV:
+   case BRW_OPCODE_MUL:
+   case BRW_OPCODE_NOT:
+   case BRW_OPCODE_OR:
+   case BRW_OPCODE_PLN:
+   case BRW_OPCODE_RNDD:
+   case BRW_OPCODE_RNDE:
+   case BRW_OPCODE_RNDU:
+   case BRW_OPCODE_RNDZ:
+   case BRW_OPCODE_SAD2:
+   case BRW_OPCODE_SADA2:
+   case BRW_OPCODE_SHL:
+   case BRW_OPCODE_SHR:
+   case BRW_OPCODE_SUBB:
+   case BRW_OPCODE_XOR:
+   case FS_OPCODE_LINTERP:
+      break;
+   default:
       return false;
+   }
 
    /* The accumulator result appears to get used for the conditional modifier
     * generation.  When negating a UD value, there is a 33rd bit generated for
@@ -479,6 +538,7 @@ fs_inst::can_change_types() const
    return dst.type == src[0].type &&
           !src[0].abs && !src[0].negate && !saturate && src[0].file != ATTR &&
           (opcode == BRW_OPCODE_MOV ||
+           (opcode == SHADER_OPCODE_LOAD_PAYLOAD && sources == 1) ||
            (opcode == BRW_OPCODE_SEL &&
             dst.type == src[1].type &&
             predicate != BRW_PREDICATE_NONE &&
@@ -501,7 +561,7 @@ fs_reg::fs_reg()
 }
 
 fs_reg::fs_reg(struct ::brw_reg reg) :
-   backend_reg(reg)
+   brw_reg(reg)
 {
    this->offset = 0;
    this->stride = 1;
@@ -516,15 +576,17 @@ fs_reg::fs_reg(struct ::brw_reg reg) :
 bool
 fs_reg::equals(const fs_reg &r) const
 {
-   return (this->backend_reg::equals(r) &&
-           stride == r.stride);
+   return brw_regs_equal(this, &r) &&
+          offset == r.offset &&
+          stride == r.stride;
 }
 
 bool
 fs_reg::negative_equals(const fs_reg &r) const
 {
-   return (this->backend_reg::negative_equals(r) &&
-           stride == r.stride);
+   return brw_regs_negative_equal(this, &r) &&
+          offset == r.offset &&
+          stride == r.stride;
 }
 
 bool
@@ -691,10 +753,8 @@ fs_inst::components_read(unsigned i) const
    case SHADER_OPCODE_TXS_LOGICAL:
    case SHADER_OPCODE_IMAGE_SIZE_LOGICAL:
    case FS_OPCODE_TXB_LOGICAL:
-   case SHADER_OPCODE_TXF_CMS_LOGICAL:
    case SHADER_OPCODE_TXF_CMS_W_LOGICAL:
    case SHADER_OPCODE_TXF_CMS_W_GFX12_LOGICAL:
-   case SHADER_OPCODE_TXF_UMS_LOGICAL:
    case SHADER_OPCODE_TXF_MCS_LOGICAL:
    case SHADER_OPCODE_LOD_LOGICAL:
    case SHADER_OPCODE_TG4_LOGICAL:
@@ -874,7 +934,6 @@ fs_inst::size_read(int arg) const
          return retype(src[arg], BRW_REGISTER_TYPE_UD).component_size(8);
       break;
 
-   case CS_OPCODE_CS_TERMINATE:
    case SHADER_OPCODE_BARRIER:
       return REG_SIZE;
 
@@ -903,31 +962,6 @@ fs_inst::size_read(int arg) const
       default:
          unreachable("Invalid source number.");
       }
-      break;
-
-   case SHADER_OPCODE_TEX:
-   case FS_OPCODE_TXB:
-   case SHADER_OPCODE_TXD:
-   case SHADER_OPCODE_TXF:
-   case SHADER_OPCODE_TXF_LZ:
-   case SHADER_OPCODE_TXF_CMS:
-   case SHADER_OPCODE_TXF_CMS_W:
-   case SHADER_OPCODE_TXF_UMS:
-   case SHADER_OPCODE_TXF_MCS:
-   case SHADER_OPCODE_TXL:
-   case SHADER_OPCODE_TXL_LZ:
-   case SHADER_OPCODE_TXS:
-   case SHADER_OPCODE_LOD:
-   case SHADER_OPCODE_TG4:
-   case SHADER_OPCODE_TG4_OFFSET:
-   case SHADER_OPCODE_TG4_BIAS:
-   case SHADER_OPCODE_TG4_EXPLICIT_LOD:
-   case SHADER_OPCODE_TG4_IMPLICIT_LOD:
-   case SHADER_OPCODE_TG4_OFFSET_LOD:
-   case SHADER_OPCODE_TG4_OFFSET_BIAS:
-   case SHADER_OPCODE_SAMPLEINFO:
-      if (arg == 0 && src[0].file == VGRF)
-         return mlen * REG_SIZE;
       break;
 
    default:
@@ -1003,9 +1037,7 @@ fs_inst::flags_written(const intel_device_info *devinfo) const
                            opcode != BRW_OPCODE_IF &&
                            opcode != BRW_OPCODE_WHILE)) {
       return brw_fs_flag_mask(this, 1);
-   } else if (opcode == SHADER_OPCODE_FIND_LIVE_CHANNEL ||
-              opcode == SHADER_OPCODE_FIND_LAST_LIVE_CHANNEL ||
-              opcode == FS_OPCODE_LOAD_LIVE_CHANNELS) {
+   } else if (opcode == FS_OPCODE_LOAD_LIVE_CHANNELS) {
       return brw_fs_flag_mask(this, 32);
    } else {
       return brw_fs_flag_mask(dst, size_written);
@@ -1023,7 +1055,6 @@ fs_inst::has_sampler_residency() const
    case SHADER_OPCODE_TXF_LOGICAL:
    case SHADER_OPCODE_TXF_CMS_W_GFX12_LOGICAL:
    case SHADER_OPCODE_TXF_CMS_W_LOGICAL:
-   case SHADER_OPCODE_TXF_CMS_LOGICAL:
    case SHADER_OPCODE_TXS_LOGICAL:
    case SHADER_OPCODE_TG4_OFFSET_LOGICAL:
    case SHADER_OPCODE_TG4_LOGICAL:
@@ -1283,8 +1314,17 @@ fs_visitor::assign_curb_setup()
          assert(num_regs > 0);
          num_regs = 1 << util_logbase2(num_regs);
 
-         fs_reg addr = ubld.vgrf(BRW_REGISTER_TYPE_UD);
-         ubld.ADD(addr, base_addr, brw_imm_ud(i * REG_SIZE));
+         fs_reg addr;
+
+         /* This pass occurs after all of the optimization passes, so don't
+          * emit an 'ADD addr, base_addr, 0' instruction.
+          */
+         if (i != 0) {
+            addr = ubld.vgrf(BRW_REGISTER_TYPE_UD);
+            ubld.ADD(addr, base_addr, brw_imm_ud(i * REG_SIZE));
+         } else {
+            addr = base_addr;
+         }
 
          fs_reg srcs[4] = {
             brw_imm_ud(0), /* desc */
@@ -2044,6 +2084,7 @@ fs_visitor::emit_repclear_shader()
    brw_wm_prog_key *key = (brw_wm_prog_key*) this->key;
    fs_inst *write = NULL;
 
+   assert(devinfo->ver < 20);
    assert(uniforms == 0);
    assume(key->nr_color_regions > 0);
 
@@ -2126,7 +2167,7 @@ brw_fb_write_msg_control(const fs_inst *inst,
    uint32_t mctl;
 
    if (prog_data->dual_src_blend) {
-      assert(inst->exec_size == 8);
+      assert(inst->exec_size < 32);
 
       if (inst->group % 16 == 0)
          mctl = BRW_DATAPORT_RENDER_TARGET_WRITE_SIMD8_DUAL_SOURCE_SUBSPAN01;
@@ -2141,6 +2182,8 @@ brw_fb_write_msg_control(const fs_inst *inst,
          mctl = BRW_DATAPORT_RENDER_TARGET_WRITE_SIMD16_SINGLE_SOURCE;
       else if (inst->exec_size == 8)
          mctl = BRW_DATAPORT_RENDER_TARGET_WRITE_SIMD8_SINGLE_SOURCE_SUBSPAN01;
+      else if (inst->exec_size == 32)
+         mctl = XE2_DATAPORT_RENDER_TARGET_WRITE_SIMD32_SINGLE_SOURCE;
       else
          unreachable("Invalid FB write execution size");
    }
@@ -2292,86 +2335,40 @@ brw_instruction_name(const struct brw_isa_info *isa, enum opcode op)
    case SHADER_OPCODE_UNDEF:
       return "undef";
 
-   case SHADER_OPCODE_TEX:
-      return "tex";
    case SHADER_OPCODE_TEX_LOGICAL:
       return "tex_logical";
-   case SHADER_OPCODE_TXD:
-      return "txd";
    case SHADER_OPCODE_TXD_LOGICAL:
       return "txd_logical";
-   case SHADER_OPCODE_TXF:
-      return "txf";
    case SHADER_OPCODE_TXF_LOGICAL:
       return "txf_logical";
-   case SHADER_OPCODE_TXF_LZ:
-      return "txf_lz";
-   case SHADER_OPCODE_TXL:
-      return "txl";
    case SHADER_OPCODE_TXL_LOGICAL:
       return "txl_logical";
-   case SHADER_OPCODE_TXL_LZ:
-      return "txl_lz";
-   case SHADER_OPCODE_TXS:
-      return "txs";
    case SHADER_OPCODE_TXS_LOGICAL:
       return "txs_logical";
-   case FS_OPCODE_TXB:
-      return "txb";
    case FS_OPCODE_TXB_LOGICAL:
       return "txb_logical";
-   case SHADER_OPCODE_TXF_CMS:
-      return "txf_cms";
-   case SHADER_OPCODE_TXF_CMS_LOGICAL:
-      return "txf_cms_logical";
-   case SHADER_OPCODE_TXF_CMS_W:
-      return "txf_cms_w";
    case SHADER_OPCODE_TXF_CMS_W_LOGICAL:
       return "txf_cms_w_logical";
    case SHADER_OPCODE_TXF_CMS_W_GFX12_LOGICAL:
       return "txf_cms_w_gfx12_logical";
-   case SHADER_OPCODE_TXF_UMS:
-      return "txf_ums";
-   case SHADER_OPCODE_TXF_UMS_LOGICAL:
-      return "txf_ums_logical";
-   case SHADER_OPCODE_TXF_MCS:
-      return "txf_mcs";
    case SHADER_OPCODE_TXF_MCS_LOGICAL:
       return "txf_mcs_logical";
-   case SHADER_OPCODE_LOD:
-      return "lod";
    case SHADER_OPCODE_LOD_LOGICAL:
       return "lod_logical";
-   case SHADER_OPCODE_TG4:
-      return "tg4";
    case SHADER_OPCODE_TG4_LOGICAL:
       return "tg4_logical";
-   case SHADER_OPCODE_TG4_OFFSET:
-      return "tg4_offset";
    case SHADER_OPCODE_TG4_OFFSET_LOGICAL:
       return "tg4_offset_logical";
-   case SHADER_OPCODE_TG4_OFFSET_LOD:
-      return "tg4_offset_lod";
    case SHADER_OPCODE_TG4_OFFSET_LOD_LOGICAL:
       return "tg4_offset_lod_logical";
-   case SHADER_OPCODE_TG4_OFFSET_BIAS:
-      return "tg4_offset_bias";
    case SHADER_OPCODE_TG4_OFFSET_BIAS_LOGICAL:
       return "tg4_offset_bias_logical";
-   case SHADER_OPCODE_TG4_BIAS:
-      return "tg4_b";
    case SHADER_OPCODE_TG4_BIAS_LOGICAL:
       return "tg4_b_logical";
-   case SHADER_OPCODE_TG4_EXPLICIT_LOD:
-      return "tg4_l";
    case SHADER_OPCODE_TG4_EXPLICIT_LOD_LOGICAL:
       return "tg4_l_logical";
-   case SHADER_OPCODE_TG4_IMPLICIT_LOD:
-      return "tg4_i";
    case SHADER_OPCODE_TG4_IMPLICIT_LOD_LOGICAL:
       return "tg4_i_logical";
-   case SHADER_OPCODE_SAMPLEINFO:
-      return "sampleinfo";
    case SHADER_OPCODE_SAMPLEINFO_LOGICAL:
       return "sampleinfo_logical";
 
@@ -2498,8 +2495,6 @@ brw_instruction_name(const struct brw_isa_info *isa, enum opcode op)
    case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
       return "interp_per_slot_offset";
 
-   case CS_OPCODE_CS_TERMINATE:
-      return "cs_terminate";
    case SHADER_OPCODE_BARRIER:
       return "barrier";
    case SHADER_OPCODE_MULH:
@@ -2576,6 +2571,8 @@ fs_visitor::dump_instruction_to_file(const fs_inst *inst, FILE *file) const
       break;
    case FIXED_GRF:
       fprintf(file, "g%d", inst->dst.nr);
+      if (inst->dst.subnr != 0)
+         fprintf(file, ".%d", inst->dst.subnr / type_sz(inst->dst.type));
       break;
    case BAD_FILE:
       fprintf(file, "(null)");
@@ -2587,7 +2584,7 @@ fs_visitor::dump_instruction_to_file(const fs_inst *inst, FILE *file) const
       fprintf(file, "***attr%d***", inst->dst.nr);
       break;
    case ARF:
-      switch (inst->dst.nr) {
+      switch (inst->dst.nr & 0xF0) {
       case BRW_ARF_NULL:
          fprintf(file, "null");
          break;
@@ -2595,7 +2592,11 @@ fs_visitor::dump_instruction_to_file(const fs_inst *inst, FILE *file) const
          fprintf(file, "a0.%d", inst->dst.subnr);
          break;
       case BRW_ARF_ACCUMULATOR:
-         fprintf(file, "acc%d", inst->dst.subnr);
+         if (inst->dst.subnr == 0)
+            fprintf(file, "acc%d", inst->dst.nr & 0x0F);
+         else
+            fprintf(file, "acc%d.%d", inst->dst.nr & 0x0F, inst->dst.subnr);
+
          break;
       case BRW_ARF_FLAG:
          fprintf(file, "f%d.%d", inst->dst.nr & 0xf, inst->dst.subnr);
@@ -2685,7 +2686,7 @@ fs_visitor::dump_instruction_to_file(const fs_inst *inst, FILE *file) const
          }
          break;
       case ARF:
-         switch (inst->src[i].nr) {
+         switch (inst->src[i].nr & 0xF0) {
          case BRW_ARF_NULL:
             fprintf(file, "null");
             break;
@@ -2693,7 +2694,11 @@ fs_visitor::dump_instruction_to_file(const fs_inst *inst, FILE *file) const
             fprintf(file, "a0.%d", inst->src[i].subnr);
             break;
          case BRW_ARF_ACCUMULATOR:
-            fprintf(file, "acc%d", inst->src[i].subnr);
+            if (inst->src[i].subnr == 0)
+               fprintf(file, "acc%d", inst->src[i].nr & 0x0F);
+            else
+               fprintf(file, "acc%d.%d", inst->src[i].nr & 0x0F, inst->src[i].subnr);
+
             break;
          case BRW_ARF_FLAG:
             fprintf(file, "f%d.%d", inst->src[i].nr & 0xf, inst->src[i].subnr);
@@ -2705,7 +2710,11 @@ fs_visitor::dump_instruction_to_file(const fs_inst *inst, FILE *file) const
          break;
       }
 
-      if (inst->src[i].offset ||
+      if (inst->src[i].file == FIXED_GRF && inst->src[i].subnr != 0) {
+         assert(inst->src[i].offset == 0);
+
+         fprintf(file, ".%d", inst->src[i].subnr / type_sz(inst->src[i].type));
+      } else if (inst->src[i].offset ||
           (inst->src[i].file == VGRF &&
            alloc.sizes[inst->src[i].nr] * REG_SIZE != inst->size_read(i))) {
          const unsigned reg_size = (inst->src[i].file == UNIFORM ? 4 : REG_SIZE);
@@ -2808,7 +2817,7 @@ fs_visitor::compute_max_register_pressure()
 {
    const register_pressure &rp = regpressure_analysis.require();
    uint32_t ip = 0, max_pressure = 0;
-   foreach_block_and_inst(block, backend_instruction, inst, cfg) {
+   foreach_block_and_inst(block, fs_inst, inst, cfg) {
       max_pressure = MAX2(max_pressure, rp.regs_live_at_ip[ip]);
       ip++;
    }
@@ -3277,6 +3286,9 @@ fs_visitor::run_fs(bool allow_spilling, bool do_rep_send)
    assert(stage == MESA_SHADER_FRAGMENT);
 
    payload_ = new fs_thread_payload(*this, source_depth_to_render_target);
+
+   if (nir->info.ray_queries > 0)
+      limit_dispatch_width(16, "SIMD32 not supported with ray queries.\n");
 
    if (do_rep_send) {
       assert(dispatch_width == 16);
@@ -3892,9 +3904,6 @@ brw_compile_fs(const struct brw_compiler *compiler,
       v8->limit_dispatch_width(16, "SIMD32 not supported with coarse"
                                " pixel shading.\n");
    }
-
-   if (nir->info.ray_queries > 0 && v8)
-      v8->limit_dispatch_width(16, "SIMD32 with ray queries.\n");
 
    if (!has_spilled &&
        (!v8 || v8->max_dispatch_width >= 16) &&

@@ -249,7 +249,8 @@ invalid_values(const struct brw_isa_info *isa, const brw_inst *inst)
    if (devinfo->ver >= 12) {
       unsigned group_size = 1 << brw_inst_exec_size(devinfo, inst);
       unsigned qtr_ctrl = brw_inst_qtr_control(devinfo, inst);
-      unsigned nib_ctrl = brw_inst_nib_control(devinfo, inst);
+      unsigned nib_ctrl =
+         devinfo->ver == 12 ? brw_inst_nib_control(devinfo, inst) : 0;
 
       unsigned chan_off = (qtr_ctrl * 2 + nib_ctrl) << 2;
       ERROR_IF(chan_off % group_size != 0,
@@ -734,6 +735,29 @@ general_restrictions_based_on_operand_types(const struct brw_isa_info *isa,
                 src_type == BRW_REGISTER_TYPE_UQ) &&
                !devinfo->has_64bit_int,
                "64-bit int source, but platform does not support it");
+      if (brw_inst_access_mode(devinfo, inst) == BRW_ALIGN_16 &&
+          num_sources == 3 && type_sz(src_type) > 4) {
+         /* From the Broadwell PRM, Volume 7 "3D Media GPGPU", page 944:
+          *
+          *    "This is applicable to 32b datatypes and 16b datatype. 64b
+          *    datatypes cannot use the replicate control."
+          */
+         switch (s) {
+         case 0:
+            ERROR_IF(brw_inst_3src_a16_src0_rep_ctrl(devinfo, inst),
+                     "RepCtrl must be zero for 64-bit source 0");
+            break;
+         case 1:
+            ERROR_IF(brw_inst_3src_a16_src1_rep_ctrl(devinfo, inst),
+                     "RepCtrl must be zero for 64-bit source 1");
+            break;
+         case 2:
+            ERROR_IF(brw_inst_3src_a16_src2_rep_ctrl(devinfo, inst),
+                     "RepCtrl must be zero for 64-bit source 2");
+            break;
+         default: unreachable("invalid src");
+         }
+      }
    }
 
    if (num_sources == 3)
@@ -1113,7 +1137,8 @@ special_restrictions_for_mixed_float_mode(const struct brw_isa_info *isa,
     *    "No SIMD16 in mixed mode when destination is f32. Instruction
     *     execution size must be no more than 8."
     */
-   ERROR_IF(exec_size > 8 && dst_type == BRW_REGISTER_TYPE_F,
+   ERROR_IF(exec_size > 8 && dst_type == BRW_REGISTER_TYPE_F &&
+            opcode != BRW_OPCODE_MOV,
             "Mixed float mode with 32-bit float destination is limited "
             "to SIMD8");
 
@@ -1188,7 +1213,8 @@ special_restrictions_for_mixed_float_mode(const struct brw_isa_info *isa,
        *     Align1 and Align16."
        */
       ERROR_IF(exec_size > 8 && dst_is_packed &&
-               dst_type == BRW_REGISTER_TYPE_HF,
+               dst_type == BRW_REGISTER_TYPE_HF &&
+               opcode != BRW_OPCODE_MOV,
                "Align1 mixed float mode is limited to SIMD8 when destination "
                "is packed half-float");
 
@@ -1708,7 +1734,7 @@ special_requirements_for_handling_double_precision_data_types(
          ERROR_IF((address_mode == BRW_ADDRESS_DIRECT && file == BRW_ARCHITECTURE_REGISTER_FILE &&
                    reg != BRW_ARF_NULL && !(reg >= BRW_ARF_ACCUMULATOR && reg < BRW_ARF_FLAG)) ||
                   (dst_file == BRW_ARCHITECTURE_REGISTER_FILE &&
-                   dst_reg != BRW_ARF_NULL && dst_reg != BRW_ARF_ACCUMULATOR),
+                   dst_reg != BRW_ARF_NULL && (dst_reg & 0xF0) != BRW_ARF_ACCUMULATOR),
                   "Explicit ARF registers except null and accumulator must not "
                   "be used.");
       }
@@ -2135,10 +2161,15 @@ instruction_restrictions(const struct brw_isa_info *isa,
       const unsigned ops_per_chan =
          MAX2(1, 32 / MAX2(src1_bits_per_element, src2_bits_per_element));
 
-      ERROR_IF(brw_inst_exec_size(devinfo, inst) != BRW_EXECUTE_8,
-               "DPAS execution size must be 8.");
+      if (devinfo->ver < 20) {
+         ERROR_IF(brw_inst_exec_size(devinfo, inst) != BRW_EXECUTE_8,
+                  "DPAS execution size must be 8.");
+      } else {
+         ERROR_IF(brw_inst_exec_size(devinfo, inst) != BRW_EXECUTE_16,
+                  "DPAS execution size must be 16.");
+      }
 
-      const unsigned exec_size = 8;
+      const unsigned exec_size = devinfo->ver < 20 ? 8 : 16;
 
       const unsigned dst_subnr  = brw_inst_dpas_3src_dst_subreg_nr(devinfo, inst);
       const unsigned src0_subnr = brw_inst_dpas_3src_src0_subreg_nr(devinfo, inst);

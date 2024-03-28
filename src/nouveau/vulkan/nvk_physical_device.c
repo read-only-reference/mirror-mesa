@@ -16,9 +16,9 @@
 #include "util/disk_cache.h"
 #include "util/mesa-sha1.h"
 
-#include "vulkan/runtime/vk_device.h"
-#include "vulkan/runtime/vk_drm_syncobj.h"
-#include "vulkan/runtime/vk_shader_module.h"
+#include "vk_device.h"
+#include "vk_drm_syncobj.h"
+#include "vk_shader_module.h"
 #include "vulkan/wsi/wsi_common.h"
 
 #include <fcntl.h>
@@ -35,6 +35,7 @@
 #include "clb0c0.h"
 #include "clb197.h"
 #include "clb1c0.h"
+#include "clc097.h"
 #include "clc0c0.h"
 #include "clc1c0.h"
 #include "clc397.h"
@@ -82,6 +83,7 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
       .KHR_16bit_storage = true,
       .KHR_bind_memory2 = true,
       .KHR_buffer_device_address = true,
+      .KHR_calibrated_timestamps = true,
       .KHR_copy_commands2 = true,
       .KHR_create_renderpass2 = true,
       .KHR_dedicated_allocation = true,
@@ -114,11 +116,11 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
       .KHR_maintenance3 = true,
       .KHR_maintenance4 = true,
       .KHR_maintenance5 = true,
+      .KHR_maintenance6 = true,
       .KHR_map_memory2 = true,
       .KHR_multiview = true,
       .KHR_pipeline_executable_properties = true,
       .KHR_pipeline_library = true,
-
 #ifdef NVK_USE_WSI_PLATFORM
       /* Hide these behind dri configs for now since we cannot implement it
        * reliably on all surfaces yet. There is no surface capability query
@@ -145,8 +147,10 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
       .KHR_shader_float_controls = true,
       .KHR_shader_float16_int8 = true,
       .KHR_shader_integer_dot_product = true,
+      .KHR_shader_maximal_reconvergence = true,
       .KHR_shader_non_semantic_info = true,
       .KHR_shader_subgroup_extended_types = true,
+      .KHR_shader_subgroup_uniform_control_flow = nvk_use_nak(info),
       .KHR_shader_terminate_invocation =
          (nvk_nak_stages(info) & VK_SHADER_STAGE_FRAGMENT_BIT) != 0,
       .KHR_spirv_1_4 = true,
@@ -159,6 +163,7 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
       .KHR_synchronization2 = true,
       .KHR_uniform_buffer_standard_layout = true,
       .KHR_variable_pointers = true,
+      .KHR_vertex_attribute_divisor = true,
       .KHR_vulkan_memory_model = nvk_use_nak(info),
       .KHR_workgroup_memory_explicit_layout = true,
       .KHR_zero_initialize_workgroup_memory = true,
@@ -166,6 +171,7 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
       .EXT_attachment_feedback_loop_layout = true,
       .EXT_border_color_swizzle = true,
       .EXT_buffer_device_address = true,
+      .EXT_calibrated_timestamps = true,
       .EXT_conditional_rendering = true,
       .EXT_color_write_enable = true,
       .EXT_custom_border_color = true,
@@ -173,6 +179,9 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
       .EXT_depth_clip_control = true,
       .EXT_depth_clip_enable = true,
       .EXT_descriptor_indexing = true,
+#ifdef VK_USE_PLATFORM_DISPLAY_KHR
+      .EXT_display_control = true,
+#endif
       .EXT_dynamic_rendering_unused_attachments = true,
       .EXT_extended_dynamic_state = true,
       .EXT_extended_dynamic_state2 = true,
@@ -215,6 +224,9 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
       .EXT_shader_subgroup_vote = true,
       .EXT_shader_viewport_index_layer = info->cls_eng3d >= MAXWELL_B,
       .EXT_subgroup_size_control = true,
+#ifdef NVK_USE_WSI_PLATFORM
+      .EXT_swapchain_maintenance1 = true,
+#endif
       .EXT_texel_buffer_alignment = true,
       .EXT_tooling_info = true,
       .EXT_transform_feedback = true,
@@ -222,7 +234,11 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
       .EXT_vertex_input_dynamic_state = true,
       .EXT_ycbcr_2plane_444_formats = true,
       .EXT_ycbcr_image_arrays = true,
+      .GOOGLE_decorate_string = true,
+      .GOOGLE_hlsl_functionality1 = true,
+      .GOOGLE_user_type = true,
       .NV_shader_sm_builtins = true,
+      .VALVE_mutable_descriptor_type = true,
    };
 }
 
@@ -263,7 +279,7 @@ nvk_get_device_features(const struct nv_device_info *info,
       .shaderTessellationAndGeometryPointSize = true,
       .shaderImageGatherExtended = true,
       .shaderStorageImageExtendedFormats = true,
-      /* TODO: shaderStorageImageMultisample */
+      .shaderStorageImageMultisample = true,
       .shaderStorageImageReadWithoutFormat = info->cls_eng3d >= MAXWELL_A,
       .shaderStorageImageWriteWithoutFormat = true,
       .shaderUniformBufferArrayDynamicIndexing = true,
@@ -275,11 +291,16 @@ nvk_get_device_features(const struct nv_device_info *info,
       .shaderFloat64 = true,
       .shaderInt64 = true,
       .shaderInt16 = true,
-      /* TODO: shaderResourceResidency */
+      .shaderResourceResidency = info->cls_eng3d >= VOLTA_A,
       .shaderResourceMinLod = info->cls_eng3d >= VOLTA_A,
       .sparseBinding = true,
+      .sparseResidency2Samples = info->cls_eng3d >= MAXWELL_A,
+      .sparseResidency4Samples = info->cls_eng3d >= MAXWELL_A,
+      .sparseResidency8Samples = info->cls_eng3d >= MAXWELL_A,
+      .sparseResidencyAliased = info->cls_eng3d >= MAXWELL_A,
       .sparseResidencyBuffer = info->cls_eng3d >= MAXWELL_A,
-      /* TODO: sparseResidency* */
+      .sparseResidencyImage2D = info->cls_eng3d >= MAXWELL_A,
+      .sparseResidencyImage3D = info->cls_eng3d >= MAXWELL_A,
       .variableMultisampleRate = true,
       .inheritedQueries = true,
 
@@ -364,8 +385,22 @@ nvk_get_device_features(const struct nv_device_info *info,
       .fragmentShaderBarycentric = info->cls_eng3d >= TURING_A &&
          (nvk_nak_stages(info) & VK_SHADER_STAGE_FRAGMENT_BIT) != 0,
 
+      /* VK_KHR_index_type_uint8 */
+      .indexTypeUint8 = true,
+
+      /* VK_KHR_line_rasterization */
+      .rectangularLines = true,
+      .bresenhamLines = true,
+      .smoothLines = true,
+      .stippledRectangularLines = true,
+      .stippledBresenhamLines = true,
+      .stippledSmoothLines = true,
+
       /* VK_KHR_maintenance5 */
       .maintenance5 = true,
+
+      /* VK_KHR_maintenance6 */
+      .maintenance6 = true,
 
       /* VK_KHR_pipeline_executable_properties */
       .pipelineExecutableInfo = true,
@@ -379,6 +414,16 @@ nvk_get_device_features(const struct nv_device_info *info,
       /* VK_KHR_shader_clock */
       .shaderSubgroupClock = true,
       .shaderDeviceClock = true,
+
+      /* VK_KHR_shader_expect_assume */
+      .shaderExpectAssume = true,
+
+      /* VK_KHR_shader_maximal_reconvergence */
+      .shaderMaximalReconvergence = true,
+
+      /* VK_KHR_vertex_attribute_divisor */
+      .vertexAttributeInstanceRateDivisor = true,
+      .vertexAttributeInstanceRateZeroDivisor = true,
 
       /* VK_KHR_workgroup_memory_explicit_layout */
       .workgroupMemoryExplicitLayout = true,
@@ -477,19 +522,13 @@ nvk_get_device_features(const struct nv_device_info *info,
       /* VK_EXT_image_sliced_view_of_3d */
       .imageSlicedViewOf3D = true,
 
+#ifdef NVK_USE_WSI_PLATFORM
+      /* VK_EXT_swapchain_maintenance1 */
+      .swapchainMaintenance1 = true,
+#endif
+
       /* VK_EXT_image_view_min_lod */
       .minLod = true,
-
-      /* VK_KHR_index_type_uint8 */
-      .indexTypeUint8 = true,
-
-      /* VK_KHR_line_rasterization */
-      .rectangularLines = true,
-      .bresenhamLines = true,
-      .smoothLines = true,
-      .stippledRectangularLines = true,
-      .stippledBresenhamLines = true,
-      .stippledSmoothLines = true,
 
       /* VK_EXT_map_memory_placed */
       .memoryMapPlaced = true,
@@ -498,6 +537,9 @@ nvk_get_device_features(const struct nv_device_info *info,
 
       /* VK_EXT_multi_draw */
       .multiDraw = true,
+
+      /* VK_EXT_mutable_descriptor_type */
+      .mutableDescriptorType = true,
 
       /* VK_EXT_non_seamless_cube_map */
       .nonSeamlessCubeMap = true,
@@ -532,16 +574,15 @@ nvk_get_device_features(const struct nv_device_info *info,
       /* VK_EXT_shader_object */
       .shaderObject = true,
 
+      /* VK_KHR_shader_subgroup_uniform_control_flow */
+      .shaderSubgroupUniformControlFlow = nvk_use_nak(info),
+
       /* VK_EXT_texel_buffer_alignment */
       .texelBufferAlignment = true,
 
       /* VK_EXT_transform_feedback */
       .transformFeedback = true,
       .geometryStreams = true,
-
-      /* VK_EXT_vertex_attribute_divisor */
-      .vertexAttributeInstanceRateDivisor = true,
-      .vertexAttributeInstanceRateZeroDivisor = true,
 
       /* VK_EXT_vertex_input_dynamic_state */
       .vertexInputDynamicState = true,
@@ -554,12 +595,6 @@ nvk_get_device_features(const struct nv_device_info *info,
 
       /* VK_NV_shader_sm_builtins */
       .shaderSMBuiltins = true,
-
-      /* VK_VALVE_mutable_descriptor_type */
-      .mutableDescriptorType = true,
-
-      /* VK_KHR_shader_expect_assume */
-      .shaderExpectAssume = true,
    };
 }
 
@@ -586,7 +621,8 @@ nvk_get_device_properties(const struct nvk_instance *instance,
    *properties = (struct vk_properties) {
       .apiVersion = nvk_get_vk_version(info),
       .driverVersion = vk_get_driver_version(),
-      .vendorID = NVIDIA_VENDOR_ID,
+      .vendorID = instance->force_vk_vendor != 0 ?
+                  instance->force_vk_vendor : NVIDIA_VENDOR_ID,
       .deviceID = info->device_id,
       .deviceType = info->type == NV_DEVICE_TYPE_DIS ?
                     VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU :
@@ -604,7 +640,7 @@ nvk_get_device_properties(const struct nvk_instance *instance,
       .maxPushConstantsSize = NVK_MAX_PUSH_SIZE,
       .maxMemoryAllocationCount = 4096,
       .maxSamplerAllocationCount = 4000,
-      .bufferImageGranularity = info->chipset >= 0x120 ? 0x400 : 0x10000,
+      .bufferImageGranularity = info->cls_eng3d >= MAXWELL_B ? 0x400 : 0x10000,
       .sparseAddressSpaceSize = NVK_SPARSE_ADDR_SPACE_SIZE,
       .maxBoundDescriptorSets = NVK_MAX_SETS,
       .maxPerStageDescriptorSamplers = NVK_MAX_DESCRIPTORS,
@@ -659,7 +695,7 @@ nvk_get_device_properties(const struct nvk_instance *instance,
       .maxViewportDimensions = { 32768, 32768 },
       .viewportBoundsRange = { -65536, 65536 },
       .viewportSubPixelBits = 8,
-      .minMemoryMapAlignment = 64,
+      .minMemoryMapAlignment = os_page_size,
       .minTexelBufferOffsetAlignment = NVK_MIN_TEXEL_BUFFER_ALIGNMENT,
       .minUniformBufferOffsetAlignment = nvk_min_cbuf_alignment(info),
       .minStorageBufferOffsetAlignment = NVK_MIN_SSBO_ALIGNMENT,
@@ -670,8 +706,8 @@ nvk_get_device_properties(const struct nvk_instance *instance,
       .minInterpolationOffset = -0.5,
       .maxInterpolationOffset = 0.4375,
       .subPixelInterpolationOffsetBits = 4,
-      .maxFramebufferHeight = info->chipset >= 0x130 ? 0x8000 : 0x4000,
-      .maxFramebufferWidth = info->chipset >= 0x130 ? 0x8000 : 0x4000,
+      .maxFramebufferHeight = info->cls_eng3d >= PASCAL_A ? 0x8000 : 0x4000,
+      .maxFramebufferWidth = info->cls_eng3d >= PASCAL_A ? 0x8000 : 0x4000,
       .maxFramebufferLayers = 2048,
       .framebufferColorSampleCounts = sample_counts,
       .framebufferDepthSampleCounts = sample_counts,
@@ -682,7 +718,7 @@ nvk_get_device_properties(const struct nvk_instance *instance,
       .sampledImageIntegerSampleCounts = sample_counts,
       .sampledImageDepthSampleCounts = sample_counts,
       .sampledImageStencilSampleCounts = sample_counts,
-      .storageImageSampleCounts = VK_SAMPLE_COUNT_1_BIT,
+      .storageImageSampleCounts = sample_counts,
       .maxSampleMaskWords = 1,
       .timestampComputeAndGraphics = true,
       .timestampPeriod = 1,
@@ -702,6 +738,10 @@ nvk_get_device_properties(const struct nvk_instance *instance,
 
       /* Vulkan 1.0 sparse properties */
       .sparseResidencyNonResidentStrict = true,
+      .sparseResidencyAlignedMipSize = true,
+      .sparseResidencyStandard2DBlockShape = true,
+      .sparseResidencyStandard2DMultisampleBlockShape = true,
+      .sparseResidencyStandard3DBlockShape = true,
 
       /* Vulkan 1.1 properties */
       .subgroupSize = 32,
@@ -827,6 +867,11 @@ nvk_get_device_properties(const struct nvk_instance *instance,
       .nonStrictSinglePixelWideLinesUseParallelogram = false,
       .nonStrictWideLinesUseParallelogram = false,
 
+      /* VK_KHR_maintenance6 */
+      .blockTexelViewCompatibleMultipleLayers = true,
+      .maxCombinedImageSamplerDescriptorCount = 3,
+      .fragmentShadingRateClampCombinerInputs = false, /* TODO */
+
       /* VK_EXT_map_memory_placed */
       .minPlacedMemoryMapAlignment = os_page_size,
 
@@ -872,8 +917,9 @@ nvk_get_device_properties(const struct nvk_instance *instance,
       .transformFeedbackRasterizationStreamSelect = true,
       .transformFeedbackDraw = true,
 
-      /* VK_EXT_vertex_attribute_divisor */
+      /* VK_KHR_vertex_attribute_divisor */
       .maxVertexAttribDivisor = UINT32_MAX,
+      .supportsNonZeroFirstInstance = true,
 
       /* VK_KHR_fragment_shader_barycentric */
       .triStripVertexOrderIndependentOfProvokingVertex = false,
@@ -883,8 +929,14 @@ nvk_get_device_properties(const struct nvk_instance *instance,
       .shaderWarpsPerSM = info->max_warps_per_mp,
    };
 
-   snprintf(properties->deviceName, sizeof(properties->deviceName),
-            "%s", info->device_name);
+   /* Add the driver to the device name (like other Mesa drivers do) */
+   if (!strcmp(info->device_name, info->chipset_name)) {
+      snprintf(properties->deviceName, sizeof(properties->deviceName),
+               "NVK %s", info->device_name);
+   } else {
+      snprintf(properties->deviceName, sizeof(properties->deviceName),
+               "%s (NVK %s)", info->device_name, info->chipset_name);
+   }
 
    /* VK_EXT_shader_module_identifier */
    STATIC_ASSERT(sizeof(vk_shaderModuleIdentifierAlgorithmUUID) ==
@@ -1157,10 +1209,20 @@ nvk_create_drm_physical_device(struct vk_instance *_instance,
 
    if (pdev->info.vram_size_B > 0) {
       uint32_t vram_heap_idx = pdev->mem_heap_count++;
+      uint32_t bar_heap_idx = vram_heap_idx;
       pdev->mem_heaps[vram_heap_idx] = (struct nvk_memory_heap) {
          .size = pdev->info.vram_size_B,
          .flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
       };
+
+      if (pdev->info.bar_size_B > 0 &&
+          pdev->info.bar_size_B < pdev->info.vram_size_B) {
+         bar_heap_idx = pdev->mem_heap_count++;
+         pdev->mem_heaps[bar_heap_idx] = (struct nvk_memory_heap) {
+            .size = pdev->info.bar_size_B,
+            .flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
+         };
+      }
 
       /* Only set available if we have the ioctl. */
       if (nouveau_ws_device_vram_used(ws_dev) > 0)
@@ -1171,13 +1233,12 @@ nvk_create_drm_physical_device(struct vk_instance *_instance,
          .heapIndex = vram_heap_idx,
       };
 
-      if (pdev->info.cls_eng3d >= MAXWELL_A &&
-          pdev->info.bar_size_B >= pdev->info.vram_size_B) {
+      if (pdev->info.cls_eng3d >= MAXWELL_A) {
          pdev->mem_types[pdev->mem_type_count++] = (VkMemoryType) {
             .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            .heapIndex = vram_heap_idx,
+            .heapIndex = bar_heap_idx,
          };
       }
    }
@@ -1370,6 +1431,32 @@ nvk_GetPhysicalDeviceQueueFamilyProperties2(
       }
    }
 }
+
+static const VkTimeDomainKHR nvk_time_domains[] = {
+   VK_TIME_DOMAIN_DEVICE_KHR,
+   VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR,
+#ifdef CLOCK_MONOTONIC_RAW
+   VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR,
+#endif
+};
+
+VKAPI_ATTR VkResult VKAPI_CALL
+nvk_GetPhysicalDeviceCalibrateableTimeDomainsKHR(
+   VkPhysicalDevice physicalDevice,
+   uint32_t *pTimeDomainCount,
+   VkTimeDomainKHR *pTimeDomains)
+{
+   VK_OUTARRAY_MAKE_TYPED(VkTimeDomainKHR, out, pTimeDomains, pTimeDomainCount);
+
+   for (int d = 0; d < ARRAY_SIZE(nvk_time_domains); d++) {
+      vk_outarray_append_typed(VkTimeDomainKHR, &out, i) {
+         *i = nvk_time_domains[d];
+      }
+   }
+
+   return vk_outarray_status(&out);
+}
+
 
 VKAPI_ATTR void VKAPI_CALL
 nvk_GetPhysicalDeviceMultisamplePropertiesEXT(

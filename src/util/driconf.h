@@ -702,6 +702,10 @@
    DRI_CONF_OPT_B(radv_legacy_sparse_binding, def, \
                   "Enable legacy sparse binding (with implicit synchronization) on the graphics and compute queue")
 
+#define DRI_CONF_RADV_FORCE_PSTATE_PEAK_GFX11_DGPU(def) \
+   DRI_CONF_OPT_B(radv_force_pstate_peak_gfx11_dgpu, def, \
+                  "Force the performance level to profile_peak (all clocks to the highest levels) for RDNA3 dGPUs")
+
 /**
  * Overrides for forcing re-compilation of pipelines when RADV_BUILD_ID_OVERRIDE is enabled.
  * These need to be bumped every time a compiler bugfix is backported (up to 8 shader
@@ -723,10 +727,6 @@
 
 #define DRI_CONF_RADV_CLEAR_LDS(def) \
    DRI_CONF_OPT_B(radv_clear_lds, def, "Clear LDS at the end of shaders. Might decrease performance.")
-
-#define DRI_CONF_RADV_FORCE_ACTIVE_ACCEL_STRUCT_LEAVES(def) \
-   DRI_CONF_OPT_B(radv_force_active_accel_struct_leaves, def, \
-                  "Force leaf nodes of acceleration structures to be marked active.")
 
 #define DRI_CONF_RADV_DISABLE_NGG_GS(def) \
    DRI_CONF_OPT_B(radv_disable_ngg_gs, def, "Disable NGG GS on GFX10/GFX10.3.")

@@ -550,28 +550,7 @@ namespace {
                                   0, 2 /* XXX */,
                                   0, 0, 0, 8 /* XXX */, 0, 0);
 
-      case SHADER_OPCODE_TEX:
-      case FS_OPCODE_TXB:
-      case SHADER_OPCODE_TXD:
-      case SHADER_OPCODE_TXF:
-      case SHADER_OPCODE_TXF_LZ:
-      case SHADER_OPCODE_TXL:
-      case SHADER_OPCODE_TXL_LZ:
-      case SHADER_OPCODE_TXF_CMS:
-      case SHADER_OPCODE_TXF_CMS_W:
-      case SHADER_OPCODE_TXF_UMS:
-      case SHADER_OPCODE_TXF_MCS:
-      case SHADER_OPCODE_TXS:
-      case SHADER_OPCODE_LOD:
       case SHADER_OPCODE_GET_BUFFER_SIZE:
-      case SHADER_OPCODE_TG4:
-      case SHADER_OPCODE_TG4_BIAS:
-      case SHADER_OPCODE_TG4_EXPLICIT_LOD:
-      case SHADER_OPCODE_TG4_IMPLICIT_LOD:
-      case SHADER_OPCODE_TG4_OFFSET:
-      case SHADER_OPCODE_TG4_OFFSET_LOD:
-      case SHADER_OPCODE_TG4_OFFSET_BIAS:
-      case SHADER_OPCODE_SAMPLEINFO:
          return calculate_desc(info, EU_UNIT_SAMPLER, 2, 0, 0, 0, 16 /* XXX */,
                                8 /* XXX */, 750 /* XXX */, 0, 0,
                                2 /* XXX */, 0);
@@ -614,10 +593,6 @@ namespace {
          return calculate_desc(info, EU_UNIT_GATEWAY, 90 /* XXX */, 0, 0,
                                0 /* XXX */, 0,
                                0, 0, 0, 0, 0, 0);
-
-      case CS_OPCODE_CS_TERMINATE:
-         return calculate_desc(info, EU_UNIT_SPAWNER, 2, 0, 0, 0 /* XXX */, 0,
-                               10 /* XXX */, 0, 0, 0, 0, 0);
 
       case SHADER_OPCODE_SEND:
          switch (info.sfid) {
@@ -706,7 +681,8 @@ namespace {
                abort();
             }
 
-         case GEN_RT_SFID_BINDLESS_THREAD_DISPATCH:
+         case BRW_SFID_MESSAGE_GATEWAY:
+         case GEN_RT_SFID_BINDLESS_THREAD_DISPATCH: /* or THREAD_SPAWNER */
          case GEN_RT_SFID_RAY_TRACE_ACCELERATOR:
             return calculate_desc(info, EU_UNIT_SPAWNER, 2, 0, 0, 0 /* XXX */, 0,
                                   10 /* XXX */, 0, 0, 0, 0, 0);
@@ -800,7 +776,7 @@ namespace {
     * Return the dependency ID of a backend_reg, offset by \p delta GRFs.
     */
    enum intel_eu_dependency_id
-   reg_dependency_id(const intel_device_info *devinfo, const backend_reg &r,
+   reg_dependency_id(const intel_device_info *devinfo, const fs_reg &r,
                      const int delta)
    {
       if (r.file == VGRF) {
@@ -877,7 +853,7 @@ namespace {
     */
    unsigned
    accum_reg_of_channel(const intel_device_info *devinfo,
-                        const backend_instruction *inst,
+                        const fs_inst *inst,
                         brw_reg_type tx, unsigned i)
    {
       assert(inst->reads_accumulator_implicitly() ||
@@ -891,11 +867,10 @@ namespace {
     * Model the performance behavior of an FS back-end instruction.
     */
    void
-   issue_fs_inst(state &st, const struct brw_isa_info *isa,
-                 const backend_instruction *be_inst)
+   issue_inst(state &st, const struct brw_isa_info *isa,
+              const fs_inst *inst)
    {
       const struct intel_device_info *devinfo = isa->devinfo;
-      const fs_inst *inst = static_cast<const fs_inst *>(be_inst);
       const instruction_info info(isa, inst);
       const perf_desc perf = instruction_desc(info);
 
@@ -1014,9 +989,6 @@ namespace {
     */
    void
    calculate_performance(performance &p, const fs_visitor *s,
-                         void (*issue_instruction)(
-                            state &, const struct brw_isa_info *,
-                            const backend_instruction *),
                          unsigned dispatch_width)
    {
       /* XXX - Note that the previous version of this code used worst-case
@@ -1054,10 +1026,10 @@ namespace {
       foreach_block(block, s->cfg) {
          const unsigned elapsed0 = elapsed;
 
-         foreach_inst_in_block(backend_instruction, inst, block) {
+         foreach_inst_in_block(fs_inst, inst, block) {
             const unsigned clock0 = st.unit_ready[EU_UNIT_FE];
 
-            issue_instruction(st, &s->compiler->isa, inst);
+            issue_inst(st, &s->compiler->isa, inst);
 
             if (inst->opcode == SHADER_OPCODE_HALT_TARGET && halt_count)
                st.weight /= discard_weight;
@@ -1083,7 +1055,7 @@ namespace {
 brw::performance::performance(const fs_visitor *v) :
    block_latency(new unsigned[v->cfg->num_blocks])
 {
-   calculate_performance(*this, v, issue_fs_inst, v->dispatch_width);
+   calculate_performance(*this, v, v->dispatch_width);
 }
 
 brw::performance::~performance()

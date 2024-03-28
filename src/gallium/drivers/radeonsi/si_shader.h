@@ -235,21 +235,6 @@ enum
 #define VS_STATE_INDEXED__SHIFT              1
 #define VS_STATE_INDEXED__MASK               0x1 /* Shared by VS and GS */
 
-/* These fields are only set in current_vs_state in si_context, and they are accessible
- * in the shader via vs_state_bits in LS/HS.
- */
-/* bit gap */
-/* TCS output patch0 offset for per-patch outputs / 4
- * - 64 outputs are implied by SI_UNIQUE_SLOT_* values.
- * - max = 32(CPs) * 64(outputs) * 16(vec4) * 64(num_patches) * 2(inputs + outputs) / 4
- *       = 1M, clamped to 32K(LDS limit) / 4 = 8K
- * - only used by si_llvm_tcs_build_end, it can be removed after NIR lowering replaces it
- */
-#define VS_STATE_TCS_OUT_PATCH0_OFFSET__SHIFT   10
-#define VS_STATE_TCS_OUT_PATCH0_OFFSET__MASK    0x3fff
-#define VS_STATE_LS_OUT_VERTEX_SIZE__SHIFT      24
-#define VS_STATE_LS_OUT_VERTEX_SIZE__MASK       0xff /* max 32 * 4 + 1 (to reduce LDS bank conflicts) */
-
 /* These fields are only set in current_gs_state in si_context, and they are accessible
  * in the shader via vs_state_bits in legacy GS, the GS copy shader, and any NGG shader.
  */
@@ -326,6 +311,7 @@ unsigned si_get_num_shader_profiles(void);
 #define SI_PROFILE_VS_NO_BINNING             (1 << 3)
 #define SI_PROFILE_GFX9_GFX10_PS_NO_BINNING  (1 << 4)
 #define SI_PROFILE_CLAMP_DIV_BY_ZERO         (1 << 5)
+#define SI_PROFILE_NO_OPT_UNIFORM_VARYINGS   (1 << 6)
 
 enum si_shader_dump_type {
    SI_DUMP_SHADER_KEY,
@@ -663,8 +649,6 @@ struct si_ps_epilog_bits {
 union si_shader_part_key {
    struct {
       struct si_tcs_epilog_bits states;
-      unsigned wave32 : 1;
-      unsigned noop_s_barrier : 1;
    } tcs_epilog;
    struct {
       struct si_ps_prolog_bits states;
@@ -1027,6 +1011,7 @@ void si_nir_scan_shader(struct si_screen *sscreen,  const struct nir_shader *nir
 
 /* si_shader_nir.c */
 extern const struct nir_lower_subgroups_options si_nir_subgroups_options;
+void si_lower_mediump_io(struct nir_shader *nir);
 
 bool si_alu_to_scalar_packed_math_filter(const struct nir_instr *instr, const void *data);
 void si_nir_opts(struct si_screen *sscreen, struct nir_shader *nir, bool first);

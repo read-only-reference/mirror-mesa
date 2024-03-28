@@ -178,7 +178,7 @@ radv_optimize_nir(struct nir_shader *shader, bool optimize_conservatively)
    } while (progress && !optimize_conservatively);
    _mesa_set_destroy(skip, NULL);
 
-   NIR_PASS(progress, shader, nir_opt_shrink_vectors);
+   NIR_PASS(progress, shader, nir_opt_shrink_vectors, true);
    NIR_PASS(progress, shader, nir_remove_dead_variables,
             nir_var_function_temp | nir_var_shader_in | nir_var_shader_out | nir_var_mem_shared, NULL);
 
@@ -201,6 +201,7 @@ radv_optimize_nir_algebraic(nir_shader *nir, bool opt_offsets)
       NIR_PASS(_, nir, nir_opt_constant_folding);
       NIR_PASS(_, nir, nir_opt_cse);
       NIR_PASS(more_algebraic, nir, nir_opt_algebraic);
+      NIR_PASS(_, nir, nir_opt_dead_cf);
    }
 
    if (opt_offsets) {
@@ -952,13 +953,18 @@ radv_create_shader_arena(struct radv_device *device, struct radv_shader_free_lis
    if (replayable)
       flags |= RADEON_FLAG_REPLAYABLE;
 
+   /* vkCmdUpdatePipelineIndirectBufferNV() can be called on any queue supporting transfer
+    * operations and it's not required to call it on the same queue as DGC execute. To make sure the
+    * compute shader BO is part of the DGC execute submission, force all shaders to be local BOs.
+    */
+   if (device->vk.enabled_features.deviceGeneratedComputePipelines)
+      flags |= RADEON_FLAG_PREFER_LOCAL_BO;
+
    VkResult result;
-   result = device->ws->buffer_create(device->ws, arena_size, RADV_SHADER_ALLOC_ALIGNMENT, RADEON_DOMAIN_VRAM, flags,
-                                      RADV_BO_PRIORITY_SHADER, replay_va, &arena->bo);
+   result = radv_bo_create(device, arena_size, RADV_SHADER_ALLOC_ALIGNMENT, RADEON_DOMAIN_VRAM, flags,
+                           RADV_BO_PRIORITY_SHADER, replay_va, true, &arena->bo);
    if (result != VK_SUCCESS)
       goto fail;
-
-   radv_rmv_log_bo_allocate(device, arena->bo, arena_size, true);
 
    list_inithead(&arena->entries);
    alloc = alloc_block_obj(device);
@@ -974,7 +980,7 @@ radv_create_shader_arena(struct radv_device *device, struct radv_shader_free_lis
       add_hole(free_list, alloc);
 
    if (!(flags & RADEON_FLAG_NO_CPU_ACCESS)) {
-      arena->ptr = (char *)device->ws->buffer_map(arena->bo);
+      arena->ptr = (char *)radv_buffer_map(device->ws, arena->bo);
       if (!arena->ptr)
          goto fail;
    }
@@ -991,10 +997,8 @@ radv_create_shader_arena(struct radv_device *device, struct radv_shader_free_lis
 fail:
    if (alloc)
       free_block_obj(device, alloc);
-   if (arena && arena->bo) {
-      radv_rmv_log_bo_destroy(device, arena->bo);
-      device->ws->buffer_destroy(device->ws, arena->bo);
-   }
+   if (arena && arena->bo)
+      radv_bo_destroy(device, arena->bo);
    free(arena);
    return NULL;
 }
@@ -1146,8 +1150,7 @@ fail:
    free(alloc);
    if (arena) {
       free(arena->list.next);
-      radv_rmv_log_bo_destroy(device, arena->bo);
-      device->ws->buffer_destroy(device->ws, arena->bo);
+      radv_bo_destroy(device, arena->bo);
    }
    free(arena);
    return NULL;
@@ -1218,8 +1221,7 @@ radv_free_shader_memory(struct radv_device *device, union radv_shader_arena_bloc
       struct radv_shader_arena *arena = hole->arena;
       free_block_obj(device, hole);
 
-      radv_rmv_log_bo_destroy(device, arena->bo);
-      device->ws->buffer_destroy(device->ws, arena->bo);
+      radv_bo_destroy(device, arena->bo);
       list_del(&arena->list);
       free(arena);
    } else if (free_list) {
@@ -1315,8 +1317,7 @@ radv_destroy_shader_arenas(struct radv_device *device)
       free(block);
 
    list_for_each_entry_safe (struct radv_shader_arena, arena, &device->shader_arenas, list) {
-      radv_rmv_log_bo_destroy(device, arena->bo);
-      device->ws->buffer_destroy(device->ws, arena->bo);
+      radv_bo_destroy(device, arena->bo);
       free(arena);
    }
    mtx_destroy(&device->shader_arena_mutex);
@@ -1384,7 +1385,7 @@ radv_destroy_shader_upload_queue(struct radv_device *device)
       if (submission->cs)
          ws->cs_destroy(submission->cs);
       if (submission->bo)
-         ws->buffer_destroy(ws, submission->bo);
+         radv_bo_destroy(device, submission->bo);
       list_del(&submission->list);
       free(submission);
    }
@@ -1499,7 +1500,7 @@ radv_postprocess_binary_config(struct radv_device *device, struct radv_shader_bi
    const struct radv_shader_info *info = &binary->info;
    gl_shader_stage stage = binary->info.stage;
    const struct radv_physical_device *pdevice = device->physical_device;
-   bool scratch_enabled = config->scratch_bytes_per_wave > 0 || info->cs.is_rt_shader;
+   bool scratch_enabled = config->scratch_bytes_per_wave > 0;
    bool trap_enabled = !!device->trap_handler_shader;
    unsigned vgpr_comp_cnt = 0;
    unsigned num_input_vgprs = args->ac.num_vgprs_used;
@@ -1663,8 +1664,6 @@ radv_postprocess_binary_config(struct radv_device *device, struct radv_shader_bi
    case MESA_SHADER_CALLABLE:
    case MESA_SHADER_INTERSECTION:
    case MESA_SHADER_ANY_HIT:
-      config->rsrc2 |= S_00B12C_SCRATCH_EN(1);
-      FALLTHROUGH;
    case MESA_SHADER_COMPUTE:
    case MESA_SHADER_TASK:
       config->rsrc1 |= S_00B848_MEM_ORDERED(pdevice->rad_info.gfx_level >= GFX10) | S_00B848_WGP_MODE(wgp_mode);
@@ -1896,20 +1895,20 @@ radv_shader_binary_upload(struct radv_device *device, const struct radv_shader_b
 }
 
 static VkResult
-radv_shader_dma_resize_upload_buf(struct radv_shader_dma_submission *submission, struct radeon_winsys *ws,
+radv_shader_dma_resize_upload_buf(struct radv_device *device, struct radv_shader_dma_submission *submission,
                                   uint64_t size)
 {
    if (submission->bo)
-      ws->buffer_destroy(ws, submission->bo);
+      radv_bo_destroy(device, submission->bo);
 
-   VkResult result = ws->buffer_create(
-      ws, size, RADV_SHADER_ALLOC_ALIGNMENT, RADEON_DOMAIN_GTT,
+   VkResult result = radv_bo_create(
+      device, size, RADV_SHADER_ALLOC_ALIGNMENT, RADEON_DOMAIN_GTT,
       RADEON_FLAG_CPU_ACCESS | RADEON_FLAG_NO_INTERPROCESS_SHARING | RADEON_FLAG_32BIT | RADEON_FLAG_GTT_WC,
-      RADV_BO_PRIORITY_UPLOAD_BUFFER, 0, &submission->bo);
+      RADV_BO_PRIORITY_UPLOAD_BUFFER, 0, true, &submission->bo);
    if (result != VK_SUCCESS)
       return result;
 
-   submission->ptr = ws->buffer_map(submission->bo);
+   submission->ptr = radv_buffer_map(device->ws, submission->bo);
    submission->bo_size = size;
 
    return VK_SUCCESS;
@@ -1962,7 +1961,7 @@ radv_shader_dma_get_submission(struct radv_device *device, struct radeon_winsys_
    ws->cs_reset(cs);
 
    if (submission->bo_size < size) {
-      result = radv_shader_dma_resize_upload_buf(submission, ws, size);
+      result = radv_shader_dma_resize_upload_buf(device, submission, size);
       if (result != VK_SUCCESS)
          goto fail;
    }
@@ -2789,57 +2788,6 @@ radv_create_ps_epilog(struct radv_device *device, const struct radv_ps_epilog_ke
       free(binary);
    }
 
-   return epilog;
-
-fail:
-   free(binary);
-   return NULL;
-}
-
-struct radv_shader_part *
-radv_create_tcs_epilog(struct radv_device *device, const struct radv_tcs_epilog_key *key)
-{
-   struct radv_shader_part *epilog;
-   struct radv_shader_args args = {0};
-   struct radv_nir_compiler_options options = {0};
-   radv_fill_nir_compiler_options(&options, device, NULL, false,
-                                  device->instance->debug_flags & RADV_DEBUG_DUMP_EPILOGS, false,
-                                  radv_device_fault_detection_enabled(device), false);
-
-   struct radv_shader_info info = {0};
-   info.stage = MESA_SHADER_TESS_CTRL;
-   info.wave_size = device->physical_device->ge_wave_size;
-   info.workgroup_size = 256;
-
-   radv_declare_tcs_epilog_args(device, key, &args);
-
-#if LLVM_AVAILABLE
-   if (options.dump_shader || options.record_ir)
-      ac_init_llvm_once();
-#endif
-
-   struct radv_shader_part_binary *binary = NULL;
-   struct radv_shader_stage_key stage_key = {0};
-   struct aco_shader_info ac_info;
-   struct aco_tcs_epilog_info ac_epilog_info;
-   struct aco_compiler_options ac_opts;
-   radv_aco_convert_shader_info(&ac_info, &info, &args, &device->cache_key, options.info->gfx_level);
-   radv_aco_convert_opts(&ac_opts, &options, &args, &stage_key);
-   radv_aco_convert_tcs_epilog_key(&ac_epilog_info, key, &args);
-   aco_compile_tcs_epilog(&ac_opts, &ac_info, &ac_epilog_info, &args.ac, &radv_aco_build_shader_part, (void **)&binary);
-
-   epilog = radv_shader_part_create(device, binary, info.wave_size);
-   if (!epilog)
-      goto fail;
-
-   epilog->key.tcs = *key;
-
-   if (options.dump_shader) {
-      fprintf(stderr, "TCS epilog");
-      fprintf(stderr, "\ndisasm:\n%s\n", epilog->disasm_string);
-   }
-
-   free(binary);
    return epilog;
 
 fail:

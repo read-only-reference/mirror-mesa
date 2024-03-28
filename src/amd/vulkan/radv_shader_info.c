@@ -22,6 +22,7 @@
  */
 #include "nir/nir.h"
 #include "nir/nir_xfb_info.h"
+#include "nir/radv_nir.h"
 #include "radv_private.h"
 #include "radv_shader.h"
 
@@ -422,6 +423,91 @@ gather_shader_info_ngg_query(struct radv_device *device, struct radv_shader_info
    info->has_prim_query = device->cache_key.primitives_generated_query || info->has_xfb_query;
 }
 
+static uint64_t
+gather_io_mask(const uint64_t nir_mask, const uint64_t nir_patch_mask, const bool per_patch)
+{
+   /* Select the correct NIR IO mask.
+    * Exclude per-patch built-in variables, because in NIR they are not part of the patch I/O masks.
+    */
+   const uint64_t nir_io_mask =
+      (per_patch ? nir_patch_mask : nir_mask) & ~(VARYING_BIT_TESS_LEVEL_OUTER | VARYING_BIT_TESS_LEVEL_INNER);
+
+   /* Create a mask of driver locations mapped from NIR semantics. */
+   uint64_t radv_io_mask = 0;
+   u_foreach_bit64 (semantic, nir_io_mask) {
+      /* These outputs are not used when fixed output slots are needed. */
+      if (semantic == VARYING_SLOT_LAYER || semantic == VARYING_SLOT_VIEWPORT ||
+          semantic == VARYING_SLOT_PRIMITIVE_ID || semantic == VARYING_SLOT_PRIMITIVE_SHADING_RATE)
+         continue;
+
+      /* Generic per-patch outputs start at an offset. */
+      if (per_patch)
+         semantic += VARYING_SLOT_PATCH0;
+
+      radv_io_mask |= BITFIELD64_BIT(radv_map_io_driver_location(semantic));
+   }
+
+   /* Include per-patch built-in variables. */
+   if (per_patch) {
+      if (nir_mask & VARYING_BIT_TESS_LEVEL_OUTER)
+         radv_io_mask |= BITFIELD64_BIT(radv_map_io_driver_location(VARYING_SLOT_TESS_LEVEL_OUTER));
+      if (nir_mask & VARYING_BIT_TESS_LEVEL_INNER)
+         radv_io_mask |= BITFIELD64_BIT(radv_map_io_driver_location(VARYING_SLOT_TESS_LEVEL_INNER));
+   }
+
+   return radv_io_mask;
+}
+
+static void
+gather_info_unlinked_input(struct radv_shader_info *info, const nir_shader *nir)
+{
+   if (info->inputs_linked)
+      return;
+
+   const uint64_t io_mask = gather_io_mask(nir->info.inputs_read, 0, false);
+   const unsigned num_linked_inputs = util_last_bit64(io_mask);
+
+   switch (nir->info.stage) {
+   case MESA_SHADER_TESS_CTRL:
+      info->tcs.num_linked_inputs = num_linked_inputs;
+      break;
+   case MESA_SHADER_TESS_EVAL:
+      info->tes.num_linked_inputs = num_linked_inputs;
+      break;
+   case MESA_SHADER_GEOMETRY:
+      info->gs.num_linked_inputs = num_linked_inputs;
+      break;
+   default:
+      unreachable("Stage doesn't have linked inputs.");
+   }
+}
+
+static void
+gather_info_unlinked_output(struct radv_shader_info *info, const nir_shader *nir)
+{
+   if (info->outputs_linked)
+      return;
+
+   const uint64_t io_mask = gather_io_mask(nir->info.outputs_written, 0, false);
+   const uint64_t patch_io_mask = gather_io_mask(nir->info.outputs_written, nir->info.patch_outputs_written, true);
+   const unsigned num_linked_outputs = util_last_bit64(io_mask);
+
+   switch (nir->info.stage) {
+   case MESA_SHADER_VERTEX:
+      info->vs.num_linked_outputs = num_linked_outputs;
+      break;
+   case MESA_SHADER_TESS_CTRL:
+      info->tcs.num_linked_outputs = num_linked_outputs;
+      info->tcs.num_linked_patch_outputs = util_last_bit64(patch_io_mask);
+      break;
+   case MESA_SHADER_TESS_EVAL:
+      info->tes.num_linked_outputs = num_linked_outputs;
+      break;
+   default:
+      unreachable("Stage doesn't have linked outputs.");
+   }
+}
+
 static void
 gather_shader_info_vs(struct radv_device *device, const nir_shader *nir,
                       const struct radv_graphics_state_key *gfx_state, const struct radv_shader_stage_key *stage_key,
@@ -454,8 +540,7 @@ gather_shader_info_vs(struct radv_device *device, const nir_shader *nir,
     */
    info->vs.dynamic_num_verts_per_prim = gfx_state->ia.topology == V_008958_DI_PT_NONE && info->is_ngg && nir->xfb_info;
 
-   if (!info->outputs_linked)
-      info->vs.num_linked_outputs = util_last_bit64(nir->info.outputs_written);
+   gather_info_unlinked_output(info, nir);
 
    if (info->next_stage == MESA_SHADER_TESS_CTRL) {
       info->vs.as_ls = true;
@@ -481,12 +566,8 @@ gather_shader_info_tcs(struct radv_device *device, const nir_shader *nir,
    info->tcs.tes_inputs_read = ~0ULL;
    info->tcs.tes_patch_inputs_read = ~0ULL;
 
-   if (!info->inputs_linked)
-      info->tcs.num_linked_inputs = util_last_bit64(nir->info.inputs_read);
-   if (!info->outputs_linked) {
-      info->tcs.num_linked_outputs = util_last_bit64(nir->info.outputs_written);
-      info->tcs.num_linked_patch_outputs = util_last_bit64(nir->info.patch_outputs_written);
-   }
+   gather_info_unlinked_input(info, nir);
+   gather_info_unlinked_output(info, nir);
 
    if (gfx_state->ts.patch_control_points) {
       /* Number of tessellation patches per workgroup processed by the current pipeline. */
@@ -502,9 +583,6 @@ gather_shader_info_tcs(struct radv_device *device, const nir_shader *nir,
                                  nir->info.tess.tcs_vertices_out, info->tcs.num_linked_inputs, info->num_tess_patches,
                                  info->tcs.num_linked_outputs, info->tcs.num_linked_patch_outputs);
    }
-
-   /* By default, assume a TCS needs an epilog unless it's linked with a TES. */
-   info->has_epilog = true;
 }
 
 static void
@@ -518,10 +596,8 @@ gather_shader_info_tes(struct radv_device *device, const nir_shader *nir, struct
    info->tes.reads_tess_factors =
       !!(nir->info.inputs_read & (VARYING_BIT_TESS_LEVEL_INNER | VARYING_BIT_TESS_LEVEL_OUTER));
 
-   if (!info->inputs_linked)
-      info->tes.num_linked_inputs = util_last_bit64(nir->info.inputs_read);
-   if (!info->outputs_linked)
-      info->tes.num_linked_outputs = util_last_bit64(nir->info.outputs_written);
+   gather_info_unlinked_input(info, nir);
+   gather_info_unlinked_output(info, nir);
 
    if (info->next_stage == MESA_SHADER_GEOMETRY) {
       info->tes.as_es = true;
@@ -696,8 +772,7 @@ gather_shader_info_gs(struct radv_device *device, const nir_shader *nir, struct 
 
    info->gs.has_pipeline_stat_query = device->physical_device->emulate_ngg_gs_query_pipeline_stat;
 
-   if (!info->inputs_linked)
-      info->gs.num_linked_inputs = util_last_bit64(nir->info.inputs_read);
+   gather_info_unlinked_input(info, nir);
 
    if (info->is_ngg) {
       gather_shader_info_ngg_query(device, info);
@@ -1395,7 +1470,7 @@ gfx10_get_ngg_scratch_lds_base(const struct radv_device *device, const struct ra
    return scratch_lds_base;
 }
 
-static void
+void
 gfx10_get_ngg_info(const struct radv_device *device, struct radv_shader_info *es_info, struct radv_shader_info *gs_info,
                    struct gfx10_ngg_info *out)
 {
@@ -1631,7 +1706,8 @@ radv_determine_ngg_settings(struct radv_device *device, struct radv_shader_stage
    assert(es_stage->stage == MESA_SHADER_VERTEX || es_stage->stage == MESA_SHADER_TESS_EVAL);
    assert(!fs_stage || fs_stage->stage == MESA_SHADER_FRAGMENT);
 
-   uint64_t ps_inputs_read = fs_stage ? fs_stage->nir->info.inputs_read : 0;
+   /* NGG culling is implicitly disabled when the FS stage is unknown. */
+   uint64_t ps_inputs_read = fs_stage ? fs_stage->nir->info.inputs_read : ~0;
 
    unsigned num_vertices_per_prim = 0;
    if (es_stage->stage == MESA_SHADER_VERTEX) {
@@ -1642,10 +1718,8 @@ radv_determine_ngg_settings(struct radv_device *device, struct radv_shader_stage
                                                                                                     : 3;
    }
 
-   /* TODO: Enable culling for LLVM. */
    es_stage->info.has_ngg_culling = radv_consider_culling(device->physical_device, es_stage->nir, ps_inputs_read,
-                                                          num_vertices_per_prim, &es_stage->info) &&
-                                    !radv_use_llvm_for_stage(device, es_stage->stage);
+                                                          num_vertices_per_prim, &es_stage->info);
 
    nir_function_impl *impl = nir_shader_get_entrypoint(es_stage->nir);
    es_stage->info.has_ngg_early_prim_export = exec_list_is_singular(&impl->body);
@@ -1744,10 +1818,10 @@ radv_link_shaders_info(struct radv_device *device, struct radv_shader_stage *pro
       struct radv_shader_stage *tcs_stage = producer;
       struct radv_shader_stage *tes_stage = consumer;
 
-      tcs_stage->info.has_epilog = false;
       tcs_stage->info.tcs.tes_reads_tess_factors = tes_stage->info.tes.reads_tess_factors;
       tcs_stage->info.tcs.tes_inputs_read = tes_stage->nir->info.inputs_read;
       tcs_stage->info.tcs.tes_patch_inputs_read = tes_stage->nir->info.patch_inputs_read;
+      tcs_stage->info.tes._primitive_mode = tes_stage->nir->info.tess._primitive_mode;
 
       if (gfx_state->ts.patch_control_points)
          tes_stage->info.num_tess_patches = tcs_stage->info.num_tess_patches;

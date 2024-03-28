@@ -328,6 +328,8 @@ a6xx_base = A6XXProps(
         prim_alloc_threshold = 0x7,
         vs_max_inputs_count = 32,
         max_sets = 5,
+        line_width_min = 1.0,
+        line_width_max = 1.0,
     )
 
 
@@ -787,6 +789,8 @@ a7xx_base = A6XXProps(
         has_lrz_dir_tracking = True,
         has_per_view_viewport = True,
         supports_ibo_ubwc = True,
+        line_width_min = 1.0,
+        line_width_max = 127.5,
     )
 
 a7xx_725 = A7XXProps(
@@ -912,6 +916,8 @@ add_gpus([
         GPUId(740), # Deprecated, used for dev kernels.
         GPUId(chip_id=0x43050a01, name="FD740"), # KGSL, no speedbin data
         GPUId(chip_id=0xffff43050a01, name="FD740"), # Default no-speedbin fallback
+        GPUId(chip_id=0x43050B00, name="FD740"), # Quest 3
+        GPUId(chip_id=0xffff43050B00, name="FD740"),
     ], A6xxGPUInfo(
         CHIP.A7XX,
         [a7xx_base, a7xx_740],
@@ -1057,7 +1063,6 @@ add_gpus([
             [A6XXRegs.REG_A7XX_GRAS_UNKNOWN_810B, 0x3],
 
             [A6XXRegs.REG_A7XX_HLSQ_UNKNOWN_A9AC, 0x00000000],
-            [A6XXRegs.REG_A7XX_RB_UNKNOWN_8E79,   0x00000000],
             [A6XXRegs.REG_A7XX_RB_UNKNOWN_8899,   0x00000000],
             [A6XXRegs.REG_A7XX_RB_UNKNOWN_88F5,   0x00000000],
 

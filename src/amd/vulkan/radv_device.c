@@ -48,6 +48,7 @@
 #include "util/u_debug.h"
 #include "radv_cs.h"
 #include "radv_debug.h"
+#include "radv_formats.h"
 #include "radv_private.h"
 #include "radv_shader.h"
 #include "vk_common_entrypoints.h"
@@ -90,12 +91,6 @@ radv_spm_trace_enabled(struct radv_instance *instance)
           debug_get_bool_option("RADV_THREAD_TRACE_CACHE_COUNTERS", true);
 }
 
-bool
-radv_device_fault_detection_enabled(const struct radv_device *device)
-{
-   return device->instance->debug_flags & RADV_DEBUG_HANG;
-}
-
 VKAPI_ATTR VkResult VKAPI_CALL
 radv_GetMemoryHostPointerPropertiesEXT(VkDevice _device, VkExternalMemoryHandleTypeFlagBits handleType,
                                        const void *pHostPointer,
@@ -127,10 +122,9 @@ radv_device_init_border_color(struct radv_device *device)
 {
    VkResult result;
 
-   result =
-      device->ws->buffer_create(device->ws, RADV_BORDER_COLOR_BUFFER_SIZE, 4096, RADEON_DOMAIN_VRAM,
-                                RADEON_FLAG_CPU_ACCESS | RADEON_FLAG_READ_ONLY | RADEON_FLAG_NO_INTERPROCESS_SHARING,
-                                RADV_BO_PRIORITY_SHADER, 0, &device->border_color_data.bo);
+   result = radv_bo_create(device, RADV_BORDER_COLOR_BUFFER_SIZE, 4096, RADEON_DOMAIN_VRAM,
+                           RADEON_FLAG_CPU_ACCESS | RADEON_FLAG_READ_ONLY | RADEON_FLAG_NO_INTERPROCESS_SHARING,
+                           RADV_BO_PRIORITY_SHADER, 0, true, &device->border_color_data.bo);
 
    if (result != VK_SUCCESS)
       return vk_error(device, result);
@@ -141,7 +135,7 @@ radv_device_init_border_color(struct radv_device *device)
    if (result != VK_SUCCESS)
       return vk_error(device, result);
 
-   device->border_color_data.colors_gpu_ptr = device->ws->buffer_map(device->border_color_data.bo);
+   device->border_color_data.colors_gpu_ptr = radv_buffer_map(device->ws, device->border_color_data.bo);
    if (!device->border_color_data.colors_gpu_ptr)
       return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
    mtx_init(&device->border_color_data.mutex, mtx_plain);
@@ -155,7 +149,7 @@ radv_device_finish_border_color(struct radv_device *device)
    if (device->border_color_data.bo) {
       radv_rmv_log_border_color_palette_destroy(device, device->border_color_data.bo);
       device->ws->buffer_make_resident(device->ws, device->border_color_data.bo, false);
-      device->ws->buffer_destroy(device->ws, device->border_color_data.bo);
+      radv_bo_destroy(device, device->border_color_data.bo);
 
       mtx_destroy(&device->border_color_data.mutex);
    }
@@ -285,35 +279,6 @@ static struct radv_shader_part_cache_ops ps_epilog_ops = {
    .create = _radv_create_ps_epilog,
    .hash = radv_hash_ps_epilog,
    .equals = radv_cmp_ps_epilog,
-};
-
-static struct radv_shader_part *
-_radv_create_tcs_epilog(struct radv_device *device, const void *_key)
-{
-   struct radv_tcs_epilog_key *key = (struct radv_tcs_epilog_key *)_key;
-   return radv_create_tcs_epilog(device, key);
-}
-
-static uint32_t
-radv_hash_tcs_epilog(const void *key_)
-{
-   const struct radv_tcs_epilog_key *key = key_;
-   return _mesa_hash_data(key, sizeof(*key));
-}
-
-static bool
-radv_cmp_tcs_epilog(const void *a_, const void *b_)
-{
-   const struct radv_tcs_epilog_key *a = a_;
-   const struct radv_tcs_epilog_key *b = b_;
-
-   return memcmp(a, b, sizeof(*a)) == 0;
-}
-
-static struct radv_shader_part_cache_ops tcs_epilog_ops = {
-   .create = _radv_create_tcs_epilog,
-   .hash = radv_hash_tcs_epilog,
-   .equals = radv_cmp_tcs_epilog,
 };
 
 VkResult
@@ -594,11 +559,16 @@ init_dispatch_tables(struct radv_device *device, struct radv_physical_device *ph
 {
    struct dispatch_table_builder b = {0};
    b.tables[RADV_DEVICE_DISPATCH_TABLE] = &device->vk.dispatch_table;
+   b.tables[RADV_ANNOTATE_DISPATCH_TABLE] = &device->layer_dispatch.annotate;
    b.tables[RADV_APP_DISPATCH_TABLE] = &device->layer_dispatch.app;
    b.tables[RADV_RGP_DISPATCH_TABLE] = &device->layer_dispatch.rgp;
    b.tables[RADV_RRA_DISPATCH_TABLE] = &device->layer_dispatch.rra;
    b.tables[RADV_RMV_DISPATCH_TABLE] = &device->layer_dispatch.rmv;
    b.tables[RADV_CTX_ROLL_DISPATCH_TABLE] = &device->layer_dispatch.ctx_roll;
+
+   bool gather_ctx_rolls = physical_device->instance->vk.trace_mode & RADV_TRACE_MODE_CTX_ROLLS;
+   if (radv_device_fault_detection_enabled(device) || gather_ctx_rolls)
+      add_entrypoints(&b, &annotate_device_entrypoints, RADV_ANNOTATE_DISPATCH_TABLE);
 
    if (!strcmp(physical_device->instance->drirc.app_layer, "metroexodus")) {
       add_entrypoints(&b, &metro_exodus_device_entrypoints, RADV_APP_DISPATCH_TABLE);
@@ -619,7 +589,7 @@ init_dispatch_tables(struct radv_device *device, struct radv_physical_device *ph
       add_entrypoints(&b, &rmv_device_entrypoints, RADV_RMV_DISPATCH_TABLE);
 #endif
 
-   if (physical_device->instance->vk.trace_mode & RADV_TRACE_MODE_CTX_ROLLS)
+   if (gather_ctx_rolls)
       add_entrypoints(&b, &ctx_roll_device_entrypoints, RADV_CTX_ROLL_DISPATCH_TABLE);
 
    add_entrypoints(&b, &radv_device_entrypoints, RADV_DISPATCH_TABLE_COUNT);
@@ -728,18 +698,20 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
       return result;
    }
 
-   init_dispatch_tables(device, physical_device);
-
    device->vk.capture_trace = capture_trace;
 
    device->vk.command_buffer_ops = &radv_cmd_buffer_ops;
 
    device->instance = physical_device->instance;
    device->physical_device = physical_device;
+
+   init_dispatch_tables(device, physical_device);
+
    simple_mtx_init(&device->ctx_roll_mtx, mtx_plain);
    simple_mtx_init(&device->trace_mtx, mtx_plain);
    simple_mtx_init(&device->pstate_mtx, mtx_plain);
    simple_mtx_init(&device->rt_handles_mtx, mtx_plain);
+   simple_mtx_init(&device->compute_scratch_mtx, mtx_plain);
 
    device->rt_handles = _mesa_hash_table_create(NULL, _mesa_hash_u32, _mesa_key_u32_equal);
 
@@ -999,13 +971,6 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
          goto fail;
    }
 
-   if (device->vk.enabled_features.shaderObject) {
-      if (!radv_shader_part_cache_init(&device->tcs_epilogs, &tcs_epilog_ops)) {
-         result = VK_ERROR_OUT_OF_HOST_MEMORY;
-         goto fail;
-      }
-   }
-
    if (device->vk.enabled_features.graphicsPipelineLibrary || device->vk.enabled_features.shaderObject ||
        device->vk.enabled_features.extendedDynamicState3ColorBlendEnable ||
        device->vk.enabled_features.extendedDynamicState3ColorWriteMask ||
@@ -1034,9 +999,9 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
 
    if (device->vk.enabled_features.performanceCounterQueryPools) {
       size_t bo_size = PERF_CTR_BO_PASS_OFFSET + sizeof(uint64_t) * PERF_CTR_MAX_PASSES;
-      result = device->ws->buffer_create(device->ws, bo_size, 4096, RADEON_DOMAIN_GTT,
-                                         RADEON_FLAG_CPU_ACCESS | RADEON_FLAG_NO_INTERPROCESS_SHARING,
-                                         RADV_BO_PRIORITY_UPLOAD_BUFFER, 0, &device->perf_counter_bo);
+      result = radv_bo_create(device, bo_size, 4096, RADEON_DOMAIN_GTT,
+                                  RADEON_FLAG_CPU_ACCESS | RADEON_FLAG_NO_INTERPROCESS_SHARING,
+                                  RADV_BO_PRIORITY_UPLOAD_BUFFER, 0, true, &device->perf_counter_bo);
       if (result != VK_SUCCESS)
          goto fail_cache;
 
@@ -1066,6 +1031,12 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
    if (result != VK_SUCCESS)
       goto fail_cache;
 
+   if (device->physical_device->rad_info.gfx_level == GFX11 && device->physical_device->rad_info.has_dedicated_vram &&
+       device->instance->drirc.force_pstate_peak_gfx11_dgpu) {
+      if (!radv_device_acquire_performance_counters(device))
+         fprintf(stderr, "radv: failed to set pstate to profile_peak.\n");
+   }
+
    *pDevice = radv_device_to_handle(device);
    return VK_SUCCESS;
 
@@ -1087,14 +1058,12 @@ fail:
 
    radv_device_finish_perf_counter_lock_cs(device);
    if (device->perf_counter_bo)
-      device->ws->buffer_destroy(device->ws, device->perf_counter_bo);
+      radv_bo_destroy(device, device->perf_counter_bo);
    if (device->gfx_init)
-      device->ws->buffer_destroy(device->ws, device->gfx_init);
+      radv_bo_destroy(device, device->gfx_init);
 
    radv_device_finish_notifier(device);
    radv_device_finish_vs_prologs(device);
-   if (device->tcs_epilogs.ops)
-      radv_shader_part_cache_finish(device, &device->tcs_epilogs);
    if (device->ps_epilogs.ops)
       radv_shader_part_cache_finish(device, &device->ps_epilogs);
    radv_device_finish_border_color(device);
@@ -1122,6 +1091,7 @@ fail_queue:
    simple_mtx_destroy(&device->pstate_mtx);
    simple_mtx_destroy(&device->trace_mtx);
    simple_mtx_destroy(&device->rt_handles_mtx);
+   simple_mtx_destroy(&device->compute_scratch_mtx);
    mtx_destroy(&device->overallocation_mutex);
 
    vk_device_finish(&device->vk);
@@ -1142,15 +1112,13 @@ radv_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
 
    radv_device_finish_perf_counter_lock_cs(device);
    if (device->perf_counter_bo)
-      device->ws->buffer_destroy(device->ws, device->perf_counter_bo);
+      radv_bo_destroy(device, device->perf_counter_bo);
 
    if (device->gfx_init)
-      device->ws->buffer_destroy(device->ws, device->gfx_init);
+      radv_bo_destroy(device, device->gfx_init);
 
    radv_device_finish_notifier(device);
    radv_device_finish_vs_prologs(device);
-   if (device->tcs_epilogs.ops)
-      radv_shader_part_cache_finish(device, &device->tcs_epilogs);
    if (device->ps_epilogs.ops)
       radv_shader_part_cache_finish(device, &device->ps_epilogs);
    radv_device_finish_border_color(device);
@@ -1185,6 +1153,7 @@ radv_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    simple_mtx_destroy(&device->pstate_mtx);
    simple_mtx_destroy(&device->trace_mtx);
    simple_mtx_destroy(&device->rt_handles_mtx);
+   simple_mtx_destroy(&device->compute_scratch_mtx);
 
    radv_trap_handler_finish(device);
    radv_finish_trace(device);

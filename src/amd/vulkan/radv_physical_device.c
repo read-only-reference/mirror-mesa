@@ -98,9 +98,7 @@ radv_calibrated_timestamps_enabled(const struct radv_physical_device *pdevice)
 static bool
 radv_shader_object_enabled(const struct radv_physical_device *pdevice)
 {
-   /* FIXME: Fix GPU hangs on Renoir. */
-   return (pdevice->rad_info.gfx_level < GFX9 || pdevice->rad_info.family == CHIP_VEGA10) && !pdevice->use_llvm &&
-          pdevice->instance->perftest_flags & RADV_PERFTEST_SHADER_OBJECT;
+   return !pdevice->use_llvm && pdevice->instance->perftest_flags & RADV_PERFTEST_SHADER_OBJECT;
 }
 
 bool
@@ -611,6 +609,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .EXT_inline_uniform_block = true,
       .EXT_line_rasterization = true,
       .EXT_load_store_op_none = true,
+      .EXT_map_memory_placed = true,
       .EXT_memory_budget = true,
       .EXT_memory_priority = true,
       .EXT_mesh_shader = radv_taskmesh_enabled(device),
@@ -683,8 +682,8 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .GOOGLE_user_type = true,
       .INTEL_shader_integer_functions2 = true,
       .NV_compute_shader_derivatives = true,
-      .NV_device_generated_commands = device->instance->drirc.enable_dgc,
-      .NV_device_generated_commands_compute = device->instance->drirc.enable_dgc,
+      .NV_device_generated_commands = !device->use_llvm && device->instance->drirc.enable_dgc,
+      .NV_device_generated_commands_compute = !device->use_llvm && device->instance->drirc.enable_dgc,
       /* Undocumented extension purely for vkd3d-proton. This check is to prevent anyone else from
        * using it.
        */
@@ -962,6 +961,11 @@ radv_physical_device_get_features(const struct radv_physical_device *pdevice, st
       /* VK_KHR_shader_subgroup_uniform_control_flow */
       .shaderSubgroupUniformControlFlow = true,
 
+      /* VK_EXT_map_memory_placed */
+      .memoryMapPlaced = true,
+      .memoryMapRangePlaced = false,
+      .memoryUnmapReserve = true,
+
       /* VK_EXT_multi_draw */
       .multiDraw = true,
 
@@ -1144,7 +1148,7 @@ radv_physical_device_get_features(const struct radv_physical_device *pdevice, st
 
       /* VK_NV_device_generated_commands_compute */
       .deviceGeneratedCompute = true,
-      .deviceGeneratedComputePipelines = false,
+      .deviceGeneratedComputePipelines = true,
       .deviceGeneratedComputeCaptureReplay = false,
 
       /* VK_KHR_cooperative_matrix */
@@ -1864,6 +1868,11 @@ radv_get_physical_device_properties(struct radv_physical_device *pdevice)
    /* VK_EXT_shader_object */
    radv_device_get_cache_uuid(pdevice, p->shaderBinaryUUID);
    p->shaderBinaryVersion = 1;
+
+   /* VK_EXT_map_memory_placed */
+   uint64_t os_page_size = 4096;
+   os_get_page_size(&os_page_size);
+   p->minPlacedMemoryMapAlignment = os_page_size;
 }
 
 static VkResult

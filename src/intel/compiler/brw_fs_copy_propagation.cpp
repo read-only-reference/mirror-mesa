@@ -689,8 +689,8 @@ try_copy_propagate(const brw_compiler *compiler, fs_inst *inst,
     * anything that would make it impossible to satisfy that restriction.
     */
    if (inst->eot) {
-      /* Avoid propagating a FIXED_GRF register, as that's already pinned. */
-      if (entry->src.file == FIXED_GRF)
+      /* Don't propagate things that are already pinned. */
+      if (entry->src.file != VGRF)
          return false;
 
       /* We might be propagating from a large register, while the SEND only
@@ -698,7 +698,8 @@ try_copy_propagate(const brw_compiler *compiler, fs_inst *inst,
        * We need to pin both split SEND sources in g112-g126/127, so only
        * allow this if the registers aren't too large.
        */
-      if (inst->opcode == SHADER_OPCODE_SEND && entry->src.file == VGRF) {
+      if (inst->opcode == SHADER_OPCODE_SEND && inst->sources >= 4 &&
+          entry->src.file == VGRF) {
          int other_src = arg == 2 ? 3 : 2;
          unsigned other_size = inst->src[other_src].file == VGRF ?
                                alloc.sizes[inst->src[other_src].nr] :
@@ -770,7 +771,7 @@ try_copy_propagate(const brw_compiler *compiler, fs_inst *inst,
     */
    if (has_dst_aligned_region_restriction(devinfo, inst, dst_type) &&
        entry_stride != 0 &&
-       (reg_offset(inst->dst) % REG_SIZE) != (reg_offset(entry->src) % REG_SIZE))
+       (reg_offset(inst->dst) % (REG_SIZE * reg_unit(devinfo))) != (reg_offset(entry->src) % (REG_SIZE * reg_unit(devinfo))))
       return false;
 
    /* The <8;8,0> regions used for FS attributes in multipolygon
@@ -879,8 +880,7 @@ try_copy_propagate(const brw_compiler *compiler, fs_inst *inst,
    /* Compute the first component of the copy that the instruction is
     * reading, and the base byte offset within that component.
     */
-   assert((entry->dst.offset % REG_SIZE == 0 || inst->opcode == BRW_OPCODE_MOV) &&
-           entry->dst.stride == 1);
+   assert(entry->dst.stride == 1);
    const unsigned component = rel_offset / type_sz(entry->dst.type);
    const unsigned suboffset = rel_offset % type_sz(entry->dst.type);
 
@@ -972,14 +972,14 @@ try_constant_propagate(const brw_compiler *compiler, fs_inst *inst,
 
    if (inst->src[arg].abs) {
       if (is_logic_op(inst->opcode) ||
-          !brw_abs_immediate(val.type, &val.as_brw_reg())) {
+          !fs_reg_abs_immediate(&val)) {
          return false;
       }
    }
 
    if (inst->src[arg].negate) {
       if (is_logic_op(inst->opcode) ||
-          !brw_negate_immediate(val.type, &val.as_brw_reg())) {
+          !fs_reg_negate_immediate(&val)) {
          return false;
       }
    }
@@ -987,16 +987,10 @@ try_constant_propagate(const brw_compiler *compiler, fs_inst *inst,
    switch (inst->opcode) {
    case BRW_OPCODE_MOV:
    case SHADER_OPCODE_LOAD_PAYLOAD:
+   case SHADER_OPCODE_POW:
    case FS_OPCODE_PACK:
       inst->src[arg] = val;
       progress = true;
-      break;
-
-   case SHADER_OPCODE_POW:
-      if (arg == 1) {
-         inst->src[arg] = val;
-         progress = true;
-      }
       break;
 
    case BRW_OPCODE_SUBB:
@@ -1016,12 +1010,12 @@ try_constant_propagate(const brw_compiler *compiler, fs_inst *inst,
          inst->src[arg] = val;
          progress = true;
       } else if (arg == 0 && inst->src[1].file != IMM) {
-         /* Don't copy propagate the constant in situations like
+         /* We used to not copy propagate the constant in situations like
           *
           *    mov(8)          g8<1>D          0x7fffffffD
           *    mul(8)          g16<1>D         g8<8,8,1>D      g15<16,8,2>W
           *
-          * On platforms that only have a 32x16 multiplier, this will
+          * On platforms that only have a 32x16 multiplier, this would
           * result in lowering the multiply to
           *
           *    mul(8)          g15<1>D         g14<8,8,1>D     0xffffUW
@@ -1029,7 +1023,7 @@ try_constant_propagate(const brw_compiler *compiler, fs_inst *inst,
           *    add(8)          g15.1<2>UW      g15.1<16,8,2>UW g16<16,8,2>UW
           *
           * On Gfx8 and Gfx9, which have the full 32x32 multiplier, it
-          * results in
+          * would results in
           *
           *    mul(8)          g16<1>D         g15<16,8,2>W    0x7fffffffD
           *
@@ -1037,11 +1031,19 @@ try_constant_propagate(const brw_compiler *compiler, fs_inst *inst,
           *
           *    When multiplying a DW and any lower precision integer, the
           *    DW operand must on src0.
+          *
+          * So it would have been invalid. However, brw_fs_combine_constants
+          * will now "fix" the constant.
           */
          if (inst->opcode == BRW_OPCODE_MUL &&
              type_sz(inst->src[1].type) < 4 &&
-             type_sz(val.type) == 4)
+             (inst->src[0].type == BRW_REGISTER_TYPE_D ||
+              inst->src[0].type == BRW_REGISTER_TYPE_UD)) {
+            inst->src[0] = val;
+            inst->src[0].type = BRW_REGISTER_TYPE_D;
+            progress = true;
             break;
+         }
 
          /* Fit this constant in by commuting the operands.
           * Exception: we can't do this for 32-bit integer MUL/MACH
@@ -1168,10 +1170,8 @@ try_constant_propagate(const brw_compiler *compiler, fs_inst *inst,
    case SHADER_OPCODE_TXL_LOGICAL:
    case SHADER_OPCODE_TXS_LOGICAL:
    case FS_OPCODE_TXB_LOGICAL:
-   case SHADER_OPCODE_TXF_CMS_LOGICAL:
    case SHADER_OPCODE_TXF_CMS_W_LOGICAL:
    case SHADER_OPCODE_TXF_CMS_W_GFX12_LOGICAL:
-   case SHADER_OPCODE_TXF_UMS_LOGICAL:
    case SHADER_OPCODE_TXF_MCS_LOGICAL:
    case SHADER_OPCODE_LOD_LOGICAL:
    case SHADER_OPCODE_TG4_BIAS_LOGICAL:

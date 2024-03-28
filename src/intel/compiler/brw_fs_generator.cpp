@@ -233,9 +233,7 @@ fs_generator::generate_send(fs_inst *inst,
                             struct brw_reg payload,
                             struct brw_reg payload2)
 {
-   const bool dst_is_null = dst.file == BRW_ARCHITECTURE_REGISTER_FILE &&
-                            dst.nr == BRW_ARF_NULL;
-   const unsigned rlen = dst_is_null ? 0 : inst->size_written / REG_SIZE;
+   const unsigned rlen = inst->dst.is_null() ? 0 : inst->size_written / REG_SIZE;
 
    uint32_t desc_imm = inst->desc |
       brw_message_desc(devinfo, inst->mlen, rlen, inst->header_size);
@@ -609,46 +607,6 @@ fs_generator::generate_quad_swizzle(const fs_inst *inst,
          break;
       }
    }
-}
-
-void
-fs_generator::generate_cs_terminate(fs_inst *inst, struct brw_reg payload)
-{
-   struct brw_inst *insn;
-
-   insn = brw_next_insn(p, BRW_OPCODE_SEND);
-
-   brw_set_dest(p, insn, retype(brw_null_reg(), BRW_REGISTER_TYPE_UW));
-   brw_set_src0(p, insn, retype(payload, BRW_REGISTER_TYPE_UW));
-   if (devinfo->ver < 12)
-      brw_set_src1(p, insn, brw_imm_ud(0u));
-
-   /* For XeHP and newer send a message to the message gateway to terminate a
-    * compute shader. For older devices, a message is sent to the thread
-    * spawner.
-    */
-   if (devinfo->verx10 >= 125)
-      brw_inst_set_sfid(devinfo, insn, BRW_SFID_MESSAGE_GATEWAY);
-   else
-      brw_inst_set_sfid(devinfo, insn, BRW_SFID_THREAD_SPAWNER);
-   brw_inst_set_mlen(devinfo, insn, 1);
-   brw_inst_set_rlen(devinfo, insn, 0);
-   brw_inst_set_eot(devinfo, insn, inst->eot);
-   brw_inst_set_header_present(devinfo, insn, false);
-
-   brw_inst_set_ts_opcode(devinfo, insn, 0); /* Dereference resource */
-
-   if (devinfo->ver < 11) {
-      brw_inst_set_ts_request_type(devinfo, insn, 0); /* Root thread */
-
-      /* Note that even though the thread has a URB resource associated with it,
-       * we set the "do not dereference URB" bit, because the URB resource is
-       * managed by the fixed-function unit, so it will free it automatically.
-       */
-      brw_inst_set_ts_resource_select(devinfo, insn, 1); /* Do not dereference URB */
-   }
-
-   brw_inst_set_mask_control(devinfo, insn, BRW_MASK_DISABLE);
 }
 
 void
@@ -1229,8 +1187,6 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
          break;
 
       case BRW_OPCODE_IF:
-         /* Can't have embedded compare (was only allowed on Gfx6). */
-         assert(inst->src[0].file == BAD_FILE);
          brw_IF(p, brw_get_default_exec_size(p));
 	 break;
 
@@ -1467,11 +1423,6 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
                disasm_info->use_tail = true;
             }
          }
-         break;
-
-      case CS_OPCODE_CS_TERMINATE:
-         generate_cs_terminate(inst, src[0]);
-         send_count++;
          break;
 
       case SHADER_OPCODE_BARRIER:

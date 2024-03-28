@@ -188,6 +188,7 @@ static const struct vk_instance_extension_table instance_extensions = {
    .KHR_get_surface_capabilities2            = true,
    .KHR_surface                              = true,
    .KHR_surface_protected_capabilities       = true,
+   .EXT_surface_maintenance1                 = true,
    .EXT_swapchain_colorspace                 = true,
 #endif
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
@@ -302,7 +303,9 @@ get_device_extensions(const struct anv_physical_device *device,
       .KHR_shader_float16_int8               = !device->instance->no_16bit,
       .KHR_shader_float_controls             = true,
       .KHR_shader_integer_dot_product        = true,
+      .KHR_shader_maximal_reconvergence      = true,
       .KHR_shader_non_semantic_info          = true,
+      .KHR_shader_quad_control               = true,
       .KHR_shader_subgroup_extended_types    = true,
       .KHR_shader_subgroup_rotate            = true,
       .KHR_shader_subgroup_uniform_control_flow = true,
@@ -367,6 +370,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .EXT_inline_uniform_block              = true,
       .EXT_line_rasterization                = true,
       .EXT_load_store_op_none                = true,
+      .EXT_map_memory_placed                 = device->info.has_mmap_offset,
       /* Enable the extension only if we have support on both the local &
        * system memory
        */
@@ -403,6 +407,9 @@ get_device_extensions(const struct anv_physical_device *device,
       .EXT_shader_subgroup_vote              = true,
       .EXT_shader_viewport_index_layer       = true,
       .EXT_subgroup_size_control             = true,
+#ifdef ANV_USE_WSI_PLATFORM
+      .EXT_swapchain_maintenance1            = true,
+#endif
       .EXT_texel_buffer_alignment            = true,
       .EXT_tooling_info                      = true,
       .EXT_transform_feedback                = true,
@@ -438,8 +445,7 @@ get_features(const struct anv_physical_device *pdevice,
    const bool mesh_shader =
       pdevice->vk.supported_extensions.EXT_mesh_shader;
 
-   const bool has_sparse_or_fake = pdevice->instance->has_fake_sparse ||
-                                   pdevice->has_sparse;
+   const bool has_sparse_or_fake = pdevice->sparse_type != ANV_SPARSE_TYPE_NOT_SUPPORTED;
 
    *features = (struct vk_features) {
       /* Vulkan 1.0 */
@@ -486,7 +492,8 @@ get_features(const struct anv_physical_device *pdevice,
       .shaderStorageImageArrayDynamicIndexing   = true,
       .shaderClipDistance                       = true,
       .shaderCullDistance                       = true,
-      .shaderFloat64                            = pdevice->info.has_64bit_float,
+      .shaderFloat64                            = pdevice->info.has_64bit_float ||
+                                                  pdevice->instance->fp64_workaround_enabled,
       .shaderInt64                              = true,
       .shaderInt16                              = true,
       .shaderResourceMinLod                     = true,
@@ -882,6 +889,8 @@ get_features(const struct anv_physical_device *pdevice,
       /* VK_KHR_cooperative_matrix */
       .cooperativeMatrix = anv_has_cooperative_matrix(pdevice),
 
+      /* VK_KHR_shader_maximal_reconvergence */
+      .shaderMaximalReconvergence = true,
 
       /* VK_KHR_shader_subgroup_rotate */
       .shaderSubgroupRotate = true,
@@ -901,6 +910,19 @@ get_features(const struct anv_physical_device *pdevice,
       .descriptorBufferCaptureReplay = true,
       .descriptorBufferImageLayoutIgnored = false,
       .descriptorBufferPushDescriptors = true,
+
+      /* VK_EXT_map_memory_placed */
+      .memoryMapPlaced = true,
+      .memoryMapRangePlaced = false,
+      .memoryUnmapReserve = true,
+
+      /* VK_KHR_shader_quad_control */
+      .shaderQuadControl = true,
+
+#ifdef ANV_USE_WSI_PLATFORM
+      /* VK_EXT_swapchain_maintenance1 */
+      .swapchainMaintenance1 = true,
+#endif
    };
 
    /* The new DOOM and Wolfenstein games require depthBounds without
@@ -1203,12 +1225,12 @@ get_properties(const struct anv_physical_device *pdevice,
    const uint32_t max_workgroup_size =
       MIN2(1024, 32 * devinfo->max_cs_workgroup_threads);
 
-   const bool has_sparse_or_fake = pdevice->instance->has_fake_sparse ||
-                                   pdevice->has_sparse;
+   const bool has_sparse_or_fake = pdevice->sparse_type != ANV_SPARSE_TYPE_NOT_SUPPORTED;
+   const bool sparse_uses_trtt = pdevice->sparse_type == ANV_SPARSE_TYPE_TRTT;
 
    uint64_t sparse_addr_space_size =
       !has_sparse_or_fake ? 0 :
-      pdevice->sparse_uses_trtt ? pdevice->va.trtt.size :
+      sparse_uses_trtt ? pdevice->va.trtt.size :
       pdevice->va.high_heap.size;
 
    VkSampleCountFlags sample_counts =
@@ -1580,6 +1602,11 @@ get_properties(const struct anv_physical_device *pdevice,
        * subpixel precision bits applies to all line rasterization types.
        */
       props->lineSubPixelPrecisionBits = 4;
+   }
+
+   /* VK_EXT_map_memory_placed */
+   {
+      props->minPlacedMemoryMapAlignment = 4096;
    }
 
    /* VK_EXT_mesh_shader */
@@ -2084,9 +2111,10 @@ static void
 anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
 {
    uint32_t family_count = 0;
-   VkQueueFlags sparse_flags = (pdevice->instance->has_fake_sparse ||
-                                pdevice->has_sparse) ?
+   VkQueueFlags sparse_flags = pdevice->sparse_type != ANV_SPARSE_TYPE_NOT_SUPPORTED ?
                                VK_QUEUE_SPARSE_BINDING_BIT : 0;
+   VkQueueFlags protected_flag = pdevice->has_protected_contexts ?
+                                 VK_QUEUE_PROTECTED_BIT : 0;
 
    if (pdevice->engine_info) {
       int gc_count =
@@ -2096,10 +2124,9 @@ anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
          intel_engines_count(pdevice->engine_info, INTEL_ENGINE_CLASS_VIDEO);
       int g_count = 0;
       int c_count = 0;
-      const bool kernel_supports_non_render_engines =
-         pdevice->info.kmd_type == INTEL_KMD_TYPE_XE || pdevice->has_vm_control;
+      const bool kernel_supports_non_render_engines = pdevice->has_vm_control;
       const bool sparse_supports_non_render_engines =
-         !pdevice->has_sparse || !pdevice->sparse_uses_trtt;
+         pdevice->sparse_type != ANV_SPARSE_TYPE_TRTT;
       const bool can_use_non_render_engines =
          kernel_supports_non_render_engines &&
          sparse_supports_non_render_engines;
@@ -2128,7 +2155,8 @@ anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
             .queueFlags = VK_QUEUE_GRAPHICS_BIT |
                           VK_QUEUE_COMPUTE_BIT |
                           VK_QUEUE_TRANSFER_BIT |
-                          sparse_flags,
+                          sparse_flags |
+                          protected_flag,
             .queueCount = gc_count,
             .engine_class = INTEL_ENGINE_CLASS_RENDER,
          };
@@ -2137,7 +2165,8 @@ anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
          pdevice->queue.families[family_count++] = (struct anv_queue_family) {
             .queueFlags = VK_QUEUE_GRAPHICS_BIT |
                           VK_QUEUE_TRANSFER_BIT |
-                          sparse_flags,
+                          sparse_flags |
+                          protected_flag,
             .queueCount = g_count,
             .engine_class = INTEL_ENGINE_CLASS_RENDER,
          };
@@ -2146,7 +2175,8 @@ anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
          pdevice->queue.families[family_count++] = (struct anv_queue_family) {
             .queueFlags = VK_QUEUE_COMPUTE_BIT |
                           VK_QUEUE_TRANSFER_BIT |
-                          sparse_flags,
+                          sparse_flags |
+                          protected_flag,
             .queueCount = c_count,
             .engine_class = compute_class,
          };
@@ -2162,6 +2192,7 @@ anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
           * When this bug is fixed we should be able to check HEVC support to determine the
           * correct number of queues.
           */
+         /* TODO: enable protected content on video queue */
          pdevice->queue.families[family_count++] = (struct anv_queue_family) {
             .queueFlags = VK_QUEUE_VIDEO_DECODE_BIT_KHR,
             .queueCount = pdevice->info.ver == 9 ? MIN2(1, v_count) : v_count,
@@ -2170,7 +2201,8 @@ anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
       }
       if (blit_count > 0) {
          pdevice->queue.families[family_count++] = (struct anv_queue_family) {
-            .queueFlags = VK_QUEUE_TRANSFER_BIT,
+            .queueFlags = VK_QUEUE_TRANSFER_BIT |
+                          protected_flag,
             .queueCount = blit_count,
             .engine_class = INTEL_ENGINE_CLASS_COPY,
          };
@@ -2397,15 +2429,20 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
 
    /* While xe.ko can use both vm_bind and TR-TT, i915.ko only has TR-TT. */
    if (device->info.kmd_type == INTEL_KMD_TYPE_XE) {
-      device->has_sparse = true;
-      device->sparse_uses_trtt =
-         debug_get_bool_option("ANV_SPARSE_USE_TRTT", false);
+      if (debug_get_bool_option("ANV_SPARSE_USE_TRTT", false))
+         device->sparse_type = ANV_SPARSE_TYPE_TRTT;
+      else
+         device->sparse_type = ANV_SPARSE_TYPE_VM_BIND;
    } else {
-      device->has_sparse =
-         device->info.ver >= 12 &&
-         device->has_exec_timeline &&
-         debug_get_bool_option("ANV_SPARSE", true);
-      device->sparse_uses_trtt = true;
+      if (device->info.ver >= 12 &&
+          device->has_exec_timeline &&
+          debug_get_bool_option("ANV_SPARSE", true)) {
+         device->sparse_type = ANV_SPARSE_TYPE_TRTT;
+      } else if (instance->has_fake_sparse) {
+         device->sparse_type = ANV_SPARSE_TYPE_FAKE;
+      } else {
+         device->sparse_type = ANV_SPARSE_TYPE_NOT_SUPPORTED;
+      }
    }
 
    device->always_flush_cache = INTEL_DEBUG(DEBUG_STALL) ||
@@ -2718,10 +2755,6 @@ anv_device_physical_get_queue_properties(const struct anv_physical_device *devic
 
    properties.queueFlags = family->queueFlags;
    properties.queueCount = family->queueCount;
-   /* TODO: enable protected content on video queue */
-   if (device->has_protected_contexts &&
-       (family->queueFlags & VK_QUEUE_VIDEO_DECODE_BIT_KHR) == 0)
-      properties.queueFlags |= VK_QUEUE_PROTECTED_BIT;
    return properties;
 }
 
@@ -2921,17 +2954,6 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(
     const char*                                 pName)
 {
    return anv_GetInstanceProcAddr(instance, pName);
-}
-
-static struct anv_state
-anv_state_pool_emit_data(struct anv_state_pool *pool, size_t size, size_t align, const void *p)
-{
-   struct anv_state state;
-
-   state = anv_state_pool_alloc(pool, size, align);
-   memcpy(state.map, p, size);
-
-   return state;
 }
 
 static void
@@ -3922,8 +3944,7 @@ VkResult anv_CreateDevice(
    pthread_mutex_destroy(&device->mutex);
  fail_vmas:
    util_vma_heap_finish(&device->vma_trtt);
-   if (!device->physical->indirect_descriptors)
-      util_vma_heap_finish(&device->vma_samplers);
+   util_vma_heap_finish(&device->vma_samplers);
    util_vma_heap_finish(&device->vma_desc_buf);
    util_vma_heap_finish(&device->vma_desc);
    util_vma_heap_finish(&device->vma_hi);
@@ -3995,7 +4016,6 @@ void anv_DestroyDevice(
     */
    anv_state_reserved_pool_finish(&device->custom_border_colors);
    anv_state_pool_free(&device->dynamic_state_pool, device->border_colors);
-   anv_state_pool_free(&device->dynamic_state_pool, device->border_colors_db);
    anv_state_pool_free(&device->dynamic_state_pool, device->slice_hash);
    anv_state_pool_free(&device->dynamic_state_pool, device->cps_states);
    anv_state_pool_free(&device->dynamic_state_pool, device->breakpoint);
@@ -4053,8 +4073,7 @@ void anv_DestroyDevice(
    anv_bo_cache_finish(&device->bo_cache);
 
    util_vma_heap_finish(&device->vma_trtt);
-   if (!device->physical->indirect_descriptors)
-      util_vma_heap_finish(&device->vma_samplers);
+   util_vma_heap_finish(&device->vma_samplers);
    util_vma_heap_finish(&device->vma_desc_buf);
    util_vma_heap_finish(&device->vma_desc);
    util_vma_heap_finish(&device->vma_hi);
@@ -4653,6 +4672,14 @@ VkResult anv_MapMemory2KHR(
                        "Memory object already mapped.");
    }
 
+   void *placed_addr = NULL;
+   if (pMemoryMapInfo->flags & VK_MEMORY_MAP_PLACED_BIT_EXT) {
+      const VkMemoryMapPlacedInfoEXT *placed_info =
+         vk_find_struct_const(pMemoryMapInfo->pNext, MEMORY_MAP_PLACED_INFO_EXT);
+      assert(placed_info != NULL);
+      placed_addr = placed_info->pPlacedAddress;
+   }
+
    /* GEM will fail to map if the offset isn't 4k-aligned.  Round down. */
    uint64_t map_offset;
    if (!device->physical->info.has_mmap_offset)
@@ -4666,7 +4693,8 @@ VkResult anv_MapMemory2KHR(
    map_size = align64(map_size, 4096);
 
    void *map;
-   VkResult result = anv_device_map_bo(device, mem->bo, map_offset, map_size, &map);
+   VkResult result = anv_device_map_bo(device, mem->bo, map_offset,
+                                       map_size, placed_addr, &map);
    if (result != VK_SUCCESS)
       return result;
 
@@ -4688,7 +4716,11 @@ VkResult anv_UnmapMemory2KHR(
    if (mem == NULL || mem->vk.host_ptr)
       return VK_SUCCESS;
 
-   anv_device_unmap_bo(device, mem->bo, mem->map, mem->map_size);
+   VkResult result =
+      anv_device_unmap_bo(device, mem->bo, mem->map, mem->map_size,
+                          pMemoryUnmapInfo->flags & VK_MEMORY_UNMAP_RESERVE_BIT_EXT);
+   if (result != VK_SUCCESS)
+      return result;
 
    mem->map = NULL;
    mem->map_size = 0;
@@ -4977,7 +5009,7 @@ void anv_GetDeviceBufferMemoryRequirements(
    const bool is_sparse =
       pInfo->pCreateInfo->flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT;
 
-   if (!device->physical->has_sparse &&
+   if ((device->physical->sparse_type == ANV_SPARSE_TYPE_NOT_SUPPORTED) &&
        INTEL_DEBUG(DEBUG_SPARSE) &&
        pInfo->pCreateInfo->flags & (VK_BUFFER_CREATE_SPARSE_BINDING_BIT |
                                     VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT |
@@ -5002,7 +5034,7 @@ VkResult anv_CreateBuffer(
    ANV_FROM_HANDLE(anv_device, device, _device);
    struct anv_buffer *buffer;
 
-   if (!device->physical->has_sparse &&
+   if ((device->physical->sparse_type == ANV_SPARSE_TYPE_NOT_SUPPORTED) &&
        INTEL_DEBUG(DEBUG_SPARSE) &&
        pCreateInfo->flags & (VK_BUFFER_CREATE_SPARSE_BINDING_BIT |
                              VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT |

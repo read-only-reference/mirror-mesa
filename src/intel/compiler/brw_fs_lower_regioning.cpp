@@ -66,7 +66,7 @@ namespace {
           * lowering pass will detect the mismatch in has_invalid_src_region
           * and fix the sources of the multiply instead of the destination.
           */
-         return inst->dst.stride * type_sz(inst->dst.type);
+         return inst->dst.hstride * type_sz(inst->dst.type);
       } else if (type_sz(inst->dst.type) < get_exec_type_size(inst) &&
           !is_byte_raw_mov(inst)) {
          return get_exec_type_size(inst);
@@ -549,6 +549,12 @@ namespace {
       for (unsigned j = 0; j < n; j++)
          ibld.at(block, inst->next).MOV(subscript(inst->dst, raw_type, j),
                                         subscript(tmp, raw_type, j));
+
+      /* If the destination was an accumulator, after lowering it will be a
+       * GRF. Clear writes_accumulator for the instruction.
+       */
+      if (inst->dst.is_accumulator())
+         inst->writes_accumulator = false;
 
       /* Point the original instruction at the temporary, making sure to keep
        * any destination modifiers in the instruction.

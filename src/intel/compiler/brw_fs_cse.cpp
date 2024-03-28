@@ -88,9 +88,8 @@ is_expression(const fs_visitor *v, const fs_inst *const inst)
    case SHADER_OPCODE_TXL_LOGICAL:
    case SHADER_OPCODE_TXS_LOGICAL:
    case FS_OPCODE_TXB_LOGICAL:
-   case SHADER_OPCODE_TXF_CMS_LOGICAL:
    case SHADER_OPCODE_TXF_CMS_W_LOGICAL:
-   case SHADER_OPCODE_TXF_UMS_LOGICAL:
+   case SHADER_OPCODE_TXF_CMS_W_GFX12_LOGICAL:
    case SHADER_OPCODE_TXF_MCS_LOGICAL:
    case SHADER_OPCODE_LOD_LOGICAL:
    case SHADER_OPCODE_TG4_LOGICAL:
@@ -101,7 +100,6 @@ is_expression(const fs_visitor *v, const fs_inst *const inst)
    case SHADER_OPCODE_TG4_OFFSET_LOD_LOGICAL:
    case SHADER_OPCODE_TG4_OFFSET_BIAS_LOGICAL:
    case FS_OPCODE_PACK:
-      return true;
    case SHADER_OPCODE_RCP:
    case SHADER_OPCODE_RSQ:
    case SHADER_OPCODE_SQRT:
@@ -112,7 +110,7 @@ is_expression(const fs_visitor *v, const fs_inst *const inst)
    case SHADER_OPCODE_INT_REMAINDER:
    case SHADER_OPCODE_SIN:
    case SHADER_OPCODE_COS:
-      return inst->mlen < 2;
+      return true;
    case SHADER_OPCODE_LOAD_PAYLOAD:
       return !is_coalescing_payload(v->alloc, inst);
    default:

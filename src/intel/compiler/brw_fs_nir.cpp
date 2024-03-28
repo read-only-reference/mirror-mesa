@@ -1901,6 +1901,7 @@ fs_nir_emit_alu(nir_to_brw_state &ntb, nir_alu_instr *instr,
 
    case nir_op_extract_u8:
    case nir_op_extract_i8: {
+      const brw_reg_type type = brw_int_type(1, instr->op == nir_op_extract_i8);
       unsigned byte = nir_src_as_uint(instr->src[1].src);
 
       /* The PRMs say:
@@ -1910,8 +1911,6 @@ fs_nir_emit_alu(nir_to_brw_state &ntb, nir_alu_instr *instr,
        *    Use two instructions and a word or DWord intermediate integer type.
        */
       if (instr->def.bit_size == 64) {
-         const brw_reg_type type = brw_int_type(1, instr->op == nir_op_extract_i8);
-
          if (instr->op == nir_op_extract_i8) {
             /* If we need to sign extend, extract to a word first */
             fs_reg w_temp = bld.vgrf(BRW_REGISTER_TYPE_W);
@@ -1931,7 +1930,6 @@ fs_nir_emit_alu(nir_to_brw_state &ntb, nir_alu_instr *instr,
                     brw_imm_uw(0xff));
          }
       } else {
-         const brw_reg_type type = brw_int_type(1, instr->op == nir_op_extract_i8);
          bld.MOV(result, subscript(op[0], type, byte));
       }
       break;
@@ -2081,7 +2079,10 @@ get_nir_def(nir_to_brw_state &ntb, const nir_def &def)
                                     BRW_REGISTER_TYPE_F);
       ntb.ssa_values[def.index] =
          bld.vgrf(reg_type, def.num_components);
-      bld.UNDEF(ntb.ssa_values[def.index]);
+
+      if (def.bit_size * bld.dispatch_width() < 8 * REG_SIZE)
+         bld.UNDEF(ntb.ssa_values[def.index]);
+
       return ntb.ssa_values[def.index];
    } else {
       nir_intrinsic_instr *decl_reg =
@@ -2215,29 +2216,69 @@ emit_gs_end_primitive(nir_to_brw_state &ntb, const nir_src &vertex_count_nir_src
    abld.OR(s.control_data_bits, s.control_data_bits, mask);
 }
 
-void
-fs_visitor::emit_gs_control_data_bits(const fs_reg &vertex_count)
+fs_reg
+fs_visitor::gs_urb_per_slot_dword_index(const fs_reg &vertex_count)
 {
-   assert(stage == MESA_SHADER_GEOMETRY);
-   assert(gs_compile->control_data_bits_per_vertex != 0);
-
-   struct brw_gs_prog_data *gs_prog_data = brw_gs_prog_data(prog_data);
-
-   const fs_builder bld = fs_builder(this).at_end();
-   const fs_builder abld = bld.annotate("emit control data bits");
-   const fs_builder fwa_bld = bld.exec_all();
-
    /* We use a single UD register to accumulate control data bits (32 bits
     * for each of the SIMD8 channels).  So we need to write a DWord (32 bits)
     * at a time.
     *
-    * Unfortunately, the URB_WRITE_SIMD8 message uses 128-bit (OWord) offsets.
-    * We have select a 128-bit group via the Global and Per-Slot Offsets, then
-    * use the Channel Mask phase to enable/disable which DWord within that
-    * group to write.  (Remember, different SIMD8 channels may have emitted
-    * different numbers of vertices, so we may need per-slot offsets.)
+    * On platforms < Xe2:
+    *    Unfortunately,the URB_WRITE_SIMD8 message uses 128-bit (OWord)
+    *    offsets.  We have select a 128-bit group via the Global and Per-Slot
+    *    Offsets, then use the Channel Mask phase to enable/disable which DWord
+    *    within that group to write.  (Remember, different SIMD8 channels may
+    *    have emitted different numbers of vertices, so we may need per-slot
+    *    offsets.)
     *
-    * Channel masking presents an annoying problem: we may have to replicate
+    *    Channel masking presents an annoying problem: we may have to replicate
+    *    the data up to 4 times:
+    *
+    *    Msg = Handles, Per-Slot Offsets, Channel Masks, Data, Data, Data,
+    *          Data.
+    *
+    *    To avoid penalizing shaders that emit a small number of vertices, we
+    *    can avoid these sometimes: if the size of the control data header is
+    *    <= 128 bits, then there is only 1 OWord.  All SIMD8 channels will land
+    *    land in the same 128-bit group, so we can skip per-slot offsets.
+    *
+    *    Similarly, if the control data header is <= 32 bits, there is only one
+    *    DWord, so we can skip channel masks.
+    */
+   const fs_builder bld = fs_builder(this).at_end();
+   const fs_builder abld = bld.annotate("urb per slot offset");
+
+   /* Figure out which DWord we're trying to write to using the formula:
+    *
+    *    dword_index = (vertex_count - 1) * bits_per_vertex / 32
+    *
+    * Since bits_per_vertex is a power of two, and is known at compile
+    * time, this can be optimized to:
+    *
+    *    dword_index = (vertex_count - 1) >> (6 - log2(bits_per_vertex))
+    */
+   fs_reg dword_index = bld.vgrf(BRW_REGISTER_TYPE_UD, 1);
+   fs_reg prev_count = bld.vgrf(BRW_REGISTER_TYPE_UD, 1);
+   abld.ADD(prev_count, vertex_count, brw_imm_ud(0xffffffffu));
+   unsigned log2_bits_per_vertex =
+      util_last_bit(gs_compile->control_data_bits_per_vertex);
+   abld.SHR(dword_index, prev_count, brw_imm_ud(6u - log2_bits_per_vertex));
+
+   return dword_index;
+}
+
+fs_reg
+fs_visitor::gs_urb_channel_mask(const fs_reg &dword_index)
+{
+   fs_reg channel_mask;
+
+   /* Xe2+ can do URB loads with a byte offset, so we don't need to
+    * construct a channel mask.
+    */
+   if (devinfo->ver >= 20)
+      return channel_mask;
+
+   /* Channel masking presents an annoying problem: we may have to replicate
     * the data up to 4 times:
     *
     * Msg = Handles, Per-Slot Offsets, Channel Masks, Data, Data, Data, Data.
@@ -2250,51 +2291,62 @@ fs_visitor::emit_gs_control_data_bits(const fs_reg &vertex_count)
     * Similarly, if the control data header is <= 32 bits, there is only one
     * DWord, so we can skip channel masks.
     */
-   fs_reg channel_mask, per_slot_offset;
+   if (gs_compile->control_data_header_size_bits <= 32)
+      return channel_mask;
 
-   if (gs_compile->control_data_header_size_bits > 32)
-      channel_mask = vgrf(glsl_uint_type());
+   const fs_builder bld = fs_builder(this).at_end();
+   const fs_builder fwa_bld = bld.exec_all();
 
-   if (gs_compile->control_data_header_size_bits > 128)
+   channel_mask = vgrf(glsl_uint_type());
+   /* Set the channel masks to 1 << (dword_index % 4), so that we'll
+    * write to the appropriate DWORD within the OWORD.
+    */
+   fs_reg channel = bld.vgrf(BRW_REGISTER_TYPE_UD, 1);
+   fwa_bld.AND(channel, dword_index, brw_imm_ud(3u));
+   channel_mask = intexp2(fwa_bld, channel);
+   /* Then the channel masks need to be in bits 23:16. */
+   fwa_bld.SHL(channel_mask, channel_mask, brw_imm_ud(16u));
+
+   return channel_mask;
+}
+
+void
+fs_visitor::emit_gs_control_data_bits(const fs_reg &vertex_count)
+{
+   assert(stage == MESA_SHADER_GEOMETRY);
+   assert(gs_compile->control_data_bits_per_vertex != 0);
+
+   const struct brw_gs_prog_data *gs_prog_data = brw_gs_prog_data(prog_data);
+
+   const fs_builder bld = fs_builder(this).at_end();
+   const fs_builder abld = bld.annotate("emit control data bits");
+
+   fs_reg dword_index = gs_urb_per_slot_dword_index(vertex_count);
+   fs_reg channel_mask = gs_urb_channel_mask(dword_index);
+   fs_reg per_slot_offset;
+
+   const unsigned max_control_data_header_size_bits =
+      devinfo->ver >= 20 ? 32 : 128;
+
+   if (gs_compile->control_data_header_size_bits > max_control_data_header_size_bits) {
       per_slot_offset = vgrf(glsl_uint_type());
 
-   /* Figure out which DWord we're trying to write to using the formula:
-    *
-    *    dword_index = (vertex_count - 1) * bits_per_vertex / 32
-    *
-    * Since bits_per_vertex is a power of two, and is known at compile
-    * time, this can be optimized to:
-    *
-    *    dword_index = (vertex_count - 1) >> (6 - log2(bits_per_vertex))
-    */
-   if (channel_mask.file != BAD_FILE || per_slot_offset.file != BAD_FILE) {
-      fs_reg dword_index = bld.vgrf(BRW_REGISTER_TYPE_UD, 1);
-      fs_reg prev_count = bld.vgrf(BRW_REGISTER_TYPE_UD, 1);
-      abld.ADD(prev_count, vertex_count, brw_imm_ud(0xffffffffu));
-      unsigned log2_bits_per_vertex =
-         util_last_bit(gs_compile->control_data_bits_per_vertex);
-      abld.SHR(dword_index, prev_count, brw_imm_ud(6u - log2_bits_per_vertex));
-
-      if (per_slot_offset.file != BAD_FILE) {
+      /* Convert dword_index to bytes on Xe2+ since LSC can do operate on byte
+       * offset granularity.
+       */
+      if (devinfo->ver >= 20) {
+         abld.SHL(per_slot_offset, dword_index, brw_imm_ud(2u));
+      } else {
          /* Set the per-slot offset to dword_index / 4, so that we'll write to
           * the appropriate OWord within the control data header.
           */
          abld.SHR(per_slot_offset, dword_index, brw_imm_ud(2u));
       }
-
-      /* Set the channel masks to 1 << (dword_index % 4), so that we'll
-       * write to the appropriate DWORD within the OWORD.
-       */
-      fs_reg channel = bld.vgrf(BRW_REGISTER_TYPE_UD, 1);
-      fwa_bld.AND(channel, dword_index, brw_imm_ud(3u));
-      channel_mask = intexp2(fwa_bld, channel);
-      /* Then the channel masks need to be in bits 23:16. */
-      fwa_bld.SHL(channel_mask, channel_mask, brw_imm_ud(16u));
    }
 
    /* If there are channel masks, add 3 extra copies of the data. */
    const unsigned length = 1 + 3 * unsigned(channel_mask.file != BAD_FILE);
-   fs_reg sources[4];
+   fs_reg sources[length];
 
    for (unsigned i = 0; i < ARRAY_SIZE(sources); i++)
       sources[i] = this->control_data_bits;
@@ -2470,6 +2522,8 @@ emit_gs_input_load(nir_to_brw_state &ntb, const fs_reg &dst,
                    unsigned first_component)
 {
    const fs_builder &bld = ntb.bld;
+   const struct intel_device_info *devinfo = ntb.devinfo;
+
    fs_visitor &s = ntb.s;
 
    assert(type_sz(dst.type) == 4);
@@ -2566,6 +2620,10 @@ emit_gs_input_load(nir_to_brw_state &ntb, const fs_reg &dst,
    fs_inst *inst;
    fs_reg indirect_offset = get_nir_src(ntb, offset_src);
 
+   /* Convert oword offset to bytes on Xe2+ */
+   if (devinfo->ver >= 20)
+      bld.SHL(indirect_offset, indirect_offset, brw_imm_ud(4u));
+
    if (nir_src_is_const(offset_src)) {
       fs_reg srcs[URB_LOGICAL_NUM_SRCS];
       srcs[URB_LOGICAL_SRC_HANDLE] = icp_handle;
@@ -2620,6 +2678,7 @@ emit_gs_input_load(nir_to_brw_state &ntb, const fs_reg &dst,
 static fs_reg
 get_indirect_offset(nir_to_brw_state &ntb, nir_intrinsic_instr *instr)
 {
+   const intel_device_info *devinfo = ntb.devinfo;
    nir_src *offset_src = nir_get_io_offset_src(instr);
 
    if (nir_src_is_const(*offset_src)) {
@@ -2631,7 +2690,18 @@ get_indirect_offset(nir_to_brw_state &ntb, nir_intrinsic_instr *instr)
       return fs_reg();
    }
 
-   return get_nir_src(ntb, *offset_src);
+   fs_reg temp_offset = get_nir_src(ntb, *offset_src);
+
+   if (devinfo->ver < 20)
+      return temp_offset;
+
+   const fs_builder &bld = ntb.bld;
+   fs_reg indirect_offset = bld.vgrf(temp_offset.type, 1);
+
+   /* Convert Owords (16-bytes) to bytes */
+   bld.SHL(indirect_offset, temp_offset, brw_imm_ud(4u));
+
+   return indirect_offset;
 }
 
 static void
@@ -2785,7 +2855,7 @@ setup_barrier_message_payload_gfx125(const fs_builder &bld,
    assert(bld.shader->devinfo->verx10 >= 125);
 
    /* From BSpec: 54006, mov r0.2[31:24] into m0.2[31:24] and m0.2[23:16] */
-   fs_reg m0_10ub = component(retype(msg_payload, BRW_REGISTER_TYPE_UB), 10);
+   fs_reg m0_10ub = horiz_offset(retype(msg_payload, BRW_REGISTER_TYPE_UB), 10);
    fs_reg r0_11ub =
       stride(suboffset(retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_UB), 11),
              0, 1, 0);
@@ -4446,11 +4516,11 @@ fs_nir_emit_cs_intrinsic(nir_to_brw_state &ntb,
          brw_type_for_nir_type(devinfo, nir_intrinsic_src_type(instr));
 
       dest = retype(dest, dest_type);
-      fs_reg src2 = retype(get_nir_src(ntb, instr->src[2]), dest_type);
+      fs_reg src0 = retype(get_nir_src(ntb, instr->src[0]), dest_type);
       const fs_reg dest_hf = dest;
 
-      fs_builder bld8 = bld.exec_all().group(8, 0);
       fs_builder bld16 = bld.exec_all().group(16, 0);
+      fs_builder bldn = devinfo->ver >= 20 ? bld16 : bld.exec_all().group(8, 0);
 
       /* DG2 cannot have the destination or source 0 of DPAS be float16. It is
        * still advantageous to support these formats for memory and bandwidth
@@ -4460,26 +4530,26 @@ fs_nir_emit_cs_intrinsic(nir_to_brw_state &ntb,
        */
       if (devinfo->verx10 == 125 && dest_type == BRW_REGISTER_TYPE_HF &&
           !s.compiler->lower_dpas) {
-         dest = bld8.vgrf(BRW_REGISTER_TYPE_F, rcount);
+         dest = bldn.vgrf(BRW_REGISTER_TYPE_F, rcount);
 
-         if (src2.file != ARF) {
-            const fs_reg src2_hf = src2;
+         if (src0.file != ARF) {
+            const fs_reg src0_hf = src0;
 
-            src2 = bld8.vgrf(BRW_REGISTER_TYPE_F, rcount);
+            src0 = bldn.vgrf(BRW_REGISTER_TYPE_F, rcount);
 
             for (unsigned i = 0; i < 4; i++) {
-               bld16.MOV(byte_offset(src2, REG_SIZE * i * 2),
-                         byte_offset(src2_hf, REG_SIZE * i));
+               bld16.MOV(byte_offset(src0, REG_SIZE * i * 2),
+                         byte_offset(src0_hf, REG_SIZE * i));
             }
          } else {
-            src2 = retype(src2, BRW_REGISTER_TYPE_F);
+            src0 = retype(src0, BRW_REGISTER_TYPE_F);
          }
       }
 
-      bld8.DPAS(dest,
-                src2,
+      bldn.DPAS(dest,
+                src0,
+                retype(get_nir_src(ntb, instr->src[2]), src_type),
                 retype(get_nir_src(ntb, instr->src[1]), src_type),
-                retype(get_nir_src(ntb, instr->src[0]), src_type),
                 sdepth,
                 rcount)
          ->saturate = nir_intrinsic_saturate(instr);
@@ -6997,6 +7067,80 @@ fs_nir_emit_intrinsic(nir_to_brw_state &ntb,
    case nir_intrinsic_load_subgroup_lt_mask:
       unreachable("not reached");
 
+   case nir_intrinsic_quad_vote_any:
+   case nir_intrinsic_quad_vote_all: {
+      struct brw_reg flag = brw_flag_reg(0, 0);
+      if (s.dispatch_width == 32)
+         flag.type = BRW_REGISTER_TYPE_UD;
+
+      fs_reg cond = get_nir_src(ntb, instr->src[0]);
+
+      /* Before Xe2, we can use specialized predicates. */
+      if (devinfo->ver < 20) {
+         const bool any = instr->intrinsic == nir_intrinsic_quad_vote_any;
+
+         /* The any/all predicates do not consider channel enables. To prevent
+          * dead channels from affecting the result, we initialize the flag with
+          * with the identity value for the logical operation.
+          */
+         const unsigned identity = any ? 0 : 0xFFFFFFFF;
+         bld.exec_all().group(1, 0).MOV(flag, retype(brw_imm_ud(identity), flag.type));
+
+         bld.CMP(bld.null_reg_ud(), cond, brw_imm_ud(0u), BRW_CONDITIONAL_NZ);
+         bld.exec_all().MOV(retype(dest, BRW_REGISTER_TYPE_UD), brw_imm_ud(0));
+
+         const enum brw_predicate pred = any ? BRW_PREDICATE_ALIGN1_ANY4H
+                                             : BRW_PREDICATE_ALIGN1_ALL4H;
+
+         fs_inst *mov = bld.MOV(retype(dest, BRW_REGISTER_TYPE_D), brw_imm_d(-1));
+         set_predicate(pred, mov);
+         break;
+      }
+
+      /* This code is going to manipulate the results of flag mask, so clear it to
+       * avoid any residual value from disabled channels.
+       */
+      bld.exec_all().group(1, 0).MOV(flag, retype(brw_imm_ud(0), flag.type));
+
+      /* Mask of invocations where condition is true, note that mask is
+       * replicated to each invocation.
+       */
+      bld.CMP(bld.null_reg_ud(), cond, brw_imm_ud(0u), BRW_CONDITIONAL_NZ);
+      fs_reg cond_mask = bld.vgrf(BRW_REGISTER_TYPE_UD);
+      bld.MOV(cond_mask, flag);
+
+      /* Mask of invocations in the quad, each invocation will get
+       * all the bits set for their quad, i.e. invocations 0-3 will have
+       * 0b...1111, invocations 4-7 will have 0b...11110000 and so on.
+       */
+      fs_reg quad_mask = bld.vgrf(BRW_REGISTER_TYPE_UD);
+      bld.MOV(quad_mask, ntb.system_values[SYSTEM_VALUE_SUBGROUP_INVOCATION]);
+      bld.AND(quad_mask, quad_mask, brw_imm_ud(0xFFFFFFFC));
+      bld.SHL(quad_mask, brw_imm_ud(0xF), quad_mask);
+
+      /* An invocation will have bits set for each quad that passes the
+       * condition.  This is uniform among each quad.
+       */
+      fs_reg tmp = bld.vgrf(BRW_REGISTER_TYPE_UD);
+      bld.AND(tmp, cond_mask, quad_mask);
+
+      if (instr->intrinsic == nir_intrinsic_quad_vote_any) {
+         bld.CMP(retype(dest, BRW_REGISTER_TYPE_UD), tmp, brw_imm_ud(0), BRW_CONDITIONAL_NZ);
+      } else {
+         assert(instr->intrinsic == nir_intrinsic_quad_vote_all);
+
+         /* Filter out quad_mask to include only active channels. */
+         fs_reg active = bld.vgrf(BRW_REGISTER_TYPE_UD);
+         bld.exec_all().emit(SHADER_OPCODE_LOAD_LIVE_CHANNELS, active);
+         bld.MOV(active, fs_reg(component(active, 0)));
+         bld.AND(quad_mask, quad_mask, active);
+
+         bld.CMP(retype(dest, BRW_REGISTER_TYPE_UD), tmp, quad_mask, BRW_CONDITIONAL_Z);
+      }
+
+      break;
+   }
+
    case nir_intrinsic_vote_any: {
       const fs_builder ubld1 = bld.exec_all().group(1, 0);
 
@@ -7140,7 +7284,13 @@ fs_nir_emit_intrinsic(nir_to_brw_state &ntb,
 
    case nir_intrinsic_read_invocation: {
       const fs_reg value = get_nir_src(ntb, instr->src[0]);
-      const fs_reg invocation = get_nir_src(ntb, instr->src[1]);
+      const fs_reg invocation = get_nir_src_imm(ntb, instr->src[1]);
+
+      if (invocation.file == IMM) {
+         unsigned i = invocation.ud & (bld.dispatch_width() - 1);
+         bld.MOV(retype(dest, value.type), component(value, i));
+         break;
+      }
 
       fs_reg tmp = bld.vgrf(value.type);
 

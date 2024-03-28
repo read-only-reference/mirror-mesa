@@ -297,8 +297,8 @@ iris_apply_elk_wm_prog_data(struct iris_compiled_shader *shader,
    iris->flat_inputs          = elk->flat_inputs;
    iris->inputs               = elk->inputs;
    iris->computed_depth_mode  = elk->computed_depth_mode;
-   iris->max_polygons         = elk->max_polygons;
-   iris->dispatch_multi       = elk->dispatch_multi;
+   iris->max_polygons         = 1;
+   iris->dispatch_multi       = 0;
    iris->computed_stencil     = elk->computed_stencil;
    iris->early_fragment_tests = elk->early_fragment_tests;
    iris->post_depth_coverage  = elk->post_depth_coverage;
@@ -344,8 +344,6 @@ iris_apply_elk_cs_prog_data(struct iris_compiled_shader *shader,
    iris->prog_offset[1] = elk->prog_offset[1];
    iris->prog_offset[2] = elk->prog_offset[2];
 
-   iris->generate_local_id = elk->generate_local_id;
-   iris->walk_order        = elk->walk_order;
    iris->uses_barrier      = elk->uses_barrier;
    iris->prog_mask         = elk->prog_mask;
 
@@ -3465,7 +3463,7 @@ iris_create_shader_state(struct pipe_context *ctx,
       key.fs = (struct iris_fs_prog_key) {
          KEY_INIT(base),
          .nr_color_regions = util_bitcount(color_outputs),
-         .coherent_fb_fetch = devinfo->ver >= 9,
+         .coherent_fb_fetch = devinfo->ver >= 9 && devinfo->ver < 20,
          .input_slots_valid =
             can_rearrange_varyings ? 0 : info->inputs_read | VARYING_BIT_POS,
       };

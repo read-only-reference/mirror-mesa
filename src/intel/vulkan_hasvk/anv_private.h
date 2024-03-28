@@ -379,7 +379,7 @@ void __anv_perf_warn(struct anv_device *device,
    } while (0)
 
 /* A non-fatal assert.  Useful for debugging. */
-#ifdef DEBUG
+#if MESA_DEBUG
 #define anv_assert(x) ({ \
    if (unlikely(!(x))) \
       mesa_loge("%s:%d ASSERT: %s", __FILE__, __LINE__, #x); \
@@ -3618,7 +3618,7 @@ struct anv_image_create_info {
 };
 
 VkResult anv_image_init(struct anv_device *device, struct anv_image *image,
-                        const struct anv_image_create_info *create_info);
+                        struct anv_image_create_info *create_info);
 
 void anv_image_finish(struct anv_image *image);
 

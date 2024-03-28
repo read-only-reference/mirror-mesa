@@ -341,10 +341,9 @@ genX(cmd_buffer_emit_state_base_address)(struct anv_cmd_buffer *cmd_buffer)
    enum anv_pipe_bits bits =
       ANV_PIPE_TEXTURE_CACHE_INVALIDATE_BIT |
       ANV_PIPE_CONSTANT_CACHE_INVALIDATE_BIT |
-#if GFX_VERx10 == 125
-      ANV_PIPE_INSTRUCTION_CACHE_INVALIDATE_BIT |
-#endif
-      ANV_PIPE_STATE_CACHE_INVALIDATE_BIT;
+      ANV_PIPE_STATE_CACHE_INVALIDATE_BIT |
+      (intel_needs_workaround(cmd_buffer->device->info, 16013000631) ?
+          ANV_PIPE_INSTRUCTION_CACHE_INVALIDATE_BIT : 0);
 
 #if GFX_VER >= 9 && GFX_VER <= 11
       /* From the SKL PRM, Vol. 2a, "PIPE_CONTROL",
@@ -365,15 +364,7 @@ genX(cmd_buffer_emit_state_base_address)(struct anv_cmd_buffer *cmd_buffer)
    assert(cmd_buffer->state.current_db_mode !=
           ANV_CMD_DESCRIPTOR_BUFFER_MODE_UNKNOWN);
    if (db_mode_changed) {
-#if GFX_VER == 11
-      anv_batch_emit(&cmd_buffer->batch, GENX(3DSTATE_SLICE_TABLE_STATE_POINTERS), ptr) {
-         ptr.SliceHashStatePointerValid = true;
-         ptr.SliceHashTableStatePointer = cmd_buffer->state.current_db_mode ==
-                                          ANV_CMD_DESCRIPTOR_BUFFER_MODE_BUFFER ?
-                                          device->slice_hash_db.offset :
-                                          device->slice_hash.offset;
-      }
-#elif GFX_VERx10 == 125
+#if GFX_VER == 11 || GFX_VER == 125
       anv_batch_emit(&cmd_buffer->batch, GENX(3DSTATE_SLICE_TABLE_STATE_POINTERS), ptr) {
          ptr.SliceHashStatePointerValid = true;
          ptr.SliceHashTableStatePointer = cmd_buffer->state.current_db_mode ==
@@ -410,6 +401,9 @@ genX(cmd_buffer_emit_state_base_address)(struct anv_cmd_buffer *cmd_buffer)
 void
 genX(cmd_buffer_emit_bt_pool_base_address)(struct anv_cmd_buffer *cmd_buffer)
 {
+   if (!anv_cmd_buffer_is_render_or_compute_queue(cmd_buffer))
+      return;
+
    /* If we are emitting a new state base address we probably need to re-emit
     * binding tables.
     */
@@ -1944,7 +1938,16 @@ genX(cmd_buffer_apply_pipe_flushes)(struct anv_cmd_buffer *cmd_buffer)
    if (trace_flush) {
       trace_intel_end_stall(&cmd_buffer->trace,
                             bits & ~cmd_buffer->state.pending_pipe_bits,
-                            anv_pipe_flush_bit_to_ds_stall_flag, NULL);
+                            anv_pipe_flush_bit_to_ds_stall_flag,
+                            cmd_buffer->state.pc_reasons[0],
+                            cmd_buffer->state.pc_reasons[1],
+                            cmd_buffer->state.pc_reasons[2],
+                            cmd_buffer->state.pc_reasons[3]);
+      cmd_buffer->state.pc_reasons[0] = NULL;
+      cmd_buffer->state.pc_reasons[1] = NULL;
+      cmd_buffer->state.pc_reasons[2] = NULL;
+      cmd_buffer->state.pc_reasons[3] = NULL;
+      cmd_buffer->state.pc_reasons_count = 0;
    }
 }
 
@@ -2540,6 +2543,8 @@ genX(batch_emit_pipe_control_write)(struct anv_batch *batch,
 
       pipe.DepthStallEnable = bits & ANV_PIPE_DEPTH_STALL_BIT;
 
+      pipe.TLBInvalidate = bits & ANV_PIPE_TLB_INVALIDATE_BIT;
+
 #if GFX_VERx10 >= 125
       pipe.PSSStallSyncEnable = bits & ANV_PIPE_PSS_STALL_SYNC_BIT;
 #endif
@@ -2741,6 +2746,45 @@ genX(flush_descriptor_buffers)(struct anv_cmd_buffer *cmd_buffer,
    }
 
    cmd_buffer->state.descriptor_buffers.dirty = false;
+}
+
+void
+genX(cmd_buffer_begin_companion)(struct anv_cmd_buffer *cmd_buffer,
+                                 VkCommandBufferLevel level)
+{
+   cmd_buffer->vk.level = level;
+   cmd_buffer->is_companion_rcs_cmd_buffer = true;
+
+   trace_intel_begin_cmd_buffer(&cmd_buffer->trace);
+
+#if GFX_VER >= 12
+   /* Reenable prefetching at the beginning of secondary command buffers. We
+    * do this so that the return instruction edition is not prefetched before
+    * completion.
+    */
+   if (cmd_buffer->vk.level == VK_COMMAND_BUFFER_LEVEL_SECONDARY) {
+      anv_batch_emit(&cmd_buffer->batch, GENX(MI_ARB_CHECK), arb) {
+         arb.PreParserDisableMask = true;
+         arb.PreParserDisable = false;
+      }
+   }
+#endif
+
+   /* A companion command buffer is only used for blorp commands atm, so
+    * default to the legacy mode.
+    */
+   cmd_buffer->state.current_db_mode = ANV_CMD_DESCRIPTOR_BUFFER_MODE_LEGACY;
+   genX(cmd_buffer_emit_bt_pool_base_address)(cmd_buffer);
+
+   /* Re-emit the aux table register in every command buffer.  This way we're
+    * ensured that we have the table even if this command buffer doesn't
+    * initialize any images.
+    */
+   if (cmd_buffer->device->info->has_aux_map) {
+      anv_add_pending_pipe_bits(cmd_buffer,
+                                ANV_PIPE_AUX_TABLE_INVALIDATE_BIT,
+                                "new cmd buffer with aux-tt");
+   }
 }
 
 VkResult
@@ -3359,6 +3403,12 @@ anv_pipe_flush_bits_for_access_flags(struct anv_cmd_buffer *cmd_buffer,
             pipe_bits |= ANV_PIPE_HDC_PIPELINE_FLUSH_BIT;
             pipe_bits |= ANV_PIPE_UNTYPED_DATAPORT_CACHE_FLUSH_BIT;
          } else {
+            /* We can use the data port when trying to stay in compute mode on
+             * the RCS.
+             */
+            pipe_bits |= ANV_PIPE_HDC_PIPELINE_FLUSH_BIT;
+            pipe_bits |= ANV_PIPE_UNTYPED_DATAPORT_CACHE_FLUSH_BIT;
+            /* Most operations are done through RT/detph writes */
             pipe_bits |= ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT;
             pipe_bits |= ANV_PIPE_DEPTH_CACHE_FLUSH_BIT;
          }
@@ -3946,9 +3996,19 @@ cmd_buffer_barrier(struct anv_cmd_buffer *cmd_buffer,
                 img_barrier->newLayout,
                 cmd_buffer->queue_family->queueFlags)) {
             for (uint32_t l = 0; l < level_count; l++) {
+               const uint32_t level = range->baseMipLevel + l;
+               const uint32_t aux_layers =
+                  anv_image_aux_layers(image, aspect, level);
+
+               if (base_layer >= aux_layers)
+                  break; /* We will only get fewer layers as level increases */
+
+               uint32_t level_layer_count =
+                  MIN2(layer_count, aux_layers - base_layer);
+
                set_image_compressed_bit(cmd_buffer, image, aspect,
-                                        range->baseMipLevel + l,
-                                        base_layer, layer_count,
+                                        level,
+                                        base_layer, level_layer_count,
                                         true);
             }
          }
@@ -5202,86 +5262,6 @@ cmd_buffer_mark_attachment_written(struct anv_cmd_buffer *cmd_buffer,
    }
 }
 
-static enum blorp_filter
-vk_to_blorp_resolve_mode(VkResolveModeFlagBits vk_mode)
-{
-   switch (vk_mode) {
-   case VK_RESOLVE_MODE_SAMPLE_ZERO_BIT:
-      return BLORP_FILTER_SAMPLE_0;
-   case VK_RESOLVE_MODE_AVERAGE_BIT:
-      return BLORP_FILTER_AVERAGE;
-   case VK_RESOLVE_MODE_MIN_BIT:
-      return BLORP_FILTER_MIN_SAMPLE;
-   case VK_RESOLVE_MODE_MAX_BIT:
-      return BLORP_FILTER_MAX_SAMPLE;
-   default:
-      return BLORP_FILTER_NONE;
-   }
-}
-
-static void
-cmd_buffer_resolve_msaa_attachment(struct anv_cmd_buffer *cmd_buffer,
-                                   const struct anv_attachment *att,
-                                   VkImageLayout layout,
-                                   VkImageAspectFlagBits aspect)
-{
-   struct anv_cmd_graphics_state *gfx = &cmd_buffer->state.gfx;
-   const struct anv_image_view *src_iview = att->iview;
-   const struct anv_image_view *dst_iview = att->resolve_iview;
-
-   enum isl_aux_usage src_aux_usage =
-      anv_layout_to_aux_usage(cmd_buffer->device->info,
-                              src_iview->image, aspect,
-                              VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                              layout,
-                              cmd_buffer->queue_family->queueFlags);
-
-   enum isl_aux_usage dst_aux_usage =
-      anv_layout_to_aux_usage(cmd_buffer->device->info,
-                              dst_iview->image, aspect,
-                              VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                              att->resolve_layout,
-                              cmd_buffer->queue_family->queueFlags);
-
-   enum blorp_filter filter = vk_to_blorp_resolve_mode(att->resolve_mode);
-
-   const VkRect2D render_area = gfx->render_area;
-   if (gfx->view_mask == 0) {
-      anv_image_msaa_resolve(cmd_buffer,
-                             src_iview->image, src_aux_usage,
-                             src_iview->planes[0].isl.base_level,
-                             src_iview->planes[0].isl.base_array_layer,
-                             dst_iview->image, dst_aux_usage,
-                             dst_iview->planes[0].isl.base_level,
-                             dst_iview->planes[0].isl.base_array_layer,
-                             aspect,
-                             render_area.offset.x, render_area.offset.y,
-                             render_area.offset.x, render_area.offset.y,
-                             render_area.extent.width,
-                             render_area.extent.height,
-                             gfx->layer_count, filter);
-   } else {
-      uint32_t res_view_mask = gfx->view_mask;
-      while (res_view_mask) {
-         int i = u_bit_scan(&res_view_mask);
-
-         anv_image_msaa_resolve(cmd_buffer,
-                                src_iview->image, src_aux_usage,
-                                src_iview->planes[0].isl.base_level,
-                                src_iview->planes[0].isl.base_array_layer + i,
-                                dst_iview->image, dst_aux_usage,
-                                dst_iview->planes[0].isl.base_level,
-                                dst_iview->planes[0].isl.base_array_layer + i,
-                                aspect,
-                                render_area.offset.x, render_area.offset.y,
-                                render_area.offset.x, render_area.offset.y,
-                                render_area.extent.width,
-                                render_area.extent.height,
-                                1, filter);
-      }
-   }
-}
-
 void genX(CmdEndRendering)(
     VkCommandBuffer                             commandBuffer)
 {
@@ -5342,8 +5322,8 @@ void genX(CmdEndRendering)(
           (gfx->rendering_flags & VK_RENDERING_SUSPENDING_BIT))
          continue;
 
-      cmd_buffer_resolve_msaa_attachment(cmd_buffer, att, att->layout,
-                                         VK_IMAGE_ASPECT_COLOR_BIT);
+      anv_attachment_msaa_resolve(cmd_buffer, att, att->layout,
+                                  VK_IMAGE_ASPECT_COLOR_BIT);
    }
 
    if (gfx->depth_att.resolve_mode != VK_RESOLVE_MODE_NONE &&
@@ -5361,9 +5341,9 @@ void genX(CmdEndRendering)(
                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                               false /* will_full_fast_clear */);
 
-      cmd_buffer_resolve_msaa_attachment(cmd_buffer, &gfx->depth_att,
-                                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                         VK_IMAGE_ASPECT_DEPTH_BIT);
+      anv_attachment_msaa_resolve(cmd_buffer, &gfx->depth_att,
+                                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                  VK_IMAGE_ASPECT_DEPTH_BIT);
 
       /* Transition the source back to the original layout.  This seems a bit
        * inefficient but, since HiZ resolves aren't destructive, going from
@@ -5379,9 +5359,9 @@ void genX(CmdEndRendering)(
 
    if (gfx->stencil_att.resolve_mode != VK_RESOLVE_MODE_NONE &&
        !(gfx->rendering_flags & VK_RENDERING_SUSPENDING_BIT)) {
-      cmd_buffer_resolve_msaa_attachment(cmd_buffer, &gfx->stencil_att,
-                                         gfx->stencil_att.layout,
-                                         VK_IMAGE_ASPECT_STENCIL_BIT);
+      anv_attachment_msaa_resolve(cmd_buffer, &gfx->stencil_att,
+                                  gfx->stencil_att.layout,
+                                  VK_IMAGE_ASPECT_STENCIL_BIT);
    }
 
 
@@ -6002,8 +5982,12 @@ VkResult
 genX(write_trtt_entries)(struct anv_trtt_submission *submit)
 {
 #if GFX_VER >= 12
+   const struct intel_device_info *devinfo =
+      submit->sparse->queue->device->info;
+
    size_t batch_size = submit->l3l2_binds_len * 20 +
-                       submit->l1_binds_len * 16 + 8;
+                       submit->l1_binds_len * 16 +
+                       GENX(PIPE_CONTROL_length) * sizeof(uint32_t) + 8;
    STACK_ARRAY(uint32_t, cmds, batch_size);
    struct anv_batch batch = {
       .start = cmds,
@@ -6095,6 +6079,10 @@ genX(write_trtt_entries)(struct anv_trtt_submission *submit)
 
       i += extra_writes;
    }
+
+   genx_batch_emit_pipe_control(&batch, devinfo, _3D,
+                                ANV_PIPE_CS_STALL_BIT |
+                                ANV_PIPE_TLB_INVALIDATE_BIT);
 
    anv_batch_emit(&batch, GENX(MI_BATCH_BUFFER_END), bbe);
 

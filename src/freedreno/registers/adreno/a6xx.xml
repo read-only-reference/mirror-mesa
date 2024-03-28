@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <database xmlns="http://nouveau.freedesktop.org/"
 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-xsi:schemaLocation="http://nouveau.freedesktop.org/ rules-ng.xsd">
+xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
 <import file="freedreno_copyright.xml"/>
 <import file="adreno/adreno_common.xml"/>
 <import file="adreno/adreno_pm4.xml"/>
@@ -1458,6 +1458,7 @@ to upconvert to 32b float internally?
 	<reg32 offset="0x0b35" name="CP_LPAC_ROQ_DBG_DATA" variants="A7XX-"/>
 	<reg32 offset="0x0b36" name="CP_LPAC_FIFO_DBG_DATA" variants="A7XX-"/>
 	<reg32 offset="0x0b40" name="CP_LPAC_FIFO_DBG_ADDR" variants="A7XX-"/>
+	<reg32 offset="0x0b81" name="CP_LPAC_SQE_CNTL"/>
 	<reg64 offset="0x0b82" name="CP_LPAC_SQE_INSTR_BASE"/>
 	<reg32 offset="0x0C01" name="VSC_ADDR_MODE_CNTL" type="a5xx_address_mode"/>
 	<reg32 offset="0x0018" name="RBBM_GPR0_CNTL"/>
@@ -3304,6 +3305,15 @@ to upconvert to 32b float internally?
 		<!-- discard primitives before rasterization -->
 		<bitfield name="DISCARD" pos="2" type="boolean"/>
 	</reg32>
+
+	<!-- Both are a750+.
+	     Probably needed to correctly overlap execution of several draws.
+	-->
+	<reg32 offset="0x9885" name="PC_TESS_PARAM_SIZE" variants="A7XX-" usage="cmd"/>
+	<!-- Blob adds a bit more space {0x10, 0x20, 0x30, 0x40} bytes, but the meaning of
+	     this additional space is not known.
+	-->
+	<reg32 offset="0x9886" name="PC_TESS_FACTOR_SIZE" variants="A7XX-" usage="cmd"/>
 
 	<!-- 0x9982-0x9aff invalid -->
 

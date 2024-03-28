@@ -73,47 +73,6 @@ brw_fs_opt_algebraic(fs_visitor &s)
    foreach_block_and_inst_safe(block, fs_inst, inst, s.cfg) {
       switch (inst->opcode) {
       case BRW_OPCODE_MOV:
-         if (!devinfo->has_64bit_float &&
-             inst->dst.type == BRW_REGISTER_TYPE_DF) {
-            assert(inst->dst.type == inst->src[0].type);
-            assert(!inst->saturate);
-            assert(!inst->src[0].abs);
-            assert(!inst->src[0].negate);
-            const brw::fs_builder ibld(&s, block, inst);
-
-            if (!inst->is_partial_write())
-               ibld.emit_undef_for_dst(inst);
-
-            ibld.MOV(subscript(inst->dst, BRW_REGISTER_TYPE_F, 1),
-                     subscript(inst->src[0], BRW_REGISTER_TYPE_F, 1));
-            ibld.MOV(subscript(inst->dst, BRW_REGISTER_TYPE_F, 0),
-                     subscript(inst->src[0], BRW_REGISTER_TYPE_F, 0));
-
-            inst->remove(block);
-            progress = true;
-         }
-
-         if (!devinfo->has_64bit_int &&
-             (inst->dst.type == BRW_REGISTER_TYPE_UQ ||
-              inst->dst.type == BRW_REGISTER_TYPE_Q)) {
-            assert(inst->dst.type == inst->src[0].type);
-            assert(!inst->saturate);
-            assert(!inst->src[0].abs);
-            assert(!inst->src[0].negate);
-            const brw::fs_builder ibld(&s, block, inst);
-
-            if (!inst->is_partial_write())
-               ibld.emit_undef_for_dst(inst);
-
-            ibld.MOV(subscript(inst->dst, BRW_REGISTER_TYPE_UD, 1),
-                     subscript(inst->src[0], BRW_REGISTER_TYPE_UD, 1));
-            ibld.MOV(subscript(inst->dst, BRW_REGISTER_TYPE_UD, 0),
-                     subscript(inst->src[0], BRW_REGISTER_TYPE_UD, 0));
-
-            inst->remove(block);
-            progress = true;
-         }
-
          if ((inst->conditional_mod == BRW_CONDITIONAL_Z ||
               inst->conditional_mod == BRW_CONDITIONAL_NZ) &&
              inst->dst.is_null() &&
@@ -140,8 +99,7 @@ brw_fs_opt_algebraic(fs_visitor &s)
                 inst->src[0].type != BRW_REGISTER_TYPE_F)
                assert(!"unimplemented: saturate mixed types");
 
-            if (brw_saturate_immediate(inst->src[0].type,
-                                       &inst->src[0].as_brw_reg())) {
+            if (fs_reg_saturate_immediate(&inst->src[0])) {
                inst->saturate = false;
                progress = true;
             }
@@ -149,7 +107,7 @@ brw_fs_opt_algebraic(fs_visitor &s)
          break;
 
       case BRW_OPCODE_MUL:
-         if (inst->src[1].file != IMM)
+         if (inst->src[0].file != IMM && inst->src[1].file != IMM)
             continue;
 
          if (brw_reg_type_is_floating_point(inst->src[1].type))
@@ -178,6 +136,15 @@ brw_fs_opt_algebraic(fs_visitor &s)
               inst->writes_accumulator_implicitly(devinfo)))
             break;
 
+         if (inst->src[0].is_zero() || inst->src[1].is_zero()) {
+            inst->opcode = BRW_OPCODE_MOV;
+            inst->sources = 1;
+            inst->src[0] = brw_imm_d(0);
+            inst->src[1] = reg_undef;
+            progress = true;
+            break;
+         }
+
          /* a * 1.0 = a */
          if (inst->src[1].is_one()) {
             inst->opcode = BRW_OPCODE_MOV;
@@ -188,6 +155,16 @@ brw_fs_opt_algebraic(fs_visitor &s)
          }
 
          /* a * -1.0 = -a */
+         if (inst->src[0].is_negative_one()) {
+            inst->opcode = BRW_OPCODE_MOV;
+            inst->sources = 1;
+            inst->src[0] = inst->src[1];
+            inst->src[0].negate = !inst->src[0].negate;
+            inst->src[1] = reg_undef;
+            progress = true;
+            break;
+         }
+
          if (inst->src[1].is_negative_one()) {
             inst->opcode = BRW_OPCODE_MOV;
             inst->sources = 1;
@@ -281,32 +258,6 @@ brw_fs_opt_algebraic(fs_visitor &s)
          }
          break;
       case BRW_OPCODE_SEL:
-         if (!devinfo->has_64bit_float &&
-             !devinfo->has_64bit_int &&
-             (inst->dst.type == BRW_REGISTER_TYPE_DF ||
-              inst->dst.type == BRW_REGISTER_TYPE_UQ ||
-              inst->dst.type == BRW_REGISTER_TYPE_Q)) {
-            assert(inst->dst.type == inst->src[0].type);
-            assert(!inst->saturate);
-            assert(!inst->src[0].abs && !inst->src[0].negate);
-            assert(!inst->src[1].abs && !inst->src[1].negate);
-            const brw::fs_builder ibld(&s, block, inst);
-
-            if (!inst->is_partial_write())
-               ibld.emit_undef_for_dst(inst);
-
-            set_predicate(inst->predicate,
-                          ibld.SEL(subscript(inst->dst, BRW_REGISTER_TYPE_UD, 0),
-                                   subscript(inst->src[0], BRW_REGISTER_TYPE_UD, 0),
-                                   subscript(inst->src[1], BRW_REGISTER_TYPE_UD, 0)));
-            set_predicate(inst->predicate,
-                          ibld.SEL(subscript(inst->dst, BRW_REGISTER_TYPE_UD, 1),
-                                   subscript(inst->src[0], BRW_REGISTER_TYPE_UD, 1),
-                                   subscript(inst->src[1], BRW_REGISTER_TYPE_UD, 1)));
-
-            inst->remove(block);
-            progress = true;
-         }
          if (inst->src[0].equals(inst->src[1])) {
             inst->opcode = BRW_OPCODE_MOV;
             inst->sources = 1;

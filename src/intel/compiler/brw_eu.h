@@ -305,14 +305,18 @@ brw_message_ex_desc(const struct intel_device_info *devinfo,
                     unsigned ex_msg_length)
 {
    assert(ex_msg_length % reg_unit(devinfo) == 0);
-   return SET_BITS(ex_msg_length / reg_unit(devinfo), 9, 6);
+   return devinfo->ver >= 20 ?
+      SET_BITS(ex_msg_length / reg_unit(devinfo), 10, 6) :
+      SET_BITS(ex_msg_length / reg_unit(devinfo), 9, 6);
 }
 
 static inline unsigned
 brw_message_ex_desc_ex_mlen(const struct intel_device_info *devinfo,
                             uint32_t ex_desc)
 {
-   return GET_BITS(ex_desc, 9, 6) * reg_unit(devinfo);
+   return devinfo->ver >= 20 ?
+      GET_BITS(ex_desc, 10, 6) * reg_unit(devinfo) :
+      GET_BITS(ex_desc, 9, 6) * reg_unit(devinfo);
 }
 
 static inline uint32_t
@@ -1168,7 +1172,8 @@ lsc_msg_desc_wcmask(UNUSED const struct intel_device_info *devinfo,
       SET_BITS(addr_sz, 8, 7) |
       SET_BITS(data_sz, 11, 9) |
       SET_BITS(transpose, 15, 15) |
-      SET_BITS(cache_ctrl, 19, 17) |
+      (devinfo->ver >= 20 ? SET_BITS(cache_ctrl, 19, 16) :
+                            SET_BITS(cache_ctrl, 19, 17)) |
       SET_BITS(dest_length, 24, 20) |
       SET_BITS(src0_length, 28, 25) |
       SET_BITS(addr_type, 30, 29);
@@ -1249,7 +1254,7 @@ lsc_msg_desc_cache_ctrl(UNUSED const struct intel_device_info *devinfo,
                         uint32_t desc)
 {
    assert(devinfo->has_lsc);
-   return GET_BITS(desc, 19, 17);
+   return devinfo->ver >= 20 ? GET_BITS(desc, 19, 16) : GET_BITS(desc, 19, 17);
 }
 
 static inline unsigned
@@ -1489,22 +1494,11 @@ brw_inst *gfx9_fb_READ(struct brw_codegen *p,
                        unsigned response_length,
                        bool per_sample);
 
-void brw_adjust_sampler_state_pointer(struct brw_codegen *p,
-                                      struct brw_reg header,
-                                      struct brw_reg sampler_index);
-
 void gfx6_math(struct brw_codegen *p,
 	       struct brw_reg dest,
 	       unsigned function,
 	       struct brw_reg src0,
 	       struct brw_reg src1);
-
-unsigned brw_scratch_surface_idx(const struct brw_codegen *p);
-
-void gfx7_block_read_scratch(struct brw_codegen *p,
-                             struct brw_reg dest,
-                             int num_regs,
-                             unsigned offset);
 
 /**
  * Return the generation-specific jump distance scaling factor.
@@ -1569,32 +1563,6 @@ void brw_CMPN(struct brw_codegen *p,
 brw_inst *brw_DPAS(struct brw_codegen *p, enum gfx12_systolic_depth sdepth,
                    unsigned rcount, struct brw_reg dest, struct brw_reg src0,
                    struct brw_reg src1, struct brw_reg src2);
-
-void
-brw_untyped_atomic(struct brw_codegen *p,
-                   struct brw_reg dst,
-                   struct brw_reg payload,
-                   struct brw_reg surface,
-                   unsigned atomic_op,
-                   unsigned msg_length,
-                   bool response_expected,
-                   bool header_present);
-
-void
-brw_untyped_surface_read(struct brw_codegen *p,
-                         struct brw_reg dst,
-                         struct brw_reg payload,
-                         struct brw_reg surface,
-                         unsigned msg_length,
-                         unsigned num_channels);
-
-void
-brw_untyped_surface_write(struct brw_codegen *p,
-                          struct brw_reg payload,
-                          struct brw_reg surface,
-                          unsigned msg_length,
-                          unsigned num_channels,
-                          bool header_present);
 
 void
 brw_memory_fence(struct brw_codegen *p,

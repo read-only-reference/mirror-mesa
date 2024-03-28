@@ -1,24 +1,6 @@
 /*
  * Copyright © 2014-2015 Broadcom
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "compiler/nir/nir.h"
@@ -1049,7 +1031,7 @@ static struct ureg_dst
 ntr_get_ssa_def_decl(struct ntr_compile *c, nir_def *ssa)
 {
    uint32_t writemask;
-   /* Fix writemask for nir_intrinsic_load_ubo_vec4 accoring to uses. */
+   /* Fix writemask for nir_intrinsic_load_ubo_vec4 according to uses. */
    if (ssa->parent_instr->type == nir_instr_type_intrinsic &&
        nir_instr_as_intrinsic(ssa->parent_instr)->intrinsic == nir_intrinsic_load_ubo_vec4)
       writemask = nir_def_components_read(ssa);
@@ -1404,7 +1386,7 @@ ntr_emit_load_ubo(struct ntr_compile *c, nir_intrinsic_instr *instr)
       src = ureg_src_dimension(src, ntr_src_as_uint(c, instr->src[0]));
    } else {
       /* virglrenderer requires that indirect UBO references have the UBO
-       * array's base index in the Index field, not added to the indrect
+       * array's base index in the Index field, not added to the indirect
        * address.
        *
        * Many nir intrinsics have a base address const value for the start of
@@ -2190,7 +2172,7 @@ ntr_should_vectorize_io(unsigned align, unsigned bit_size,
    if (bit_size != 32)
       return false;
 
-   /* Our offset alignment should aways be at least 4 bytes */
+   /* Our offset alignment should always be at least 4 bytes */
    if (align < 4)
       return false;
 
@@ -2380,7 +2362,6 @@ const void *nir_to_rc_options(struct nir_shader *s,
    struct ntr_compile *c;
    const void *tgsi_tokens;
    bool is_r500 = r300_screen(screen)->caps.is_r500;
-   nir_variable_mode no_indirects_mask = ntr_no_indirects_mask(s, screen);
 
    /* Lower array indexing on FS inputs.  Since we don't set
     * ureg->supports_any_inout_decl_range, the TGSI input decls will be split to
@@ -2402,35 +2383,9 @@ const void *nir_to_rc_options(struct nir_shader *s,
    nir_to_rc_lower_txp(s);
    NIR_PASS_V(s, nir_to_rc_lower_tex);
 
-   if (!s->options->lower_uniforms_to_ubo) {
-      NIR_PASS_V(s, nir_lower_uniforms_to_ubo,
-                 screen->get_param(screen, PIPE_CAP_PACKED_UNIFORMS),
-                 true);
-   }
-
-   if (!screen->get_param(screen, PIPE_CAP_LOAD_CONSTBUF))
-      NIR_PASS_V(s, nir_lower_ubo_vec4);
-
    bool progress;
+
    NIR_PASS_V(s, nir_opt_constant_folding);
-
-   /* Clean up after triginometric input normalization. */
-   NIR_PASS_V(s, nir_opt_vectorize, ntr_should_vectorize_instr, NULL);
-   do {
-      progress = false;
-      NIR_PASS(progress, s, nir_opt_shrink_vectors);
-   } while (progress);
-   NIR_PASS_V(s, nir_copy_prop);
-   NIR_PASS_V(s, nir_opt_cse);
-   NIR_PASS_V(s, nir_opt_dce);
-   NIR_PASS_V(s, nir_opt_shrink_stores, true);
-
-   NIR_PASS_V(s, nir_lower_indirect_derefs, no_indirects_mask, UINT32_MAX);
-
-   /* Lower demote_if to if (cond) { demote } because TGSI doesn't have a DEMOTE_IF. */
-   NIR_PASS_V(s, nir_lower_discard_if, nir_lower_demote_if_to_cf);
-
-   NIR_PASS_V(s, nir_lower_frexp);
 
    do {
       progress = false;

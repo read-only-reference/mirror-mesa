@@ -131,44 +131,6 @@ brw_fs_lower_load_payload(fs_visitor &s)
 }
 
 bool
-brw_fs_lower_minmax(fs_visitor &s)
-{
-   assert(s.devinfo->ver < 6);
-
-   bool progress = false;
-
-   foreach_block_and_inst_safe(block, fs_inst, inst, s.cfg) {
-      const fs_builder ibld(&s, block, inst);
-
-      if (inst->opcode == BRW_OPCODE_SEL &&
-          inst->predicate == BRW_PREDICATE_NONE) {
-         /* If src1 is an immediate value that is not NaN, then it can't be
-          * NaN.  In that case, emit CMP because it is much better for cmod
-          * propagation.  Likewise if src1 is not float.  Gfx4 and Gfx5 don't
-          * support HF or DF, so it is not necessary to check for those.
-          */
-         if (inst->src[1].type != BRW_REGISTER_TYPE_F ||
-             (inst->src[1].file == IMM && !isnan(inst->src[1].f))) {
-            ibld.CMP(ibld.null_reg_d(), inst->src[0], inst->src[1],
-                     inst->conditional_mod);
-         } else {
-            ibld.CMPN(ibld.null_reg_d(), inst->src[0], inst->src[1],
-                      inst->conditional_mod);
-         }
-         inst->predicate = BRW_PREDICATE_NORMAL;
-         inst->conditional_mod = BRW_CONDITIONAL_NONE;
-
-         progress = true;
-      }
-   }
-
-   if (progress)
-      s.invalidate_analysis(DEPENDENCY_INSTRUCTIONS);
-
-   return progress;
-}
-
-bool
 brw_fs_lower_sub_sat(fs_visitor &s)
 {
    bool progress = false;
@@ -207,7 +169,8 @@ brw_fs_lower_sub_sat(fs_visitor &s)
           */
          if (inst->exec_size == 8 && inst->src[0].type != BRW_REGISTER_TYPE_Q &&
              inst->src[0].type != BRW_REGISTER_TYPE_UQ) {
-            fs_reg acc(ARF, BRW_ARF_ACCUMULATOR, inst->src[1].type);
+            fs_reg acc = retype(brw_acc_reg(inst->exec_size),
+                                inst->src[1].type);
 
             ibld.MOV(acc, inst->src[1]);
             fs_inst *add = ibld.ADD(inst->dst, acc, inst->src[0]);
@@ -505,16 +468,19 @@ brw_fs_lower_sends_overlapping_payload(fs_visitor &s)
       if (inst->opcode == SHADER_OPCODE_SEND && inst->ex_mlen > 0 &&
           regions_overlap(inst->src[2], inst->mlen * REG_SIZE,
                           inst->src[3], inst->ex_mlen * REG_SIZE)) {
-         fs_reg tmp = fs_reg(VGRF, s.alloc.allocate(inst->ex_mlen),
+         const unsigned arg = inst->mlen < inst->ex_mlen ? 2 : 3;
+         const unsigned len = MIN2(inst->mlen, inst->ex_mlen);
+
+         fs_reg tmp = fs_reg(VGRF, s.alloc.allocate(len),
                              BRW_REGISTER_TYPE_UD);
          /* Sadly, we've lost all notion of channels and bit sizes at this
           * point.  Just WE_all it.
           */
          const fs_builder ibld = fs_builder(&s, block, inst).exec_all().group(16, 0);
-         fs_reg copy_src = retype(inst->src[3], BRW_REGISTER_TYPE_UD);
+         fs_reg copy_src = retype(inst->src[arg], BRW_REGISTER_TYPE_UD);
          fs_reg copy_dst = tmp;
-         for (unsigned i = 0; i < inst->ex_mlen; i += 2) {
-            if (inst->ex_mlen == i + 1) {
+         for (unsigned i = 0; i < len; i += 2) {
+            if (len == i + 1) {
                /* Only one register left; do SIMD8 */
                ibld.group(8, 0).MOV(copy_dst, copy_src);
             } else {
@@ -523,7 +489,7 @@ brw_fs_lower_sends_overlapping_payload(fs_visitor &s)
             copy_src = offset(copy_src, ibld, 1);
             copy_dst = offset(copy_dst, ibld, 1);
          }
-         inst->src[3] = tmp;
+         inst->src[arg] = tmp;
          progress = true;
       }
    }
@@ -558,3 +524,91 @@ brw_fs_lower_3src_null_dest(fs_visitor &s)
    return progress;
 }
 
+static bool
+unsupported_64bit_type(const intel_device_info *devinfo,
+                       enum brw_reg_type type)
+{
+   return (!devinfo->has_64bit_float && type == BRW_REGISTER_TYPE_DF) ||
+          (!devinfo->has_64bit_int && (type == BRW_REGISTER_TYPE_UQ ||
+                                       type == BRW_REGISTER_TYPE_Q));
+}
+
+/**
+ * Perform lowering to legalize the IR for various ALU restrictions.
+ *
+ * For example:
+ * - Splitting 64-bit MOV/SEL into 2x32-bit where needed
+ */
+bool
+brw_fs_lower_alu_restrictions(fs_visitor &s)
+{
+   const intel_device_info *devinfo = s.devinfo;
+   bool progress = false;
+
+   foreach_block_and_inst_safe(block, fs_inst, inst, s.cfg) {
+      switch (inst->opcode) {
+      case BRW_OPCODE_MOV:
+         if (unsupported_64bit_type(devinfo, inst->dst.type)) {
+            assert(inst->dst.type == inst->src[0].type);
+            assert(!inst->saturate);
+            assert(!inst->src[0].abs);
+            assert(!inst->src[0].negate);
+            const brw::fs_builder ibld(&s, block, inst);
+
+            enum brw_reg_type type =
+               brw_reg_type_from_bit_size(32, inst->dst.type);
+
+            if (!inst->is_partial_write())
+               ibld.emit_undef_for_dst(inst);
+
+            ibld.MOV(subscript(inst->dst, type, 1),
+                     subscript(inst->src[0], type, 1));
+            ibld.MOV(subscript(inst->dst, type, 0),
+                     subscript(inst->src[0], type, 0));
+
+            inst->remove(block);
+            progress = true;
+         }
+         break;
+
+      case BRW_OPCODE_SEL:
+         if (unsupported_64bit_type(devinfo, inst->dst.type)) {
+            assert(inst->dst.type == inst->src[0].type);
+            assert(!inst->saturate);
+            assert(!inst->src[0].abs && !inst->src[0].negate);
+            assert(!inst->src[1].abs && !inst->src[1].negate);
+            assert(inst->conditional_mod == BRW_CONDITIONAL_NONE);
+            const brw::fs_builder ibld(&s, block, inst);
+
+            enum brw_reg_type type =
+               brw_reg_type_from_bit_size(32, inst->dst.type);
+
+            if (!inst->is_partial_write())
+               ibld.emit_undef_for_dst(inst);
+
+            set_predicate(inst->predicate,
+                          ibld.SEL(subscript(inst->dst, type, 0),
+                                   subscript(inst->src[0], type, 0),
+                                   subscript(inst->src[1], type, 0)));
+            set_predicate(inst->predicate,
+                          ibld.SEL(subscript(inst->dst, type, 1),
+                                   subscript(inst->src[0], type, 1),
+                                   subscript(inst->src[1], type, 1)));
+
+            inst->remove(block);
+            progress = true;
+         }
+         break;
+
+      default:
+         break;
+      }
+   }
+
+   if (progress) {
+      s.invalidate_analysis(DEPENDENCY_INSTRUCTION_DATA_FLOW |
+                            DEPENDENCY_INSTRUCTION_DETAIL);
+   }
+
+   return progress;
+}
