@@ -574,6 +574,12 @@ kopper_acquire(struct zink_screen *screen, struct zink_resource *res, uint64_t t
             res->obj->new_dt = true;
             continue;
          }
+         if (ret == VK_NOT_READY || ret == VK_TIMEOUT) {
+            if (timeout > 1000000)
+               unreachable("kopper_acquire: updated timeout after failure has become unreasonable large");
+            timeout += 4000;
+            continue;
+         }
          VKSCR(DestroySemaphore)(screen->dev, acquire, NULL);
          return ret;
       }
@@ -1109,14 +1115,21 @@ zink_kopper_set_swap_interval(struct pipe_screen *pscreen, struct pipe_resource 
 {
    struct zink_resource *res = zink_resource(pres);
    struct zink_screen *screen = zink_screen(pscreen);
+   if (!res->obj->dt)
+      fprintf(stderr, "NOT SWAPCHAIN %p\n", res);
    assert(res->obj->dt);
    struct kopper_displaytarget *cdt = res->obj->dt;
    VkPresentModeKHR old_present_mode = cdt->present_mode;
 
    zink_kopper_set_present_mode_for_interval(cdt, interval);
 
-   if (old_present_mode != cdt->present_mode)
-      update_swapchain(screen, cdt, cdt->caps.currentExtent.width, cdt->caps.currentExtent.height);
+   if (old_present_mode == cdt->present_mode)
+      return;
+   VkResult ret = update_swapchain(screen, cdt, cdt->caps.currentExtent.width, cdt->caps.currentExtent.height);
+   if (ret == VK_SUCCESS)
+      return;
+   cdt->present_mode = old_present_mode;
+   mesa_loge("zink: failed to set swap interval!");
 }
 
 int

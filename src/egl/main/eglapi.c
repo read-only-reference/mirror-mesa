@@ -81,7 +81,7 @@
  *
  */
 
-#ifdef USE_LIBGLVND
+#if USE_LIBGLVND
 #define EGLAPI
 #undef PUBLIC
 #define PUBLIC
@@ -681,7 +681,7 @@ eglInitialize(EGLDisplay dpy, EGLint *major, EGLint *minor)
          _eglLog(_EGL_DEBUG,
                  "Found 'LIBGL_ALWAYS_SOFTWARE' set, will use a CPU renderer");
 
-      const char *env = getenv("MESA_LOADER_DRIVER_OVERRIDE");
+      const char *env = os_get_option("MESA_LOADER_DRIVER_OVERRIDE");
       disp->Options.Zink = env && !strcmp(env, "zink");
 
       const char *gallium_hud_env = getenv("GALLIUM_HUD");

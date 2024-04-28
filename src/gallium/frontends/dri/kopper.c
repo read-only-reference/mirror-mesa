@@ -26,7 +26,7 @@
 #include "util/format/u_format.h"
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
-#include "util/u_box.h"
+#include "util/box.h"
 #include "util/log.h"
 #include "pipe/p_context.h"
 #include "pipe-loader/pipe_loader.h"
@@ -111,7 +111,7 @@ static const __DRIextension *drivk_sw_screen_extensions[] = {
 };
 
 static const __DRIconfig **
-kopper_init_screen(struct dri_screen *screen)
+kopper_init_screen(struct dri_screen *screen, bool implicit)
 {
    const __DRIconfig **configs;
    struct pipe_screen *pscreen = NULL;
@@ -130,13 +130,13 @@ kopper_init_screen(struct dri_screen *screen)
    if (screen->fd != -1)
       success = pipe_loader_drm_probe_fd(&screen->dev, screen->fd, false);
    else
-      success = pipe_loader_vk_probe_dri(&screen->dev, NULL);
+      success = pipe_loader_vk_probe_dri(&screen->dev);
 #else
-   success = pipe_loader_vk_probe_dri(&screen->dev, NULL);
+   success = pipe_loader_vk_probe_dri(&screen->dev);
 #endif
 
    if (success)
-      pscreen = pipe_loader_create_screen(screen->dev);
+      pscreen = pipe_loader_create_screen(screen->dev, implicit);
 
    if (!pscreen)
       goto fail;
@@ -428,8 +428,6 @@ kopper_allocate_textures(struct dri_context *ctx,
 
    resized = (drawable->old_w != width ||
               drawable->old_h != height);
-   if (resized)
-      drawable->buffer_age = 0;
 
    /* Wait for glthread to finish because we can't use pipe_context from
     * multiple threads.
@@ -555,6 +553,7 @@ XXX do this once swapinterval is hooked up
             assert(data);
             drawable->textures[statts[i]] =
                screen->base.screen->resource_create_drawable(screen->base.screen, &templ, data);
+            drawable->window_valid = !!drawable->textures[statts[i]];
          }
 #ifdef VK_USE_PLATFORM_XCB_KHR
          else if (is_pixmap && statts[i] == ST_ATTACHMENT_FRONT_LEFT && !screen->is_sw) {
@@ -844,7 +843,6 @@ kopperSwapBuffersWithDamage(__DRIdrawable *dPriv, uint32_t flush_flags, int nrec
    }
 
    kopper_copy_to_front(ctx->st->pipe, drawable, ptex, nrects, stack_boxes);
-   drawable->buffer_age = 1;
    if (drawable->is_window && !zink_kopper_check(ptex))
       return -1;
    if (!drawable->textures[ST_ATTACHMENT_FRONT_LEFT]) {
@@ -904,6 +902,9 @@ kopperSetSwapInterval(__DRIdrawable *dPriv, int interval)
                                 drawable->textures[ST_ATTACHMENT_BACK_LEFT] :
                                 drawable->textures[ST_ATTACHMENT_FRONT_LEFT];
 
+   /* can't set swap interval on non-windows */
+   if (!drawable->window_valid)
+      return;
    /* the conditional is because we can be called before buffer allocation.  If
     * we're before allocation, then the initial_swap_interval will be used when
     * the swapchain is eventually created.
@@ -921,6 +922,10 @@ kopperQueryBufferAge(__DRIdrawable *dPriv)
    struct pipe_resource *ptex = drawable->textures[ST_ATTACHMENT_BACK_LEFT] ?
                                 drawable->textures[ST_ATTACHMENT_BACK_LEFT] :
                                 drawable->textures[ST_ATTACHMENT_FRONT_LEFT];
+
+   /* can't get buffer age from non-window swapchain */
+   if (!drawable->window_valid)
+      return 0;
 
    /* Wait for glthread to finish because we can't use pipe_context from
     * multiple threads.
@@ -940,11 +945,12 @@ const __DRIkopperExtension driKopperExtension = {
 };
 
 static const struct __DRImesaCoreExtensionRec mesaCoreExtension = {
-   .base = { __DRI_MESA, 1 },
+   .base = { __DRI_MESA, 2 },
    .version_string = MESA_INTERFACE_VERSION_STRING,
    .createNewScreen = driCreateNewScreen2,
    .createContext = driCreateContextAttribs,
    .initScreen = kopper_init_screen,
+   .createNewScreen3 = driCreateNewScreen3,
 };
 
 const __DRIextension *galliumvk_driver_extensions[] = {

@@ -886,13 +886,12 @@ system_value("tess_level_inner_default", 2)
 system_value("patch_vertices_in", 1)
 system_value("local_invocation_id", 3)
 system_value("local_invocation_index", 1)
-# zero_base indicates it starts from 0 for the current dispatch
-# non-zero_base indicates the base is included
+# workgroup_id does not include the base_workgroup_id
 system_value("workgroup_id", 3)
-system_value("workgroup_id_zero_base", 3)
 # The workgroup_index is intended for situations when a 3 dimensional
 # workgroup_id is not available on the HW, but a 1 dimensional index is.
 system_value("workgroup_index", 1)
+# API specific base added to the workgroup_id, e.g. baseGroup* of vkCmdDispatchBase
 system_value("base_workgroup_id", 3, bit_sizes=[32, 64])
 system_value("user_clip_plane", 4, indices=[UCP_ID])
 system_value("num_workgroups", 3)
@@ -926,12 +925,11 @@ system_value("subgroup_lt_mask", 0, bit_sizes=[32, 64])
 system_value("num_subgroups", 1)
 system_value("subgroup_id", 1)
 system_value("workgroup_size", 3)
-# note: the definition of global_invocation_id_zero_base is based on
-# (workgroup_id * workgroup_size) + local_invocation_id.
-# it is *not* based on workgroup_id_zero_base, meaning the work group
-# base is already accounted for, and the global base is additive on top of that
+# note: the definition of global_invocation_id is based on
+# ((workgroup_id + base_workgroup_id) * workgroup_size) + local_invocation_id.
 system_value("global_invocation_id", 3, bit_sizes=[32, 64])
-system_value("global_invocation_id_zero_base", 3, bit_sizes=[32, 64])
+# API specific base added to the global_invocation_id
+# e.g. global_work_offset of clEnqueueNDRangeKernel
 system_value("base_global_invocation_id", 3, bit_sizes=[32, 64])
 system_value("global_invocation_index", 1, bit_sizes=[32, 64])
 system_value("work_dim", 1)
@@ -1012,7 +1010,7 @@ system_value("color0", 4)
 system_value("color1", 4)
 
 # System value for internal compute shaders in radeonsi.
-system_value("user_data_amd", 4)
+system_value("user_data_amd", 8)
 
 # In a fragment shader, the current sample mask. At the beginning of the shader,
 # this is the same as load_sample_mask_in, but as the shader is executed, it may
@@ -1312,14 +1310,6 @@ system_value("subgroup_id_shift_ir3", 1)
 intrinsic("load_frag_coord_unscaled_ir3", dest_comp=4,
           flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
 
-# IR3-specific intrinsics for tessellation control shaders.  cond_end_ir3 end
-# the shader when src0 is false and is used to narrow down the TCS shader to
-# just thread 0 before writing out tessellation levels.
-intrinsic("cond_end_ir3", src_comp=[1])
-# end_patch_ir3 is used just before thread 0 exist the TCS and presumably
-# signals the TE that the patch is complete and can be tessellated.
-intrinsic("end_patch_ir3")
-
 # Per-view gl_FragSizeEXT and gl_FragCoord offset.
 intrinsic("load_frag_size_ir3", src_comp=[1], dest_comp=2, indices=[RANGE],
         flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
@@ -1453,9 +1443,17 @@ store("tf_r600", [])
 # This barrier is a hint that prevents moving the instruction that computes
 # src after this barrier. It's a constraint for the instruction scheduler.
 # Otherwise it's identical to a move instruction.
-# On AMD, it also forces the src value to be stored in a VGPR.
+# The VGPR version forces the src value to be stored in a VGPR, while the SGPR
+# version enforces an SGPR.
 intrinsic("optimization_barrier_vgpr_amd", dest_comp=0, src_comp=[0],
           flags=[CAN_ELIMINATE])
+intrinsic("optimization_barrier_sgpr_amd", dest_comp=0, src_comp=[0],
+          flags=[CAN_ELIMINATE])
+
+# These are no-op intrinsics used as a simple source and user of SSA defs for testing.
+intrinsic("unit_test_amd", src_comp=[0], indices=[BASE])
+intrinsic("unit_test_uniform_amd", dest_comp=0, indices=[BASE])
+intrinsic("unit_test_divergent_amd", dest_comp=0, indices=[BASE])
 
 # Untyped buffer load/store instructions of arbitrary length.
 # src[] = { descriptor, vector byte offset, scalar byte offset, index offset }
@@ -1561,6 +1559,8 @@ system_value("pipeline_stat_query_enabled_amd", dest_comp=1, bit_sizes=[1])
 system_value("prim_gen_query_enabled_amd", dest_comp=1, bit_sizes=[1])
 # Whether NGG should execute shader query for primitive streamouted.
 system_value("prim_xfb_query_enabled_amd", dest_comp=1, bit_sizes=[1])
+# 64-bit memory address to struct {uint32_t ordered_id; uint32_t dwords_written;}[4]
+system_value("xfb_state_address_gfx12_amd", dest_comp=1, bit_sizes=[64])
 # Merged wave info. Bits 0-7 are the ES thread count, 8-15 are the GS thread count, 16-24 is the
 # GS Wave ID, 24-27 is the wave index in the workgroup, and 28-31 is the workgroup size in waves.
 system_value("merged_wave_info_amd", dest_comp=1)
@@ -1688,6 +1688,24 @@ system_value("ordered_id_amd", 1)
 # WRITE_MASK = mask for counter channel to update
 intrinsic("ordered_xfb_counter_add_gfx11_amd", dest_comp=0, src_comp=[1, 0], indices=[WRITE_MASK], bit_sizes=[32])
 
+# Add dwords_written[] to global streamout offsets.
+# * Exactly 4 lanes must be active, one for each buffer binding.
+# * Disabled buffers must set dwords_written=0 for their lane, but the lane
+#   must be enabled.
+# * This is implemented with inline assembly, which is why some parameters
+#   appear trivial or redundant.
+#
+# Inputs:
+#   exec = 0xf (set by the caller using nir_push_if)
+#   src[0] = 64-bit SGPR atomic base address (use nir_load_xfb_state_address_gfx12_amd)
+#   src[1] = 32-bit VGPR voffset, set in 4 lanes (always local_invocation_index * 8)
+#   src[2] = 32-bit SGPR ordered_id (use nir_load_ordered_id_amd)
+#   src[3] = 64-bit VGPR atomic src, set in 4 lanes
+#            (always pack_64_2x32_split(ordered_id, "dwords written per workgroup" for each buffer))
+#
+# dst = 32-bit VGPR of the previous value of dwords_writtenN in memory, returned in 4 lanes
+intrinsic("ordered_xfb_counter_add_gfx12_amd", dest_comp=1, src_comp=[1, 1, 1, 1], bit_sizes=[32])
+
 # Subtract from global streamout buffer offsets. Used to fix up the offsets
 # when we overflow streamout buffers.
 # src[] = { offsets }
@@ -1743,6 +1761,18 @@ intrinsic("cmat_muladd_amd", src_comp=[16, 16, 0], dest_comp=0, bit_sizes=src2,
 
 # Get the debug log buffer descriptor.
 intrinsic("load_debug_log_desc_amd", bit_sizes=[32], dest_comp=4, flags=[CAN_ELIMINATE, CAN_REORDER])
+
+# s_sleep BASE (sleep for 64*BASE cycles). BASE must be in [0, 0xffff].
+# BASE=0 is valid but isn't useful.
+# GFX12+: If BASE & 0x8000, sleep forever (until wakeup, trap, or kill).
+intrinsic("sleep_amd", indices=[BASE])
+
+# s_nop BASE (sleep for BASE+1 cycles, BASE must be in [0, 15]).
+intrinsic("nop_amd", indices=[BASE])
+
+system_value("ray_tracing_stack_base_lvp", 1)
+
+system_value("shader_call_data_offset_lvp", 1)
 
 # V3D-specific instrinc for tile buffer color reads.
 #
@@ -2171,7 +2201,7 @@ system_value("ray_query_global_intel", 1, bit_sizes=[64])
 # infrastructure in NIR uses to determine the number of components in the
 # result.
 intrinsic("dpas_intel", dest_comp=0, src_comp=[0, 0, 0],
-          indices=[DEST_TYPE, SRC_TYPE, SATURATE, CMAT_SIGNED_MASK, SYSTOLIC_DEPTH, REPEAT_COUNT],
+          indices=[DEST_TYPE, SRC_TYPE, SATURATE, SYSTOLIC_DEPTH, REPEAT_COUNT],
           flags=[CAN_ELIMINATE])
 
 # NVIDIA-specific intrinsics

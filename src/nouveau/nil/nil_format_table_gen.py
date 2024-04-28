@@ -17,7 +17,7 @@ TEMPLATE_H = template.Template(text="""\
 #ifndef ${guard}
 #define ${guard}
 
-#include "nil_format.h"
+#include "util/format/u_format.h"
 
 enum nil_format_support_flags {
    NIL_FORMAT_SUPPORTS_TEXTURE_BIT        = BITFIELD_BIT(0),
@@ -27,6 +27,18 @@ enum nil_format_support_flags {
    NIL_FORMAT_SUPPORTS_ALPHA_BLEND_BIT    = BITFIELD_BIT(4),
    NIL_FORMAT_SUPPORTS_DEPTH_STENCIL_BIT  = BITFIELD_BIT(5),
    NIL_FORMAT_SUPPORTS_SCANOUT_BIT        = BITFIELD_BIT(6),
+};
+
+struct nil_tic_format {
+   unsigned comp_sizes:8;
+   unsigned type_r:3;
+   unsigned type_g:3;
+   unsigned type_b:3;
+   unsigned type_a:3;
+   unsigned src_x:3;
+   unsigned src_y:3;
+   unsigned src_z:3;
+   unsigned src_w:3;
 };
 
 struct nil_format_info {
@@ -53,6 +65,8 @@ TEMPLATE_C = template.Template(text="""\
 #include "cl9097tex.h"
 #include "clb097.h"
 #include "clb097tex.h"
+#include "clb197.h"
+#include "clb197tex.h"
 
 const struct nil_format_info nil_format_table[PIPE_FORMAT_COUNT] = {
 % for f in formats:
@@ -77,19 +91,21 @@ const struct nil_format_info nil_format_table[PIPE_FORMAT_COUNT] = {
 
 CT_FORMAT_PREFIX = {
     None        : 'NV9097_SET_COLOR_TARGET_FORMAT_V_',
-    'maxwell'   : 'NVB097_SET_COLOR_TARGET_FORMAT_V_',
+    'maxwella'  : 'NVB097_SET_COLOR_TARGET_FORMAT_V_',
     'tk1'       : 'NVB097_SET_COLOR_TARGET_FORMAT_V_',
 }
 
 ZT_FORMAT_PREFIX = {
     None        : 'NV9097_SET_ZT_FORMAT_V_',
-    'maxwell'   : 'NVB097_SET_ZT_FORMAT_V_',
+    'maxwella'  : 'NVB097_SET_ZT_FORMAT_V_',
+    'maxwellb'  : 'NVB197_SET_ZT_FORMAT_V_',
     'tk1'       : 'NVB097_SET_ZT_FORMAT_V_',
 }
 
 TCS_PREFIX = {
     None        : 'NV9097_TEXHEADV2_0_COMPONENT_SIZES_',
-    'maxwell'   : 'NVB097_TEXHEAD_BL_COMPONENTS_SIZES_',
+    'maxwella'  : 'NVB097_TEXHEAD_BL_COMPONENTS_SIZES_',
+    'maxwellb'  : 'NVB197_TEXHEAD_BL_COMPONENTS_SIZES_',
     'tk1'       : 'NVB097_TEXHEAD_BL_COMPONENTS_SIZES_',
 }
 
