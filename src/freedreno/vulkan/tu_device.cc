@@ -22,6 +22,7 @@
 #include "util/driconf.h"
 #include "util/os_misc.h"
 #include "util/u_process.h"
+#include "vk_android.h"
 #include "vk_shader_module.h"
 #include "vk_sampler.h"
 #include "vk_util.h"
@@ -41,6 +42,11 @@
 #include "tu_rmv.h"
 #include "tu_tracepoints.h"
 #include "tu_wsi.h"
+
+#if DETECT_OS_ANDROID
+#include "util/u_gralloc/u_gralloc.h"
+#include <vndk/hardware_buffer.h>
+#endif
 
 static int
 tu_device_get_cache_uuid(struct tu_physical_device *device, void *uuid)
@@ -170,6 +176,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .KHR_maintenance3 = true,
       .KHR_maintenance4 = true,
       .KHR_maintenance5 = true,
+      .KHR_maintenance6 = true,
       .KHR_map_memory2 = true,
       .KHR_multiview = TU_DEBUG(NOCONFORM) ? true : device->info->a6xx.has_hw_multiview,
       .KHR_performance_query = TU_DEBUG(PERFC),
@@ -242,11 +249,14 @@ get_device_extensions(const struct tu_physical_device *device,
       .EXT_image_view_min_lod = true,
       .EXT_index_type_uint8 = true,
       .EXT_inline_uniform_block = true,
+      .EXT_legacy_vertex_attributes = true,
       .EXT_line_rasterization = true,
       .EXT_load_store_op_none = true,
+      .EXT_map_memory_placed = true,
       .EXT_memory_budget = true,
       .EXT_multi_draw = true,
       .EXT_mutable_descriptor_type = true,
+      .EXT_nested_command_buffer = true,
       .EXT_non_seamless_cube_map = true,
       .EXT_physical_device_drm = !is_kgsl(device->instance),
       .EXT_pipeline_creation_cache_control = true,
@@ -279,9 +289,6 @@ get_device_extensions(const struct tu_physical_device *device,
 
       /* For Graphics Flight Recorder (GFR) */
       .AMD_buffer_marker = true,
-#if DETECT_OS_ANDROID
-      .ANDROID_native_buffer = true,
-#endif
       .ARM_rasterization_order_attachment_access = true,
       .GOOGLE_decorate_string = true,
       .GOOGLE_hlsl_functionality1 = true,
@@ -289,6 +296,13 @@ get_device_extensions(const struct tu_physical_device *device,
       .IMG_filter_cubic = device->info->a6xx.has_tex_filter_cubic,
       .VALVE_mutable_descriptor_type = true,
    } };
+
+#if DETECT_OS_ANDROID
+   if (vk_android_get_ugralloc() != NULL) {
+      ext->ANDROID_external_memory_android_hardware_buffer = true,
+      ext->ANDROID_native_buffer = true;
+   }
+#endif
 }
 
 static void
@@ -441,6 +455,9 @@ tu_get_features(struct tu_physical_device *pdevice,
    /* VK_KHR_maintenance5 */
    features->maintenance5 = true;
 
+   /* VK_KHR_maintenance6 */
+   features->maintenance6 = true;
+
    /* VK_KHR_performance_query */
    features->performanceCounterQueryPools = true;
    features->performanceCounterMultipleQueryPools = false;
@@ -554,11 +571,24 @@ tu_get_features(struct tu_physical_device *pdevice,
    /* VK_EXT_image_view_min_lod */
    features->minLod = true;
 
+   /* VK_EXT_legacy_vertex_attributes */
+   features->legacyVertexAttributes = true;
+
+   /* VK_EXT_map_memory_placed */
+   features->memoryMapPlaced = true;
+   features->memoryMapRangePlaced = false;
+   features->memoryUnmapReserve = true;
+
    /* VK_EXT_multi_draw */
    features->multiDraw = true;
 
    /* VK_EXT_mutable_descriptor_type */
    features->mutableDescriptorType = true;
+
+   /* VK_EXT_nested_command_buffer */
+   features->nestedCommandBuffer = true,
+   features->nestedCommandBufferRendering = true,
+   features->nestedCommandBufferSimultaneousUse = true,
 
    /* VK_EXT_non_seamless_cube_map */
    features->nonSeamlessCubeMap = true;
@@ -910,7 +940,7 @@ tu_get_properties(struct tu_physical_device *pdevice,
    props->lineWidthRange[1] = pdevice->info->a6xx.line_width_max;
    props->pointSizeGranularity = 	0.0625;
    props->lineWidthGranularity =
-      pdevice->info->a6xx.line_width_max == 1.0 ? 1.0 : 0.5;
+      pdevice->info->a6xx.line_width_max == 1.0 ? 0.0 : 0.5;
    props->strictLines = true;
    props->standardSampleLocations = true;
    props->optimalBufferCopyOffsetAlignment = 128;
@@ -1005,8 +1035,16 @@ tu_get_properties(struct tu_physical_device *pdevice,
           vk_shaderModuleIdentifierAlgorithmUUID,
           sizeof(props->shaderModuleIdentifierAlgorithmUUID));
 
+   /* VK_EXT_map_memory_placed */
+   uint64_t os_page_size = 4096;
+   os_get_page_size(&os_page_size);
+   props->minPlacedMemoryMapAlignment = os_page_size,
+
    /* VK_EXT_multi_draw */
    props->maxMultiDrawCount = 2048;
+
+   /* VK_EXT_nested_command_buffer */
+   props->maxCommandBufferNestingLevel = UINT32_MAX,
 
    /* VK_EXT_graphics_pipeline_library */
    props->graphicsPipelineLibraryFastLinking = true;
@@ -1056,6 +1094,9 @@ tu_get_properties(struct tu_physical_device *pdevice,
    props->descriptorBufferAddressSpaceSize = ~0ull;
    props->combinedImageSamplerDensityMapDescriptorSize = 2 * A6XX_TEX_CONST_DWORDS * 4;
 
+   /* VK_EXT_legacy_vertex_attributes */
+   props->nativeUnalignedPerformance = true,
+
    /* VK_EXT_fragment_density_map*/
    props->minFragmentDensityTexelSize = (VkExtent2D) { MIN_FDM_TEXEL_SIZE, MIN_FDM_TEXEL_SIZE };
    props->maxFragmentDensityTexelSize = (VkExtent2D) { MAX_FDM_TEXEL_SIZE, MAX_FDM_TEXEL_SIZE };
@@ -1068,6 +1109,11 @@ tu_get_properties(struct tu_physical_device *pdevice,
    props->polygonModePointSize = true;
    props->nonStrictWideLinesUseParallelogram = false;
    props->nonStrictSinglePixelWideLinesUseParallelogram = false;
+
+   /* VK_KHR_maintenance6 */
+   props->blockTexelViewCompatibleMultipleLayers = true;
+   props->maxCombinedImageSamplerDescriptorCount = 1;
+   props->fragmentShadingRateClampCombinerInputs = false; /* TODO */
 }
 
 static const struct vk_pipeline_cache_object_ops *const cache_import_ops[] = {
@@ -1650,7 +1696,7 @@ tu_trace_destroy_ts_buffer(struct u_trace_context *utctx, void *timestamps)
 template <chip CHIP>
 static void
 tu_trace_record_ts(struct u_trace *ut, void *cs, void *timestamps,
-                   unsigned idx, bool end_of_pipe)
+                   unsigned idx, uint32_t)
 {
    struct tu_bo *bo = (struct tu_bo *) timestamps;
    struct tu_cs *ts_cs = (struct tu_cs *) cs;
@@ -1689,7 +1735,7 @@ tu_trace_read_ts(struct u_trace_context *utctx,
       tu_device_wait_u_trace(device, submission_data->syncobj);
    }
 
-   if (tu_bo_map(device, bo) != VK_SUCCESS) {
+   if (tu_bo_map(device, bo, NULL) != VK_SUCCESS) {
       return U_TRACE_NO_TIMESTAMP;
    }
 
@@ -2325,7 +2371,7 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
       goto fail_global_bo;
    }
 
-   result = tu_bo_map(device, device->global_bo);
+   result = tu_bo_map(device, device->global_bo, NULL);
    if (result != VK_SUCCESS) {
       vk_startup_errorf(device->instance, result, "BO map");
       goto fail_global_bo_map;
@@ -2539,6 +2585,7 @@ fail_queues:
    }
 
    u_rwlock_destroy(&device->dma_bo_lock);
+   tu_drm_device_finish(device);
    vk_device_finish(&device->vk);
    vk_free(&device->vk.alloc, device);
    return result;
@@ -2733,28 +2780,27 @@ tu_AllocateMemory(VkDevice _device,
 
    assert(pAllocateInfo->sType == VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
 
-   if (pAllocateInfo->allocationSize == 0) {
-      /* Apparently, this is allowed */
-      *pMem = VK_NULL_HANDLE;
-      return VK_SUCCESS;
-   }
-
    struct tu_memory_heap *mem_heap = &device->physical_device->heap;
    uint64_t mem_heap_used = p_atomic_read(&mem_heap->used);
    if (mem_heap_used > mem_heap->size)
       return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 
-   mem = (struct tu_device_memory *) vk_object_alloc(
-      &device->vk, pAllocator, sizeof(*mem), VK_OBJECT_TYPE_DEVICE_MEMORY);
+   mem = (struct tu_device_memory *) vk_device_memory_create(
+      &device->vk, pAllocateInfo, pAllocator, sizeof(*mem));
    if (mem == NULL)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
+   if (pAllocateInfo->allocationSize == 0 && !mem->vk.ahardware_buffer) {
+      vk_device_memory_destroy(&device->vk, pAllocator, &mem->vk);
+      /* Apparently, this is allowed */
+      *pMem = VK_NULL_HANDLE;
+      return VK_SUCCESS;
+   }
+
    const VkImportMemoryFdInfoKHR *fd_info =
       vk_find_struct_const(pAllocateInfo->pNext, IMPORT_MEMORY_FD_INFO_KHR);
-   if (fd_info && !fd_info->handleType)
-      fd_info = NULL;
 
-   if (fd_info) {
+   if (fd_info && fd_info->handleType) {
       assert(fd_info->handleType ==
                 VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT ||
              fd_info->handleType ==
@@ -2771,6 +2817,15 @@ tu_AllocateMemory(VkDevice _device,
          /* take ownership and close the fd */
          close(fd_info->fd);
       }
+   } else if (mem->vk.ahardware_buffer) {
+#if DETECT_OS_ANDROID
+      const native_handle_t *handle = AHardwareBuffer_getNativeHandle(mem->vk.ahardware_buffer);
+      assert(handle->numFds > 0);
+      size_t size = lseek(handle->data[0], 0, SEEK_END);
+      result = tu_bo_init_dmabuf(device, &mem->bo, size, handle->data[0]);
+#else
+      result = VK_ERROR_FEATURE_NOT_PRESENT;
+#endif
    } else {
       uint64_t client_address = 0;
       BITMASK_ENUM(tu_bo_alloc_flags) alloc_flags = TU_BO_ALLOC_NO_FLAGS;
@@ -2813,7 +2868,7 @@ tu_AllocateMemory(VkDevice _device,
    }
 
    if (result != VK_SUCCESS) {
-      vk_object_free(&device->vk, pAllocator, mem);
+      vk_device_memory_destroy(&device->vk, pAllocator, &mem->vk);
       return result;
    }
 
@@ -2861,7 +2916,7 @@ tu_FreeMemory(VkDevice _device,
 
    p_atomic_add(&device->physical_device->heap.used, -mem->bo->size);
    tu_bo_finish(device, mem->bo);
-   vk_object_free(&device->vk, pAllocator, mem);
+   vk_device_memory_destroy(&device->vk, pAllocator, &mem->vk);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -2876,11 +2931,17 @@ tu_MapMemory2KHR(VkDevice _device, const VkMemoryMapInfoKHR *pMemoryMapInfo, voi
       return VK_SUCCESS;
    }
 
-   if (!mem->bo->map) {
-      result = tu_bo_map(device, mem->bo);
-      if (result != VK_SUCCESS)
-         return result;
+   void *placed_addr = NULL;
+   if (pMemoryMapInfo->flags & VK_MEMORY_MAP_PLACED_BIT_EXT) {
+      const VkMemoryMapPlacedInfoEXT *placed_info =
+         vk_find_struct_const(pMemoryMapInfo->pNext, MEMORY_MAP_PLACED_INFO_EXT);
+      assert(placed_info != NULL);
+      placed_addr = placed_info->pPlacedAddress;
    }
+
+   result = tu_bo_map(device, mem->bo, placed_addr);
+   if (result != VK_SUCCESS)
+      return result;
 
    *ppData = (char *) mem->bo->map + pMemoryMapInfo->offset;
    return VK_SUCCESS;
@@ -2889,8 +2950,13 @@ tu_MapMemory2KHR(VkDevice _device, const VkMemoryMapInfoKHR *pMemoryMapInfo, voi
 VKAPI_ATTR VkResult VKAPI_CALL
 tu_UnmapMemory2KHR(VkDevice _device, const VkMemoryUnmapInfoKHR *pMemoryUnmapInfo)
 {
-   /* TODO: unmap here instead of waiting for FreeMemory */
-   return VK_SUCCESS;
+   VK_FROM_HANDLE(tu_device, device, _device);
+   VK_FROM_HANDLE(tu_device_memory, mem, pMemoryUnmapInfo->memory);
+
+   if (mem == NULL)
+      return VK_SUCCESS;
+
+   return tu_bo_unmap(device, mem->bo, pMemoryUnmapInfo->flags & VK_MEMORY_UNMAP_RESERVE_BIT_EXT);
 }
 
 static void
@@ -2959,6 +3025,11 @@ tu_BindBufferMemory2(VkDevice device,
       VK_FROM_HANDLE(tu_device_memory, mem, pBindInfos[i].memory);
       VK_FROM_HANDLE(tu_buffer, buffer, pBindInfos[i].buffer);
 
+      const VkBindMemoryStatusKHR *status =
+         vk_find_struct_const(pBindInfos[i].pNext, BIND_MEMORY_STATUS_KHR);
+      if (status)
+         *status->pResult = VK_SUCCESS;
+
       if (mem) {
          buffer->bo = mem->bo;
          buffer->iova = mem->bo->iova + pBindInfos[i].memoryOffset;
@@ -3006,7 +3077,7 @@ tu_CreateEvent(VkDevice _device,
    if (result != VK_SUCCESS)
       goto fail_alloc;
 
-   result = tu_bo_map(device, event->bo);
+   result = tu_bo_map(device, event->bo, NULL);
    if (result != VK_SUCCESS)
       goto fail_map;
 

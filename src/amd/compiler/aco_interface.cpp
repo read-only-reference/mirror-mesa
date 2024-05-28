@@ -73,7 +73,7 @@ get_disasm_string(Program* program, std::vector<uint32_t>& code, unsigned exec_s
          print_asm(program, code, exec_size / 4u, memf);
       } else {
          fprintf(memf, "Shader disassembly is not supported in the current configuration"
-#if !LLVM_AVAILABLE
+#if !AMD_LLVM_AVAILABLE
                        " (LLVM not available)"
 #endif
                        ", falling back to print_program.\n\n");
@@ -104,6 +104,10 @@ aco_postprocess_shader(const struct aco_compiler_options* options,
    if (!info->is_trap_handler_shader) {
       dominator_tree(program.get());
       lower_phis(program.get());
+
+      if (program->gfx_level <= GFX7)
+         lower_subdword(program.get());
+
       validate(program.get());
 
       /* Optimization */
@@ -353,6 +357,8 @@ aco_compile_vs_prolog(const struct aco_compiler_options* options,
    select_vs_prolog(program.get(), pinfo, &config, options, info, args);
    validate(program.get());
    insert_NOPs(program.get());
+   if (program->gfx_level >= GFX10)
+      form_hard_clauses(program.get());
 
    if (options->dump_shader)
       aco_print_program(program.get(), stderr);
@@ -398,7 +404,7 @@ aco_get_codegen_flags()
    init();
    /* Exclude flags which don't affect code generation. */
    uint64_t exclude =
-      DEBUG_VALIDATE_IR | DEBUG_VALIDATE_RA | DEBUG_PERFWARN | DEBUG_PERF_INFO | DEBUG_LIVE_INFO;
+      DEBUG_VALIDATE_IR | DEBUG_VALIDATE_RA | DEBUG_PERF_INFO | DEBUG_LIVE_INFO;
    return debug_flags & ~exclude;
 }
 

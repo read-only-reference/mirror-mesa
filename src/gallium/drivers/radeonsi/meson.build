@@ -113,6 +113,7 @@ files_libradeonsi = files(
   'radeon_vcn_enc_2_0.c',
   'radeon_vcn_enc_3_0.c',
   'radeon_vcn_enc_4_0.c',
+  'radeon_vcn_enc_5_0.c',
   'radeon_video.c',
   'radeon_video.h',
 )
@@ -129,7 +130,7 @@ files_libradeonsi += ['si_perfetto.cpp', 'si_perfetto.h']
 
 amd_common_libs = [libamd_common]
 
-if with_llvm
+if amd_with_llvm
   files_libradeonsi += files(
     'si_shader_llvm.c',
     'si_shader_llvm.h',
@@ -144,7 +145,7 @@ if with_llvm
 endif
 
 radeonsi_gfx_libs = []
-foreach ver : ['6', '7', '8', '9', '10', '103', '11', '115']
+foreach ver : ['6', '7', '8', '9', '10', '103', '11', '115', '12']
   radeonsi_gfx_libs += static_library(
     'radeonsi_gfx@0@'.format(ver),
     ['si_state_draw.cpp'],
@@ -166,7 +167,7 @@ libradeonsi = static_library(
 driver_radeonsi = declare_dependency(
   compile_args : '-DGALLIUM_RADEONSI',
   link_with : radeonsi_gfx_libs + [
-    libradeonsi, libradeonwinsys, libamdgpuwinsys, libamd_common, libamd_common_llvm, libgalliumvl, libvpe
+    libradeonsi, libradeonwinsys, libamdgpuwinsys, libamd_common, libamd_common_llvm, libvpe
   ],
   dependencies : idep_nir,
 )

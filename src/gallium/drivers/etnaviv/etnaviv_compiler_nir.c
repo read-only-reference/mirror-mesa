@@ -491,7 +491,7 @@ emit_alu(struct etna_compile *c, nir_alu_instr * alu)
       break;
    }
 
-   hw_src srcs[3];
+   hw_src srcs[3] = {0};
 
    for (int i = 0; i < info->num_inputs; i++) {
       nir_alu_src *asrc = &alu->src[i];
@@ -576,12 +576,12 @@ emit_intrinsic(struct etna_compile *c, nir_intrinsic_instr * intr)
          .opcode = ISA_OPC_MOVAR,
          .dst.use = 1,
          .dst.write_mask = ISA_WRMASK_X___,
-         .src[2] = get_src(c, &intr->src[0]),
+         .src[0] = get_src(c, &intr->src[0]),
       });
       emit_inst(c, &(struct etna_inst) {
          .opcode = ISA_OPC_MOV,
          .dst = dst,
-         .src[2] = {
+         .src[0] = {
             .use = 1,
             .rgroup = ISA_REG_GROUP_UNIFORM_0,
             .reg = nir_intrinsic_base(intr),

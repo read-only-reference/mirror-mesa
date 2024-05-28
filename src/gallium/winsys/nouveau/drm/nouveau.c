@@ -6,12 +6,11 @@
 #include <stdlib.h>
 #include <xf86drm.h>
 
-#include <nouveau/nvif/ioctl.h>
-
 #include "drm-uapi/nouveau_drm.h"
 #include "nouveau.h"
 #include "nvif/class.h"
 #include "nvif/cl0080.h"
+#include "nvif/ioctl.h"
 
 #include "util/bitscan.h"
 #include "util/list.h"
@@ -65,11 +64,11 @@ nouveau_drm_new(int fd, struct nouveau_drm **pdrm)
    if (!drm)
       return -ENOMEM;
    drm->fd = fd;
+   *pdrm = drm;
 
    drmVersionPtr ver = drmGetVersion(fd);
    if (!ver)
       goto out_err;
-   *pdrm = drm;
 
    drm->version = (ver->version_major << 24) |
                   (ver->version_minor << 8) |
@@ -81,7 +80,7 @@ nouveau_drm_new(int fd, struct nouveau_drm **pdrm)
    return 0;
 
 out_err:
-   nouveau_drm_del(&drm);
+   nouveau_drm_del(pdrm);
    return -EINVAL;
 }
 

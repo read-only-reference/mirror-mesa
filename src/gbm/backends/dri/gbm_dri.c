@@ -262,7 +262,7 @@ static struct dri_extension_match gbm_swrast_device_extensions[] = {
 };
 
 static const __DRIextension **
-dri_open_driver(struct gbm_dri_device *dri)
+dri_open_driver(struct gbm_dri_device *dri, bool driver_name_is_inferred)
 {
    /* Temporarily work around dri driver libs that need symbols in libglapi
     * but don't automatically link it in.
@@ -283,17 +283,18 @@ dri_open_driver(struct gbm_dri_device *dri)
       "LIBGL_DRIVERS_PATH",
       NULL
    };
-   return loader_open_driver(dri->driver_name, &dri->driver, search_path_vars);
+   return loader_open_driver(dri->driver_name, &dri->driver, search_path_vars,
+                             driver_name_is_inferred);
 }
 
 static int
-dri_screen_create_for_driver(struct gbm_dri_device *dri, char *driver_name, bool implicit)
+dri_screen_create_for_driver(struct gbm_dri_device *dri, char *driver_name, bool driver_name_is_inferred)
 {
    bool swrast = driver_name == NULL; /* If it's pure swrast, not just swkms. */
 
    dri->driver_name = swrast ? strdup("swrast") : driver_name;
 
-   const __DRIextension **extensions = dri_open_driver(dri);
+   const __DRIextension **extensions = dri_open_driver(dri, driver_name_is_inferred);
    if (!extensions)
       goto fail;
 
@@ -318,7 +319,7 @@ dri_screen_create_for_driver(struct gbm_dri_device *dri, char *driver_name, bool
    dri->screen = dri->mesa->createNewScreen3(0, swrast ? -1 : dri->base.v0.fd,
                                              dri->loader_extensions,
                                              dri->driver_extensions,
-                                             &dri->driver_configs, implicit, dri);
+                                             &dri->driver_configs, driver_name_is_inferred, dri);
    if (dri->screen == NULL)
       goto close_driver;
 
@@ -348,7 +349,7 @@ fail:
 }
 
 static int
-dri_screen_create(struct gbm_dri_device *dri, bool implicit)
+dri_screen_create(struct gbm_dri_device *dri, bool driver_name_is_inferred)
 {
    char *driver_name;
 
@@ -356,11 +357,11 @@ dri_screen_create(struct gbm_dri_device *dri, bool implicit)
    if (!driver_name)
       return -1;
 
-   return dri_screen_create_for_driver(dri, driver_name, implicit);
+   return dri_screen_create_for_driver(dri, driver_name, driver_name_is_inferred);
 }
 
 static int
-dri_screen_create_sw(struct gbm_dri_device *dri, bool implicit)
+dri_screen_create_sw(struct gbm_dri_device *dri, bool driver_name_is_inferred)
 {
    char *driver_name;
    int ret;
@@ -369,9 +370,9 @@ dri_screen_create_sw(struct gbm_dri_device *dri, bool implicit)
    if (!driver_name)
       return -errno;
 
-   ret = dri_screen_create_for_driver(dri, driver_name, implicit);
+   ret = dri_screen_create_for_driver(dri, driver_name, driver_name_is_inferred);
    if (ret != 0)
-      ret = dri_screen_create_for_driver(dri, NULL, implicit);
+      ret = dri_screen_create_for_driver(dri, NULL, driver_name_is_inferred);
    if (ret != 0)
       return ret;
 

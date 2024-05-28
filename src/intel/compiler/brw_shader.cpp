@@ -577,6 +577,14 @@ fs_inst::remove(bblock_t *block, bool defer_later_block_ip_updates)
 {
    assert(inst_is_in_block(block, this) || !"Instruction not in block");
 
+   if (exec_list_is_singular(&block->instructions)) {
+      this->opcode = BRW_OPCODE_NOP;
+      this->resize_sources(0);
+      this->dst = fs_reg();
+      this->size_written = 0;
+      return;
+   }
+
    if (defer_later_block_ip_updates) {
       block->end_ip_delta--;
    } else {
@@ -616,7 +624,8 @@ brw_compile_tes(const struct brw_compiler *compiler,
    nir->info.inputs_read = key->inputs_read;
    nir->info.patch_inputs_read = key->patch_inputs_read;
 
-   brw_nir_apply_key(nir, compiler, &key->base, 8);
+   brw_nir_apply_key(nir, compiler, &key->base,
+                     brw_geometry_stage_dispatch_width(compiler->devinfo));
    brw_nir_lower_tes_inputs(nir, input_vue_map);
    brw_nir_lower_vue_outputs(nir);
    brw_postprocess_nir(nir, compiler, debug_enabled,

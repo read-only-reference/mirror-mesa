@@ -77,7 +77,7 @@ endif
 
 if with_platform_android
   vulkan_lite_runtime_files += files('vk_android.c')
-  vulkan_lite_runtime_deps += dep_android
+  vulkan_lite_runtime_deps += [dep_android, idep_u_gralloc]
 endif
 
 vk_common_entrypoints = custom_target(
@@ -153,6 +153,17 @@ vk_physical_device_properties = custom_target(
   depend_files : vk_physical_device_properties_gen_depend_files,
 )
 
+vk_physical_device_spirv_caps = custom_target(
+  'vk_physical_device_spirv_caps',
+  input : [vk_physical_device_spirv_caps_gen, vk_api_xml],
+  output : 'vk_physical_device_spirv_caps.c',
+  command : [
+    prog_python, '@INPUT0@', '--xml', '@INPUT1@',
+    '--out-c', '@OUTPUT0@', '--beta', with_vulkan_beta.to_string()
+  ],
+  depend_files : vk_physical_device_spirv_caps_gen_depend_files,
+)
+
 vk_synchronization_helpers = custom_target(
   'vk_synchronization_helpers',
   input : [vk_synchronization_helpers_gen, vk_api_xml],
@@ -183,6 +194,7 @@ vulkan_lite_runtime_files += [
   vk_format_info,
   vk_physical_device_features,
   vk_physical_device_properties,
+  vk_physical_device_spirv_caps,
   vk_synchronization_helpers,
 ]
 
@@ -230,6 +242,7 @@ libvulkan_lite_instance = static_library(
 # - idep_vulkan_runtime
 idep_vulkan_lite_runtime_headers = declare_dependency(
   sources : [
+    spirv_info_h,
     vk_cmd_enqueue_entrypoints[0],
     vk_cmd_queue[1],
     vk_common_entrypoints[0],
@@ -282,7 +295,11 @@ if prog_glslang.found()
     'astc_spv.h',
     input : astc_decoder_glsl_file,
     output : 'astc_spv.h',
-    command : [prog_glslang, '-V', '-S', 'comp', '-x', '-o', '@OUTPUT@', '@INPUT@'] + glslang_quiet,
+    command : [
+      prog_glslang, '-V', '-S', 'comp', '-x', '-o', '@OUTPUT@', '@INPUT@',
+      glslang_quiet, glslang_depfile,
+    ],
+    depfile : 'astc_spv.h.d',
   )
 endif
 

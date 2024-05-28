@@ -131,8 +131,12 @@ struct intel_pipeline_stat {
 #define STATS_BO_END_OFFSET_BYTES   (STATS_BO_SIZE / 2)
 #define MAX_STAT_COUNTERS           (STATS_BO_END_OFFSET_BYTES / 8)
 
-#define I915_PERF_OA_SAMPLE_SIZE (8 +   /* drm_i915_perf_record_header */ \
-                                  256)  /* OA counter report */
+/* Up to now all platforms uses the same sample size */
+#define INTEL_PERF_OA_SAMPLE_SIZE 256
+
+/* header + sample */
+#define INTEL_PERF_OA_HEADER_SAMPLE_SIZE (sizeof(struct intel_perf_record_header) + \
+                                          INTEL_PERF_OA_SAMPLE_SIZE)
 
 struct intel_perf_query_result {
    /**
@@ -248,7 +252,7 @@ struct intel_perf_query_info {
 
    /* OA specific */
    uint64_t oa_metrics_set_id;
-   int oa_format;
+   uint64_t oa_format;
 
    /* For indexing into the accumulator[] ... */
    int gpu_time_offset;
@@ -345,8 +349,10 @@ struct intel_perf_config {
     */
    uint64_t oa_timestamp_mask;
 
-   /* Powergating configuration for the running the query. */
-   struct drm_i915_gem_context_param_sseu sseu;
+   /* Powergating configuration for the running the query.
+    * Only used in i915, struct drm_i915_gem_context_param_sseu.
+    */
+   void *sseu;
 
    struct intel_perf_query_info *queries;
    int n_queries;
@@ -373,7 +379,7 @@ struct intel_perf_config {
       bool     query_mode;          /** $QueryMode */
    } sys_vars;
 
-   struct intel_device_info devinfo;
+   const struct intel_device_info *devinfo;
 
    /* OA metric sets, indexed by GUID, as know by Mesa at build time, to
     * cross-reference with the GUIDs of configs advertised by the kernel at
@@ -385,12 +391,6 @@ struct intel_perf_config {
     * query begins, this OA metric is used as a fallback.
     */
    uint64_t fallback_raw_oa_metric;
-
-   /* Whether we have support for this platform. If true && n_queries == 0,
-    * this means we will not be able to use i915-perf because of it is in
-    * paranoid mode.
-    */
-   bool platform_supported;
 
    /* Location of the device's sysfs entry. */
    char sysfs_dev_dir[256];
@@ -418,6 +418,19 @@ struct intel_perf_config {
 struct intel_perf_counter_pass {
    struct intel_perf_query_info *query;
    struct intel_perf_query_counter *counter;
+};
+
+enum intel_perf_record_type {
+   INTEL_PERF_RECORD_TYPE_SAMPLE = 1,
+   INTEL_PERF_RECORD_TYPE_OA_REPORT_LOST = 2,
+   INTEL_PERF_RECORD_TYPE_OA_BUFFER_LOST = 3,
+   INTEL_PERF_RECORD_TYPE_MAX,
+};
+
+struct intel_perf_record_header {
+   uint32_t type; /* enum intel_perf_record_type */
+   uint16_t pad;
+   uint16_t size;
 };
 
 /** Initialize the intel_perf_config object for a given device.
@@ -538,6 +551,10 @@ intel_perf_new(void *ctx)
    return perf;
 }
 
+void intel_perf_free(struct intel_perf_config *perf_cfg);
+
+uint64_t intel_perf_get_oa_format(struct intel_perf_config *perf_cfg);
+
 /** Whether we have the ability to hold off preemption on a batch so we don't
  * have to look at the OA buffer to subtract unrelated workloads off the
  * values captured through MI_* commands.
@@ -566,6 +583,14 @@ void intel_perf_get_counters_passes(struct intel_perf_config *perf,
                                     const uint32_t *counter_indices,
                                     uint32_t counter_indices_count,
                                     struct intel_perf_counter_pass *counter_pass);
+
+int intel_perf_stream_open(struct intel_perf_config *perf_config, int drm_fd,
+                           uint32_t ctx_id, uint64_t metrics_set_id,
+                           uint64_t period_exponent, bool hold_preemption,
+                           bool enable);
+int intel_perf_stream_read_samples(struct intel_perf_config *perf_config,
+                                   int perf_stream_fd, uint8_t *buffer,
+                                   size_t buffer_len);
 
 #ifdef __cplusplus
 } // extern "C"

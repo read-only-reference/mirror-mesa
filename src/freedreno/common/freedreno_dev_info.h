@@ -175,6 +175,14 @@ struct fd_dev_info {
       /* See ir3_compiler::has_scalar_alu. */
       bool has_scalar_alu;
 
+      /* Whether writing to UBWC attachment and reading the same image as input
+       * attachment or as a texture reads correct values from the image.
+       * If this is false, we may read stale values from the flag buffer,
+       * thus reading incorrect values from the image.
+       * Happens with VK_EXT_attachment_feedback_loop_layout.
+       */
+      bool has_coherent_ubwc_flag_caches;
+
       struct {
          uint32_t PC_POWER_CNTL;
          uint32_t TPL1_DBG_ECO_CNTL;
@@ -239,6 +247,13 @@ struct fd_dev_info {
        * fully compatible.
        */
       bool ubwc_unorm_snorm_int_compatible;
+
+      /* Blob doesn't use hw binning with GS on all a6xx and a7xx, however
+       * in Turnip it worked without issues until a750. On a750 there are CTS
+       * failures when e.g. dEQP-VK.subgroups.arithmetic.framebuffer.* in
+       * parallel with "forcebin". It is exacerbated by using "syncdraw".
+       */
+      bool no_gs_hw_binning_quirk;
    } a7xx;
 };
 

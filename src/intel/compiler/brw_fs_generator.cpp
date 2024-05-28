@@ -901,6 +901,9 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
       assert(inst->mlen <= BRW_MAX_MSG_LENGTH * reg_unit(devinfo));
 
       switch (inst->opcode) {
+      case BRW_OPCODE_NOP:
+         brw_NOP(p);
+         break;
       case BRW_OPCODE_SYNC:
          assert(src[0].file == BRW_IMMEDIATE_VALUE);
          brw_SYNC(p, tgl_sync_function(src[0].ud));
@@ -1165,7 +1168,8 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
 
       case SHADER_OPCODE_MOV_RELOC_IMM:
          assert(src[0].file == BRW_IMMEDIATE_VALUE);
-         brw_MOV_reloc_imm(p, dst, dst.type, src[0].ud);
+         assert(src[1].file == BRW_IMMEDIATE_VALUE);
+         brw_MOV_reloc_imm(p, dst, dst.type, src[0].ud, src[1].ud);
          break;
 
       case BRW_OPCODE_HALT:
@@ -1325,7 +1329,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
          brw_float_controls_mode(p, src[0].d, src[1].d);
          break;
 
-      case SHADER_OPCODE_READ_SR_REG:
+      case SHADER_OPCODE_READ_ARCH_REG:
          if (devinfo->ver >= 12) {
             /* There is a SWSB restriction that requires that any time sr0 is
              * accessed both the instruction doing the access and the next one
@@ -1333,13 +1337,12 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
              */
             if (brw_get_default_swsb(p).mode != TGL_SBID_NULL)
                brw_SYNC(p, TGL_SYNC_NOP);
-            assert(src[0].file == BRW_IMMEDIATE_VALUE);
             brw_set_default_swsb(p, tgl_swsb_regdist(1));
-            brw_MOV(p, dst, brw_sr0_reg(src[0].ud));
+            brw_MOV(p, dst, src[0]);
             brw_set_default_swsb(p, tgl_swsb_regdist(1));
             brw_AND(p, dst, dst, brw_imm_ud(0xffffffff));
          } else {
-            brw_MOV(p, dst, brw_sr0_reg(src[0].ud));
+            brw_MOV(p, dst, src[0]);
          }
          break;
 

@@ -412,7 +412,7 @@ namespace brw {
          left = horiz_stride(horiz_offset(tmp, left_offset), left_stride);
          right = horiz_stride(horiz_offset(tmp, right_offset), right_stride);
          if ((tmp.type == BRW_TYPE_Q || tmp.type == BRW_TYPE_UQ) &&
-             !shader->devinfo->has_64bit_int) {
+             (!shader->devinfo->has_64bit_int || shader->devinfo->ver >= 20)) {
             switch (opcode) {
             case BRW_OPCODE_MUL:
                /* This will get lowered by integer MUL lowering */
@@ -679,13 +679,14 @@ namespace brw {
           * Original gfx4 does type conversion to the destination type
           * before comparison, producing garbage results for floating
           * point comparisons.
-          *
-          * The destination type doesn't matter on newer generations,
-          * so we set the type to match src0 so we can compact the
-          * instruction.
           */
+         const enum brw_reg_type type =
+            dst.is_null() ?
+            src0.type :
+            brw_type_with_size(src0.type, brw_type_size_bits(dst.type));
+
          return set_condmod(condition,
-                            emit(BRW_OPCODE_CMP, retype(dst, src0.type),
+                            emit(BRW_OPCODE_CMP, retype(dst, type),
                                  fix_unsigned_negate(src0),
                                  fix_unsigned_negate(src1)));
       }
@@ -704,13 +705,14 @@ namespace brw {
           * Original gfx4 does type conversion to the destination type
           * before comparison, producing garbage results for floating
           * point comparisons.
-          *
-          * The destination type doesn't matter on newer generations,
-          * so we set the type to match src0 so we can compact the
-          * instruction.
           */
+         const enum brw_reg_type type =
+            dst.is_null() ?
+            src0.type :
+            brw_type_with_size(src0.type, brw_type_size_bits(dst.type));
+
          return set_condmod(condition,
-                            emit(BRW_OPCODE_CMPN, retype(dst, src0.type),
+                            emit(BRW_OPCODE_CMPN, retype(dst, type),
                                  fix_unsigned_negate(src0),
                                  fix_unsigned_negate(src1)));
       }
@@ -787,6 +789,18 @@ namespace brw {
          }
 
          return inst;
+      }
+
+      void
+      VEC(const fs_reg &dst, const fs_reg *src, unsigned sources) const
+      {
+         /* For now, this emits a series of MOVs to ease the transition
+          * to the new helper.  The intention is to have this emit either
+          * a single MOV or a LOAD_PAYLOAD to fully initialize dst from a
+          * the list of sources.
+          */
+         for (unsigned i = 0; i < sources; i++)
+            MOV(offset(dst, dispatch_width(), i), src[i]);
       }
 
       fs_inst *

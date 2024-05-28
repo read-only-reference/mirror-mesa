@@ -2036,7 +2036,7 @@ anv_image_get_memory_requirements(struct anv_device *device,
       }
 
       default:
-         anv_debug_ignored_stype(ext->sType);
+         vk_debug_ignored_stype(ext->sType);
          break;
       }
    }
@@ -2089,7 +2089,7 @@ void anv_GetImageMemoryRequirements2(
       }
 
       default:
-         anv_debug_ignored_stype(ext->sType);
+         vk_debug_ignored_stype(ext->sType);
          break;
       }
    }
@@ -2156,7 +2156,8 @@ anv_image_get_sparse_memory_requirements(
 
       VkSparseImageFormatProperties format_props =
          anv_sparse_calc_image_format_properties(device->physical, aspect,
-                                                 image->vk.image_type, surf);
+                                                 image->vk.image_type,
+                                                 image->vk.samples, surf);
 
       uint32_t miptail_first_lod;
       VkDeviceSize miptail_size, miptail_offset, miptail_stride;
@@ -2451,7 +2452,7 @@ anv_bind_image_memory(struct anv_device *device,
       }
 #pragma GCC diagnostic pop
       default:
-         anv_debug_ignored_stype(s->sType);
+         vk_debug_ignored_stype(s->sType);
          break;
       }
    }

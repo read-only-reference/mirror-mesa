@@ -274,14 +274,33 @@ print_instr_format_specific(enum amd_gfx_level gfx_level, const Instruction* ins
    case Format::SOPP: {
       uint16_t imm = instr->salu().imm;
       switch (instr->opcode) {
-      case aco_opcode::s_waitcnt: {
-         wait_imm unpacked(gfx_level, imm);
-         if (unpacked.vm != wait_imm::unset_counter)
-            fprintf(output, " vmcnt(%d)", unpacked.vm);
-         if (unpacked.exp != wait_imm::unset_counter)
-            fprintf(output, " expcnt(%d)", unpacked.exp);
-         if (unpacked.lgkm != wait_imm::unset_counter)
-            fprintf(output, " lgkmcnt(%d)", unpacked.lgkm);
+      case aco_opcode::s_waitcnt:
+      case aco_opcode::s_wait_loadcnt_dscnt:
+      case aco_opcode::s_wait_storecnt_dscnt: {
+         wait_imm unpacked;
+         unpacked.unpack(gfx_level, instr);
+         const char* names[wait_type_num];
+         names[wait_type_exp] = "expcnt";
+         names[wait_type_vm] = gfx_level >= GFX12 ? "loadcnt" : "vmcnt";
+         names[wait_type_lgkm] = gfx_level >= GFX12 ? "dscnt" : "lgkmcnt";
+         names[wait_type_vs] = gfx_level >= GFX12 ? "storecnt" : "vscnt";
+         names[wait_type_sample] = "samplecnt";
+         names[wait_type_bvh] = "bvhcnt";
+         names[wait_type_km] = "kmcnt";
+         for (unsigned i = 0; i < wait_type_num; i++) {
+            if (unpacked[i] != wait_imm::unset_counter)
+               fprintf(output, " %s(%d)", names[i], unpacked[i]);
+         }
+         break;
+      }
+      case aco_opcode::s_wait_expcnt:
+      case aco_opcode::s_wait_dscnt:
+      case aco_opcode::s_wait_loadcnt:
+      case aco_opcode::s_wait_storecnt:
+      case aco_opcode::s_wait_samplecnt:
+      case aco_opcode::s_wait_bvhcnt:
+      case aco_opcode::s_wait_kmcnt: {
+         fprintf(output, " imm:%u", imm);
          break;
       }
       case aco_opcode::s_waitcnt_depctr: {
@@ -448,6 +467,8 @@ print_instr_format_specific(enum amd_gfx_level gfx_level, const Instruction* ins
          fprintf(output, " attr%u.%c", ldsdir.attr, "xyzw"[ldsdir.attr_chan]);
       if (ldsdir.wait_vdst != 15)
          fprintf(output, " wait_vdst:%u", ldsdir.wait_vdst);
+      if (ldsdir.wait_vsrc != 1)
+         fprintf(output, " wait_vsrc:%u", ldsdir.wait_vsrc);
       print_sync(ldsdir.sync, output);
       break;
    }

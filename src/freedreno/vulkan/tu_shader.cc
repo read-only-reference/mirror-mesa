@@ -38,40 +38,6 @@ tu_spirv_to_nir(struct tu_device *dev,
       /* Use 16-bit math for RelaxedPrecision ALU ops */
       .mediump_16bit_alu = true,
 
-      .caps = {
-         .demote_to_helper_invocation = true,
-         .descriptor_array_dynamic_indexing = true,
-         .descriptor_array_non_uniform_indexing = true,
-         .descriptor_indexing = true,
-         .device_group = true,
-         .draw_parameters = true,
-         .float_controls = true,
-         .float16 = true,
-         .fragment_density = true,
-         .geometry_streams = true,
-         .image_read_without_format = true,
-         .image_write_without_format = true,
-         .int16 = true,
-         .multiview = true,
-         .physical_storage_buffer_address = true,
-         .post_depth_coverage = true,
-         .runtime_descriptor_array = true,
-         .shader_viewport_index_layer = true,
-         .stencil_export = true,
-         .storage_16bit = dev->physical_device->info->a6xx.storage_16bit,
-         .subgroup_arithmetic = true,
-         .subgroup_ballot = true,
-         .subgroup_basic = true,
-         .subgroup_quad = true,
-         .subgroup_shuffle = true,
-         .subgroup_vote = true,
-         .tessellation = true,
-         .transform_feedback = true,
-         .variable_pointers = true,
-         .vk_memory_model_device_scope = true,
-         .vk_memory_model = true,
-      },
-
       .ubo_addr_format = nir_address_format_vec2_index_32bit_offset,
       .ssbo_addr_format = nir_address_format_vec2_index_32bit_offset,
 
@@ -576,6 +542,12 @@ lower_tex_ycbcr(const struct tu_pipeline_layout *layout,
    if (ycbcr_sampler->ycbcr_model == VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY)
       return;
 
+   /* Skip if not actually a YCbCr format.  CtsGraphics, for example, tries to create
+    * YcbcrConversions for RGB formats.
+    */
+   if (!vk_format_get_ycbcr_info(ycbcr_sampler->format))
+      return;
+
    builder->cursor = nir_after_instr(&tex->instr);
 
    uint8_t bits = vk_format_get_component_bits(ycbcr_sampler->format,
@@ -886,14 +858,6 @@ tu_lower_io(nir_shader *shader, struct tu_device *dev,
             continue;
          if (!(binding->shader_stages &
                mesa_to_vk_shader_stage(shader->info.stage)))
-            continue;
-
-         /* Workaround a CTS bug by ignoring zero-sized inline uniform
-          * blocks that aren't being properly filtered out when creating the
-          * descriptor set layout, see
-          * https://gitlab.khronos.org/Tracker/vk-gl-cts/-/issues/4115
-          */
-         if (binding->size == 0)
             continue;
 
          /* If we don't know the size at compile time due to a variable

@@ -28,6 +28,7 @@ intel_nir_files = files(
   'intel_nir_lower_conversions.c',
   'intel_nir_lower_non_uniform_barycentric_at_sample.c',
   'intel_nir_lower_non_uniform_resource_intel.c',
+  'intel_nir_lower_printf.c',
   'intel_nir_lower_shading_rate_output.c',
   'intel_nir_lower_sparse.c',
   'intel_nir_lower_texture.c',
@@ -130,6 +131,17 @@ brw_device_sha1_gen_src = custom_target('brw_device_sha1_gen.c',
                                         command : [prog_python, '@INPUT0@', '--outdir', meson.current_build_dir()])
 
 
+brw_nir_lower_fsign = custom_target(
+  'brw_nir_lower_fsign.c',
+  input : 'brw_nir_lower_fsign.py',
+  output : 'brw_nir_lower_fsign.c',
+  command : [
+    prog_python, '@INPUT@', '-p', dir_compiler_nir,
+  ],
+  depend_files : nir_algebraic_depends,
+  capture : true,
+)
+
 brw_nir_trig = custom_target(
   'brw_nir_trig_workarounds.c',
   input : 'brw_nir_trig_workarounds.py',
@@ -143,7 +155,7 @@ brw_nir_trig = custom_target(
 
 libintel_compiler_brw = static_library(
   'intel_compiler',
-  [libintel_compiler_brw_files, intel_nir_files, brw_nir_trig, ir_expression_operation_h, [brw_device_sha1_gen_src]],
+  [libintel_compiler_brw_files, intel_nir_files, brw_nir_lower_fsign, brw_nir_trig, ir_expression_operation_h, [brw_device_sha1_gen_src]],
   include_directories : [inc_include, inc_src, inc_intel],
   c_args : [no_override_init_args],
   gnu_symbol_visibility : 'hidden',
@@ -173,9 +185,7 @@ elif with_intel_clc
       'elk/elk_nir_options.h',
       'elk/elk_nir_options.c',
     ],
-    link_with : [
-      libintel_common,libisl,
-    ],
+    link_with : [libisl],
     include_directories : [inc_include, inc_src, inc_intel],
     c_args : [pre_args, no_override_init_args],
     link_args : [ld_args_build_id],
@@ -209,9 +219,7 @@ if with_tests
       ),
       ir_expression_operation_h,
       include_directories : [inc_include, inc_src, inc_intel],
-      link_with : [
-        libintel_common, libisl
-      ],
+      link_with : libisl,
       dependencies : [idep_gtest, idep_nir, idep_mesautil, idep_intel_dev,
                       idep_intel_compiler_brw],
     ),
@@ -255,7 +263,6 @@ brw_asm_tool = executable(
   dependencies : [idep_mesautil, dep_thread, idep_intel_dev,
                   idep_intel_compiler_brw],
   include_directories : [inc_include, inc_src, inc_intel],
-  link_with : [libintel_common],
   c_args : [no_override_init_args],
   gnu_symbol_visibility : 'hidden',
   install : true
@@ -291,7 +298,6 @@ brw_disasm_tool = executable(
   dependencies : [idep_mesautil, dep_thread, idep_intel_dev,
                   idep_intel_compiler_brw],
   include_directories : [inc_include, inc_src, inc_intel],
-  link_with : [libintel_common],
   c_args : [no_override_init_args],
   gnu_symbol_visibility : 'hidden',
   install : true

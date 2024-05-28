@@ -208,9 +208,10 @@ static void si_late_optimize_16bit_samplers(struct si_screen *sscreen, nir_shade
       },
    };
    struct nir_opt_16bit_tex_image_options opt_16bit_options = {
-      .rounding_mode = nir_rounding_mode_rtz,
-      .opt_tex_dest_types = nir_type_float,
-      .opt_image_dest_types = nir_type_float,
+      .rounding_mode = nir_rounding_mode_undef,
+      .opt_tex_dest_types = nir_type_float | nir_type_int | nir_type_uint,
+      .opt_image_dest_types = nir_type_float | nir_type_int | nir_type_uint,
+      .integer_dest_saturates = true,
       .opt_image_store_data = true,
       .opt_image_srcs = true,
       .opt_srcs_options_count = has_g16 ? 2 : 1,
@@ -279,8 +280,6 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
     * - ensure constant offsets for texture instructions are folded
     *   and copy-propagated
     */
-   NIR_PASS_V(nir, nir_lower_int64);
-
    const struct nir_lower_tex_options lower_tex_options = {
       .lower_txp = ~0u,
       .lower_txf_offset = true,
@@ -336,12 +335,21 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
       /* gl_LocalInvocationIndex must be derived from gl_LocalInvocationID.xyz to make it correct
        * with quad derivatives. Using gl_SubgroupID for that (which is what we do by default) is
        * incorrect with a non-linear thread order.
+       *
+       * On Gfx12, we always use a non-linear thread order if the workgroup X and Y size is
+       * divisible by 2.
        */
       options.lower_local_invocation_index =
-         nir->info.cs.derivative_group == DERIVATIVE_GROUP_QUADS;
+         nir->info.cs.derivative_group == DERIVATIVE_GROUP_QUADS ||
+         (sscreen->info.gfx_level >= GFX12 &&
+          nir->info.cs.derivative_group == DERIVATIVE_GROUP_NONE &&
+          (nir->info.workgroup_size_variable ||
+           (nir->info.workgroup_size[0] % 2 == 0 && nir->info.workgroup_size[1] % 2 == 0)));
       NIR_PASS_V(nir, nir_lower_compute_system_values, &options);
 
-      if (nir->info.cs.derivative_group == DERIVATIVE_GROUP_QUADS) {
+      /* Gfx12 supports this in hw. */
+      if (sscreen->info.gfx_level < GFX12 &&
+          nir->info.cs.derivative_group == DERIVATIVE_GROUP_QUADS) {
          nir_opt_cse(nir); /* CSE load_local_invocation_id */
          memset(&options, 0, sizeof(options));
          options.shuffle_local_ids_for_quad_derivatives = true;

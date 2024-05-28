@@ -11,9 +11,9 @@
 #include "util/os_misc.h"
 
 #include <fcntl.h>
-#include <nouveau/nvif/ioctl.h>
 #include "nvif/cl0080.h"
 #include "nvif/class.h"
+#include "nvif/ioctl.h"
 #include <unistd.h>
 #include <xf86drm.h>
 
@@ -454,4 +454,14 @@ nouveau_ws_device_timestamp(struct nouveau_ws_device *device)
       return 0;
 
    return timestamp;
+}
+
+bool
+nouveau_ws_device_has_tiled_bo(struct nouveau_ws_device *device)
+{
+   uint64_t has = 0;
+   if (nouveau_ws_param(device->fd, NOUVEAU_GETPARAM_HAS_VMA_TILEMODE, &has))
+      return false;
+
+   return has != 0;
 }

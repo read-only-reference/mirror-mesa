@@ -79,7 +79,10 @@ gl_nir_opts(nir_shader *nir)
       NIR_PASS(progress, nir, nir_copy_prop);
       NIR_PASS(progress, nir, nir_opt_remove_phis);
       NIR_PASS(progress, nir, nir_opt_dce);
-      if (nir_opt_loop(nir)) {
+
+      bool opt_loop_progress = false;
+      NIR_PASS(opt_loop_progress, nir, nir_opt_loop);
+      if (opt_loop_progress) {
          progress = true;
          NIR_PASS(progress, nir, nir_copy_prop);
          NIR_PASS(progress, nir, nir_opt_dce);
@@ -2781,6 +2784,7 @@ gl_nir_link_glsl(struct gl_context *ctx, struct gl_shader_program *prog)
    }
 
    resize_tes_inputs(consts, prog);
+   set_geom_shader_input_array_size(prog);
 
    /* Validate the inputs of each stage with the output of the preceding
     * stage.

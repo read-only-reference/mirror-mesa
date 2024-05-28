@@ -96,6 +96,7 @@ struct radv_ps_epilog_key {
    uint8_t enable_mrt_output_nan_fixup;
 
    uint32_t colors_written;
+   uint8_t color_map[MAX_RTS];
    bool mrt0_is_dual_src;
    bool export_depth;
    bool export_stencil;
@@ -289,6 +290,7 @@ struct radv_vs_input_state {
    uint32_t offsets[MAX_VERTEX_ATTRIBS];
    uint8_t formats[MAX_VERTEX_ATTRIBS];
    uint8_t format_align_req_minus_1[MAX_VERTEX_ATTRIBS];
+   uint8_t component_align_req_minus_1[MAX_VERTEX_ATTRIBS];
    uint8_t format_sizes[MAX_VERTEX_ATTRIBS];
 
    bool bindings_match_attrib;
@@ -310,6 +312,7 @@ struct radv_vs_prolog_key {
    uint8_t formats[MAX_VERTEX_ATTRIBS];
    unsigned num_attributes;
    uint32_t misaligned_mask;
+   uint32_t unaligned_mask;
    bool as_ls;
    bool is_ngg;
    bool wave32;
@@ -354,6 +357,7 @@ struct radv_shader_binary_rtld {
 struct radv_shader_part_binary {
    struct {
       uint32_t spi_shader_col_format;
+      uint32_t cb_shader_mask;
       uint32_t spi_shader_z_format;
    } info;
 
@@ -452,6 +456,7 @@ struct radv_shader_part {
    uint32_t rsrc1;
    bool nontrivial_divisors;
    uint32_t spi_shader_col_format;
+   uint32_t cb_shader_mask;
    uint32_t spi_shader_z_format;
    uint64_t upload_seq;
 
@@ -546,8 +551,6 @@ union radv_shader_arena_block *radv_alloc_shader_memory(struct radv_device *devi
 union radv_shader_arena_block *radv_replay_shader_arena_block(struct radv_device *device,
                                                               const struct radv_serialized_shader_arena_block *src,
                                                               void *ptr);
-
-struct radv_serialized_shader_arena_block radv_serialize_shader_arena_block(union radv_shader_arena_block *block);
 
 void radv_free_shader_memory(struct radv_device *device, union radv_shader_arena_block *alloc);
 
@@ -705,5 +708,8 @@ void radv_shader_combine_cfg_tes_gs(const struct radv_shader *tes, const struct 
                                     uint32_t *rsrc2_out);
 
 const struct radv_userdata_info *radv_get_user_sgpr(const struct radv_shader *shader, int idx);
+
+void radv_precompute_registers_hw_ngg(struct radv_device *device, const struct ac_shader_config *config,
+                                      struct radv_shader_info *info);
 
 #endif /* RADV_SHADER_H */

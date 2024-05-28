@@ -8,12 +8,6 @@
 KHR-GLES31.core.geometry_shader.rendering.rendering.triangles_with_adjacency_input_line_strip_output_triangle_strip_adjacency_drawcall,Fail
 KHR-GLES31.core.geometry_shader.rendering.rendering.triangles_with_adjacency_input_triangle_strip_output_triangle_strip_adjacency_drawcall,Fail
 
-# ANGLE passes depthBiasConstantFactor directly to GlobalDepthOffsetConstant, while zink multiplies by 2.0.
-# radeonsi has an extra 2.0 factor in the 16-bit depth case vs 24-bit, which radv doesn't have.
-# I expect this is a radv bug due to missing VK CTS coverage:
-# https://gitlab.khronos.org/Tracker/vk-gl-cts/-/issues/4169
-dEQP-GLES3.functional.polygon_offset.fixed16_render_with_units,Fail
-
 # Failure in later miplevels, occasionally flaky
 dEQP-GLES3.functional.texture.specification.teximage2d_depth.depth_component24,Fail
 dEQP-GLES3.functional.texture.specification.teximage2d_depth.depth24_stencil8,Fail
@@ -48,3 +42,15 @@ dEQP-GLES31.functional.texture.specification.texstorage3d.format.depth32f_stenci
 multisample-dEQP-GLES31.functional.blend_equation_advanced.basic.multiply,Fail
 multisample-dEQP-GLES31.functional.blend_equation_advanced.basic.overlay,Fail
 multisample-dEQP-GLES31.functional.blend_equation_advanced.basic.screen,Fail
+
+# Regression from https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/29436
+# https://gitlab.freedesktop.org/mesa/mesa/-/issues/11253
+dEQP-GLES31.functional.tessellation.user_defined_io.per_patch_block_array.vertex_io_array_size_implicit.isolines,Fail
+dEQP-GLES31.functional.tessellation.user_defined_io.per_patch_block_array.vertex_io_array_size_implicit.quads,Fail
+dEQP-GLES31.functional.tessellation.user_defined_io.per_patch_block_array.vertex_io_array_size_implicit.triangles,Fail
+dEQP-GLES31.functional.tessellation.user_defined_io.per_patch_block_array.vertex_io_array_size_query.isolines,Fail
+dEQP-GLES31.functional.tessellation.user_defined_io.per_patch_block_array.vertex_io_array_size_query.quads,Fail
+dEQP-GLES31.functional.tessellation.user_defined_io.per_patch_block_array.vertex_io_array_size_query.triangles,Fail
+dEQP-GLES31.functional.tessellation.user_defined_io.per_patch_block_array.vertex_io_array_size_shader_builtin.isolines,Fail
+dEQP-GLES31.functional.tessellation.user_defined_io.per_patch_block_array.vertex_io_array_size_shader_builtin.quads,Fail
+dEQP-GLES31.functional.tessellation.user_defined_io.per_patch_block_array.vertex_io_array_size_shader_builtin.triangles,Fail

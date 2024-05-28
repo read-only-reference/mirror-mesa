@@ -2378,6 +2378,10 @@ typedef enum nir_texop {
    nir_texop_sampler_descriptor_amd,
    /** Returns the sampler's LOD bias */
    nir_texop_lod_bias_agx,
+   /** Returns a bool indicating that the sampler uses a custom border colour */
+   nir_texop_has_custom_border_color_agx,
+   /** Returns the sampler's custom border colour (if has_custom_border_agx) */
+   nir_texop_custom_border_color_agx,
    /** Maps to TXQ.DIMENSION */
    nir_texop_hdr_dim_nv,
    /** Maps to TXQ.TEXTURE_TYPE */
@@ -3597,6 +3601,8 @@ typedef enum {
    nir_lower_iadd_sat64 = (1 << 21),
    nir_lower_find_lsb64 = (1 << 22),
    nir_lower_conv64 = (1 << 23),
+   nir_lower_uadd_sat64 = (1 << 24),
+   nir_lower_iadd3_64 = (1 << 25),
 } nir_lower_int64_options;
 
 typedef enum {
@@ -3651,6 +3657,13 @@ typedef enum {
    nir_io_dont_use_pos_for_non_fs_varyings = BITFIELD_BIT(1),
 
    nir_io_16bit_input_output_support = BITFIELD_BIT(2),
+
+   /**
+    * Implement mediump inputs and outputs as normal 32-bit IO.
+    * Causes the mediump flag to be not set for IO semantics, essentially
+    * destroying any mediump-related IO information in the shader.
+    */
+   nir_io_mediump_is_32bit = BITFIELD_BIT(3),
 
    /* Options affecting the GLSL compiler are below. */
 
@@ -4332,7 +4345,7 @@ static inline nir_function *
 nir_shader_get_function_for_name(const nir_shader *shader, const char *name)
 {
    nir_foreach_function(func, shader) {
-      if (strcmp(func->name, name) == 0)
+      if (func->name && strcmp(func->name, name) == 0)
          return func;
    }
 
@@ -5660,6 +5673,7 @@ typedef struct {
 } nir_load_store_vectorize_options;
 
 bool nir_opt_load_store_vectorize(nir_shader *shader, const nir_load_store_vectorize_options *options);
+bool nir_opt_load_store_update_alignments(nir_shader *shader);
 
 typedef bool (*nir_lower_shader_calls_should_remat_func)(nir_instr *instr, void *data);
 
@@ -5796,6 +5810,12 @@ bool nir_lower_is_helper_invocation(nir_shader *shader);
 bool nir_lower_single_sampled(nir_shader *shader);
 
 typedef struct nir_lower_subgroups_options {
+   /* In addition to the boolean lowering options below, this optional callback
+    * will filter instructions for lowering if non-NULL. The data passed will be
+    * this options struct itself.
+    */
+   nir_instr_filter_cb filter;
+
    uint8_t subgroup_size;
    uint8_t ballot_bit_size;
    uint8_t ballot_components;
@@ -5818,6 +5838,7 @@ typedef struct nir_lower_subgroups_options {
    bool lower_rotate_to_shuffle : 1;
    bool lower_ballot_bit_count_to_mbcnt_amd : 1;
    bool lower_inverse_ballot : 1;
+   bool lower_reduce : 1;
    bool lower_boolean_reduce : 1;
    bool lower_boolean_shuffle : 1;
 } nir_lower_subgroups_options;
@@ -6315,6 +6336,7 @@ struct nir_opt_16bit_tex_image_options {
    nir_rounding_mode rounding_mode;
    nir_alu_type opt_tex_dest_types;
    nir_alu_type opt_image_dest_types;
+   bool integer_dest_saturates;
    bool opt_image_store_data;
    bool opt_image_srcs;
    unsigned opt_srcs_options_count;
@@ -6432,6 +6454,8 @@ bool nir_lower_helper_writes(nir_shader *shader, bool lower_plain_stores);
 
 typedef struct nir_lower_printf_options {
    unsigned max_buffer_size;
+   unsigned ptr_bit_size;
+   bool     use_printf_base_identifier;
 } nir_lower_printf_options;
 
 bool nir_lower_printf(nir_shader *nir, const nir_lower_printf_options *options);
@@ -6448,6 +6472,7 @@ typedef struct nir_opt_access_options {
 bool nir_opt_access(nir_shader *shader, const nir_opt_access_options *options);
 bool nir_opt_algebraic(nir_shader *shader);
 bool nir_opt_algebraic_before_ffma(nir_shader *shader);
+bool nir_opt_algebraic_before_lower_int64(nir_shader *shader);
 bool nir_opt_algebraic_late(nir_shader *shader);
 bool nir_opt_algebraic_distribute_src_mods(nir_shader *shader);
 bool nir_opt_constant_folding(nir_shader *shader);

@@ -47,17 +47,18 @@
 #include "compiler/v3d_compiler.h"
 #include "drm-uapi/drm_fourcc.h"
 
-static const char *
+const char *
 v3d_screen_get_name(struct pipe_screen *pscreen)
 {
         struct v3d_screen *screen = v3d_screen(pscreen);
 
         if (!screen->name) {
                 screen->name = ralloc_asprintf(screen,
-                                               "V3D %d.%d.%d",
+                                               "V3D %d.%d.%d.%d",
                                                screen->devinfo.ver / 10,
                                                screen->devinfo.ver % 10,
-                                               screen->devinfo.rev);
+                                               screen->devinfo.rev,
+                                               screen->devinfo.compat_rev);
         }
 
         return screen->name;
@@ -73,6 +74,9 @@ static void
 v3d_screen_destroy(struct pipe_screen *pscreen)
 {
         struct v3d_screen *screen = v3d_screen(pscreen);
+
+        ralloc_free(screen->perfcnt_names);
+        screen->perfcnt_names = NULL;
 
         _mesa_hash_table_destroy(screen->bo_handles, NULL);
         v3d_bufmgr_destroy(pscreen);
@@ -151,15 +155,9 @@ v3d_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
         case PIPE_CAP_CUBE_MAP_ARRAY:
         case PIPE_CAP_TEXTURE_BARRIER:
-                return 1;
-
         case PIPE_CAP_POLYGON_OFFSET_CLAMP:
-                return screen->devinfo.ver >= 42;
-
-
         case PIPE_CAP_TEXTURE_QUERY_LOD:
-                return screen->devinfo.ver >= 42;
-                break;
+                return 1;
 
         case PIPE_CAP_PACKED_UNIFORMS:
                 /* We can't enable this flag, because it results in load_ubo
@@ -183,7 +181,7 @@ v3d_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
                 return PIPE_TEXTURE_TRANSFER_BLIT;
 
         case PIPE_CAP_COMPUTE:
-                return screen->has_csd && screen->devinfo.ver >= 42;
+                return screen->has_csd;
 
         case PIPE_CAP_GENERATE_MIPMAP:
                 return v3d_has_feature(screen, DRM_V3D_PARAM_SUPPORTS_TFU);
@@ -346,13 +344,10 @@ v3d_screen_get_shader_param(struct pipe_screen *pscreen, enum pipe_shader_type s
         switch (shader) {
         case PIPE_SHADER_VERTEX:
         case PIPE_SHADER_FRAGMENT:
+        case PIPE_SHADER_GEOMETRY:
                 break;
         case PIPE_SHADER_COMPUTE:
                 if (!screen->has_csd)
-                        return 0;
-                break;
-        case PIPE_SHADER_GEOMETRY:
-                if (screen->devinfo.ver < 42)
                         return 0;
                 break;
         default:
@@ -444,14 +439,7 @@ v3d_screen_get_shader_param(struct pipe_screen *pscreen, enum pipe_shader_type s
                  }
 
         case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
-                if (screen->has_cache_flush) {
-                        if (screen->devinfo.ver < 42)
-                                return 0;
-                        else
-                                return PIPE_MAX_SHADER_IMAGES;
-                } else {
-                        return 0;
-                }
+                return screen->has_cache_flush ? PIPE_MAX_SHADER_IMAGES : 0;
 
         case PIPE_SHADER_CAP_SUPPORTED_IRS:
                 return 1 << PIPE_SHADER_IR_NIR;
@@ -911,6 +899,12 @@ v3d_screen_create(int fd, const struct pipe_screen_config *config,
 
         if (!v3d_get_device_info(screen->fd, &screen->devinfo, &v3d_ioctl))
                 goto fail;
+
+        screen->perfcnt_names = rzalloc_array(screen, char*, screen->devinfo.max_perfcnt);
+        if (!screen->perfcnt_names) {
+                fprintf(stderr, "Error allocating performance counters names");
+                goto fail;
+        }
 
         driParseConfigFiles(config->options, config->options_info, 0, "v3d",
                             NULL, NULL, NULL, 0, NULL, 0);

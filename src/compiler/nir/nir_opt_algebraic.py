@@ -1698,6 +1698,8 @@ optimizations.extend([
    (('ishr', 'a@32', 24), ('extract_i8', a, 3), '!options->lower_extract_byte'),
    (('ishr', 'a@64', 56), ('extract_i8', a, 7), '!options->lower_extract_byte'),
    (('iand', 0xff, a), ('extract_u8', a, 0), '!options->lower_extract_byte'),
+   (('ishr', ('iand', a, 0x0000ff00),  8), ('extract_u8', a, 1), '!options->lower_extract_byte'),
+   (('ishr', ('iand', a, 0x00ff0000), 16), ('extract_u8', a, 2), '!options->lower_extract_byte'),
 
    # Common pattern in many Vulkan CTS tests that read 8-bit integers from a
    # storage buffer.
@@ -1720,6 +1722,16 @@ optimizations.extend([
    (('extract_u8', ('extract_i8', a, b), 0), ('extract_u8', a, b)),
    (('extract_u8', ('extract_u8', a, b), 0), ('extract_u8', a, b)),
 
+   # The extract_X8(a & 0xff) patterns aren't included because the iand will
+   # already be converted to extract_u8.
+   (('extract_i8', ('iand', a, 0x0000ff00), 1), ('extract_i8', a, 1)),
+   (('extract_i8', ('iand', a, 0x00ff0000), 2), ('extract_i8', a, 2)),
+   (('extract_i8', ('iand', a, 0xff000000), 3), ('extract_i8', a, 3)),
+
+   (('extract_u8', ('iand', a, 0x0000ff00), 1), ('extract_u8', a, 1)),
+   (('extract_u8', ('iand', a, 0x00ff0000), 2), ('extract_u8', a, 2)),
+   (('extract_u8', ('iand', a, 0xff000000), 3), ('extract_u8', a, 3)),
+
     # Word extraction
    (('ushr', ('ishl', 'a@32', 16), 16), ('extract_u16', a, 0), '!options->lower_extract_word'),
    (('ushr', 'a@32', 16), ('extract_u16', a, 1), '!options->lower_extract_word'),
@@ -1732,12 +1744,27 @@ optimizations.extend([
    (('ibfe', a,  0, 16), ('extract_i16', a, 0), '!options->lower_extract_word'),
    (('ibfe', a, 16, 16), ('extract_i16', a, 1), '!options->lower_extract_word'),
 
+   # Collapse nop packing.
+   (('unpack_32_4x8', ('pack_32_4x8', a)), a),
+   (('unpack_32_2x16', ('pack_32_2x16', a)), a),
+   (('unpack_64_4x16', ('pack_64_4x16', a)), a),
+   (('unpack_64_2x32', ('pack_64_2x32', a)), a),
+   (('pack_32_4x8', ('unpack_32_4x8', a)), a),
+   (('pack_32_2x16', ('unpack_32_2x16', a)), a),
+   (('pack_64_4x16', ('unpack_64_4x16', a)), a),
+   (('pack_64_2x32', ('unpack_64_2x32', a)), a),
+
    # Packing a u8vec4 to write to an SSBO.
    (('ior', ('ishl', ('u2u32', 'a@8'), 24), ('ior', ('ishl', ('u2u32', 'b@8'), 16), ('ior', ('ishl', ('u2u32', 'c@8'), 8), ('u2u32', 'd@8')))),
     ('pack_32_4x8', ('vec4', d, c, b, a)), 'options->has_pack_32_4x8'),
 
    (('extract_u16', ('extract_i16', a, b), 0), ('extract_u16', a, b)),
    (('extract_u16', ('extract_u16', a, b), 0), ('extract_u16', a, b)),
+
+   # The extract_X16(a & 0xff) patterns aren't included because the iand will
+   # already be converted to extract_u8.
+   (('extract_i16', ('iand', a, 0x00ff0000), 1), ('extract_u8', a, 2), '!options->lower_extract_byte'), # extract_u8 is correct
+   (('extract_u16', ('iand', a, 0x00ff0000), 1), ('extract_u8', a, 2), '!options->lower_extract_byte'),
 
    # Lower pack/unpack
    (('pack_64_2x32_split', a, b), ('ior', ('u2u64', a), ('ishl', ('u2u64', b), 32)), 'options->lower_pack_64_2x32_split'),
@@ -1800,6 +1827,10 @@ optimizations.extend([
    # Reduce intermediate precision with int64.
    (('u2u32', ('iadd(is_used_once)', 'a@64', b)),
     ('iadd', ('u2u32', a), ('u2u32', b))),
+
+   # Lowered pack followed by lowered unpack, for the high bits
+   (('u2u32', ('ushr', ('ior', ('ishl', a, 32), ('u2u64', b)), 32)), ('u2u32', a)),
+   (('u2u16', ('ushr', ('ior', ('ishl', a, 16), ('u2u32', b)), 16)), ('u2u16', a)),
 ])
 
 # After the ('extract_u8', a, 0) pattern, above, triggers, there will be
@@ -1974,7 +2005,8 @@ optimizations.extend([
    (('imul_32x16', a, b), ('imul', a, ('extract_i16', b, 0)), 'options->lower_mul_32x16'),
    (('umul_32x16', a, b), ('imul', a, ('extract_u16', b, 0)), 'options->lower_mul_32x16'),
 
-   (('uadd_sat@64', a, b), ('bcsel', ('ult', ('iadd', a, b), a), -1, ('iadd', a, b)), 'options->lower_uadd_sat || (options->lower_int64_options & nir_lower_iadd64) != 0'),
+   (('uadd_sat@64', a, b), ('bcsel', ('ult', ('iadd', a, b), a), -1, ('iadd', a, b)),
+    'options->lower_uadd_sat || (options->lower_int64_options & (nir_lower_iadd64 | nir_lower_uadd_sat64)) != 0'),
    (('uadd_sat', a, b), ('bcsel', ('ult', ('iadd', a, b), a), -1, ('iadd', a, b)), 'options->lower_uadd_sat'),
    (('usub_sat', a, b), ('bcsel', ('ult', a, b), 0, ('isub', a, b)), 'options->lower_usub_sat'),
    (('usub_sat@64', a, b), ('bcsel', ('ult', a, b), 0, ('isub', a, b)), '(options->lower_int64_options & nir_lower_usub_sat64) != 0'),
@@ -2254,11 +2286,19 @@ optimizations.extend([
 
    (('unpack_half_2x16_split_x', 'a@32'),
     ('f2f32', ('u2u16', a)),
-    'options->lower_pack_split'),
+    'options->lower_pack_split && !nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 16)'),
+
+   (('unpack_half_2x16_split_x', 'a@32'),
+    ('f2f32', ('fmul', 1.0, ('u2u16', a))),
+    'options->lower_pack_split && nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 16)'),
 
    (('unpack_half_2x16_split_y', 'a@32'),
     ('f2f32', ('u2u16', ('ushr', a, 16))),
-    'options->lower_pack_split'),
+    'options->lower_pack_split && !nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 16)'),
+
+   (('unpack_half_2x16_split_y', 'a@32'),
+    ('f2f32', ('fmul', 1.0, ('u2u16', ('ushr', a, 16)))),
+    'options->lower_pack_split && nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 16)'),
 
    (('isign', a), ('imin', ('imax', a, -1), 1), 'options->lower_isign'),
    (('imin', ('imax', a, -1), 1), ('isign', a), '!options->lower_isign'),
@@ -2309,7 +2349,7 @@ optimizations.extend([
 for bit_size in [8, 16, 32, 64]:
    cond = '!options->lower_uadd_sat'
    if bit_size == 64:
-      cond += ' && !(options->lower_int64_options & nir_lower_iadd64)'
+      cond += ' && !(options->lower_int64_options & (nir_lower_iadd64 | nir_lower_uadd_sat64))'
    add = 'iadd@' + str(bit_size)
 
    optimizations += [
@@ -3041,15 +3081,36 @@ late_optimizations.extend([
    (('iadd', a, ('ineg', 'b')), ('isub', 'a', 'b'), 'options->has_isub || options->lower_ineg'),
    (('ineg', a), ('isub', 0, a), 'options->lower_ineg'),
    (('iabs', a), ('imax', a, ('ineg', a)), 'options->lower_iabs'),
+])
+
+for s in [8, 16, 32, 64]:
+   cond = 'options->has_iadd3'
+   if s == 64:
+      cond += ' && !(options->lower_int64_options & nir_lower_iadd3_64)'
+
+   iadd = "iadd@{}".format(s)
+
    # On Intel GPUs, the constant field for an ADD3 instruction must be either
    # int16_t or uint16_t.
-   (('iadd', ('iadd(is_used_once)', 'a(is_not_const)', 'b(is_not_const)'), 'c(is_not_const)'), ('iadd3', a, b, c), 'options->has_iadd3'),
-   (('iadd', ('iadd(is_used_once)', '#a(is_16_bits)',  'b(is_not_const)'), 'c(is_not_const)'), ('iadd3', a, b, c), 'options->has_iadd3'),
-   (('iadd', ('iadd(is_used_once)', 'a(is_not_const)', 'b(is_not_const)'), '#c(is_16_bits)'),   ('iadd3', a, b, c), 'options->has_iadd3'),
-   (('iadd', ('ineg', ('iadd(is_used_once)', 'a(is_not_const)', 'b(is_not_const)')), 'c(is_not_const)'), ('iadd3', ('ineg', a), ('ineg', b), c), 'options->has_iadd3'),
-   (('iadd', ('ineg', ('iadd(is_used_once)', '#a(is_16_bits)',  'b(is_not_const)')), 'c(is_not_const)'), ('iadd3', ('ineg', a), ('ineg', b), c), 'options->has_iadd3'),
-   (('iadd', ('ineg', ('iadd(is_used_once)', 'a(is_not_const)', 'b(is_not_const)')), '#c(is_16_bits)'),  ('iadd3', ('ineg', a), ('ineg', b), c), 'options->has_iadd3'),
+   late_optimizations.extend([
+      ((iadd, ('iadd(is_used_once)', 'a(is_not_const)', 'b(is_not_const)'), 'c(is_not_const)'), ('iadd3', a, b, c), cond),
+      ((iadd, ('iadd(is_used_once)', '#a(is_16_bits)',  'b(is_not_const)'), 'c(is_not_const)'), ('iadd3', a, b, c), cond),
+      ((iadd, ('iadd(is_used_once)', 'a(is_not_const)', 'b(is_not_const)'), '#c(is_16_bits)'),   ('iadd3', a, b, c), cond),
+      ((iadd, ('ineg', ('iadd(is_used_once)', 'a(is_not_const)', 'b(is_not_const)')), 'c(is_not_const)'), ('iadd3', ('ineg', a), ('ineg', b), c), cond),
+      ((iadd, ('ineg', ('iadd(is_used_once)', '#a(is_16_bits)',  'b(is_not_const)')), 'c(is_not_const)'), ('iadd3', ('ineg', a), ('ineg', b), c), cond),
+      ((iadd, ('ineg', ('iadd(is_used_once)', 'a(is_not_const)', 'b(is_not_const)')), '#c(is_16_bits)'),  ('iadd3', ('ineg', a), ('ineg', b), c), cond),
 
+      ((iadd, ('ishl', a, 1), 'b(is_not_const)'), ('iadd3', a, a, b), cond),
+      ((iadd, ('ishl', a, 1), '#b(is_16_bits)' ), ('iadd3', a, a, b), cond),
+      ((iadd, ('ineg', ('ishl', a, 1)), 'b(is_not_const)'), ('iadd3', ('ineg', a), ('ineg', a), b), cond),
+      ((iadd, ('ineg', ('ishl', a, 1)), '#b(is_16_bits)' ), ('iadd3', ('ineg', a), ('ineg', a), b), cond),
+
+      # Use special checks to ensure (b+b) or -(b+b) fit in 16 bits.
+      (('ishl@{}'.format(s), ('iadd', a, '#b(is_2x_16_bits)'), 1), ('iadd3', a, a, ('iadd', b, b)), cond),
+      (('ishl@{}'.format(s), ('ineg', ('iadd', a, '#b(is_neg2x_16_bits)')), 1), ('iadd3', ('ineg', a), ('ineg', a), ('ineg', ('iadd', b, b))), cond),
+   ])
+
+late_optimizations.extend([
     # fneg_lo / fneg_hi
    (('vec2(is_only_used_as_float)', ('fneg@16', a), b), ('fmul', ('vec2', a, b), ('vec2', -1.0, 1.0)), 'options->vectorize_vec2_16bit'),
    (('vec2(is_only_used_as_float)', a, ('fneg@16', b)), ('fmul', ('vec2', a, b), ('vec2', 1.0, -1.0)), 'options->vectorize_vec2_16bit'),
@@ -3386,9 +3447,48 @@ distribute_src_mods = [
    (('fabs', ('fsign(is_used_once)', a)), ('fsign', ('fabs', a))),
 ]
 
+before_lower_int64_optimizations = [
+    # The i2i64(a) implies that 'a' has at most 32-bits of data.
+    (('ishl', ('i2i64', a), b),
+     # Effective shift count of zero, just return 'a'.
+     ('bcsel', ('ieq', ('iand', b, 63), 0), ('i2i64', a),
+      ('bcsel', ('ilt', ('iand', b, 63), 32),
+       # Shifting less than 32 bits, so both 32-bit halves will have
+       # some data. These (and the else case) shift counts are of 32-bit
+       # values, so the shift counts are implicitly moduolo 32.
+       ('pack_64_2x32_split', ('ishl', ('i2i32', a), b), ('ishr', ('i2i32', a),          ('iadd', ('ineg', b), 32) )),
+       # Shifting 32 bits or more, so lower 32 bits must be zero.
+       ('pack_64_2x32_split', 0                        , ('ishl', ('i2i32', a), ('iabs', ('iadd', ('ineg', b), 32)))))),
+     '(options->lower_int64_options & nir_lower_shift64) != 0'),
+
+    (('ishl', ('u2u64', a), b),
+     ('bcsel', ('ieq', ('iand', b, 63), 0), ('u2u64', a),
+      ('bcsel', ('ilt', ('iand', b, 63), 32),
+       ('pack_64_2x32_split', ('ishl', ('u2u32', a), b), ('ushr', ('u2u32', a),          ('iadd', ('ineg', b), 32) )),
+       ('pack_64_2x32_split', 0                        , ('ishl', ('u2u32', a), ('iabs', ('iadd', ('ineg', b), 32)))))),
+     '(options->lower_int64_options & nir_lower_shift64) != 0'),
+
+    # If ineg64 is lowered, then the negation is not free. Try to eliminate
+    # some of the negations.
+    (('iadd@64', ('ineg', a), ('ineg(is_used_once)', b)), ('isub', ('ineg', a), b), '(options->lower_int64_options & nir_lower_ineg64) != 0'),
+    (('iadd@64', a, ('ineg', b)), ('isub', a, b), '(options->lower_int64_options & nir_lower_ineg64) != 0'),
+    (('isub@64', a, ('ineg', b)), ('iadd', a, b), '(options->lower_int64_options & nir_lower_ineg64) != 0'),
+    (('isub@64', ('ineg', a), ('ineg', b)), ('isub', b, a), '(options->lower_int64_options & nir_lower_ineg64) != 0'),
+
+    (('imul@64', ('ineg', a), ('ineg', b)), ('imul', a, b)),
+    (('idiv@64', ('ineg', a), ('ineg', b)), ('idiv', a, b)),
+
+    # If the hardware can do int64, the shift is the same cost as the add. It
+    # should be fine to do this transformation unconditionally.
+    (('iadd', ('i2i64', a), ('i2i64', a)), ('ishl', ('i2i64', a), 1)),
+    (('iadd', ('u2u64', a), ('u2u64', a)), ('ishl', ('u2u64', a), 1)),
+]
+
 print(nir_algebraic.AlgebraicPass("nir_opt_algebraic", optimizations).render())
 print(nir_algebraic.AlgebraicPass("nir_opt_algebraic_before_ffma",
                                   before_ffma_optimizations).render())
+print(nir_algebraic.AlgebraicPass("nir_opt_algebraic_before_lower_int64",
+                                  before_lower_int64_optimizations).render())
 print(nir_algebraic.AlgebraicPass("nir_opt_algebraic_late",
                                   late_optimizations).render())
 print(nir_algebraic.AlgebraicPass("nir_opt_algebraic_distribute_src_mods",

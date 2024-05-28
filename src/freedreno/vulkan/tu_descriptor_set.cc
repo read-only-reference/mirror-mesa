@@ -21,6 +21,8 @@
 
 #include <fcntl.h>
 
+#include "vulkan/vulkan_android.h"
+
 #include "util/mesa-sha1.h"
 #include "vk_descriptors.h"
 #include "vk_util.h"
@@ -287,7 +289,7 @@ tu_CreateDescriptorSetLayout(
          return vk_error(device, result);
       }
 
-      result = tu_bo_map(device, set_layout->embedded_samplers);
+      result = tu_bo_map(device, set_layout->embedded_samplers, NULL);
       if (result != VK_SUCCESS) {
          tu_bo_finish(device, set_layout->embedded_samplers);
          vk_object_free(&device->vk, pAllocator, set_layout);
@@ -805,7 +807,7 @@ tu_CreateDescriptorPool(VkDevice _device,
          if (ret)
             goto fail_alloc;
 
-         ret = tu_bo_map(device, pool->bo);
+         ret = tu_bo_map(device, pool->bo, NULL);
          if (ret)
             goto fail_map;
       } else {
@@ -1668,7 +1670,9 @@ tu_CreateSamplerYcbcrConversion(
    if (!conversion)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
-   conversion->format = pCreateInfo->format;
+   conversion->format =
+      vk_select_android_external_format(pCreateInfo->pNext, pCreateInfo->format);
+
    conversion->ycbcr_model = pCreateInfo->ycbcrModel;
    conversion->ycbcr_range = pCreateInfo->ycbcrRange;
    conversion->components = pCreateInfo->components;

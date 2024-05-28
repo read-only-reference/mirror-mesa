@@ -263,7 +263,7 @@ struct util_format_pack_description {
                       unsigned width, unsigned height);
 
    /**
-    * Pack pixels from Z32_FLOAT.
+    * Pack pixels from Z32_UNORM.
     * Note: strides are in bytes.
     *
     * Only defined for depth formats.
@@ -554,6 +554,12 @@ static inline bool
 util_format_is_srgb(enum pipe_format format)
 {
    const struct util_format_description *desc = util_format_description(format);
+
+   assert(desc);
+   if (!desc) {
+      return false;
+   }
+
    return desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB;
 }
 
@@ -1466,6 +1472,7 @@ util_format_get_plane_format(enum pipe_format format, unsigned plane)
    case PIPE_FORMAT_Y8_U8_V8_444_UNORM:
    case PIPE_FORMAT_Y8_400_UNORM:
    case PIPE_FORMAT_R8_G8_B8_UNORM:
+   case PIPE_FORMAT_Y8_U8_V8_440_UNORM:
       return PIPE_FORMAT_R8_UNORM;
    case PIPE_FORMAT_NV12:
    case PIPE_FORMAT_Y8_U8V8_422_UNORM:
@@ -1526,6 +1533,7 @@ util_format_get_plane_height(enum pipe_format format, unsigned plane,
    case PIPE_FORMAT_P016:
    case PIPE_FORMAT_P030:
    case PIPE_FORMAT_Y16_U16_V16_420_UNORM:
+   case PIPE_FORMAT_Y8_U8_V8_440_UNORM:
       return !plane ? height : (height + 1) / 2;
    case PIPE_FORMAT_YV16:
    default:

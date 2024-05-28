@@ -30,7 +30,6 @@ extern uint64_t debug_flags;
 enum {
    DEBUG_VALIDATE_IR = 0x1,
    DEBUG_VALIDATE_RA = 0x2,
-   DEBUG_PERFWARN = 0x4,
    DEBUG_FORCE_WAITCNT = 0x8,
    DEBUG_NO_VN = 0x10,
    DEBUG_NO_OPT = 0x20,
@@ -173,26 +172,66 @@ struct float_mode {
    }
 };
 
+enum wait_type {
+   wait_type_exp = 0,
+   wait_type_lgkm = 1,
+   wait_type_vm = 2,
+   /* GFX10+ */
+   wait_type_vs = 3,
+   /* GFX12+ */
+   wait_type_sample = 4,
+   wait_type_bvh = 5,
+   wait_type_km = 6,
+   wait_type_num = 7,
+};
+
+struct Instruction;
+
 struct wait_imm {
    static const uint8_t unset_counter = 0xff;
 
-   uint8_t vm;
    uint8_t exp;
    uint8_t lgkm;
+   uint8_t vm;
    uint8_t vs;
+   uint8_t sample;
+   uint8_t bvh;
+   uint8_t km;
 
    wait_imm();
    wait_imm(uint16_t vm_, uint16_t exp_, uint16_t lgkm_, uint16_t vs_);
-   wait_imm(enum amd_gfx_level chip, uint16_t packed);
 
    uint16_t pack(enum amd_gfx_level chip) const;
+
+   static wait_imm max(enum amd_gfx_level gfx_level);
+
+   bool unpack(enum amd_gfx_level gfx_level, const Instruction* instr);
 
    bool combine(const wait_imm& other);
 
    bool empty() const;
 
    void print(FILE* output) const;
+
+   uint8_t& operator[](size_t i)
+   {
+      assert(i < wait_type_num);
+      return *((uint8_t*)this + i);
+   }
+
+   const uint8_t& operator[](size_t i) const
+   {
+      assert(i < wait_type_num);
+      return *((uint8_t*)this + i);
+   }
 };
+static_assert(offsetof(wait_imm, exp) == wait_type_exp);
+static_assert(offsetof(wait_imm, lgkm) == wait_type_lgkm);
+static_assert(offsetof(wait_imm, vm) == wait_type_vm);
+static_assert(offsetof(wait_imm, vs) == wait_type_vs);
+static_assert(offsetof(wait_imm, sample) == wait_type_sample);
+static_assert(offsetof(wait_imm, bvh) == wait_type_bvh);
+static_assert(offsetof(wait_imm, km) == wait_type_km);
 
 /* s_wait_event immediate bits. */
 enum wait_event_imm : uint16_t {
@@ -659,7 +698,8 @@ public:
    constexpr void setTemp(Temp t) noexcept
    {
       assert(!isConstant_);
-      isTemp_ = true;
+      if (t.id() != 0)
+         isTemp_ = true;
       data_.temp = t;
    }
 
@@ -1436,7 +1476,8 @@ struct LDSDIR_instruction : public Instruction {
    uint8_t attr : 6;
    uint8_t attr_chan : 2;
    uint32_t wait_vdst : 4;
-   uint32_t padding : 28;
+   uint32_t wait_vsrc : 1;
+   uint32_t padding : 27;
 };
 static_assert(sizeof(LDSDIR_instruction) == sizeof(Instruction) + 8, "Unexpected padding");
 
@@ -1739,6 +1780,17 @@ unsigned get_operand_size(aco_ptr<Instruction>& instr, unsigned index);
 
 bool should_form_clause(const Instruction* a, const Instruction* b);
 
+enum vmem_type : uint8_t {
+   vmem_nosampler = 1 << 0,
+   vmem_sampler = 1 << 1,
+   vmem_bvh = 1 << 2,
+};
+
+/* VMEM instructions of the same type return in-order. For GFX12+, this determines which counter
+ * is used.
+ */
+uint8_t get_vmem_type(enum amd_gfx_level gfx_level, Instruction* instr);
+
 enum block_kind {
    /* uniform indicates that leaving this block,
     * all actives lanes stay active */
@@ -1959,6 +2011,7 @@ struct DeviceInfo {
    unsigned simd_per_cu;
    bool has_fast_fma32 = false;
    bool has_mac_legacy32 = false;
+   bool has_fmac_legacy32 = false;
    bool fused_mad_mix = false;
    bool xnack_enabled = false;
    bool sram_ecc_enabled = false;
@@ -2113,6 +2166,7 @@ void select_ps_prolog(Program* program, void* pinfo, ac_shader_config* config,
                       const struct aco_shader_info* info, const struct ac_shader_args* args);
 
 void lower_phis(Program* program);
+void lower_subdword(Program* program);
 void calc_min_waves(Program* program);
 void update_vgpr_sgpr_demand(Program* program, const RegisterDemand new_demand);
 live live_var_analysis(Program* program);
@@ -2146,13 +2200,6 @@ bool print_asm(Program* program, std::vector<uint32_t>& binary, unsigned exec_si
 bool validate_ir(Program* program);
 bool validate_cfg(Program* program);
 bool validate_ra(Program* program);
-#ifndef NDEBUG
-void perfwarn(Program* program, bool cond, const char* msg, Instruction* instr = NULL);
-#else
-#define perfwarn(program, cond, msg, ...)                                                          \
-   do {                                                                                            \
-   } while (0)
-#endif
 
 void collect_presched_stats(Program* program);
 void collect_preasm_stats(Program* program);
@@ -2183,10 +2230,8 @@ void aco_print_program(const Program* program, FILE* output, unsigned flags = 0)
 void aco_print_program(const Program* program, FILE* output, const live& live_vars,
                        unsigned flags = 0);
 
-void _aco_perfwarn(Program* program, const char* file, unsigned line, const char* fmt, ...);
 void _aco_err(Program* program, const char* file, unsigned line, const char* fmt, ...);
 
-#define aco_perfwarn(program, ...) _aco_perfwarn(program, __FILE__, __LINE__, __VA_ARGS__)
 #define aco_err(program, ...)      _aco_err(program, __FILE__, __LINE__, __VA_ARGS__)
 
 int get_op_fixed_to_def(Instruction* instr);
@@ -2218,6 +2263,7 @@ typedef struct {
    const int16_t opcode_gfx9[static_cast<int>(aco_opcode::num_opcodes)];
    const int16_t opcode_gfx10[static_cast<int>(aco_opcode::num_opcodes)];
    const int16_t opcode_gfx11[static_cast<int>(aco_opcode::num_opcodes)];
+   const int16_t opcode_gfx12[static_cast<int>(aco_opcode::num_opcodes)];
    const std::bitset<static_cast<int>(aco_opcode::num_opcodes)> can_use_input_modifiers;
    const std::bitset<static_cast<int>(aco_opcode::num_opcodes)> can_use_output_modifiers;
    const std::bitset<static_cast<int>(aco_opcode::num_opcodes)> is_atomic;

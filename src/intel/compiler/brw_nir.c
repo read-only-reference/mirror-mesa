@@ -1647,6 +1647,8 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
 
    OPT(nir_opt_combine_barriers, combine_all_memory_barriers, NULL);
 
+   OPT(intel_nir_lower_printf);
+
    do {
       progress = false;
       OPT(nir_opt_algebraic_before_ffma);
@@ -1675,6 +1677,12 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
    }
 
    brw_vectorize_lower_mem_access(nir, compiler, robust_flags);
+
+   /* Potentially perform this optimization pass twice because it can create
+    * additional opportunities for itself.
+    */
+   if (OPT(nir_opt_algebraic_before_lower_int64))
+      OPT(nir_opt_algebraic_before_lower_int64);
 
    if (OPT(nir_lower_int64))
       brw_nir_optimize(nir, devinfo);
@@ -1711,7 +1719,11 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
 
    do {
       progress = false;
-      if (OPT(nir_opt_algebraic_late)) {
+
+      OPT(nir_opt_algebraic_late);
+      OPT(brw_nir_lower_fsign);
+
+      if (progress) {
          OPT(nir_opt_constant_folding);
          OPT(nir_copy_prop);
          OPT(nir_opt_dce);
@@ -1755,6 +1767,8 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
 
    if (OPT(nir_opt_uniform_atomics)) {
       OPT(nir_lower_subgroups, &subgroups_options);
+
+      OPT(nir_opt_algebraic_before_lower_int64);
 
       if (OPT(nir_lower_int64))
          brw_nir_optimize(nir, devinfo);
@@ -2167,4 +2181,3 @@ brw_nir_get_var_type(const struct nir_shader *nir, nir_variable *var)
 
    return type;
 }
-

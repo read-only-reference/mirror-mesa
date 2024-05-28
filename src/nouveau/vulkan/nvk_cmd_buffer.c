@@ -22,11 +22,11 @@
 
 #include "nouveau/nouveau.h"
 
-#include "nvk_cl906f.h"
-#include "nvk_cl90b5.h"
-#include "nvk_cla097.h"
-#include "nvk_cla0c0.h"
-#include "nvk_clc597.h"
+#include "nv_push_cl906f.h"
+#include "nv_push_cl90b5.h"
+#include "nv_push_cla097.h"
+#include "nv_push_cla0c0.h"
+#include "nv_push_clc597.h"
 
 static void
 nvk_descriptor_state_fini(struct nvk_cmd_buffer *cmd,
@@ -632,16 +632,10 @@ nvk_bind_descriptor_sets(UNUSED struct nvk_cmd_buffer *cmd,
       if (desc->sets[s] != set) {
          if (set != NULL) {
             desc->root.sets[s] = nvk_descriptor_set_addr(set);
-            desc->set_sizes[s] = set->size;
          } else {
-            desc->root.sets[s] = 0;
-            desc->set_sizes[s] = 0;
+            desc->root.sets[s] = NVK_BUFFER_ADDRESS_NULL;
          }
          desc->sets[s] = set;
-         desc->sets_dirty |= BITFIELD_BIT(s);
-
-         /* Binding descriptors invalidates push descriptors */
-         desc->push_dirty &= ~BITFIELD_BIT(s);
       }
 
       desc->root.set_dynamic_buffer_start[s] = dyn_buffer_start;
@@ -780,10 +774,12 @@ nvk_cmd_buffer_flush_push_descriptors(struct nvk_cmd_buffer *cmd,
    const uint32_t min_cbuf_alignment = nvk_min_cbuf_alignment(&pdev->info);
    VkResult result;
 
-   if (!desc->push_dirty)
-      return;
-
    u_foreach_bit(set_idx, desc->push_dirty) {
+      /* We only have an active push descriptor set if sets[set_idx] == NULL.
+       */
+      if (desc->sets[set_idx] != NULL)
+         continue;
+
       struct nvk_push_descriptor_set *push_set = desc->push[set_idx];
       uint64_t push_set_addr;
       result = nvk_cmd_buffer_upload_data(cmd, push_set->data,
@@ -795,8 +791,10 @@ nvk_cmd_buffer_flush_push_descriptors(struct nvk_cmd_buffer *cmd,
          return;
       }
 
-      desc->root.sets[set_idx] = push_set_addr;
-      desc->set_sizes[set_idx] = sizeof(push_set->data);
+      desc->root.sets[set_idx] = (struct nvk_buffer_address) {
+         .base_addr = push_set_addr,
+         .size = sizeof(push_set->data),
+      };
    }
 }
 
@@ -824,10 +822,7 @@ nvk_cmd_buffer_get_cbuf_descriptor(struct nvk_cmd_buffer *cmd,
       return true;
 
    case NVK_CBUF_TYPE_DESC_SET:
-      *desc_out = (struct nvk_buffer_address) {
-         .base_addr = desc->root.sets[cbuf->desc_set],
-         .size = desc->set_sizes[cbuf->desc_set],
-      };
+      *desc_out = desc->root.sets[cbuf->desc_set];
       return true;
 
    case NVK_CBUF_TYPE_DYNAMIC_UBO: {
@@ -863,8 +858,8 @@ nvk_cmd_buffer_get_cbuf_descriptor_addr(struct nvk_cmd_buffer *cmd,
 {
    assert(cbuf->type == NVK_CBUF_TYPE_UBO_DESC);
 
-   assert(cbuf->desc_offset < desc->set_sizes[cbuf->desc_set]);
-   return desc->root.sets[cbuf->desc_set] + cbuf->desc_offset;
+   assert(cbuf->desc_offset < desc->root.sets[cbuf->desc_set].size);
+   return desc->root.sets[cbuf->desc_set].base_addr + cbuf->desc_offset;
 }
 
 void

@@ -185,13 +185,11 @@ kgsl_bo_export_dmabuf(struct tu_device *dev, struct tu_bo *bo)
 }
 
 static VkResult
-kgsl_bo_map(struct tu_device *dev, struct tu_bo *bo)
+kgsl_bo_map(struct tu_device *dev, struct tu_bo *bo, void *placed_addr)
 {
-   if (bo->map)
-      return VK_SUCCESS;
-
    uint64_t offset = bo->gem_handle << 12;
-   void *map = mmap(0, bo->size, PROT_READ | PROT_WRITE, MAP_SHARED,
+   void *map = mmap(placed_addr, bo->size, PROT_READ | PROT_WRITE,
+                    MAP_SHARED | (placed_addr != NULL ? MAP_FIXED : 0),
                     dev->physical_device->local_fd, offset);
    if (map == MAP_FAILED)
       return vk_error(dev, VK_ERROR_MEMORY_MAP_FAILED);
@@ -1273,7 +1271,8 @@ kgsl_queue_submit(struct tu_queue *queue, struct vk_queue_submit *vk_submit)
          bool free_data = i == submission_data->last_buffer_with_tracepoints;
          if (submission_data->cmd_trace_data[i].trace)
             u_trace_flush(submission_data->cmd_trace_data[i].trace,
-                          submission_data, free_data);
+                          submission_data, queue->device->vk.current_frame,
+                          free_data);
 
          if (!submission_data->cmd_trace_data[i].timestamp_copy_cs) {
             /* u_trace is owned by cmd_buffer */
@@ -1287,7 +1286,7 @@ kgsl_queue_submit(struct tu_queue *queue, struct vk_queue_submit *vk_submit)
    pthread_mutex_unlock(&queue->device->submit_mutex);
    pthread_cond_broadcast(&queue->device->timeline_cond);
 
-   u_trace_context_process(&queue->device->trace_context, true);
+   u_trace_context_process(&queue->device->trace_context, false);
 
    if (cmd_buffers != (struct tu_cmd_buffer **) vk_submit->command_buffers)
       vk_free(&queue->device->vk.alloc, cmd_buffers);

@@ -305,24 +305,6 @@ vk_to_isl_color_with_format(VkClearColorValue color, enum isl_format format)
    return isl_color;
 }
 
-/**
- * Warn on ignored extension structs.
- *
- * The Vulkan spec requires us to ignore unsupported or unknown structs in
- * a pNext chain.  In debug mode, emitting warnings for ignored structs may
- * help us discover structs that we should not have ignored.
- *
- *
- * From the Vulkan 1.0.38 spec:
- *
- *    Any component of the implementation (the loader, any enabled layers,
- *    and drivers) must skip over, without processing (other than reading the
- *    sType and pNext members) any chained structures with sType values not
- *    defined by extensions supported by that component.
- */
-#define anv_debug_ignored_stype(sType) \
-   mesa_logd("%s: ignored VkStructureType %u\n", __func__, (sType))
-
 void __anv_perf_warn(struct anv_device *device,
                      const struct vk_object_base *object,
                      const char *file, int line, const char *format, ...)
@@ -1250,6 +1232,12 @@ struct anv_physical_device {
 
     /* Value of PIPELINE_SELECT::PipelineSelection == GPGPU */
     uint32_t                                    gpgpu_pipeline_value;
+
+    /** A pre packed VERTEX_ELEMENT_STATE feeding 0s to the VS stage
+     *
+     * For use when a pipeline has no VS input
+     */
+    uint32_t                                    empty_vs_input[2];
 };
 
 static inline uint32_t
@@ -1480,6 +1468,7 @@ struct anv_gfx_dynamic_state {
       bool AlphaToCoverageEnable;
       bool AlphaToOneEnable;
       bool IndependentAlphaBlendEnable;
+      bool ColorDitherEnable;
       struct {
          bool     WriteDisableAlpha;
          bool     WriteDisableRed;
@@ -1826,6 +1815,10 @@ struct anv_device {
     struct anv_bo_pool                          batch_bo_pool;
     /** Memory pool for utrace timestamp buffers */
     struct anv_bo_pool                          utrace_bo_pool;
+    /**
+     * Size of the timestamp captured for utrace.
+     */
+    uint32_t                                     utrace_timestamp_size;
     /** Memory pool for BVH build buffers */
     struct anv_bo_pool                          bvh_bo_pool;
 
@@ -1874,7 +1867,6 @@ struct anv_device {
      */
     char                                        host_null_surface_state[ANV_SURFACE_STATE_SIZE];
 
-    struct vk_pipeline_cache *                  default_pipeline_cache;
     struct vk_pipeline_cache *                  internal_cache;
 
     struct {
@@ -1909,12 +1901,6 @@ struct anv_device {
     struct anv_bo                              *rt_scratch_bos[16];
     struct anv_bo                              *btd_fifo_bo;
     struct anv_address                          rt_uuid_addr;
-
-    /** A pre packed VERTEX_ELEMENT_STATE feeding 0s to the VS stage
-     *
-     * For use when a pipeline has no VS input
-     */
-    uint32_t                                    empty_vs_input[2];
 
     bool                                        robust_buffer_access;
 
@@ -2051,6 +2037,21 @@ struct anv_device {
        simple_mtx_t                              mutex;
        struct hash_table                        *map;
     }                                            embedded_samplers;
+
+    struct {
+       /**
+        * Mutex for the printfs array
+        */
+       simple_mtx_t                              mutex;
+       /**
+        * Buffer in which the shader printfs are stored
+        */
+       struct anv_bo                            *bo;
+       /**
+        * Array of pointers to u_printf_info
+        */
+       struct util_dynarray                      prints;
+    } printf;
 };
 
 static inline uint32_t
@@ -2171,6 +2172,10 @@ anv_device_lookup_bo(struct anv_device *device, uint32_t gem_handle)
 VkResult anv_device_wait(struct anv_device *device, struct anv_bo *bo,
                          int64_t timeout);
 
+VkResult anv_device_print_init(struct anv_device *device);
+void anv_device_print_fini(struct anv_device *device);
+void anv_device_print_shader_prints(struct anv_device *device);
+
 VkResult anv_queue_init(struct anv_device *device, struct anv_queue *queue,
                         const VkDeviceQueueCreateInfo *pCreateInfo,
                         uint32_t index_in_family);
@@ -2209,6 +2214,9 @@ anv_queue_post_submit(struct anv_queue *queue, VkResult submit_result)
       if (result != VK_SUCCESS)
          result = vk_queue_set_lost(&queue->vk, "sync wait failed");
    }
+
+   if (INTEL_DEBUG(DEBUG_SHADER_PRINT))
+      anv_device_print_shader_prints(queue->device);
 
    return result;
 }
@@ -3151,6 +3159,7 @@ VkSparseImageFormatProperties
 anv_sparse_calc_image_format_properties(struct anv_physical_device *pdevice,
                                         VkImageAspectFlags aspect,
                                         VkImageType vk_image_type,
+                                        VkSampleCountFlagBits vk_samples,
                                         struct isl_surf *surf);
 void anv_sparse_calc_miptail_properties(struct anv_device *device,
                                         struct anv_image *image,
@@ -3439,6 +3448,12 @@ struct anv_push_constants {
     */
    uint32_t surfaces_base_offset;
 
+   /* Robust access pushed registers. */
+   uint64_t push_reg_mask[MESA_SHADER_STAGES];
+
+   /** Ray query globals (RT_DISPATCH_GLOBALS) */
+   uint64_t ray_query_globals;
+
    union {
       struct {
          /** Dynamic MSAA value */
@@ -3459,16 +3474,12 @@ struct anv_push_constants {
           *
           * This is never set by software but is implicitly filled out when
           * uploading the push constants for compute shaders.
+          *
+          * This *MUST* be the last field of the anv_push_constants structure.
           */
          uint32_t subgroup_id;
       } cs;
    };
-
-   /* Robust access pushed registers. */
-   uint64_t push_reg_mask[MESA_SHADER_STAGES];
-
-   /** Ray query globals (RT_DISPATCH_GLOBALS) */
-   uint64_t ray_query_globals;
 };
 
 struct anv_surface_state {
@@ -3896,6 +3907,20 @@ struct anv_cmd_state {
     * A buffer used for spill/fill of ray queries.
     */
    struct anv_bo *                              ray_query_shadow_bo;
+
+   /** Pointer to the last emitted COMPUTE_WALKER.
+    *
+    * This is used to edit the instruction post emission to replace the "Post
+    * Sync" field for utrace timestamp emission.
+    */
+   void                                        *last_compute_walker;
+
+   /** Pointer to the last emitted EXECUTE_INDIRECT_DISPATCH.
+    *
+    * This is used to edit the instruction post emission to replace the "Post
+    * Sync" field for utrace timestamp emission.
+    */
+   void                                        *last_indirect_dispatch;
 };
 
 #define ANV_MIN_CMD_BUFFER_BATCH_SIZE 8192
@@ -4045,20 +4070,6 @@ struct anv_cmd_buffer {
     * Structure holding tracepoints recorded in the command buffer.
     */
    struct u_trace                               trace;
-
-   /** Pointer to the last emitted COMPUTE_WALKER.
-    *
-    * This is used to edit the instruction post emission to replace the "Post
-    * Sync" field for utrace timestamp emission.
-    */
-   void                                        *last_compute_walker;
-
-   /** Pointer to the last emitted EXECUTE_INDIRECT_DISPATCH.
-    *
-    * This is used to edit the instruction post emission to replace the "Post
-    * Sync" field for utrace timestamp emission.
-    */
-   void                                        *last_indirect_dispatch;
 
    struct {
       struct anv_video_session *vid;
@@ -4766,10 +4777,18 @@ struct anv_ray_tracing_pipeline {
    }
 
 ANV_DECL_PIPELINE_DOWNCAST(graphics, ANV_PIPELINE_GRAPHICS)
-ANV_DECL_PIPELINE_DOWNCAST(graphics_base, ANV_PIPELINE_GRAPHICS)
 ANV_DECL_PIPELINE_DOWNCAST(graphics_lib, ANV_PIPELINE_GRAPHICS_LIB)
 ANV_DECL_PIPELINE_DOWNCAST(compute, ANV_PIPELINE_COMPUTE)
 ANV_DECL_PIPELINE_DOWNCAST(ray_tracing, ANV_PIPELINE_RAY_TRACING)
+
+/* Can't use the macro because we need to handle both types. */
+static inline struct anv_graphics_base_pipeline *
+anv_pipeline_to_graphics_base(struct anv_pipeline *pipeline)
+{
+   assert(pipeline->type == ANV_PIPELINE_GRAPHICS ||
+          pipeline->type == ANV_PIPELINE_GRAPHICS_LIB);
+   return (struct anv_graphics_base_pipeline *) pipeline;
+}
 
 static inline bool
 anv_pipeline_has_stage(const struct anv_graphics_pipeline *pipeline,
@@ -6038,15 +6057,15 @@ void anv_astc_emu_process(struct anv_cmd_buffer *cmd_buffer,
  *      (vkQueueBeginDebugUtilsLabelEXT/vkQueueEndDebugUtilsLabelEXT)
  */
 struct anv_utrace_submit {
-   /* Needs to be the first field */
-   struct intel_ds_flush_data ds;
-
    /* Batch stuff to implement of copy of timestamps recorded in another
     * buffer.
     */
    struct anv_reloc_list relocs;
    struct anv_batch batch;
    struct util_dynarray batch_bos;
+
+   /* structure used by the perfetto glue */
+   struct intel_ds_flush_data ds;
 
    /* Stream for temporary allocations */
    struct anv_state_stream dynamic_state_stream;

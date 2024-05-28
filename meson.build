@@ -623,8 +623,22 @@ if vdpau_drivers_path == ''
   vdpau_drivers_path = join_paths(get_option('libdir'), 'vdpau')
 endif
 
-prog_glslang = find_program('glslangValidator', native : true, required : with_vulkan_overlay_layer or with_aco_tests or with_amd_vk or with_intel_vk)
+# GLSL has interesting version output and Meson doesn't parse it correctly as of
+# Meson 1.4.0
+prog_glslang = find_program('glslangValidator', native : true,
+                            required : with_vulkan_overlay_layer or with_aco_tests or with_amd_vk or with_intel_vk)
 if prog_glslang.found()
+  # Check if glslang has depfile support. Support was added in 11.3.0, but
+  # Windows path support was broken until 11.9.0.
+  # 
+  # It is intentional to check the build machine, since we need to ensure that
+  # glslang will output valid paths on the build platform
+  _glslang_check = build_machine.system() == 'windows' ? '>= 11.9.0' : '>= 11.3.0'
+  if run_command(prog_glslang, ['--version'], check : false).stdout().split(':')[2].version_compare(_glslang_check)
+    glslang_depfile = ['--depfile', '@DEPFILE@']
+  else
+    glslang_depfile = []
+  endif
   if run_command(prog_glslang, [ '--quiet', '--version' ], check : false).returncode() == 0
     glslang_quiet = ['--quiet']
   else
@@ -832,8 +846,8 @@ if with_gallium_rusticl
     error('rusticl requires at least one gallium driver.')
   endif
 
-  if meson.version().version_compare('< 1.3.1')
-    error('rusticl requires meson 1.3.1 or newer')
+  if meson.version().version_compare('< 1.4.0')
+    error('rusticl requires meson 1.4.0 or newer')
   endif
 
   add_languages('rust', required: true)
@@ -1742,6 +1756,7 @@ if draw_with_llvm
   # lto is needded with LLVM>=15, but we don't know what LLVM verrsion we are using yet
   llvm_optional_modules += ['lto']
 endif
+amd_with_llvm = get_option('amd-use-llvm')
 
 if with_amd_vk or with_gallium_radeonsi or with_clc
   _llvm_version = '>= 15.0.0'
@@ -1783,6 +1798,10 @@ if with_llvm
     error('Lavapipe requires LLVM draw support.')
   endif
 
+  if with_gallium_r600 and not amd_with_llvm
+    error('R600 requires LLVM AMD support.')
+  endif
+
   if host_machine.system() != 'windows'
     # LLVM can be built without rtti, turning off rtti changes the ABI of C++
     # programs, so we need to build all C++ code in mesa without rtti as well to
@@ -1821,8 +1840,10 @@ elif with_clc
 else
   draw_with_llvm = false
 endif
+amd_with_llvm = amd_with_llvm and with_llvm
 pre_args += '-DLLVM_AVAILABLE=@0@'.format(with_llvm.to_int())
 pre_args += '-DDRAW_LLVM_AVAILABLE=@0@'.format((with_llvm and draw_with_llvm).to_int())
+pre_args += '-DAMD_LLVM_AVAILABLE=@0@'.format(amd_with_llvm.to_int())
 
 with_opencl_spirv = (_opencl != 'disabled' and get_option('opencl-spirv')) or with_clc
 if with_opencl_spirv
@@ -1923,7 +1944,7 @@ if get_option('b_sanitize') == 'thread'
   # meson versions prior to 1.4 will warn "Consider using the built-in option for sanitizers ..." 
   # later on because it only checks whether the option starts with "-fsanitize",
   # but there is no built-in option for adding a blacklist
-  tsan_blacklist = '-fsanitize-blacklist=@0@'.format(join_paths(meson.project_source_root(), 'tsan-blacklist.txt'))
+  tsan_blacklist = '-fsanitize-blacklist=@0@'.format(join_paths(meson.project_source_root(), 'build-support', 'tsan-blacklist.txt'))
   if cc.has_argument(tsan_blacklist)
     pre_args += tsan_blacklist
   else
@@ -2264,6 +2285,12 @@ endif
 # This quirk needs to be applied to sources with functions defined in assembly
 # as GCC LTO drops them. See: https://bugs.freedesktop.org/show_bug.cgi?id=109391
 gcc_lto_quirk = (cc.get_id() == 'gcc') ? ['-fno-lto'] : []
+
+# As of GCC 13.2.1, Venus build with optimization level plain/0 and LTO does not
+# compile properly: https://gitlab.freedesktop.org/mesa/mesa/-/issues/11006
+if with_virtio_vk and cc.get_id() == 'gcc' and (get_option('optimization') == '0' or get_option('optimization') == 'plain') and get_option('b_lto') == true
+  error('Venus does not compile properly with GCC + optimization level plain/0 + LTO.')
+endif
 
 devenv = environment()
 

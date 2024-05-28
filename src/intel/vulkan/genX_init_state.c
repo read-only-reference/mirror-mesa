@@ -31,7 +31,7 @@
 
 #include "vk_standard_sample_locations.h"
 
-#if GFX_VERx10 == 125 && ANV_SUPPORT_RT
+#if GFX_VERx10 >= 125 && ANV_SUPPORT_RT
 #include "grl/genX_grl.h"
 #endif
 
@@ -347,14 +347,6 @@ init_render_queue_state(struct anv_queue *queue, bool is_companion_rcs_batch)
       .end = (void *) cmds + sizeof(cmds),
    };
 
-   struct GENX(VERTEX_ELEMENT_STATE) empty_ve = {
-      .Valid = true,
-      .Component0Control = VFCOMP_STORE_0,
-      .Component1Control = VFCOMP_STORE_0,
-      .Component2Control = VFCOMP_STORE_0,
-      .Component3Control = VFCOMP_STORE_0,
-   };
-   GENX(VERTEX_ELEMENT_STATE_pack)(NULL, device->empty_vs_input, &empty_ve);
 
    genX(emit_pipeline_select)(&batch, _3D, device);
 
@@ -698,8 +690,10 @@ init_compute_queue_state(struct anv_queue *queue)
    }
 
    anv_batch_emit(&batch, GENX(STATE_COMPUTE_MODE), cm) {
+#if GFX_VER < 20
       cm.PixelAsyncComputeThreadLimit = 4;
       cm.PixelAsyncComputeThreadLimitMask = 0x7;
+#endif
    }
 #endif
 
@@ -770,7 +764,7 @@ void
 genX(init_physical_device_state)(ASSERTED struct anv_physical_device *pdevice)
 {
    assert(pdevice->info.verx10 == GFX_VERx10);
-#if GFX_VERx10 == 125 && ANV_SUPPORT_RT
+#if GFX_VERx10 >= 125 && ANV_SUPPORT_RT
    genX(grl_load_rt_uuid)(pdevice->rt_uuid);
    pdevice->max_grl_scratch_size = genX(grl_max_scratch_size)();
 #endif
@@ -778,6 +772,15 @@ genX(init_physical_device_state)(ASSERTED struct anv_physical_device *pdevice)
    pdevice->cmd_emit_timestamp = genX(cmd_emit_timestamp);
 
    pdevice->gpgpu_pipeline_value = GPGPU;
+
+   struct GENX(VERTEX_ELEMENT_STATE) empty_ve = {
+      .Valid = true,
+      .Component0Control = VFCOMP_STORE_0,
+      .Component1Control = VFCOMP_STORE_0,
+      .Component2Control = VFCOMP_STORE_0,
+      .Component3Control = VFCOMP_STORE_0,
+   };
+   GENX(VERTEX_ELEMENT_STATE_pack)(NULL, pdevice->empty_vs_input, &empty_ve);
 }
 
 VkResult

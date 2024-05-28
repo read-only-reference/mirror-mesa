@@ -111,6 +111,7 @@ EXTENSIONS = [
               features=True),
     Extension("VK_EXT_shader_subgroup_ballot"),
     Extension("VK_EXT_shader_subgroup_vote"),
+    Extension("VK_EXT_legacy_vertex_attributes", alias="legacyverts", features=True, properties=True),
     Extension("VK_EXT_shader_atomic_float",
               alias="atomic_float",
               features=True),
@@ -141,7 +142,6 @@ EXTENSIONS = [
               alias="feedback_loop",
               features=True),
     Extension("VK_EXT_attachment_feedback_loop_dynamic_state", alias="feedback_dyn", features=True),
-    Extension("VK_NV_device_generated_commands", alias="nv_dgc", features=True, properties=True),
     Extension("VK_EXT_fragment_shader_interlock",
               alias="interlock",
               features=True,
@@ -471,7 +471,7 @@ zink_get_physical_device_info(struct zink_screen *screen)
    // enumerate device supported extensions
    VkResult result = screen->vk.EnumerateDeviceExtensionProperties(screen->pdev, NULL, &num_extensions, NULL);
    if (result != VK_SUCCESS) {
-      if (!screen->implicitly_loaded)
+      if (!screen->driver_name_is_inferred)
          mesa_loge("ZINK: vkEnumerateDeviceExtensionProperties failed (%s)", vk_Result_to_str(result));
    } else {
       if (num_extensions > 0) {
@@ -479,7 +479,7 @@ zink_get_physical_device_info(struct zink_screen *screen)
          if (!extensions) goto fail;
          result = screen->vk.EnumerateDeviceExtensionProperties(screen->pdev, NULL, &num_extensions, extensions);
          if (result != VK_SUCCESS) {
-            if (!screen->implicitly_loaded)
+            if (!screen->driver_name_is_inferred)
                mesa_loge("ZINK: vkEnumerateDeviceExtensionProperties failed (%s)", vk_Result_to_str(result));
          }
 

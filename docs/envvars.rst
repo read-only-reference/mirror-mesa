@@ -594,6 +594,9 @@ Intel driver environment variables
    ``sf``
       emit messages about the strips & fans unit (for old gens, includes
       the SF program)
+   ``shader-print``
+      allow developer print traces added by `brw_nir_printf` to be
+      printed out on the console
    ``soft64``
       enable implementation of software 64bit floating point support
    ``sparse``
@@ -656,6 +659,42 @@ Intel driver environment variables
    By default, only a standard set of gpu metrics are advertised. This
    reduces time to collect metrics and hides infrequently used metrics.
    To enable all metrics, set value to 1.
+
+.. envvar:: INTEL_FORCE_PROBE
+
+   A comma-separated list of device probe override values. The basic
+   format is ``<pci-id>[,<pci-id>,...]``. The wildcard value of ``*``
+   will specify all known PCI IDs. If ``!`` precedes a PCI ID, or the
+   wildcard value, then the device support will be disabled. All
+   numbers are interpreted in base 16, and a ``0x`` prefix is
+   optional. Values specified later take precidence, so the wildcard
+   probably should only be used at the beginning.
+
+   Some examples :
+
+   ``1234,!abcd``
+      Device 0x1234 would be forced on and 0xabcd would be disabled.
+
+   ``1234,!*``
+      All devices are disabled since the wildcard appears later.
+
+   ``!*,0x1234``
+      All devices disabled except 0x1234 which is forced on.
+
+   ``*,!0x1234``
+      All devices are forced on, except 0x1234 which is disabled.
+
+   ``!0x1234,1234``
+      Support for device 0x1234 is forced on since the enable appears
+      later.
+
+   .. note::
+      If a device requires using :envvar:`INTEL_FORCE_PROBE` to force
+      it to load, then Mesa does not have full support for the device.
+      It may have limited, or possibly no functionality within Mesa at
+      this point. It is recommended to upgrade to a Mesa which does
+      not require :envvar:`INTEL_FORCE_PROBE` for the device as soon
+      as it is available.
 
 .. envvar:: INTEL_MEASURE
 
@@ -1084,6 +1123,11 @@ Rusticl environment variables
    - ``program`` dumps compilation logs to stderr
    - ``sync`` waits on the GPU to complete after every event
    - ``validate`` validates any internally generated SPIR-Vs, e.g. through compiling OpenCL C code
+
+.. envvar:: RUSTICL_MAX_WORK_GROUPS
+
+   Limits the amount of threads per dimension in a work-group. Useful for splitting up long running
+   tasks to increase responsiveness or to simulate the lowering of huge global sizes for testing.
 
 .. _clc-env-var:
 

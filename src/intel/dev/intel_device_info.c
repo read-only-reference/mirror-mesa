@@ -74,6 +74,8 @@ static const struct {
    { "dg2", 0x5690 },
    { "mtl", 0x7d60 },
    { "arl", 0x7d67 },
+   { "lnl", 0x64a0 },
+   { "bmg", 0xe202 },
 };
 
 /**
@@ -1202,6 +1204,42 @@ static const struct intel_device_info intel_device_info_arl_h = {
    .platform = INTEL_PLATFORM_ARL_H,
 };
 
+#define XE2_FEATURES                                            \
+   /* (Sub)slice info comes from the kernel topology info */    \
+   XEHP_FEATURES(0, 1, 0),                                      \
+   .ver = 20,                                                   \
+   .verx10 = 200,                                               \
+   .num_subslices = dual_subslices(1),                          \
+   .has_64bit_float = true,                                     \
+   .has_64bit_int = true,                                       \
+   .has_integer_dword_mul = false,                              \
+   .has_coarse_pixel_primitive_and_cb = true,                   \
+   .has_mesh_shading = true,                                    \
+   .has_ray_tracing = true,                                     \
+   .has_indirect_unroll = true,                                 \
+   .pat = {                                                     \
+      .cached_coherent = PAT_ENTRY(1, WB, 1WAY),                \
+      .scanout = PAT_ENTRY(6, WC, NONE),                        \
+      .writeback_incoherent = PAT_ENTRY(0, WB, NONE),           \
+      .writecombining = PAT_ENTRY(6, WC, NONE),                 \
+   },                                                           \
+   .cooperative_matrix_configurations = { { 0 }, },             \
+   .has_flat_ccs = true
+
+static const struct intel_device_info intel_device_info_bmg = {
+   XE2_FEATURES,
+   .platform = INTEL_PLATFORM_BMG,
+   .has_local_mem = true,
+   .apply_hwconfig = true,
+};
+
+static const struct intel_device_info intel_device_info_lnl = {
+   XE2_FEATURES,
+   .platform = INTEL_PLATFORM_LNL,
+   .has_local_mem = false,
+   .apply_hwconfig = true,
+};
+
 void
 intel_device_info_topology_reset_masks(struct intel_device_info *devinfo)
 {
@@ -1301,6 +1339,37 @@ intel_device_info_update_l3_banks(struct intel_device_info *devinfo)
    }
 }
 
+/* Returns the number of EUs of the first subslice enabled */
+uint32_t
+intel_device_info_get_eu_count_first_subslice(const struct intel_device_info *devinfo)
+{
+   uint32_t first_subslice, first_slice, offset, i;
+   uint32_t eu_count = 0;
+
+   first_slice = ffs(devinfo->slice_masks);
+   first_slice--;
+   offset = first_slice * devinfo->subslice_slice_stride;
+
+   for (i = 0; i < DIV_ROUND_UP(devinfo->max_subslices_per_slice, 8); i++) {
+      first_subslice = ffs(devinfo->subslice_masks[offset + i]);
+
+      if (first_subslice == 0)
+         continue;
+
+      break;
+   }
+
+   assert(first_subslice > 0);
+   first_subslice--;
+   offset = first_slice * devinfo->eu_slice_stride +
+            first_subslice * devinfo->eu_subslice_stride;
+   for (i = 0; i < DIV_ROUND_UP(devinfo->max_eus_per_subslice, 8); i++)
+      eu_count += __builtin_popcount(devinfo->eu_masks[offset + i]);
+
+   assert(eu_count > 0);
+   return eu_count;
+}
+
 /* Generate mask from the device data. */
 static void
 fill_masks(struct intel_device_info *devinfo)
@@ -1334,13 +1403,90 @@ intel_device_info_update_cs_workgroup_threads(struct intel_device_info *devinfo)
 }
 
 static bool
-intel_device_info_init_common(int pci_id,
+parse_force_probe_entry(int pci_id, const char *entry, bool *force_on,
+                        bool *force_off)
+{
+   const char *cp = entry;
+
+   bool negated = *cp == '!';
+   if (negated)
+      cp++;
+
+   if (*cp == '\0')
+      return false;
+
+   bool wildcard = *cp == '*';
+   long val = 0;
+
+   if (wildcard) {
+      cp++;
+   } else {
+      char *end;
+      val = strtol(cp, &end, 16);
+      if (end == cp)
+         return false;
+      cp = end;
+   }
+
+   if (*cp != '\0')
+      return false;
+
+   bool matched = wildcard || (long)pci_id == val;
+   if (matched) {
+      *force_on = !negated;
+      *force_off = negated;
+   }
+
+   return matched;
+}
+
+static void
+scan_for_force_probe(int pci_id, bool *force_on, bool *force_off)
+{
+   *force_on = false;
+   *force_off = false;
+
+   const char *env = getenv("INTEL_FORCE_PROBE");
+   if (env == NULL)
+      return;
+
+   size_t len = strlen(env);
+   if (len == 0)
+      return;
+
+   char *dup = strndup(env, len);
+   if (dup == NULL)
+      return;
+
+   for (char *entry = strtok(dup, ","); entry; entry = strtok(NULL, ","))
+      parse_force_probe_entry(pci_id, entry, force_on, force_off);
+
+   free(dup);
+   assert(!*force_on || !*force_off);
+}
+
+struct device_init_config {
+   bool require_force_probe;
+};
+
+/* Example PCI ID entry using FORCE_PROBE:
+ *
+ * CHIPSET(0x1234, foo, "FOO", "Intel(R) Graphics", FORCE_PROBE)
+ */
+#define FORCE_PROBE .require_force_probe = true
+
+static bool
+intel_device_info_init_common(int pci_id, bool building,
                               struct intel_device_info *devinfo)
 {
+   struct device_init_config device_config = { 0 };
    switch (pci_id) {
 #undef CHIPSET
-#define CHIPSET(id, family, fam_str, name) \
-      case id: *devinfo = intel_device_info_##family; break;
+#define CHIPSET(id, family, fam_str, name, ...)                         \
+      case id:                                                          \
+         *devinfo = intel_device_info_##family;                         \
+         device_config = *&(struct device_init_config) { __VA_ARGS__ }; \
+         break;
 #include "pci_ids/crocus_pci_ids.h"
 #include "pci_ids/iris_pci_ids.h"
 
@@ -1356,7 +1502,7 @@ intel_device_info_init_common(int pci_id,
 
    switch (pci_id) {
 #undef CHIPSET
-#define CHIPSET(_id, _family, _fam_str, _name) \
+#define CHIPSET(_id, _family, _fam_str, _name, ...) \
    case _id: \
       /* sizeof(str_literal) includes the null */ \
       STATIC_ASSERT(sizeof(_name) + sizeof(_fam_str) + 2 <= \
@@ -1367,6 +1513,28 @@ intel_device_info_init_common(int pci_id,
 #include "pci_ids/iris_pci_ids.h"
    default:
       strncpy(devinfo->name, "Intel Unknown", sizeof(devinfo->name));
+   }
+
+   bool force_on = false;
+   bool force_off = false;
+   if (building)
+      force_on = true;
+   else
+      scan_for_force_probe(pci_id, &force_on, &force_off);
+   if (force_off) {
+      mesa_logw("%s (0x%x) disabled with INTEL_FORCE_PROBE", devinfo->name,
+                pci_id);
+      return false;
+   } else if (device_config.require_force_probe) {
+      if (force_on) {
+         if (!building)
+            mesa_logw("Forcing probe of unsupported: %s (0x%x)", devinfo->name,
+                      pci_id);
+      } else {
+         mesa_loge("%s (0x%x) requires INTEL_FORCE_PROBE", devinfo->name,
+                   pci_id);
+         return false;
+      }
    }
 
    devinfo->pci_device_id = pci_id;
@@ -1447,11 +1615,11 @@ intel_device_info_apply_workarounds(struct intel_device_info *devinfo)
       devinfo->urb.max_entries[MESA_SHADER_GEOMETRY] = 1024;
 }
 
-bool
-intel_get_device_info_from_pci_id(int pci_id,
-                                  struct intel_device_info *devinfo)
+static bool
+intel_get_device_info_from_pci_id_common(int pci_id, bool building,
+                                         struct intel_device_info *devinfo)
 {
-   intel_device_info_init_common(pci_id, devinfo);
+   intel_device_info_init_common(pci_id, building, devinfo);
 
    /* This is a placeholder until a proper value is set. */
    devinfo->kmd_type = INTEL_KMD_TYPE_I915;
@@ -1460,6 +1628,20 @@ intel_get_device_info_from_pci_id(int pci_id,
    intel_device_info_apply_workarounds(devinfo);
 
    return true;
+}
+
+bool
+intel_get_device_info_from_pci_id(int pci_id,
+                                  struct intel_device_info *devinfo)
+{
+   return intel_get_device_info_from_pci_id_common(pci_id, false, devinfo);
+}
+
+bool
+intel_get_device_info_for_build(int pci_id,
+                                struct intel_device_info *devinfo)
+{
+   return intel_get_device_info_from_pci_id_common(pci_id, true, devinfo);
 }
 
 bool
@@ -1660,8 +1842,8 @@ intel_get_device_info_from_fd(int fd, struct intel_device_info *devinfo, int min
       mesa_loge("Failed to query drm device.");
       return false;
    }
-   if (!intel_device_info_init_common(
-          drmdev->deviceinfo.pci->device_id, devinfo)) {
+   if (!intel_device_info_init_common(drmdev->deviceinfo.pci->device_id,
+                                      false, devinfo)) {
       drmFreeDevice(&drmdev);
       return false;
    }
@@ -1780,7 +1962,29 @@ intel_device_info_wa_stepping(struct intel_device_info *devinfo)
     * 'compiler_field' in intel_device_info.py
     */
 
-   if (devinfo->platform == INTEL_PLATFORM_TGL) {
+   if (devinfo->platform == INTEL_PLATFORM_BMG) {
+      switch (devinfo->revision) {
+      case 0:
+         return INTEL_STEPPING_A0;
+      case 1:
+         return INTEL_STEPPING_A1;
+      case 4:
+         return INTEL_STEPPING_B0;
+      default:
+         return INTEL_STEPPING_RELEASE;
+      }
+   } else if (devinfo->platform == INTEL_PLATFORM_LNL) {
+      switch (devinfo->revision) {
+      case 0:
+         return INTEL_STEPPING_A0;
+      case 1:
+         return INTEL_STEPPING_A1;
+      case 4:
+         return INTEL_STEPPING_B0;
+      default:
+         return INTEL_STEPPING_RELEASE;
+      }
+   } else if (devinfo->platform == INTEL_PLATFORM_TGL) {
       /* TGL production steppings: B0 and C0 */
       switch (devinfo->revision) {
       case 1:
@@ -1796,3 +2000,33 @@ intel_device_info_wa_stepping(struct intel_device_info *devinfo)
    return INTEL_STEPPING_RELEASE;
 }
 
+uint32_t
+intel_device_info_get_max_slm_size(const struct intel_device_info *devinfo)
+{
+   uint32_t k_bytes = 0;
+
+   if (devinfo->verx10 >= 200) {
+      k_bytes = intel_device_info_get_max_preferred_slm_size(devinfo);
+   } else {
+      k_bytes = 64;
+   }
+
+   return k_bytes * 1024;
+}
+
+uint32_t
+intel_device_info_get_max_preferred_slm_size(const struct intel_device_info *devinfo)
+{
+   uint32_t k_bytes = 0;
+
+   if (devinfo->verx10 >= 200) {
+      if (intel_needs_workaround(devinfo, 16018610683))
+         k_bytes = 128;
+      else
+         k_bytes = 160;
+   } else {
+      k_bytes = 128;
+   }
+
+   return k_bytes * 1024;
+}

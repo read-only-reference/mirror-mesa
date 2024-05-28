@@ -596,6 +596,7 @@ perform_hazard_query(hazard_query* query, Instruction* instr, bool upwards)
    /* don't move non-reorderable instructions */
    if (instr->opcode == aco_opcode::s_memtime || instr->opcode == aco_opcode::s_memrealtime ||
        instr->opcode == aco_opcode::s_setprio || instr->opcode == aco_opcode::s_getreg_b32 ||
+       instr->opcode == aco_opcode::p_shader_cycles_hi_lo_hi ||
        instr->opcode == aco_opcode::p_init_scratch ||
        instr->opcode == aco_opcode::p_jump_to_epilog ||
        instr->opcode == aco_opcode::s_sendmsg_rtn_b32 ||
@@ -663,6 +664,34 @@ perform_hazard_query(hazard_query* query, Instruction* instr, bool upwards)
       return hazard_fail_reorder_sendmsg;
 
    return hazard_success;
+}
+
+unsigned
+get_likely_cost(Instruction* instr)
+{
+   if (instr->opcode == aco_opcode::p_split_vector ||
+       instr->opcode == aco_opcode::p_extract_vector) {
+      unsigned cost = 0;
+      for (Definition def : instr->definitions) {
+         if (instr->operands[0].isKill() &&
+             def.regClass().type() == instr->operands[0].regClass().type())
+            continue;
+         cost += def.size();
+      }
+      return cost;
+   } else if (instr->opcode == aco_opcode::p_create_vector) {
+      unsigned cost = 0;
+      for (Operand op : instr->operands) {
+         if (op.isTemp() && op.isFirstKill() &&
+             op.regClass().type() == instr->definitions[0].regClass().type())
+            continue;
+         cost += op.size();
+      }
+      return cost;
+   } else {
+      /* For the moment, just assume the same cost for all other instructions. */
+      return 1;
+   }
 }
 
 void
@@ -1118,7 +1147,7 @@ schedule_VMEM_store(sched_ctx& ctx, Block* block, std::vector<RegisterDemand>& r
    DownwardsCursor cursor = ctx.mv.downwards_init(idx, true, true);
    int skip = 0;
 
-   for (int i = 0; (i - skip) < VMEM_STORE_CLAUSE_MAX_GRAB_DIST; i++) {
+   for (int16_t k = 0; k < VMEM_STORE_CLAUSE_MAX_GRAB_DIST;) {
       aco_ptr<Instruction>& candidate = block->instructions[cursor.source_idx];
       if (candidate->opcode == aco_opcode::p_logical_start)
          break;
@@ -1126,6 +1155,7 @@ schedule_VMEM_store(sched_ctx& ctx, Block* block, std::vector<RegisterDemand>& r
       if (!should_form_clause(current, candidate.get())) {
          add_to_hazard_query(&hq, candidate.get());
          ctx.mv.downwards_skip(cursor);
+         k += get_likely_cost(candidate.get());
          continue;
       }
 

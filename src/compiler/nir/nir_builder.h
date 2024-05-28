@@ -920,6 +920,18 @@ nir_imin_imm(nir_builder *build, nir_def *x, int64_t y)
 }
 
 static inline nir_def *
+nir_umax_imm(nir_builder *build, nir_def *x, uint64_t y)
+{
+   return nir_umax(build, x, nir_imm_intN_t(build, y, x->bit_size));
+}
+
+static inline nir_def *
+nir_umin_imm(nir_builder *build, nir_def *x, uint64_t y)
+{
+   return nir_umin(build, x, nir_imm_intN_t(build, y, x->bit_size));
+}
+
+static inline nir_def *
 _nir_mul_imm(nir_builder *build, nir_def *x, uint64_t y, bool amul)
 {
    assert(x->bit_size <= 64);
@@ -2152,6 +2164,14 @@ nir_scoped_memory_barrier(nir_builder *b,
 
 nir_def *
 nir_gen_rect_vertices(nir_builder *b, nir_def *z, nir_def *w);
+
+/* Emits a printf in the same way nir_lower_printf(). Each of the variadic
+ * argument is a pointer to a nir_def value.
+ */
+void nir_printf_fmt(nir_builder *b,
+                    bool use_printf_base_identifier,
+                    unsigned ptr_bit_size,
+                    const char *fmt, ...);
 
 #ifdef __cplusplus
 } /* extern "C" */

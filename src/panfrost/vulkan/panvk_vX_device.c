@@ -140,6 +140,7 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
 
    vk_device_set_drm_fd(&device->vk, device->kmod.dev->fd);
 
+   panvk_per_arch(blend_shader_cache_init)(device);
    panvk_per_arch(meta_init)(device);
 
    for (unsigned i = 0; i < pCreateInfo->queueCreateInfoCount; i++) {
@@ -180,6 +181,7 @@ fail:
    }
 
    panvk_per_arch(meta_cleanup)(device);
+   panvk_per_arch(blend_shader_cache_cleanup)(device);
    panvk_priv_bo_destroy(device->tiler_heap, &device->vk.alloc);
    panvk_priv_bo_destroy(device->sample_positions, &device->vk.alloc);
    pan_kmod_vm_destroy(device->kmod.vm);
@@ -204,6 +206,7 @@ panvk_per_arch(destroy_device)(struct panvk_device *device,
    }
 
    panvk_per_arch(meta_cleanup)(device);
+   panvk_per_arch(blend_shader_cache_cleanup)(device);
    panvk_priv_bo_destroy(device->tiler_heap, &device->vk.alloc);
    panvk_priv_bo_destroy(device->sample_positions, &device->vk.alloc);
    pan_kmod_vm_destroy(device->kmod.vm);
@@ -213,4 +216,20 @@ panvk_per_arch(destroy_device)(struct panvk_device *device,
 
    pan_kmod_dev_destroy(device->kmod.dev);
    vk_free(&device->vk.alloc, device);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+panvk_per_arch(GetRenderAreaGranularity)(VkDevice device,
+                                         VkRenderPass renderPass,
+                                         VkExtent2D *pGranularity)
+{
+   *pGranularity = (VkExtent2D){32, 32};
+}
+
+VKAPI_ATTR void VKAPI_CALL
+panvk_per_arch(GetRenderingAreaGranularityKHR)(
+   VkDevice _device, const VkRenderingAreaInfoKHR *pRenderingAreaInfo,
+   VkExtent2D *pGranularity)
+{
+   *pGranularity = (VkExtent2D){32, 32};
 }
