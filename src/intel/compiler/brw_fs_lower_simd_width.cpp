@@ -198,8 +198,7 @@ get_sampler_lowered_simd_width(const struct intel_device_info *devinfo,
       inst->components_read(TEX_LOGICAL_SRC_MIN_LOD);
 
 
-   if (inst->opcode == FS_OPCODE_TXB_LOGICAL &&
-       devinfo->ver >= 20 && inst->has_packed_lod_ai_src) {
+   if (inst->opcode == FS_OPCODE_TXB_LOGICAL && devinfo->ver >= 20) {
       num_payload_components += 3 - coord_components;
    } else if (inst->opcode == SHADER_OPCODE_TXD_LOGICAL &&
             devinfo->verx10 >= 125 && devinfo->ver < 20) {
@@ -277,7 +276,6 @@ brw_fs_get_lowered_simd_width(const fs_visitor *shader, const fs_inst *inst)
    case BRW_OPCODE_FBH:
    case BRW_OPCODE_FBL:
    case BRW_OPCODE_CBIT:
-   case BRW_OPCODE_SAD2:
    case BRW_OPCODE_MAD:
    case BRW_OPCODE_LRP:
    case BRW_OPCODE_ADD3:
@@ -484,6 +482,12 @@ brw_fs_get_lowered_simd_width(const fs_visitor *shader, const fs_inst *inst)
 static inline bool
 needs_src_copy(const fs_builder &lbld, const fs_inst *inst, unsigned i)
 {
+   /* The indirectly indexed register stays the same even if we split the
+    * instruction.
+    */
+   if (inst->opcode == SHADER_OPCODE_MOV_INDIRECT && i == 0)
+      return false;
+
    return !(is_periodic(inst->src[i], lbld.dispatch_width()) ||
             (inst->components_read(i) == 1 &&
              lbld.dispatch_width() <= inst->exec_size)) ||
@@ -514,10 +518,13 @@ emit_unzip(const fs_builder &lbld, fs_inst *inst, unsigned i)
       lbld.VEC(tmp, comps, num_components);
 
       return tmp;
-
-   } else if (is_periodic(inst->src[i], lbld.dispatch_width())) {
+   } else if (is_periodic(inst->src[i], lbld.dispatch_width()) ||
+              (inst->opcode == SHADER_OPCODE_MOV_INDIRECT && i == 0)) {
       /* The source is invariant for all dispatch_width-wide groups of the
        * original region.
+       *
+       * The src[0] of MOV_INDIRECT is invariant regardless of the execution
+       * size.
        */
       return inst->src[i];
 

@@ -1191,7 +1191,7 @@ get_scratch_surf(struct anv_pipeline *pipeline,
    anv_reloc_list_add_bo(pipeline->batch.relocs, bo);
    return anv_scratch_pool_get_surf(pipeline->device,
                                     &pipeline->device->scratch_pool,
-                                    bin->prog_data->total_scratch) >> 4;
+                                    bin->prog_data->total_scratch) >> ANV_SCRATCH_SPACE_SHIFT(GFX_VER);
 }
 
 static void
@@ -1451,6 +1451,10 @@ emit_3dstate_te(struct anv_graphics_pipeline *pipeline)
          /* 1K_TRIANGLES */
          te.LocalBOPAccumulatorThreshold = 1;
 #endif
+
+#if GFX_VER >= 20
+         te.NumberOfRegionsPerPatch = 2;
+#endif
       }
    }
 }
@@ -1660,6 +1664,12 @@ emit_3dstate_ps_extra(struct anv_graphics_pipeline *pipeline,
          ps.InputCoverageMaskState = ICMS_NORMAL;
 
 #if GFX_VER >= 11
+      ps.PixelShaderRequiresSubpixelSampleOffsets =
+         wm_prog_data->uses_sample_offsets;
+      ps.PixelShaderRequiresNonPerspectiveBaryPlaneCoefficients =
+         wm_prog_data->uses_npc_bary_coefficients;
+      ps.PixelShaderRequiresPerspectiveBaryPlaneCoefficients =
+         wm_prog_data->uses_pc_bary_coefficients;
       ps.PixelShaderRequiresSourceDepthandorWPlaneCoefficients =
          wm_prog_data->uses_depth_w_coefficients;
 #endif
@@ -1771,6 +1781,7 @@ emit_task_state(struct anv_graphics_pipeline *pipeline)
    anv_pipeline_emit(pipeline, final.task_control,
                      GENX(3DSTATE_TASK_CONTROL), tc) {
       tc.TaskShaderEnable = true;
+      tc.StatisticsEnable = true;
       tc.ScratchSpaceBuffer =
          get_scratch_surf(&pipeline->base.base, MESA_SHADER_TASK, task_bin);
       tc.MaximumNumberofThreadGroups = 511;
@@ -1827,17 +1838,21 @@ emit_mesh_state(struct anv_graphics_pipeline *pipeline)
    assert(anv_pipeline_is_mesh(pipeline));
 
    const struct anv_shader_bin *mesh_bin = pipeline->base.shaders[MESA_SHADER_MESH];
+   const struct brw_mesh_prog_data *mesh_prog_data = get_mesh_prog_data(pipeline);
 
    anv_pipeline_emit(pipeline, final.mesh_control,
                      GENX(3DSTATE_MESH_CONTROL), mc) {
       mc.MeshShaderEnable = true;
+      mc.StatisticsEnable = true;
       mc.ScratchSpaceBuffer =
          get_scratch_surf(&pipeline->base.base, MESA_SHADER_MESH, mesh_bin);
       mc.MaximumNumberofThreadGroups = 511;
+#if GFX_VER >= 20
+      mc.VPandRTAIndexAutostripEnable = mesh_prog_data->autostrip_enable;
+#endif
    }
 
    const struct intel_device_info *devinfo = pipeline->base.base.device->info;
-   const struct brw_mesh_prog_data *mesh_prog_data = get_mesh_prog_data(pipeline);
    const struct intel_cs_dispatch_info mesh_dispatch =
       brw_cs_get_dispatch_info(devinfo, &mesh_prog_data->base, NULL);
 

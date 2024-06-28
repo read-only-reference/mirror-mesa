@@ -83,7 +83,10 @@ static const uint32_t isl_encode_multisample_layout[] = {
 static const uint32_t isl_encode_aux_mode[] = {
    [ISL_AUX_USAGE_NONE] = AUX_NONE,
    [ISL_AUX_USAGE_MC] = AUX_NONE,
+   [ISL_AUX_USAGE_MCS] = AUX_MCS,
    [ISL_AUX_USAGE_MCS_CCS] = AUX_MCS,
+   [ISL_AUX_USAGE_STC_CCS] = AUX_NONE,
+   [ISL_AUX_USAGE_HIZ_CCS_WT] = AUX_NONE,
 };
 #elif GFX_VER >= 12
 static const uint32_t isl_encode_aux_mode[] = {
@@ -578,8 +581,9 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
    s.ResourceMinLOD = info->view->min_lod_clamp;
 
 #if GFX_VERx10 >= 200
-   s.EnableSamplerRoutetoLSC = isl_format_support_sampler_route_to_lsc(info->view->format);
-   s.EnableSamplerRoutetoLSC &= (s.SurfaceType == SURFTYPE_2D);
+   s.EnableSamplerRoutetoLSC =
+      isl_format_support_sampler_route_to_lsc(info->view->format) &&
+      s.SurfaceType == SURFTYPE_2D && info->view->array_len == 1;
 
 /* Wa_14018471104:
  * For APIs that use ResourceMinLod, do the following: (remains same as before)
@@ -589,6 +593,9 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
 #if INTEL_NEEDS_WA_14018471104
    s.EnableSamplerRoutetoLSC &= info->view->min_lod_clamp == 0;
 #endif
+
+   /* Per application override. */
+   s.EnableSamplerRoutetoLSC &= dev->sampler_route_to_lsc;
 #endif /* if GFX_VERx10 >= 200 */
 
 #else
@@ -611,6 +618,7 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
    assert(isl_swizzle_is_identity(info->view->swizzle));
 #endif
 
+   assert(info->address % info->surf->alignment_B == 0);
    s.SurfaceBaseAddress = info->address;
 
 #if GFX_VER >= 6
@@ -717,8 +725,13 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
           * ISL_MSAA_LAYOUT_INTERLEAVED which is incompatible with MCS
           * compression, this means that we can't even specify MSAA depth CCS
           * in RENDER_SURFACE_STATE::AuxiliarySurfaceMode.
+          *
+          * On Xe2+, the above restriction is not mentioned in the
+          * RENDER_SURFACE_STATE::AuxiliarySurfaceMode.
+          *
+          * Bspec 57023 (r58975)
           */
-         assert(info->surf->samples == 1);
+         assert(GFX_VER >= 20 || info->surf->samples == 1);
 
          /* Prior to Gfx12, the dimension must not be 3D */
          if (info->aux_usage == ISL_AUX_USAGE_HIZ)
@@ -824,6 +837,7 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
       uint32_t pitch_in_tiles =
          info->aux_surf->row_pitch_B / tile_info.phys_extent_B.width;
 
+      assert(info->aux_address % info->aux_surf->alignment_B == 0);
       s.AuxiliarySurfaceBaseAddress = info->aux_address;
       s.AuxiliarySurfacePitch = pitch_in_tiles - 1;
 
@@ -899,7 +913,12 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
       }
 #endif
 
-#if GFX_VER >= 12
+#if GFX_VER >= 20
+      /* According to Bspec 57023 >> RENDER_SURFACE_STATE, the clear value
+       * address and explicit clear value are removed since Xe2.
+       */
+      assert(!info->use_clear_address);
+#elif GFX_VER >= 12
       assert(info->use_clear_address);
 #elif GFX_VER >= 9
       if (!info->use_clear_address) {
@@ -1054,8 +1073,17 @@ isl_genX(buffer_fill_state_s)(const struct isl_device *dev, void *state,
     * address. Only enabled on Gfx9+ since Gfx8 has an Atom version with only
     * 32bits of address space.
     */
-   if (dev->buffer_length_in_aux_addr)
+   if (dev->buffer_length_in_aux_addr) {
+      assert(intel_needs_workaround(dev->info, 14019708328) == false);
       s.AuxiliarySurfaceBaseAddress = info->size_B << 32;
+   } else {
+      /* Wa_14019708328: all SURFTYPE_BUFFERs has
+       * AuxiliarySurfaceMode == AUX_NONE so no need to check for it.
+       * In case workaround is not needed and buffer_length_in_aux_addr is
+       * false, it will set AuxiliarySurfaceBaseAddress to 0.
+       */
+      s.AuxiliarySurfaceBaseAddress = dev->dummy_aux_address;
+   }
 #else
    assert(!dev->buffer_length_in_aux_addr);
 #endif

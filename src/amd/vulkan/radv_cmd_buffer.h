@@ -578,6 +578,7 @@ struct radv_cmd_buffer {
 
    uint32_t sqtt_cb_id;
 
+   struct set *accel_struct_buffers;
    struct util_dynarray ray_history;
 };
 
@@ -704,11 +705,11 @@ void radv_write_vertex_descriptors(const struct radv_cmd_buffer *cmd_buffer,
                                    const struct radv_graphics_pipeline *pipeline, bool full_null_descriptors,
                                    void *vb_ptr);
 
-enum radv_cmd_flush_bits radv_src_access_flush(struct radv_cmd_buffer *cmd_buffer, VkAccessFlags2 src_flags,
-                                               const struct radv_image *image);
+enum radv_cmd_flush_bits radv_src_access_flush(struct radv_cmd_buffer *cmd_buffer, VkPipelineStageFlags2 src_stages,
+                                               VkAccessFlags2 src_flags, const struct radv_image *image);
 
-enum radv_cmd_flush_bits radv_dst_access_flush(struct radv_cmd_buffer *cmd_buffer, VkAccessFlags2 dst_flags,
-                                               const struct radv_image *image);
+enum radv_cmd_flush_bits radv_dst_access_flush(struct radv_cmd_buffer *cmd_buffer, VkPipelineStageFlags2 dst_stages,
+                                               VkAccessFlags2 dst_flags, const struct radv_image *image);
 
 struct radv_resolve_barrier {
    VkPipelineStageFlags2 src_stage_mask;
@@ -778,5 +779,7 @@ void radv_emit_set_predication_state(struct radv_cmd_buffer *cmd_buffer, bool dr
 void radv_begin_conditional_rendering(struct radv_cmd_buffer *cmd_buffer, uint64_t va, bool draw_visible);
 
 void radv_end_conditional_rendering(struct radv_cmd_buffer *cmd_buffer);
+
+uint64_t radv_descriptor_get_va(const struct radv_descriptor_state *descriptors_state, unsigned set_idx);
 
 #endif /* RADV_CMD_BUFFER_H */

@@ -225,6 +225,24 @@ static int si_init_surface(struct si_screen *sscreen, struct radeon_surf *surfac
              ptex->flags & PIPE_RESOURCE_FLAG_SPARSE)
             flags |= RADEON_SURF_NO_HTILE;
       }
+
+      /* TODO: Set these for scanout after display DCC is enabled. The reason these are not set is
+       * because they overlap DCC_OFFSET_256B and the kernel driver incorrectly reads DCC_OFFSET_256B
+       * on GFX12, which completely breaks the display code.
+       */
+      if (!is_imported && !(ptex->bind & PIPE_BIND_SCANOUT)) {
+         enum pipe_format format = util_format_get_depth_only(ptex->format);
+
+         /* These should be set for both color and Z/S. */
+         surface->u.gfx9.color.dcc_number_type = ac_get_cb_number_type(format);
+         surface->u.gfx9.color.dcc_data_format = ac_get_cb_format(sscreen->info.gfx_level, format);
+      }
+
+      if (surface->modifier == DRM_FORMAT_MOD_INVALID &&
+          (ptex->bind & PIPE_BIND_CONST_BW ||
+           sscreen->debug_flags & DBG(NO_DCC) ||
+           (ptex->bind & PIPE_BIND_SCANOUT && sscreen->debug_flags & DBG(NO_DISPLAY_DCC))))
+         flags |= RADEON_SURF_DISABLE_DCC;
    } else {
       /* Gfx6-11 */
       if (!is_flushed_depth && is_depth) {
@@ -959,6 +977,19 @@ void si_print_texture_info(struct si_screen *sscreen, struct si_texture *tex,
    }
 }
 
+static void print_debug_tex(struct si_screen *sscreen, struct si_texture *tex)
+{
+   if (sscreen->debug_flags & DBG(TEX)) {
+      puts("Texture:");
+      struct u_log_context log;
+      u_log_context_init(&log);
+      si_print_texture_info(sscreen, tex, &log);
+      u_log_new_page_print(&log, stdout);
+      fflush(stdout);
+      u_log_context_destroy(&log);
+   }
+}
+
 /**
  * Common function for si_texture_create and si_texture_from_handle.
  *
@@ -1028,6 +1059,14 @@ static struct si_texture *si_texture_create_object(struct pipe_screen *screen,
       /* Create the backing buffer. */
       si_init_resource_fields(sscreen, resource, alloc_size, alignment);
 
+      /* GFX12: Image descriptors always set COMPRESSION_EN=1, so this is the only thing that
+       * disables DCC in the driver.
+       */
+      if (sscreen->info.gfx_level >= GFX12 &&
+          resource->domains & RADEON_DOMAIN_VRAM &&
+          surface->u.gfx9.gfx12_enable_dcc)
+         resource->flags |= RADEON_FLAG_GFX12_ALLOW_DCC;
+
       if (!si_alloc_resource(sscreen, resource))
          goto error;
    } else {
@@ -1051,17 +1090,8 @@ static struct si_texture *si_texture_create_object(struct pipe_screen *screen,
       fprintf(stderr, "\n");
    }
 
-   if (sscreen->debug_flags & DBG(TEX)) {
-      puts("Texture:");
-      struct u_log_context log;
-      u_log_context_init(&log);
-      si_print_texture_info(sscreen, tex, &log);
-      u_log_new_page_print(&log, stdout);
-      fflush(stdout);
-      u_log_context_destroy(&log);
-   }
-
    if (sscreen->info.gfx_level >= GFX12) {
+      print_debug_tex(sscreen, tex);
       if (tex->is_depth) {
          /* Z24 is no longer supported. We should use Z32_FLOAT instead. */
          if (base->format == PIPE_FORMAT_Z16_UNORM) {
@@ -1099,6 +1129,8 @@ static struct si_texture *si_texture_create_object(struct pipe_screen *screen,
                               (sscreen->info.gfx_level >= GFX8 &&
                                tex->surface.flags & RADEON_SURF_TC_COMPATIBLE_HTILE &&
                                tex->buffer.b.b.last_level > 0);
+
+   print_debug_tex(sscreen, tex);
 
    /* TC-compatible HTILE:
     * - GFX8 only supports Z32_FLOAT.

@@ -223,6 +223,12 @@ struct intel_perf_query_result;
  */
 #define ANV_PERF_QUERY_OFFSET_REG 0x2670 /* MI_ALU_REG14 */
 
+/* We reserve this MI ALU register to hold the last programmed bindless
+ * surface state base address so that we can predicate STATE_BASE_ADDRESS
+ * emissions if the address doesn't change.
+ */
+#define ANV_BINDLESS_SURFACE_BASE_ADDR_REG 0x2668 /* MI_ALU_REG13 */
+
 #define ANV_GRAPHICS_SHADER_STAGE_COUNT (MESA_SHADER_MESH + 1)
 
 /* RENDER_SURFACE_STATE is a bit smaller (48b) but since it is aligned to 64
@@ -440,6 +446,9 @@ enum anv_bo_alloc_flags {
 
    /** For descriptor buffer pools */
    ANV_BO_ALLOC_DESCRIPTOR_BUFFER_POOL =  (1 << 21),
+
+   /** Compressed buffer, only supported in Xe2+ */
+   ANV_BO_ALLOC_COMPRESSED =              (1 << 22),
 };
 
 /** Specifies that the BO should be cached and coherent. */
@@ -768,35 +777,6 @@ struct anv_state_stream {
    struct util_dynarray all_blocks;
 };
 
-struct anv_sparse_submission {
-   struct anv_queue *queue;
-
-   struct anv_vm_bind *binds;
-   int binds_len;
-   int binds_capacity;
-
-   uint32_t wait_count;
-   uint32_t signal_count;
-
-   struct vk_sync_wait *waits;
-   struct vk_sync_signal *signals;
-};
-
-struct anv_trtt_bind {
-   uint64_t pte_addr;
-   uint64_t entry_addr;
-};
-
-struct anv_trtt_submission {
-   struct anv_sparse_submission *sparse;
-
-   struct anv_trtt_bind *l3l2_binds;
-   struct anv_trtt_bind *l1_binds;
-
-   int l3l2_binds_len;
-   int l1_binds_len;
-};
-
 /* The block_pool functions exported for testing only.  The block pool should
  * only be used via a state pool (see below).
  */
@@ -940,6 +920,18 @@ uint32_t anv_scratch_pool_get_surf(struct anv_device *device,
                                    struct anv_scratch_pool *pool,
                                    unsigned per_thread_scratch);
 
+/* Note that on Gfx12HP we pass a scratch space surface state offset
+ * shifted by 2 relative to the value specified on the BSpec, since
+ * that allows the compiler to save a shift instruction while
+ * constructing the extended descriptor for SS addressing.  That
+ * worked because we limit the scratch surface state pool to 8 MB and
+ * because we relied on the legacy (ExBSO=0) encoding of the extended
+ * descriptor in order to save the shift, which is no longer supported
+ * for the UGM shared function on Xe2 platforms, so we no longer
+ * attempt to do that trick.
+ */
+#define ANV_SCRATCH_SPACE_SHIFT(ver) ((ver) >= 20 ? 6 : 4)
+
 /** Implements a BO cache that ensures a 1-1 mapping of GEM BOs to anv_bos */
 struct anv_bo_cache {
    struct util_sparse_array bo_map;
@@ -966,6 +958,7 @@ struct anv_memory_type {
    uint32_t                heapIndex;
    /* Whether this is the descriptor buffer memory type */
    bool                    descriptor_buffer;
+   bool                    compressed;
 };
 
 struct anv_memory_heap {
@@ -1125,6 +1118,8 @@ struct anv_physical_device {
       uint32_t                                  desc_buffer_mem_types;
       /** Mask of memory types of protected buffers/images */
       uint32_t                                  protected_mem_types;
+      /** Mask of memory types of compressed buffers/images */
+      uint32_t                                  compressed_mem_types;
     } memory;
 
     struct {
@@ -1270,6 +1265,7 @@ struct anv_instance {
     int                                         mesh_conv_prim_attrs_to_vert_attrs;
     bool                                        enable_tbimr;
     bool                                        external_memory_implicit_sync;
+    bool                                        force_guc_low_latency;
 
     /**
      * Workarounds for game bugs.
@@ -1288,10 +1284,16 @@ struct anv_instance {
     bool                                        has_fake_sparse;
     bool                                        disable_fcv;
     bool                                        compression_control_enabled;
+    bool                                        anv_fake_nonlocal_memory;
 
     /* HW workarounds */
     bool                                        no_16bit;
     bool                                        intel_enable_wa_14018912822;
+
+    /**
+     * Ray tracing configuration.
+     */
+    unsigned                                    stack_ids;
 };
 
 VkResult anv_init_wsi(struct anv_physical_device *physical_device);
@@ -1342,6 +1344,9 @@ struct anv_queue {
    struct vk_sync                           *companion_sync;
 
    struct intel_ds_queue                     ds;
+
+   struct anv_async_submit                  *init_submit;
+   struct anv_async_submit                  *init_companion_submit;
 };
 
 struct nir_xfb_info;
@@ -1451,6 +1456,7 @@ enum anv_gfx_state_bits {
    ANV_GFX_STATE_PS_EXTRA,
    ANV_GFX_STATE_PMA_FIX, /* Fake state to implement workaround */
    ANV_GFX_STATE_WA_18019816803, /* Fake state to implement workaround */
+   ANV_GFX_STATE_WA_14018283232, /* Fake state to implement workaround */
    ANV_GFX_STATE_TBIMR_TILE_PASS_INFO,
 
    ANV_GFX_STATE_MAX,
@@ -1744,6 +1750,16 @@ struct anv_gfx_dynamic_state {
 
    bool pma_fix;
 
+   /**
+    * DEPTH and STENCIL attachment write state for Wa_18019816803.
+    */
+   bool ds_write_state;
+
+   /**
+    * Toggle tracking for Wa_14018283232.
+    */
+   bool wa_14018283232_toggle;
+
    BITSET_DECLARE(dirty, ANV_GFX_STATE_MAX);
 };
 
@@ -1769,19 +1785,6 @@ struct anv_device_astc_emu {
     VkDescriptorSetLayout ds_layout;
     VkPipelineLayout pipeline_layout;
     VkPipeline pipeline;
-};
-
-struct anv_trtt_batch_bo {
-   struct anv_bo *bo;
-   uint32_t size;
-
-   /* Once device->trtt.timeline_handle signals timeline_val as complete we
-    * can free this struct and its members.
-    */
-   uint64_t timeline_val;
-
-   /* Part of device->trtt.in_flight_batches. */
-   struct list_head link;
 };
 
 struct anv_device {
@@ -1836,7 +1839,7 @@ struct anv_device {
     struct anv_state_pool                       indirect_push_descriptor_pool;
     struct anv_state_pool                       push_descriptor_buffer_pool;
 
-    struct anv_state_reserved_pool              custom_border_colors;
+    struct anv_state_reserved_array_pool        custom_border_colors;
     struct anv_state_reserved_array_pool        custom_border_colors_db;
 
     /** BO used for various workarounds
@@ -1850,6 +1853,8 @@ struct anv_device {
      */
     struct anv_bo *                             workaround_bo;
     struct anv_address                          workaround_address;
+
+    struct anv_bo *                             dummy_aux_bo;
 
     /**
      * Workarounds for game bugs.
@@ -1979,7 +1984,7 @@ struct anv_device {
     VkCommandPool                               companion_rcs_cmd_pool;
 
     struct anv_trtt {
-       pthread_mutex_t mutex;
+       simple_mtx_t mutex;
 
        /* Sometimes we need to run batches from places where we don't have a
         * queue coming from the API, so we use this.
@@ -2011,12 +2016,11 @@ struct anv_device {
        struct anv_bo *cur_page_table_bo;
        uint64_t next_page_table_bo_offset;
 
-       /* Timeline syncobj used to track completion of the TR-TT batch BOs. */
-       uint32_t timeline_handle;
+       struct vk_sync *timeline;
        uint64_t timeline_val;
 
-       /* List of struct anv_trtt_batch_bo batches that are in flight and can
-        * be freed once their timeline gets signaled.
+       /* List of struct anv_trtt_submission that are in flight and can be
+        * freed once their vk_sync gets signaled.
         */
        struct list_head in_flight_batches;
     } trtt;
@@ -2111,7 +2115,7 @@ anv_mocs(const struct anv_device *device,
 
 static inline uint32_t
 anv_mocs_for_address(const struct anv_device *device,
-                     struct anv_address *addr)
+                     const struct anv_address *addr)
 {
    return anv_mocs(device, addr->bo, 0);
 }
@@ -2183,20 +2187,6 @@ void anv_queue_finish(struct anv_queue *queue);
 
 VkResult anv_queue_submit(struct vk_queue *queue,
                           struct vk_queue_submit *submit);
-VkResult anv_queue_submit_simple_batch(struct anv_queue *queue,
-                                       struct anv_batch *batch,
-                                       bool is_companion_rcs_batch);
-VkResult anv_queue_submit_trtt_batch(struct anv_sparse_submission *submit,
-                                     struct anv_batch *batch);
-
-static inline void
-anv_trtt_batch_bo_free(struct anv_device *device,
-                       struct anv_trtt_batch_bo *trtt_bbo)
-{
-   anv_bo_pool_free(&device->batch_bo_pool, trtt_bbo->bo);
-   list_del(&trtt_bbo->link);
-   vk_free(&device->vk.alloc, trtt_bbo);
-}
 
 void anv_queue_trace(struct anv_queue *queue, const char *label,
                      bool frame, bool begin);
@@ -2324,6 +2314,11 @@ struct anv_batch {
    VkResult                                     status;
 
    enum intel_engine_class                      engine_class;
+
+   /**
+    * Write fencing status for mi_builder.
+    */
+   bool write_fence_status;
 
    /**
     * Number of 3DPRIMITIVE's emitted for WA 16014538804
@@ -2459,6 +2454,77 @@ _anv_combine_address(struct anv_batch *batch, void *location,
 /* #define __gen_get_batch_address anv_batch_address */
 /* #define __gen_address_value anv_address_physical */
 /* #define __gen_address_offset anv_address_add */
+
+/* Base structure used to track a submission that needs some clean operations
+ * upon completion. Should be embedded into a larger structure.
+ */
+struct anv_async_submit {
+   struct anv_queue *queue;
+
+   struct anv_bo_pool *bo_pool;
+
+   bool use_companion_rcs;
+
+   bool owns_sync;
+   struct vk_sync_signal signal;
+
+   struct anv_reloc_list relocs;
+   struct anv_batch batch;
+   struct util_dynarray batch_bos;
+};
+
+VkResult
+anv_async_submit_init(struct anv_async_submit *submit,
+                      struct anv_queue *queue,
+                      struct anv_bo_pool *bo_pool,
+                      bool use_companion_rcs,
+                      bool create_signal_sync);
+
+void
+anv_async_submit_fini(struct anv_async_submit *submit);
+
+VkResult
+anv_async_submit_create(struct anv_queue *queue,
+                        struct anv_bo_pool *bo_pool,
+                        bool use_companion_rcs,
+                        bool create_signal_sync,
+                        struct anv_async_submit **out_submit);
+
+void
+anv_async_submit_destroy(struct anv_async_submit *submit);
+
+bool
+anv_async_submit_done(struct anv_async_submit *submit);
+
+bool
+anv_async_submit_wait(struct anv_async_submit *submit);
+
+struct anv_sparse_submission {
+   struct anv_queue *queue;
+
+   struct anv_vm_bind *binds;
+   int binds_len;
+   int binds_capacity;
+
+   uint32_t wait_count;
+   uint32_t signal_count;
+
+   struct vk_sync_wait *waits;
+   struct vk_sync_signal *signals;
+};
+
+struct anv_trtt_bind {
+   uint64_t pte_addr;
+   uint64_t entry_addr;
+};
+
+struct anv_trtt_submission {
+   struct anv_async_submit base;
+
+   struct anv_sparse_submission *sparse;
+
+   struct list_head link;
+};
 
 struct anv_device_memory {
    struct vk_device_memory                      vk;
@@ -3155,6 +3221,9 @@ VkResult anv_sparse_bind_image_memory(struct anv_queue *queue,
 VkResult anv_sparse_bind(struct anv_device *device,
                          struct anv_sparse_submission *sparse_submit);
 
+VkResult anv_sparse_trtt_garbage_collect_batches(struct anv_device *device,
+                                                 bool wait_completion);
+
 VkSparseImageFormatProperties
 anv_sparse_calc_image_format_properties(struct anv_physical_device *pdevice,
                                         VkImageAspectFlags aspect,
@@ -3174,8 +3243,6 @@ VkResult anv_sparse_image_check_support(struct anv_physical_device *pdevice,
                                         VkSampleCountFlagBits samples,
                                         VkImageType type,
                                         VkFormat format);
-VkResult anv_trtt_batch_bo_new(struct anv_device *device, uint32_t batch_size,
-                               struct anv_trtt_batch_bo **out_trtt_bbo);
 
 struct anv_buffer {
    struct vk_buffer vk;
@@ -3730,11 +3797,6 @@ struct anv_cmd_graphics_state {
    /* State tracking for Wa_14018912822. */
    bool color_blend_zero;
    bool alpha_blend_zero;
-
-   /**
-    * DEPTH and STENCIL attachment write state for Wa_18019816803.
-    */
-   bool ds_write_state;
 
    /**
     * State tracking for Wa_18020335297.
@@ -4498,9 +4560,9 @@ struct anv_pipeline {
    void *                                       mem_ctx;
 
    enum anv_pipeline_type                       type;
-   VkPipelineCreateFlags                        flags;
+   VkPipelineCreateFlags2KHR                    flags;
 
-   VkPipelineCreateFlags2KHR                    active_stages;
+   VkShaderStageFlags                           active_stages;
 
    uint32_t                                     ray_queries;
 
@@ -5898,7 +5960,6 @@ struct anv_sampler {
    struct anv_state             custom_border_color_db;
 };
 
-#define ANV_PIPELINE_STATISTICS_MASK 0x000007ff
 
 struct anv_query_pool {
    struct vk_query_pool                         vk;
@@ -6026,7 +6087,11 @@ void anv_apply_per_prim_attr_wa(struct nir_shader *ms_nir,
 /* Use to emit a series of memcpy operations */
 struct anv_memcpy_state {
    struct anv_device *device;
+   struct anv_cmd_buffer *cmd_buffer;
    struct anv_batch *batch;
+
+   /* Configuration programmed by the memcpy operation */
+   struct intel_urb_config urb_cfg;
 
    struct anv_vb_cache_range vb_bound;
    struct anv_vb_cache_range vb_dirty;
@@ -6057,12 +6122,7 @@ void anv_astc_emu_process(struct anv_cmd_buffer *cmd_buffer,
  *      (vkQueueBeginDebugUtilsLabelEXT/vkQueueEndDebugUtilsLabelEXT)
  */
 struct anv_utrace_submit {
-   /* Batch stuff to implement of copy of timestamps recorded in another
-    * buffer.
-    */
-   struct anv_reloc_list relocs;
-   struct anv_batch batch;
-   struct util_dynarray batch_bos;
+   struct anv_async_submit base;
 
    /* structure used by the perfetto glue */
    struct intel_ds_flush_data ds;
@@ -6070,12 +6130,6 @@ struct anv_utrace_submit {
    /* Stream for temporary allocations */
    struct anv_state_stream dynamic_state_stream;
    struct anv_state_stream general_state_stream;
-
-   /* Syncobj to be signaled when the batch completes */
-   struct vk_sync *sync;
-
-   /* Queue on which all the recorded traces are submitted */
-   struct anv_queue *queue;
 
    /* Buffer of 64bits timestamps (only used for timestamp copies) */
    struct anv_bo *trace_bo;

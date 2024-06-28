@@ -434,14 +434,20 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
          NIR_PASS(_, stage->nir, nir_copy_prop);
          NIR_PASS(_, stage->nir, nir_opt_shrink_stores, !instance->drirc.disable_shrink_image_store);
 
+         /* Ensure vectorized load_push_constant still have constant offsets, for
+          * radv_nir_apply_pipeline_layout. */
+         if (stage->args.ac.inline_push_const_mask)
+            NIR_PASS(_, stage->nir, nir_opt_constant_folding);
+
          /* Gather info again, to update whether 8/16-bit are used. */
          nir_shader_gather_info(stage->nir, nir_shader_get_entrypoint(stage->nir));
       }
    }
 
-   NIR_PASS(_, stage->nir, ac_nir_lower_subdword_loads,
-            (ac_nir_lower_subdword_options){.modes_1_comp = nir_var_mem_ubo,
-                                            .modes_N_comps = nir_var_mem_ubo | nir_var_mem_ssbo});
+   NIR_PASS(
+      _, stage->nir, ac_nir_lower_subdword_loads,
+      (ac_nir_lower_subdword_options){.modes_1_comp = nir_var_mem_ubo | nir_var_mem_push_const,
+                                      .modes_N_comps = nir_var_mem_ubo | nir_var_mem_push_const | nir_var_mem_ssbo});
 
    progress = false;
    NIR_PASS(progress, stage->nir, nir_vk_lower_ycbcr_tex, ycbcr_conversion_lookup, &stage->layout);
@@ -525,10 +531,10 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
          .no_color_export = stage->info.has_epilog,
          .no_depth_export = stage->info.ps.exports_mrtz_via_epilog,
 
-         .bc_optimize_for_persp = G_0286CC_PERSP_CENTER_ENA(stage->info.ps.spi_ps_input) &&
-                                  G_0286CC_PERSP_CENTROID_ENA(stage->info.ps.spi_ps_input),
-         .bc_optimize_for_linear = G_0286CC_LINEAR_CENTER_ENA(stage->info.ps.spi_ps_input) &&
-                                   G_0286CC_LINEAR_CENTROID_ENA(stage->info.ps.spi_ps_input),
+         .bc_optimize_for_persp = G_0286CC_PERSP_CENTER_ENA(stage->info.ps.spi_ps_input_ena) &&
+                                  G_0286CC_PERSP_CENTROID_ENA(stage->info.ps.spi_ps_input_ena),
+         .bc_optimize_for_linear = G_0286CC_LINEAR_CENTER_ENA(stage->info.ps.spi_ps_input_ena) &&
+                                   G_0286CC_LINEAR_CENTROID_ENA(stage->info.ps.spi_ps_input_ena),
       };
 
       if (!options.no_color_export) {
