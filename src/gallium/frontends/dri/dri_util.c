@@ -52,7 +52,7 @@
 #include "main/debug_output.h"
 #include "main/errors.h"
 #include "loader/loader.h"
-#include "GL/internal/mesa_interface.h"
+#include "mesa_interface.h"
 #include "loader_dri_helper.h"
 
 driOptionDescription __dri2ConfigOptions[] = {
@@ -173,17 +173,6 @@ driCreateNewScreen3(int scrn, int fd,
     return opaque_dri_screen(screen);
 }
 
-__DRIscreen *
-driCreateNewScreen2(int scrn, int fd,
-                    const __DRIextension **loader_extensions,
-                    const __DRIextension **driver_extensions,
-                    const __DRIconfig ***driver_configs, void *data)
-{
-   return driCreateNewScreen3(scrn, fd, loader_extensions,
-                              driver_extensions,
-                              driver_configs, false, data);
-}
-
 static __DRIscreen *
 dri2CreateNewScreen(int scrn, int fd,
                     const __DRIextension **extensions,
@@ -239,7 +228,7 @@ driSWRastCreateNewScreen3(int scrn, const __DRIextension **extensions,
  * This function calls __DriverAPIRec::DestroyScreen on \p screenPrivate, calls
  * drmClose(), and finally frees \p screenPrivate.
  */
-static void driDestroyScreen(__DRIscreen *psp)
+void driDestroyScreen(__DRIscreen *psp)
 {
     if (psp) {
         /* No interaction with the X-server is possible at this point.  This
@@ -251,7 +240,7 @@ static void driDestroyScreen(__DRIscreen *psp)
     }
 }
 
-static const __DRIextension **driGetExtensions(__DRIscreen *psp)
+const __DRIextension **driGetExtensions(__DRIscreen *psp)
 {
     return dri_screen(psp)->extensions;
 }
@@ -390,7 +379,7 @@ driGetConfigAttribIndex(const __DRIconfig *config,
  * \param value  returns the attribute's value
  * \return 1 for success, 0 for failure
  */
-static int
+int
 driGetConfigAttrib(const __DRIconfig *config,
                    unsigned int attrib, unsigned int *value)
 {
@@ -404,7 +393,7 @@ driGetConfigAttrib(const __DRIconfig *config,
  * \param value  returns the attribute's value
  * \return 1 for success, 0 for failure
  */
-static int
+int
 driIndexConfigAttrib(const __DRIconfig *config, int index,
                      unsigned int *attrib, unsigned int *value)
 {
@@ -667,7 +656,7 @@ driCreateNewContextForAPI(__DRIscreen *screen, int api,
                                    &error, data);
 }
 
-static __DRIcontext *
+__DRIcontext *
 driCreateNewContext(__DRIscreen *screen, const __DRIconfig *config,
                     __DRIcontext *shared, void *data)
 {
@@ -682,14 +671,14 @@ driCreateNewContext(__DRIscreen *screen, const __DRIconfig *config,
  * This function calls __DriverAPIRec::DestroyContext on \p contextPrivate, calls
  * drmDestroyContext(), and finally frees \p contextPrivate.
  */
-static void
+void
 driDestroyContext(__DRIcontext *pcp)
 {
     if (pcp)
         dri_destroy_context(dri_context(pcp));
 }
 
-static int
+int
 driCopyContext(__DRIcontext *dest, __DRIcontext *src, unsigned long mask)
 {
     (void) dest;
@@ -711,9 +700,9 @@ driCopyContext(__DRIcontext *dest, __DRIcontext *src, unsigned long mask)
  * for \c glXMakeCurrentReadSGI or GLX 1.3's \c glXMakeContextCurrent
  * function.
  */
-static int driBindContext(__DRIcontext *pcp,
-                          __DRIdrawable *pdp,
-                          __DRIdrawable *prp)
+int driBindContext(__DRIcontext *pcp,
+                   __DRIdrawable *pdp,
+                   __DRIdrawable *prp)
 {
    /*
     ** Assume error checking is done properly in glXMakeCurrent before
@@ -743,7 +732,7 @@ static int driBindContext(__DRIcontext *pcp,
  * While casting the opaque private pointers associated with the parameters
  * into their respective real types it also assures they are not \c NULL.
  */
-static int driUnbindContext(__DRIcontext *pcp)
+int driUnbindContext(__DRIcontext *pcp)
 {
     /*
     ** Assume error checking is done properly in glXMakeCurrent before
@@ -762,7 +751,7 @@ static int driUnbindContext(__DRIcontext *pcp)
 
 /*@}*/
 
-static __DRIdrawable *
+__DRIdrawable *
 driCreateNewDrawable(__DRIscreen *psp,
                      const __DRIconfig *config,
                      void *data)
@@ -777,7 +766,7 @@ driCreateNewDrawable(__DRIscreen *psp,
     return opaque_dri_drawable(drawable);
 }
 
-static void
+void
 driDestroyDrawable(__DRIdrawable *pdp)
 {
     dri_put_drawable(dri_drawable(pdp));
@@ -855,7 +844,7 @@ dri2ConfigQuerys(__DRIscreen *psp, const char *var, char **val)
     return 0;
 }
 
-static unsigned int
+unsigned int
 driGetAPIMask(__DRIscreen *screen)
 {
     return dri_screen(screen)->api_mask;
@@ -867,7 +856,7 @@ driGetAPIMask(__DRIscreen *screen)
  * DRI2 implements this inside the loader with only flushes handled by the
  * driver.
  */
-static void
+void
 driSwapBuffersWithDamage(__DRIdrawable *pdp, int nrects, const int *rects)
 {
    struct dri_drawable *drawable = dri_drawable(pdp);
@@ -877,7 +866,7 @@ driSwapBuffersWithDamage(__DRIdrawable *pdp, int nrects, const int *rects)
    drawable->swap_buffers_with_damage(drawable, nrects, rects);
 }
 
-static void
+void
 driSwapBuffers(__DRIdrawable *pdp)
 {
    struct dri_drawable *drawable = dri_drawable(pdp);
@@ -928,7 +917,6 @@ const __DRIdri2Extension driDRI2Extension = {
     .allocateBuffer             = dri2AllocateBuffer,
     .releaseBuffer              = dri2ReleaseBuffer,
     .createContextAttribs       = driCreateContextAttribs,
-    .createNewScreen2           = driCreateNewScreen2,
     .createNewScreen3           = driCreateNewScreen3,
 };
 
@@ -943,7 +931,6 @@ const __DRIdri2Extension swkmsDRI2Extension = {
     .allocateBuffer             = dri2AllocateBuffer,
     .releaseBuffer              = dri2ReleaseBuffer,
     .createContextAttribs       = driCreateContextAttribs,
-    .createNewScreen2           = driCreateNewScreen2,
     .createNewScreen3           = driCreateNewScreen3,
 };
 
@@ -980,190 +967,140 @@ const __DRI2flushControlExtension dri2FlushControlExtension = {
  */
 static const struct {
    uint32_t    image_format;
-   mesa_format mesa_format;
    GLenum internal_format;
 } format_mapping[] = {
    {
       .image_format    = __DRI_IMAGE_FORMAT_RGB565,
-      .mesa_format     =        MESA_FORMAT_B5G6R5_UNORM,
       .internal_format =        GL_RGB565,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_ARGB1555,
-      .mesa_format     =        MESA_FORMAT_B5G5R5A1_UNORM,
       .internal_format =        GL_RGB5_A1,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_ABGR1555,
-      .mesa_format     =        MESA_FORMAT_R5G5B5A1_UNORM,
       .internal_format =        GL_RGB5_A1,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_XRGB8888,
-      .mesa_format     =        MESA_FORMAT_B8G8R8X8_UNORM,
       .internal_format =        GL_RGB8,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_ABGR16161616F,
-      .mesa_format     =        MESA_FORMAT_RGBA_FLOAT16,
       .internal_format =        GL_RGBA16F,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_XBGR16161616F,
-      .mesa_format     =        MESA_FORMAT_RGBX_FLOAT16,
       .internal_format =        GL_RGB16F,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_ABGR16161616,
-      .mesa_format     =        MESA_FORMAT_RGBA_UNORM16,
       .internal_format =        GL_RGBA16,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_XBGR16161616,
-      .mesa_format     =        MESA_FORMAT_RGBX_UNORM16,
       .internal_format =        GL_RGB16,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_ARGB2101010,
-      .mesa_format     =        MESA_FORMAT_B10G10R10A2_UNORM,
       .internal_format =        GL_RGB10_A2,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_XRGB2101010,
-      .mesa_format     =        MESA_FORMAT_B10G10R10X2_UNORM,
       .internal_format =        GL_RGB10,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_ABGR2101010,
-      .mesa_format     =        MESA_FORMAT_R10G10B10A2_UNORM,
       .internal_format =        GL_RGB10_A2,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_XBGR2101010,
-      .mesa_format     =        MESA_FORMAT_R10G10B10X2_UNORM,
       .internal_format =        GL_RGB10,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_ARGB8888,
-      .mesa_format     =        MESA_FORMAT_B8G8R8A8_UNORM,
       .internal_format =        GL_RGBA8,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_ABGR8888,
-      .mesa_format     =        MESA_FORMAT_R8G8B8A8_UNORM,
       .internal_format =        GL_RGBA8,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_XBGR8888,
-      .mesa_format     =        MESA_FORMAT_R8G8B8X8_UNORM,
       .internal_format =        GL_RGB8,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_R8,
-      .mesa_format     =        MESA_FORMAT_R_UNORM8,
       .internal_format =        GL_R8,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_R8,
-      .mesa_format     =        MESA_FORMAT_L_UNORM8,
       .internal_format =        GL_R8,
    },
 #if UTIL_ARCH_LITTLE_ENDIAN
    {
       .image_format    = __DRI_IMAGE_FORMAT_GR88,
-      .mesa_format     =        MESA_FORMAT_RG_UNORM8,
       .internal_format =        GL_RG8,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_GR88,
-      .mesa_format     =        MESA_FORMAT_LA_UNORM8,
       .internal_format =        GL_RG8,
    },
 #endif
    {
       .image_format    = __DRI_IMAGE_FORMAT_SABGR8,
-      .mesa_format     =        MESA_FORMAT_R8G8B8A8_SRGB,
       .internal_format =        GL_SRGB8_ALPHA8,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_SARGB8,
-      .mesa_format     =        MESA_FORMAT_B8G8R8A8_SRGB,
       .internal_format =        GL_SRGB8_ALPHA8,
    },
    {
       .image_format = __DRI_IMAGE_FORMAT_SXRGB8,
-      .mesa_format  =           MESA_FORMAT_B8G8R8X8_SRGB,
       .internal_format =        GL_SRGB8,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_R16,
-      .mesa_format     =        MESA_FORMAT_R_UNORM16,
       .internal_format =        GL_R16,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_R16,
-      .mesa_format     =        MESA_FORMAT_L_UNORM16,
       .internal_format =        GL_R16,
    },
 #if UTIL_ARCH_LITTLE_ENDIAN
    {
       .image_format    = __DRI_IMAGE_FORMAT_GR1616,
-      .mesa_format     =        MESA_FORMAT_RG_UNORM16,
       .internal_format =        GL_RG16,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_GR1616,
-      .mesa_format     =        MESA_FORMAT_LA_UNORM16,
       .internal_format =        GL_RG16,
    },
 #endif
    {
       .image_format    = __DRI_IMAGE_FORMAT_ARGB4444,
-      .mesa_format     =        MESA_FORMAT_B4G4R4A4_UNORM,
       .internal_format =        GL_RGBA4,
    },
    {
       .image_format    = __DRI_IMAGE_FORMAT_ABGR4444,
-      .mesa_format     =        MESA_FORMAT_R4G4B4A4_UNORM,
       .internal_format =        GL_RGBA4,
    },
 };
 
 uint32_t
-driGLFormatToImageFormat(mesa_format format)
-{
-   for (size_t i = 0; i < ARRAY_SIZE(format_mapping); i++)
-      if (format_mapping[i].mesa_format == format)
-         return format_mapping[i].image_format;
-
-   return __DRI_IMAGE_FORMAT_NONE;
-}
-
-uint32_t
-driGLFormatToSizedInternalGLFormat(mesa_format format)
-{
-   for (size_t i = 0; i < ARRAY_SIZE(format_mapping); i++)
-      if (format_mapping[i].mesa_format == format)
-         return format_mapping[i].internal_format;
-
-   return GL_NONE;
-}
-
-mesa_format
-driImageFormatToGLFormat(uint32_t image_format)
+driImageFormatToSizedInternalGLFormat(uint32_t image_format)
 {
    for (size_t i = 0; i < ARRAY_SIZE(format_mapping); i++)
       if (format_mapping[i].image_format == image_format)
-         return format_mapping[i].mesa_format;
+         return format_mapping[i].internal_format;
 
-   return MESA_FORMAT_NONE;
+   return GL_NONE;
 }
 
 /** Image driver interface */
 const __DRIimageDriverExtension driImageDriverExtension = {
     .base = { __DRI_IMAGE_DRIVER, 2 },
 
-    .createNewScreen2           = driCreateNewScreen2,
     .createNewDrawable          = driCreateNewDrawable,
     .getAPIMask                 = driGetAPIMask,
     .createContextAttribs       = driCreateContextAttribs,

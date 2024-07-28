@@ -812,7 +812,7 @@ v3d_resource_create_with_modifiers(struct pipe_screen *pscreen,
         /* Scanout BOs for simulator need to be linear for interaction with
          * i965.
          */
-        if (using_v3d_simulator &&
+        if (USE_V3D_SIMULATOR &&
             tmpl->bind & (PIPE_BIND_SHARED | PIPE_BIND_SCANOUT))
                 should_tile = false;
 
@@ -1180,7 +1180,7 @@ v3d_resource_get_stencil(struct pipe_resource *prsc)
 {
         struct v3d_resource *rsc = v3d_resource(prsc);
 
-        return &rsc->separate_stencil->base;
+        return rsc->separate_stencil ? &rsc->separate_stencil->base : NULL;
 }
 
 static const struct u_transfer_vtbl transfer_vtbl = {

@@ -266,6 +266,9 @@ struct NOP_ctx_gfx11 {
    std::bitset<128> sgpr_read_by_valu_as_lanemask;
    std::bitset<128> sgpr_read_by_valu_as_lanemask_then_wr_by_salu;
 
+   /* WMMAHazards */
+   std::bitset<256> vgpr_written_by_wmma;
+
    void join(const NOP_ctx_gfx11& other)
    {
       has_Vcmpx |= other.has_Vcmpx;
@@ -279,6 +282,7 @@ struct NOP_ctx_gfx11 {
       sgpr_read_by_valu_as_lanemask |= other.sgpr_read_by_valu_as_lanemask;
       sgpr_read_by_valu_as_lanemask_then_wr_by_salu |=
          other.sgpr_read_by_valu_as_lanemask_then_wr_by_salu;
+      vgpr_written_by_wmma |= other.vgpr_written_by_wmma;
    }
 
    bool operator==(const NOP_ctx_gfx11& other)
@@ -293,7 +297,8 @@ struct NOP_ctx_gfx11 {
              trans_since_wr_by_trans == other.trans_since_wr_by_trans &&
              sgpr_read_by_valu_as_lanemask == other.sgpr_read_by_valu_as_lanemask &&
              sgpr_read_by_valu_as_lanemask_then_wr_by_salu ==
-                other.sgpr_read_by_valu_as_lanemask_then_wr_by_salu;
+                other.sgpr_read_by_valu_as_lanemask_then_wr_by_salu &&
+             vgpr_written_by_wmma == other.vgpr_written_by_wmma;
    }
 };
 
@@ -1118,6 +1123,18 @@ fill_vgpr_bitset(std::bitset<256>& set, PhysReg reg, unsigned bytes)
       set.set(reg.reg() - 256 + i);
 }
 
+bool
+test_vgpr_bitset(std::bitset<256>& set, Operand op)
+{
+   if (op.physReg().reg() < 256)
+      return false;
+   for (unsigned i = 0; i < op.size(); i++) {
+      if (set[op.physReg().reg() - 256 + i])
+         return true;
+   }
+   return false;
+}
+
 /* GFX11 */
 unsigned
 parse_vdst_wait(aco_ptr<Instruction>& instr)
@@ -1568,6 +1585,24 @@ handle_instruction_gfx11(State& state, NOP_ctx_gfx11& ctx, aco_ptr<Instruction>&
          ctx.vgpr_used_by_ds.reset();
       }
    }
+
+   /* WMMA Hazards */
+   if (instr_info.classes[(int)instr->opcode] == instr_class::wmma) {
+      assert(instr->operands.back().regClass() == instr->definitions[0].regClass());
+
+      bool is_swmma = instr->operands.size() == 4;
+      if (test_vgpr_bitset(ctx.vgpr_written_by_wmma, instr->operands[0]) ||
+          test_vgpr_bitset(ctx.vgpr_written_by_wmma, instr->operands[1]) ||
+          (is_swmma && test_vgpr_bitset(ctx.vgpr_written_by_wmma, instr->operands[2]))) {
+         bld.vop1(aco_opcode::v_nop);
+      }
+
+      ctx.vgpr_written_by_wmma.reset();
+      fill_vgpr_bitset(ctx.vgpr_written_by_wmma, instr->definitions[0].physReg(),
+                       instr->definitions[0].bytes());
+   } else if (instr->isVALU()) {
+      ctx.vgpr_written_by_wmma.reset();
+   }
 }
 
 bool
@@ -1619,9 +1654,10 @@ resolve_all_gfx11(State& state, NOP_ctx_gfx11& ctx,
       ctx.trans_since_wr_by_trans.reset();
    }
 
-   /* VcmpxPermlaneHazard */
-   if (ctx.has_Vcmpx) {
+   /* VcmpxPermlaneHazard/WMMAHazards */
+   if (ctx.has_Vcmpx || ctx.vgpr_written_by_wmma.any()) {
       ctx.has_Vcmpx = false;
+      ctx.vgpr_written_by_wmma.reset();
       bld.vop1(aco_opcode::v_nop);
    }
 
@@ -1736,6 +1772,70 @@ mitigate_hazards(Program* program)
    }
 }
 
+/* FeatureRequiredExportPriority in LLVM */
+void
+required_export_priority(Program* program)
+{
+   /* Skip callees, assuming that the caller has already increased the priority. */
+   bool increase_priority = !program->is_epilog && !program->info.vs.has_prolog &&
+                            (!program->info.merged_shader_compiled_separately ||
+                             program->stage.sw == SWStage::VS || program->stage.sw == SWStage::TES);
+   increase_priority |= program->is_prolog;
+
+   for (Block& block : program->blocks) {
+      std::vector<aco_ptr<Instruction>> new_instructions;
+      new_instructions.reserve(block.instructions.size() + 6);
+
+      Builder bld(program, &new_instructions);
+
+      if (increase_priority && block.index == 0) {
+         if (!block.instructions.empty() && block.instructions[0]->opcode == aco_opcode::s_setprio)
+            block.instructions[0]->salu().imm = MAX2(block.instructions[0]->salu().imm, 2);
+         else
+            bld.sopp(aco_opcode::s_setprio, 2);
+      }
+
+      for (unsigned i = 0; i < block.instructions.size(); i++) {
+         Instruction* instr = block.instructions[i].get();
+         new_instructions.push_back(std::move(block.instructions[i]));
+
+         if (instr->opcode == aco_opcode::s_setprio) {
+            instr->salu().imm = MAX2(instr->salu().imm, 2);
+            continue;
+         }
+
+         bool end_of_export_sequence = instr->isEXP() && (i == block.instructions.size() - 1 ||
+                                                          !block.instructions[i + 1]->isEXP());
+         if (!end_of_export_sequence)
+            continue;
+
+         bool before_endpgm = false;
+         if (i != block.instructions.size() - 1) {
+            before_endpgm = block.instructions[i + 1]->opcode == aco_opcode::s_endpgm;
+         } else {
+            /* Does this fallthrough to a s_endpgm? */
+            for (unsigned j = block.index + 1; j < program->blocks.size(); j++) {
+               if (program->blocks[j].instructions.size() == 1 &&
+                   program->blocks[j].instructions[0]->opcode == aco_opcode::s_endpgm)
+                  before_endpgm = true;
+               if (!program->blocks[j].instructions.empty())
+                  break;
+            }
+         }
+
+         bld.sopp(aco_opcode::s_setprio, 0);
+         if (!before_endpgm)
+            bld.sopk(aco_opcode::s_waitcnt_expcnt, Operand(sgpr_null, s1), 0);
+         bld.sopp(aco_opcode::s_nop, 0);
+         bld.sopp(aco_opcode::s_nop, 0);
+         if (!before_endpgm)
+            bld.sopp(aco_opcode::s_setprio, 2);
+      }
+
+      block.instructions = std::move(new_instructions);
+   }
+}
+
 } /* end namespace */
 
 void
@@ -1749,6 +1849,10 @@ insert_NOPs(Program* program)
       mitigate_hazards<NOP_ctx_gfx10, handle_instruction_gfx10, resolve_all_gfx10>(program);
    else
       mitigate_hazards<NOP_ctx_gfx6, handle_instruction_gfx6, resolve_all_gfx6>(program);
+
+   if (program->gfx_level == GFX11_5 && (program->stage.hw == AC_HW_NEXT_GEN_GEOMETRY_SHADER ||
+                                         program->stage.hw == AC_HW_PIXEL_SHADER))
+      required_export_priority(program);
 }
 
 } // namespace aco

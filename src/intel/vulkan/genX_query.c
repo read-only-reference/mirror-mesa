@@ -799,15 +799,18 @@ void genX(CmdResetQueryPool)(
    ANV_FROM_HANDLE(anv_query_pool, pool, queryPool);
    struct anv_physical_device *pdevice = cmd_buffer->device->physical;
 
-   /* Shader clearing is only possible on render/compute */
+   /* Shader clearing is only possible on render/compute when not in protected
+    * mode.
+    */
    if (anv_cmd_buffer_is_render_or_compute_queue(cmd_buffer) &&
+       (cmd_buffer->vk.pool->flags & VK_COMMAND_POOL_CREATE_PROTECTED_BIT) != 0 &&
        queryCount >= pdevice->instance->query_clear_with_blorp_threshold) {
       trace_intel_begin_query_clear_blorp(&cmd_buffer->trace);
 
       anv_cmd_buffer_fill_area(cmd_buffer,
                                anv_query_address(pool, firstQuery),
                                queryCount * pool->stride,
-                               0);
+                               0, false);
 
       /* The pending clearing writes are in compute if we're in gpgpu mode on
        * the render engine or on the compute engine.
@@ -1317,6 +1320,26 @@ void genX(CmdEndQueryIndexedEXT)(
                                    ANV_PIPE_CS_STALL_BIT |
                                    ANV_PIPE_STALL_AT_SCOREBOARD_BIT);
       emit_xfb_query(&b, index, anv_address_add(query_addr, 16));
+#if GFX_VER == 11
+      /* Running the following CTS pattern on ICL will likely report a failure :
+       *
+       * dEQP-VK.transform_feedback.primitives_generated_query.get.queue_reset.32bit.geom.*
+       *
+       * If you dump the returned values in genX(GetQueryPoolResults)(), you
+       * will notice that the last 64bit value is 0 and rereading the value
+       * once more will return a non-zero value. This seems to indicate that
+       * the memory writes are not ordered somehow... Otherwise the
+       * availability write below would ensure the previous writes above have
+       * completed.
+       *
+       * So as a workaround, we stall CS to make sure the previous writes have
+       * landed before emitting the availability.
+       */
+      genx_batch_emit_pipe_control(&cmd_buffer->batch,
+                                   cmd_buffer->device->info,
+                                   cmd_buffer->state.current_pipeline,
+                                   ANV_PIPE_CS_STALL_BIT);
+#endif
       emit_query_mi_availability(&b, query_addr, true);
       break;
 
@@ -1584,28 +1607,12 @@ copy_query_results_with_cs(struct anv_cmd_buffer *cmd_buffer,
     * to ensure proper ordering of the commands from the 3d pipe and the
     * command streamer.
     */
-   if ((cmd_buffer->state.queries.buffer_write_bits |
-        cmd_buffer->state.queries.clear_bits) &
-       ANV_QUERY_WRITES_RT_FLUSH)
-      needed_flushes |= ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT;
 
-   if ((cmd_buffer->state.queries.buffer_write_bits |
-        cmd_buffer->state.queries.clear_bits) &
-       ANV_QUERY_WRITES_TILE_FLUSH)
-      needed_flushes |= ANV_PIPE_TILE_CACHE_FLUSH_BIT;
+   const enum anv_query_bits query_bits =
+      cmd_buffer->state.queries.buffer_write_bits |
+      cmd_buffer->state.queries.clear_bits;
 
-   if ((cmd_buffer->state.queries.buffer_write_bits |
-        cmd_buffer->state.queries.clear_bits) &
-       ANV_QUERY_WRITES_DATA_FLUSH) {
-      needed_flushes |= (ANV_PIPE_DATA_CACHE_FLUSH_BIT |
-                         ANV_PIPE_HDC_PIPELINE_FLUSH_BIT |
-                         ANV_PIPE_UNTYPED_DATAPORT_CACHE_FLUSH_BIT);
-   }
-
-   if ((cmd_buffer->state.queries.buffer_write_bits |
-        cmd_buffer->state.queries.clear_bits) &
-       ANV_QUERY_WRITES_CS_STALL)
-      needed_flushes |= ANV_PIPE_CS_STALL_BIT;
+   needed_flushes |= ANV_PIPE_QUERY_BITS(query_bits);
 
    /* Occlusion & timestamp queries are written using a PIPE_CONTROL and
     * because we're about to copy values from MI commands, we need to stall

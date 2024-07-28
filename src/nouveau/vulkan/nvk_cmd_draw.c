@@ -18,8 +18,6 @@
 #include "vk_render_pass.h"
 #include "vk_standard_sample_locations.h"
 
-#include "nouveau_context.h"
-
 #include "nv_push_cl902d.h"
 #include "nv_push_cl9097.h"
 #include "nv_push_cl90b5.h"
@@ -486,7 +484,7 @@ nvk_push_draw_state_init(struct nvk_queue *queue, struct nv_push *p)
    P_IMMD(p, NV9097, SET_EDGE_FLAG, V_TRUE);
    P_IMMD(p, NV9097, SET_SAMPLER_BINDING, V_INDEPENDENTLY);
 
-   uint64_t zero_addr = dev->zero_page->offset;
+   uint64_t zero_addr = dev->zero_page->va->addr;
    P_MTHD(p, NV9097, SET_VERTEX_STREAM_SUBSTITUTE_A);
    P_NV9097_SET_VERTEX_STREAM_SUBSTITUTE_A(p, zero_addr >> 32);
    P_NV9097_SET_VERTEX_STREAM_SUBSTITUTE_B(p, zero_addr);
@@ -494,7 +492,7 @@ nvk_push_draw_state_init(struct nvk_queue *queue, struct nv_push *p)
    if (pdev->info.cls_eng3d >= FERMI_A &&
        pdev->info.cls_eng3d < MAXWELL_A) {
       assert(dev->vab_memory);
-      uint64_t vab_addr = dev->vab_memory->offset;
+      uint64_t vab_addr = dev->vab_memory->va->addr;
       P_MTHD(p, NV9097, SET_VAB_MEMORY_AREA_A);
       P_NV9097_SET_VAB_MEMORY_AREA_A(p, vab_addr >> 32);
       P_NV9097_SET_VAB_MEMORY_AREA_B(p, vab_addr);
@@ -505,7 +503,7 @@ nvk_push_draw_state_init(struct nvk_queue *queue, struct nv_push *p)
       P_IMMD(p, NVB097, SET_SELECT_MAXWELL_TEXTURE_HEADERS, V_TRUE);
 
    /* Store the address to CB0 in a pair of state registers */
-   uint64_t cb0_addr = queue->draw_cb0->offset;
+   uint64_t cb0_addr = queue->draw_cb0->va->addr;
    P_MTHD(p, NV9097, SET_MME_SHADOW_SCRATCH(NVK_MME_SCRATCH_CB0_ADDR_HI));
    P_NV9097_SET_MME_SHADOW_SCRATCH(p, NVK_MME_SCRATCH_CB0_ADDR_HI, cb0_addr >> 32);
    P_NV9097_SET_MME_SHADOW_SCRATCH(p, NVK_MME_SCRATCH_CB0_ADDR_LO, cb0_addr);
@@ -1508,7 +1506,7 @@ nvk_flush_vp_state(struct nvk_cmd_buffer *cmd)
       &cmd->vk.dynamic_graphics_state;
 
    struct nv_push *p =
-      nvk_cmd_buffer_push(cmd, 16 * dyn->vp.viewport_count + 4 * NVK_MAX_VIEWPORTS);
+      nvk_cmd_buffer_push(cmd, 18 * dyn->vp.viewport_count + 4 * NVK_MAX_VIEWPORTS);
 
    /* Nothing to do for MESA_VK_DYNAMIC_VP_VIEWPORT_COUNT */
 
@@ -1564,8 +1562,16 @@ nvk_flush_vp_state(struct nvk_cmd_buffer *cmd)
             .y0      = ymin,
             .height  = ymax - ymin,
          });
-         P_NV9097_SET_VIEWPORT_CLIP_MIN_Z(p, i, fui(zmin));
-         P_NV9097_SET_VIEWPORT_CLIP_MAX_Z(p, i, fui(zmax));
+
+         if (nvk_cmd_buffer_3d_cls(cmd) >= VOLTA_A) {
+            P_NV9097_SET_VIEWPORT_CLIP_MIN_Z(p, i, fui(zmin));
+            P_NV9097_SET_VIEWPORT_CLIP_MAX_Z(p, i, fui(zmax));
+         } else {
+            P_1INC(p, NVB197, CALL_MME_MACRO(NVK_MME_SET_VIEWPORT_MIN_MAX_Z));
+            P_INLINE_DATA(p, i);
+            P_INLINE_DATA(p, fui(zmin));
+            P_INLINE_DATA(p, fui(zmax));
+         }
 
          if (nvk_cmd_buffer_3d_cls(cmd) >= MAXWELL_B) {
             P_IMMD(p, NVB197, SET_VIEWPORT_COORDINATE_SWIZZLE(i), {
@@ -1669,10 +1675,76 @@ vk_to_nv9097_provoking_vertex(VkProvokingVertexModeEXT vk_mode)
    return vk_mode;
 }
 
+void
+nvk_mme_set_viewport_min_max_z(struct mme_builder *b)
+{
+   struct mme_value vp_idx = mme_load(b);
+   struct mme_value min_z = mme_load(b);
+   struct mme_value max_z = mme_load(b);
+
+   /* Multiply by 2 because it's an array with stride 8 */
+   mme_sll_to(b, vp_idx, vp_idx, mme_imm(1));
+   mme_mthd_arr(b, NVK_SET_MME_SCRATCH(VIEWPORT0_MIN_Z), vp_idx);
+   mme_emit(b, min_z);
+   mme_emit(b, max_z);
+
+   struct mme_value z_clamp = nvk_mme_load_scratch(b, Z_CLAMP);
+   mme_if(b, ine, z_clamp, mme_zero()) {
+      /* Multiply by 2 again because this array has stride 16 */
+      mme_sll_to(b, vp_idx, vp_idx, mme_imm(1));
+      mme_mthd_arr(b, NV9097_SET_VIEWPORT_CLIP_MIN_Z(0), vp_idx);
+      mme_emit(b, min_z);
+      mme_emit(b, max_z);
+   }
+}
+
+void
+nvk_mme_set_z_clamp(struct mme_builder *b)
+{
+   struct mme_value z_clamp = mme_load(b);
+   struct mme_value old_z_clamp = nvk_mme_load_scratch(b, Z_CLAMP);
+   mme_if(b, ine, z_clamp, old_z_clamp) {
+      nvk_mme_store_scratch(b, Z_CLAMP, z_clamp);
+
+      mme_if(b, ine, z_clamp, mme_zero()) {
+         struct mme_value i_2 = mme_mov(b, mme_zero());
+         mme_while(b, ine, i_2, mme_imm(NVK_MAX_VIEWPORTS * 2)) {
+            struct mme_value min_z =
+               mme_state_arr(b, NVK_SET_MME_SCRATCH(VIEWPORT0_MIN_Z), i_2);
+            struct mme_value max_z =
+               mme_state_arr(b, NVK_SET_MME_SCRATCH(VIEWPORT0_MAX_Z), i_2);
+
+            struct mme_value i_4 = mme_sll(b, i_2, mme_imm(1));
+            mme_mthd_arr(b, NV9097_SET_VIEWPORT_CLIP_MIN_Z(0), i_4);
+            mme_emit(b, min_z);
+            mme_emit(b, max_z);
+
+            mme_free_reg(b, i_4);
+            mme_free_reg(b, min_z);
+            mme_free_reg(b, max_z);
+
+            mme_add_to(b, i_2, i_2, mme_imm(2));
+         }
+         mme_free_reg(b, i_2);
+      }
+      mme_if(b, ieq, z_clamp, mme_zero()) {
+         struct mme_value i_4 = mme_mov(b, mme_zero());
+         mme_while(b, ine, i_4, mme_imm(NVK_MAX_VIEWPORTS * 4)) {
+            mme_mthd_arr(b, NV9097_SET_VIEWPORT_CLIP_MIN_Z(0), i_4);
+            mme_emit(b, mme_imm(fui(-INFINITY)));
+            mme_emit(b, mme_imm(fui(INFINITY)));
+
+            mme_add_to(b, i_4, i_4, mme_imm(4));
+         }
+         mme_free_reg(b, i_4);
+      }
+   }
+}
+
 static void
 nvk_flush_rs_state(struct nvk_cmd_buffer *cmd)
 {
-   struct nv_push *p = nvk_cmd_buffer_push(cmd, 44);
+   struct nv_push *p = nvk_cmd_buffer_push(cmd, 46);
 
    const struct vk_dynamic_graphics_state *dyn =
       &cmd->vk.dynamic_graphics_state;
@@ -1687,12 +1759,6 @@ nvk_flush_rs_state(struct nvk_cmd_buffer *cmd)
       P_IMMD(p, NVC397, SET_VIEWPORT_CLIP_CONTROL, {
          /* We only set Z clip range if clamp is requested.  Otherwise, we
           * leave it set to -/+INF and clamp using the guardband below.
-          *
-          * TODO: Fix pre-Volta
-          *
-          * This probably involves a few macros, one which stases viewport
-          * min/maxDepth in scratch states and one which goes here and
-          * emits either min/maxDepth or -/+INF as needed.
           */
          .min_z_zero_max_z_one = MIN_Z_ZERO_MAX_Z_ONE_FALSE,
          .z_clip_range = nvk_cmd_buffer_3d_cls(cmd) >= VOLTA_A
@@ -1727,6 +1793,17 @@ nvk_flush_rs_state(struct nvk_cmd_buffer *cmd)
          .geometry_guardband_z = z_clip ? GEOMETRY_GUARDBAND_Z_SCALE_1
                                         : GEOMETRY_GUARDBAND_Z_SCALE_256,
       });
+
+      /* Pre-Volta, we don't have SET_VIEWPORT_CLIP_CONTROL::z_clip_range.
+       * Instead, we have to emulate it by smashing VIEWPORT_CLIP_MIN/MAX_Z
+       * based on whether or not z_clamp is set. This is done by a pair of
+       * macros, one of which is called here and the other is called in
+       * viewport setup.
+       */
+      if (nvk_cmd_buffer_3d_cls(cmd) < VOLTA_A) {
+         P_1INC(p, NVB197, CALL_MME_MACRO(NVK_MME_SET_Z_CLAMP));
+         P_INLINE_DATA(p, z_clamp);
+      }
    }
 
    if (BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_RS_POLYGON_MODE)) {
@@ -1828,24 +1905,26 @@ nvk_flush_rs_state(struct nvk_cmd_buffer *cmd)
 
    if (BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_RS_CONSERVATIVE_MODE) ||
        BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_RS_EXTRA_PRIMITIVE_OVERESTIMATION_SIZE)) {
-      if (dyn->rs.conservative_mode == VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT) {
+      if (nvk_cmd_buffer_3d_cls(cmd) < MAXWELL_B) {
+         assert(dyn->rs.conservative_mode == VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT);
+      } else if (dyn->rs.conservative_mode == VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT) {
          P_IMMD(p, NVB197, SET_CONSERVATIVE_RASTER, ENABLE_FALSE);
       } else {
          uint32_t extra_overestimate =
             MIN2(3, dyn->rs.extra_primitive_overestimation_size * 4);
 
-         if (nvk_cmd_buffer_3d_cls(cmd)  < VOLTA_A) {
+         if (nvk_cmd_buffer_3d_cls(cmd) >= VOLTA_A) {
+            P_IMMD(p, NVC397, SET_CONSERVATIVE_RASTER_CONTROL, {
+               .extra_prim_bloat = extra_overestimate,
+               .copy_inner_to_outer =
+                  (dyn->rs.conservative_mode == VK_CONSERVATIVE_RASTERIZATION_MODE_UNDERESTIMATE_EXT),
+               .triangle_snap_mode = TRIANGLE_SNAP_MODE_MODE_PRE_SNAP,
+               .line_and_point_snap_mode = LINE_AND_POINT_SNAP_MODE_MODE_PRE_SNAP,
+               .uncertainty_region_size = UNCERTAINTY_REGION_SIZE_SIZE_512,
+            });
+         } else {
             P_1INC(p, NVB197, CALL_MME_MACRO(NVK_MME_SET_CONSERVATIVE_RASTER_STATE));
             P_INLINE_DATA(p, extra_overestimate << 23);
-         } else {
-            P_IMMD(p, NVC397, SET_CONSERVATIVE_RASTER_CONTROL, {
-                      .extra_prim_bloat = extra_overestimate,
-                      .copy_inner_to_outer = 
-                        (dyn->rs.conservative_mode == VK_CONSERVATIVE_RASTERIZATION_MODE_UNDERESTIMATE_EXT),
-                      .triangle_snap_mode = TRIANGLE_SNAP_MODE_MODE_PRE_SNAP,
-                      .line_and_point_snap_mode = LINE_AND_POINT_SNAP_MODE_MODE_PRE_SNAP,
-                      .uncertainty_region_size = UNCERTAINTY_REGION_SIZE_SIZE_512,
-                     });
          }
          P_IMMD(p, NVB197, SET_CONSERVATIVE_RASTER, ENABLE_TRUE);
       }
@@ -2493,7 +2572,7 @@ nvk_flush_descriptors(struct nvk_cmd_buffer *cmd)
                P_INLINE_DATA(p, g | (c << 4));
 
                nv_push_update_count(p, 3);
-               nvk_cmd_buffer_push_indirect(cmd, desc_addr, 3);
+               nvk_cmd_buffer_push_indirect(cmd, desc_addr, 12);
             }
          }
       }
@@ -2545,31 +2624,28 @@ nvk_CmdBindIndexBuffer2KHR(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(nvk_cmd_buffer, cmd, commandBuffer);
    VK_FROM_HANDLE(nvk_buffer, buffer, _buffer);
+   struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
+   struct nvk_addr_range addr_range =
+      nvk_buffer_addr_range(buffer, offset, size);
+
+   if (addr_range.addr == 0 && nvk_cmd_buffer_3d_cls(cmd) < TURING_A)
+      addr_range.addr = dev->zero_page->va->addr;
 
    struct nv_push *p = nvk_cmd_buffer_push(cmd, 10);
-
-   uint64_t addr, range;
-   if (buffer != NULL && size > 0) {
-      addr = nvk_buffer_address(buffer, offset);
-      range = vk_buffer_range(&buffer->vk, offset, size);
-   } else {
-      range = addr = 0;
-   }
 
    P_IMMD(p, NV9097, SET_DA_PRIMITIVE_RESTART_INDEX,
           vk_index_to_restart(indexType));
 
    P_MTHD(p, NV9097, SET_INDEX_BUFFER_A);
-   P_NV9097_SET_INDEX_BUFFER_A(p, addr >> 32);
-   P_NV9097_SET_INDEX_BUFFER_B(p, addr);
+   P_NV9097_SET_INDEX_BUFFER_A(p, addr_range.addr >> 32);
+   P_NV9097_SET_INDEX_BUFFER_B(p, addr_range.addr);
 
    if (nvk_cmd_buffer_3d_cls(cmd) >= TURING_A) {
       P_MTHD(p, NVC597, SET_INDEX_BUFFER_SIZE_A);
-      P_NVC597_SET_INDEX_BUFFER_SIZE_A(p, range >> 32);
-      P_NVC597_SET_INDEX_BUFFER_SIZE_B(p, range);
+      P_NVC597_SET_INDEX_BUFFER_SIZE_A(p, addr_range.range >> 32);
+      P_NVC597_SET_INDEX_BUFFER_SIZE_B(p, addr_range.range);
    } else {
-      /* TODO: What about robust zero-size buffers? */
-      const uint64_t limit = range > 0 ? addr + range - 1 : 0;
+      const uint64_t limit = addr_range.addr + addr_range.range - 1;
       P_MTHD(p, NV9097, SET_INDEX_BUFFER_C);
       P_NV9097_SET_INDEX_BUFFER_C(p, limit >> 32);
       P_NV9097_SET_INDEX_BUFFER_D(p, limit);
@@ -2582,11 +2658,16 @@ void
 nvk_cmd_bind_vertex_buffer(struct nvk_cmd_buffer *cmd, uint32_t vb_idx,
                            struct nvk_addr_range addr_range)
 {
+   struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
+
    /* Used for meta save/restore */
    if (vb_idx == 0)
       cmd->state.gfx.vb0 = addr_range;
 
    struct nv_push *p = nvk_cmd_buffer_push(cmd, 6);
+
+   if (addr_range.addr == 0 && nvk_cmd_buffer_3d_cls(cmd) < TURING_A)
+      addr_range.addr = dev->zero_page->va->addr;
 
    P_MTHD(p, NV9097, SET_VERTEX_STREAM_A_LOCATION_A(vb_idx));
    P_NV9097_SET_VERTEX_STREAM_A_LOCATION_A(p, vb_idx, addr_range.addr >> 32);
@@ -2597,9 +2678,7 @@ nvk_cmd_bind_vertex_buffer(struct nvk_cmd_buffer *cmd, uint32_t vb_idx,
       P_NVC597_SET_VERTEX_STREAM_SIZE_A(p, vb_idx, addr_range.range >> 32);
       P_NVC597_SET_VERTEX_STREAM_SIZE_B(p, vb_idx, addr_range.range);
    } else {
-      /* TODO: What about robust zero-size buffers? */
-      const uint64_t limit = addr_range.range > 0 ?
-         addr_range.addr + addr_range.range - 1 : 0;
+      const uint64_t limit = addr_range.addr + addr_range.range - 1;
       P_MTHD(p, NV9097, SET_VERTEX_STREAM_LIMIT_A_A(vb_idx));
       P_NV9097_SET_VERTEX_STREAM_LIMIT_A_A(p, vb_idx, limit >> 32);
       P_NV9097_SET_VERTEX_STREAM_LIMIT_A_B(p, vb_idx, limit);

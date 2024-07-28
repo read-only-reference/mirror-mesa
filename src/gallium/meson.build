@@ -44,12 +44,26 @@ if with_platform_haiku
 endif
 if with_gallium_softpipe
   subdir('drivers/softpipe')
-  if draw_with_llvm
-    subdir('drivers/llvmpipe')
-  endif
+else
+  driver_softpipe = declare_dependency()
+endif
+if with_any_llvmpipe
+  subdir('drivers/llvmpipe')
+else
+  driver_llvmpipe = declare_dependency()
+endif
+if with_gallium_llvmpipe and with_gallium_softpipe
+  driver_swrast = declare_dependency(
+    dependencies : [ driver_softpipe, driver_llvmpipe ],
+  )
+elif with_gallium_llvmpipe
+  driver_swrast = driver_llvmpipe
+elif with_gallium_softpipe
+  driver_swrast = driver_softpipe
 else
   driver_swrast = declare_dependency()
 endif
+
 if with_gallium_asahi
   subdir('winsys/asahi/drm')
   subdir('drivers/asahi')
@@ -174,11 +188,12 @@ if with_gallium_d3d12
 else
   driver_d3d12 = declare_dependency()
 endif
-if with_gallium_clover
-  # TODO: this isn't really clover specific, but ATM clover is the only
-  # consumer
+if with_gallium_clover or with_tests
+  # At the moment, clover and gallium/tests are the only two consumers
+  # for pipe-loader
   subdir('targets/pipe-loader')
-
+endif
+if with_gallium_clover
   subdir('frontends/clover')
   subdir('targets/opencl')
 endif

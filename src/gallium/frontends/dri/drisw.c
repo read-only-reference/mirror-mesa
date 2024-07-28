@@ -26,7 +26,7 @@
  *
  **************************************************************************/
 
-#include "GL/internal/mesa_interface.h"
+#include "mesa_interface.h"
 #include "git_sha1.h"
 #include "util/format/u_format.h"
 #include "util/u_memory.h"
@@ -620,16 +620,6 @@ drisw_init_screen(struct dri_screen *screen, bool driver_name_is_inferred)
    if (pscreen->resource_create_with_modifiers && (pscreen->get_param(pscreen, PIPE_CAP_DMABUF) & DRM_PRIME_CAP_EXPORT))
       screen->extensions[0] = &driVkImageExtension.base;
 #endif
-   screen->lookup_egl_image = dri2_lookup_egl_image;
-
-   const __DRIimageLookupExtension *image = screen->dri2.image;
-   if (image &&
-       image->base.version >= 2 &&
-       image->validateEGLImage &&
-       image->lookupEGLImageValidated) {
-      screen->validate_egl_image = dri2_validate_egl_image;
-      screen->lookup_egl_image_validated = dri2_lookup_egl_image_validated;
-   }
 
    screen->create_drawable = drisw_create_drawable;
 
@@ -640,8 +630,8 @@ fail:
 }
 
 /* swrast copy sub buffer entrypoint. */
-static void driswCopySubBuffer(__DRIdrawable *pdp, int x, int y,
-                               int w, int h)
+void
+driswCopySubBuffer(__DRIdrawable *pdp, int x, int y, int w, int h)
 {
    struct dri_drawable *drawable = dri_drawable(pdp);
 
@@ -650,17 +640,9 @@ static void driswCopySubBuffer(__DRIdrawable *pdp, int x, int y,
    drisw_copy_sub_buffer(drawable, x, y, w, h);
 }
 
-/* for swrast only */
-const __DRIcopySubBufferExtension driSWCopySubBufferExtension = {
-   .base = { __DRI_COPY_SUB_BUFFER, 1 },
-
-   .copySubBuffer               = driswCopySubBuffer,
-};
-
 static const struct __DRImesaCoreExtensionRec mesaCoreExtension = {
    .base = { __DRI_MESA, 2 },
    .version_string = MESA_INTERFACE_VERSION_STRING,
-   .createNewScreen = driCreateNewScreen2,
    .createContext = driCreateContextAttribs,
    .initScreen = drisw_init_screen,
    .createNewScreen3 = driCreateNewScreen3,
@@ -671,7 +653,6 @@ const __DRIextension *galliumsw_driver_extensions[] = {
     &driCoreExtension.base,
     &mesaCoreExtension.base,
     &driSWRastExtension.base,
-    &driSWCopySubBufferExtension.base,
     &gallium_config_options.base,
     NULL
 };

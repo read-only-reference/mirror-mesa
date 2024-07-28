@@ -99,14 +99,8 @@ get_cps_state_offset(struct anv_cmd_buffer *cmd_buffer, bool cps_enabled,
 {
    struct anv_device *device = cmd_buffer->device;
 
-   if (!cps_enabled) {
-      assert(cmd_buffer->state.current_db_mode !=
-             ANV_CMD_DESCRIPTOR_BUFFER_MODE_UNKNOWN);
-      return cmd_buffer->state.current_db_mode ==
-             ANV_CMD_DESCRIPTOR_BUFFER_MODE_BUFFER ?
-             device->cps_states_db.offset :
-             device->cps_states.offset;
-   }
+   if (!cps_enabled)
+      return device->cps_states.offset;
 
    uint32_t offset;
    static const uint32_t size_index[] = {
@@ -131,12 +125,7 @@ get_cps_state_offset(struct anv_cmd_buffer *cmd_buffer, bool cps_enabled,
 
    offset *= MAX_VIEWPORTS * GENX(CPS_STATE_length) * 4;
 
-   assert(cmd_buffer->state.current_db_mode !=
-          ANV_CMD_DESCRIPTOR_BUFFER_MODE_UNKNOWN);
-   return (cmd_buffer->state.current_db_mode ==
-           ANV_CMD_DESCRIPTOR_BUFFER_MODE_BUFFER ?
-           device->cps_states_db.offset :
-           device->cps_states.offset) + offset;
+   return device->cps_states.offset + offset;
 }
 #endif /* GFX_VER >= 12 */
 
@@ -1023,19 +1012,6 @@ genX(cmd_buffer_flush_gfx_runtime_state)(struct anv_cmd_buffer *cmd_buffer)
         BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_MS_SAMPLE_LOCATIONS_ENABLE)))
       BITSET_SET(hw_state->dirty, ANV_GFX_STATE_SAMPLE_PATTERN);
 
-   if ((gfx->dirty & ANV_CMD_DIRTY_PIPELINE) ||
-       (gfx->dirty & ANV_CMD_DIRTY_RENDER_TARGETS) ||
-       BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_CB_COLOR_WRITE_ENABLES)) {
-      /* 3DSTATE_WM in the hope we can avoid spawning fragment shaders
-       * threads.
-       */
-      bool force_thread_dispatch =
-         anv_pipeline_has_stage(pipeline, MESA_SHADER_FRAGMENT) &&
-         (pipeline->force_fragment_thread_dispatch ||
-          anv_cmd_buffer_all_color_write_masked(cmd_buffer));
-      SET(WM, wm.ForceThreadDispatchEnable, force_thread_dispatch ? ForceON : 0);
-   }
-
    if ((cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_PIPELINE) ||
        BITSET_TEST(dyn->dirty, MESA_VK_DYNAMIC_ATTACHMENT_FEEDBACK_LOOP_ENABLE)) {
       SET_STAGE(PS_EXTRA, ps_extra.PixelShaderKillsPixel,
@@ -1044,6 +1020,33 @@ genX(cmd_buffer_flush_gfx_runtime_state)(struct anv_cmd_buffer *cmd_buffer)
                                  wm_prog_data->uses_kill),
                 FRAGMENT);
    }
+
+#if GFX_VERx10 >= 125
+   if (cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_PIPELINE) {
+      SET_STAGE(PS_EXTRA, ps_extra.PixelShaderHasUAV,
+                wm_prog_data && wm_prog_data->has_side_effects,
+                FRAGMENT);
+   }
+#else
+   if (cmd_buffer->state.gfx.dirty & (ANV_CMD_DIRTY_PIPELINE |
+                                      ANV_CMD_DIRTY_OCCLUSION_QUERY_ACTIVE)) {
+      /* Prior to Gfx12.5 the HW seems to avoid spawning fragment shaders even
+       * if 3DSTATE_PS_EXTRA::PixelShaderKillsPixel=true when
+       * 3DSTATE_PS_BLEND::HasWriteableRT=false. This is causing problems with
+       * occlusion queries with 0 attachments. There are no CTS tests
+       * exercising this but zink+anv fails a bunch of tests like piglit
+       * arb_framebuffer_no_attachments-query.
+       *
+       * Here we choose to tweak the PixelShaderHasUAV to make sure the
+       * fragment shaders are run properly.
+       */
+      SET_STAGE(PS_EXTRA, ps_extra.PixelShaderHasUAV,
+                wm_prog_data && (wm_prog_data->has_side_effects ||
+                                 (gfx->color_att_count == 0 &&
+                                  gfx->n_occlusion_queries > 0)),
+                FRAGMENT);
+   }
+#endif
 
    if ((gfx->dirty & ANV_CMD_DIRTY_PIPELINE) ||
        (gfx->dirty & ANV_CMD_DIRTY_RENDER_TARGETS) ||
@@ -1616,6 +1619,8 @@ cmd_buffer_gfx_state_emission(struct anv_cmd_buffer *cmd_buffer)
    const struct vk_dynamic_graphics_state *dyn =
       &cmd_buffer->vk.dynamic_graphics_state;
    struct anv_gfx_dynamic_state *hw_state = &gfx->dyn_state;
+   const bool protected = cmd_buffer->vk.pool->flags &
+                          VK_COMMAND_POOL_CREATE_PROTECTED_BIT;
 
    if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_URB)) {
       genX(urb_workaround)(cmd_buffer, &pipeline->urb_cfg);
@@ -1640,14 +1645,20 @@ cmd_buffer_gfx_state_emission(struct anv_cmd_buffer *cmd_buffer)
       anv_batch_emit_pipeline_state(&cmd_buffer->batch, pipeline, final.vf_sgvs_2);
 #endif
 
-   if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_VS))
-      anv_batch_emit_pipeline_state(&cmd_buffer->batch, pipeline, final.vs);
+   if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_VS)) {
+      anv_batch_emit_pipeline_state_protected(&cmd_buffer->batch, pipeline,
+                                              final.vs, protected);
+   }
 
-   if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_HS))
-      anv_batch_emit_pipeline_state(&cmd_buffer->batch, pipeline, final.hs);
+   if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_HS)) {
+      anv_batch_emit_pipeline_state_protected(&cmd_buffer->batch, pipeline,
+                                              final.hs, protected);
+   }
 
-   if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_DS))
-      anv_batch_emit_pipeline_state(&cmd_buffer->batch, pipeline, final.ds);
+   if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_DS)) {
+      anv_batch_emit_pipeline_state_protected(&cmd_buffer->batch, pipeline,
+                                              final.ds, protected);
+   }
 
    if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_VF_STATISTICS))
       anv_batch_emit_pipeline_state(&cmd_buffer->batch, pipeline, final.vf_statistics);
@@ -1688,8 +1699,10 @@ cmd_buffer_gfx_state_emission(struct anv_cmd_buffer *cmd_buffer)
    }
 
    if (device->vk.enabled_extensions.EXT_mesh_shader) {
-      if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_MESH_CONTROL))
-         anv_batch_emit_pipeline_state(&cmd_buffer->batch, pipeline, final.mesh_control);
+      if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_MESH_CONTROL)) {
+         anv_batch_emit_pipeline_state_protected(&cmd_buffer->batch, pipeline,
+                                                 final.mesh_control, protected);
+      }
 
       if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_MESH_SHADER))
          anv_batch_emit_pipeline_state(&cmd_buffer->batch, pipeline, final.mesh_shader);
@@ -1697,8 +1710,10 @@ cmd_buffer_gfx_state_emission(struct anv_cmd_buffer *cmd_buffer)
       if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_MESH_DISTRIB))
          anv_batch_emit_pipeline_state(&cmd_buffer->batch, pipeline, final.mesh_distrib);
 
-      if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_TASK_CONTROL))
-         anv_batch_emit_pipeline_state(&cmd_buffer->batch, pipeline, final.task_control);
+      if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_TASK_CONTROL)) {
+         anv_batch_emit_pipeline_state_protected(&cmd_buffer->batch, pipeline,
+                                                 final.task_control, protected);
+      }
 
       if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_TASK_SHADER))
          anv_batch_emit_pipeline_state(&cmd_buffer->batch, pipeline, final.task_shader);
@@ -1730,8 +1745,8 @@ cmd_buffer_gfx_state_emission(struct anv_cmd_buffer *cmd_buffer)
    /* Now the potentially dynamic instructions */
 
    if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_PS)) {
-      anv_batch_emit_merge(&cmd_buffer->batch, GENX(3DSTATE_PS),
-                           pipeline, partial.ps, ps) {
+      anv_batch_emit_merge_protected(&cmd_buffer->batch, GENX(3DSTATE_PS),
+                                     pipeline, partial.ps, ps, protected) {
          SET(ps, ps, KernelStartPointer0);
          SET(ps, ps, KernelStartPointer1);
          SET(ps, ps, DispatchGRFStartRegisterForConstantSetupData0);
@@ -1758,6 +1773,7 @@ cmd_buffer_gfx_state_emission(struct anv_cmd_buffer *cmd_buffer)
    if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_PS_EXTRA)) {
       anv_batch_emit_merge(&cmd_buffer->batch, GENX(3DSTATE_PS_EXTRA),
                            pipeline, partial.ps_extra, pse) {
+         SET(pse, ps_extra, PixelShaderHasUAV);
          SET(pse, ps_extra, PixelShaderIsPerSample);
 #if GFX_VER >= 11
          SET(pse, ps_extra, PixelShaderIsPerCoarsePixel);
@@ -1925,8 +1941,8 @@ cmd_buffer_gfx_state_emission(struct anv_cmd_buffer *cmd_buffer)
    }
 
    if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_GS)) {
-      anv_batch_emit_merge(&cmd_buffer->batch, GENX(3DSTATE_GS),
-                           pipeline, partial.gs, gs) {
+      anv_batch_emit_merge_protected(&cmd_buffer->batch, GENX(3DSTATE_GS),
+                                     pipeline, partial.gs, gs, protected) {
          SET(gs, gs, ReorderMode);
       }
    }
@@ -2135,7 +2151,6 @@ cmd_buffer_gfx_state_emission(struct anv_cmd_buffer *cmd_buffer)
    if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_WM)) {
       anv_batch_emit_merge(&cmd_buffer->batch, GENX(3DSTATE_WM),
                            pipeline, partial.wm, wm) {
-         SET(wm, wm, ForceThreadDispatchEnable);
          SET(wm, wm, LineStippleEnable);
          SET(wm, wm, BarycentricInterpolationMode);
       }

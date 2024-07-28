@@ -60,15 +60,7 @@
 #include <xcb/sync.h>
 
 #include "loader_dri3_helper.h"
-#include "GL/internal/mesa_interface.h"
-
-struct dri3_display
-{
-   __GLXDRIdisplay base;
-
-   const __DRIextension **loader_extensions;
-   int has_multibuffer;
-};
+#include "mesa_interface.h"
 
 struct dri3_screen {
    struct glx_screen base;
@@ -88,17 +80,12 @@ struct dri3_screen {
    __DRIscreen *driScreenRenderGPU;
 
    const __DRIimageExtension *image;
-   const __DRIimageDriverExtension *image_driver;
-   const __DRIcoreExtension *core;
-   const __DRImesaCoreExtension *mesa;
    const __DRI2flushExtension *f;
    const __DRI2configQueryExtension *config;
-   const __DRItexBufferExtension *texBuffer;
    const __DRI2rendererQueryExtension *rendererQuery;
    const __DRI2interopExtension *interop;
    const __DRIconfig **driver_configs;
 
-   void *driver;
    /* fd of the GPU used for rendering. */
    int fd_render_gpu;
    /* fd of the GPU used for display. If the same GPU is used for display
@@ -119,9 +106,6 @@ struct dri3_drawable {
    uint64_t previous_ust;
    unsigned frames;
 };
-
-bool
-dri3_check_multibuffer(Display * dpy, bool *err);
 
 _X_HIDDEN int
 dri3_query_renderer_integer(struct glx_screen *base, int attribute,

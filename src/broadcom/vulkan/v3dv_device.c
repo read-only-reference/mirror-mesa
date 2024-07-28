@@ -201,6 +201,7 @@ get_device_extensions(const struct v3dv_physical_device *device,
       .EXT_border_color_swizzle             = true,
       .EXT_color_write_enable               = true,
       .EXT_custom_border_color              = true,
+      .EXT_depth_clamp_zero_one             = device->devinfo.ver >= 71,
       .EXT_depth_clip_control               = true,
       .EXT_depth_clip_enable                = device->devinfo.ver >= 71,
       .EXT_load_store_op_none               = true,
@@ -260,6 +261,7 @@ get_features(const struct v3dv_physical_device *physical_device,
       .multiDrawIndirect = false,
       .drawIndirectFirstInstance = true,
       .depthClamp = physical_device->devinfo.ver >= 71,
+      .depthClampZeroOne = physical_device->devinfo.ver >= 71,
       .depthBiasClamp = true,
       .fillModeNonSolid = true,
       .depthBounds = physical_device->devinfo.ver >= 71,
@@ -646,7 +648,7 @@ physical_device_finish(struct v3dv_physical_device *device)
 
    free(device->name);
 
-#if using_v3d_simulator
+#if USE_V3D_SIMULATOR
    v3d_simulator_destroy(device->sim_file);
 #endif
 
@@ -683,7 +685,7 @@ v3dv_DestroyInstance(VkInstance _instance,
 static uint64_t
 compute_heap_size()
 {
-#if !using_v3d_simulator
+#if !USE_V3D_SIMULATOR
    /* Query the total ram from the system */
    struct sysinfo info;
    sysinfo(&info);
@@ -713,7 +715,7 @@ compute_memory_budget(struct v3dv_physical_device *device)
    uint64_t heap_size = device->memory.memoryHeaps[0].size;
    uint64_t heap_used = device->heap_used;
    uint64_t sys_available;
-#if !using_v3d_simulator
+#if !USE_V3D_SIMULATOR
    ASSERTED bool has_available_memory =
       os_get_available_system_memory(&sys_available);
    assert(has_available_memory);
@@ -1298,7 +1300,7 @@ create_physical_device(struct v3dv_instance *instance,
     */
 
    const char *primary_path;
-#if !using_v3d_simulator
+#if !USE_V3D_SIMULATOR
    if (display_device)
       primary_path = display_device->nodes[DRM_NODE_PRIMARY];
    else
@@ -1330,7 +1332,7 @@ create_physical_device(struct v3dv_instance *instance,
    device->has_render = true;
    device->render_devid = render_stat.st_rdev;
 
-#if using_v3d_simulator
+#if USE_V3D_SIMULATOR
    device->device_id = gpu_device->deviceinfo.pci->device_id;
 #endif
 
@@ -1339,7 +1341,7 @@ create_physical_device(struct v3dv_instance *instance,
        instance->vk.enabled_extensions.KHR_xlib_surface ||
        instance->vk.enabled_extensions.KHR_wayland_surface ||
        instance->vk.enabled_extensions.EXT_acquire_drm_display) {
-#if !using_v3d_simulator
+#if !USE_V3D_SIMULATOR
       /* Open the primary node on the vc4 display device */
       assert(display_device);
       display_fd = open(primary_path, O_RDWR | O_CLOEXEC);
@@ -1351,7 +1353,7 @@ create_physical_device(struct v3dv_instance *instance,
 #endif
    }
 
-#if using_v3d_simulator
+#if USE_V3D_SIMULATOR
    device->sim_file = v3d_simulator_init(render_fd);
 #endif
 
@@ -1492,12 +1494,12 @@ enumerate_devices(struct vk_instance *vk_instance)
 
    VkResult result = VK_SUCCESS;
 
-#if !using_v3d_simulator
+#if !USE_V3D_SIMULATOR
    int32_t v3d_idx = -1;
    int32_t vc4_idx = -1;
 #endif
    for (unsigned i = 0; i < (unsigned)max_devices; i++) {
-#if using_v3d_simulator
+#if USE_V3D_SIMULATOR
       /* In the simulator, we look for an Intel/AMD render node */
       const int required_nodes = (1 << DRM_NODE_RENDER) | (1 << DRM_NODE_PRIMARY);
       if ((devices[i]->available_nodes & required_nodes) == required_nodes &&
@@ -1545,7 +1547,7 @@ enumerate_devices(struct vk_instance *vk_instance)
 #endif
    }
 
-#if !using_v3d_simulator
+#if !USE_V3D_SIMULATOR
    if (v3d_idx != -1) {
       drmDevicePtr v3d_device = devices[v3d_idx];
       drmDevicePtr vc4_device = vc4_idx != -1 ? devices[vc4_idx] : NULL;
@@ -1567,7 +1569,7 @@ v3dv_physical_device_vendor_id(const struct v3dv_physical_device *dev)
 uint32_t
 v3dv_physical_device_device_id(const struct v3dv_physical_device *dev)
 {
-#if using_v3d_simulator
+#if USE_V3D_SIMULATOR
    return dev->device_id;
 #else
    switch (dev->devinfo.ver) {
@@ -1655,7 +1657,7 @@ v3dv_GetInstanceProcAddr(VkInstance _instance,
                          const char *pName)
 {
    V3DV_FROM_HANDLE(v3dv_instance, instance, _instance);
-   return vk_instance_get_proc_addr(&instance->vk,
+   return vk_instance_get_proc_addr(instance ? &instance->vk : NULL,
                                     &v3dv_instance_entrypoints,
                                     pName);
 }
@@ -2055,7 +2057,7 @@ device_alloc_for_wsi(struct v3dv_device *device,
     * hardware we need to allocate our winsys BOs on the vc4 display device
     * and import them into v3d.
     */
-#if using_v3d_simulator
+#if USE_V3D_SIMULATOR
       return device_alloc(device, mem, size);
 #else
    VkResult result;

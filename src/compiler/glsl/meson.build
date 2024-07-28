@@ -5,7 +5,7 @@ libglsl_util = static_library(
   'glsl_util',
   glsl_util_files,
   include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
-  dependencies : dep_valgrind,
+  dependencies : [dep_valgrind, idep_mesautil],
   gnu_symbol_visibility : 'hidden',
   build_by_default : false,
 )
@@ -208,7 +208,6 @@ files_libglsl = files(
 )
 
 files_libglsl_standalone = files(
-  'opt_add_neg_to_sub.h',
   'standalone_scaffolding.cpp',
   'standalone_scaffolding.h',
   'standalone.cpp',
@@ -230,7 +229,7 @@ libglsl = static_library(
   gnu_symbol_visibility : 'hidden',
   link_with : libglcpp,
   include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
-  dependencies : idep_nir,
+  dependencies : [idep_nir, idep_mesautil],
   build_by_default : false,
 )
 
