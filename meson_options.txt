@@ -66,6 +66,14 @@ option(
 )
 
 option(
+  'unversion-libgallium',
+  type : 'boolean',
+  value : false,
+  description : 'Do not include mesa version in libgallium DSO filename. ' +
+                'Do not enable unless you know what you are doing. Default: false'
+)
+
+option(
   'dri-search-path',
   type : 'string',
   value : '',
@@ -86,7 +94,7 @@ option(
   type : 'array',
   value : ['auto'],
   choices : [
-    'auto', 'kmsro', 'radeonsi', 'r300', 'r600', 'nouveau', 'freedreno',
+    'auto', 'radeonsi', 'r300', 'r600', 'nouveau', 'freedreno',
     'swrast', 'v3d', 'vc4', 'etnaviv', 'tegra', 'i915', 'svga', 'virgl',
     'panfrost', 'iris', 'lima', 'zink', 'd3d12', 'asahi', 'crocus', 'all',
     'softpipe', 'llvmpipe',
@@ -303,7 +311,7 @@ option(
   'vulkan-layers',
   type : 'array',
   value : [],
-  choices : ['device-select', 'intel-nullhw', 'overlay'],
+  choices : ['device-select', 'intel-nullhw', 'overlay', 'screenshot'],
   description : 'List of vulkan layers to build'
 )
 
@@ -436,7 +444,10 @@ option (
   'llvm-orcjit',
   type : 'boolean',
   value : false,
-  description: 'Build llvmpipe with LLVM ORCJIT support.'
+  description: 'Build llvmpipe with LLVM ORCJIT support. Has no effect when ' +
+               'building for architectures without LLVM MCJIT support -- ' +
+               'ORCJIT is the only choice on such architectures and will ' +
+               'always be enabled.'
 )
 
 option(

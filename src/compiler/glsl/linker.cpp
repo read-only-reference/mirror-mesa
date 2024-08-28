@@ -1540,6 +1540,7 @@ link_intrastage_shaders(void *mem_ctx,
                         bool allow_missing_main)
 {
    bool arb_fragment_coord_conventions_enable = false;
+   bool KHR_shader_subgroup_basic_enable = false;
 
    /* Check that global variables defined in multiple shaders are consistent.
     */
@@ -1551,6 +1552,8 @@ link_intrastage_shaders(void *mem_ctx,
                              false);
       if (shader_list[i]->ARB_fragment_coord_conventions_enable)
          arb_fragment_coord_conventions_enable = true;
+      if (shader_list[i]->KHR_shader_subgroup_basic_enable)
+         KHR_shader_subgroup_basic_enable = true;
    }
 
    if (!prog->data->LinkStatus)
@@ -1660,6 +1663,9 @@ link_intrastage_shaders(void *mem_ctx,
 
    populate_symbol_table(linked, shader_list[0]->symbols);
 
+   gl_prog->info.subgroup_size = KHR_shader_subgroup_basic_enable ?
+      SUBGROUP_SIZE_API_CONSTANT : SUBGROUP_SIZE_UNIFORM;
+
    /* The pointer to the main function in the final linked shader (i.e., the
     * copy of the original shader that contained the main function).
     */
@@ -1683,7 +1689,7 @@ link_intrastage_shaders(void *mem_ctx,
       }
    }
 
-   if (!link_function_calls(prog, linked, shader_list, num_shaders)) {
+   if (!link_function_calls(prog, linked, main, shader_list, num_shaders)) {
       _mesa_delete_linked_shader(ctx, linked);
       return NULL;
    }

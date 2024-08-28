@@ -194,7 +194,7 @@ dri3_create_surface(_EGLDisplay *disp, EGLint type, _EGLConfig *conf,
           dri2_dpy->conn, drawable, egl_to_loader_dri3_drawable_type(type),
           dri2_dpy->dri_screen_render_gpu, dri2_dpy->dri_screen_display_gpu,
           dri2_dpy->multibuffers_available, true, dri_config,
-          &dri2_dpy->loader_dri3_ext, &egl_dri3_vtable,
+          &egl_dri3_vtable,
           &dri3_surf->loader_drawable)) {
       _eglError(EGL_BAD_ALLOC, "dri3_surface_create");
       goto cleanup_pixmap;
@@ -226,7 +226,7 @@ dri3_authenticate(_EGLDisplay *disp, uint32_t id)
 #ifdef HAVE_WAYLAND_PLATFORM
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
 
-   if (dri2_dpy->device_name) {
+   if (!dri2_dpy->swrast) {
       _eglLog(_EGL_WARNING,
               "Wayland client render node authentication is unnecessary");
       return 0;
@@ -324,7 +324,7 @@ dri3_create_image_khr_pixmap(_EGLDisplay *disp, _EGLContext *ctx,
 
    dri2_img->dri_image = loader_dri3_create_image(
       dri2_dpy->conn, bp_reply, fourcc, dri2_dpy->dri_screen_render_gpu,
-      dri2_dpy->image, dri2_img);
+      dri2_img);
 
    free(bp_reply);
 
@@ -373,7 +373,7 @@ dri3_create_image_khr_pixmap_from_buffers(_EGLDisplay *disp, _EGLContext *ctx,
 
    dri2_img->dri_image = loader_dri3_create_image_from_buffers(
       dri2_dpy->conn, bp_reply, fourcc, dri2_dpy->dri_screen_render_gpu,
-      dri2_dpy->image, dri2_img);
+      dri2_img);
    free(bp_reply);
 
    if (!dri2_img->dri_image) {
@@ -528,7 +528,7 @@ struct dri2_egl_display_vtbl dri3_x11_display_vtbl = {
 };
 
 enum dri2_egl_driver_fail
-dri3_x11_connect(struct dri2_egl_display *dri2_dpy, bool swrast)
+dri3_x11_connect(struct dri2_egl_display *dri2_dpy, bool zink, bool swrast)
 {
    dri2_dpy->fd_render_gpu =
       x11_dri3_open(dri2_dpy->conn, dri2_dpy->screen->root, 0);
@@ -550,15 +550,16 @@ dri3_x11_connect(struct dri2_egl_display *dri2_dpy, bool swrast)
    if (!dri2_dpy->driver_name)
       dri2_dpy->driver_name = loader_get_driver_for_fd(dri2_dpy->fd_render_gpu);
 
-   if (!strcmp(dri2_dpy->driver_name, "zink") &&
-       !debug_get_bool_option("LIBGL_KOPPER_DISABLE", false)) {
+   if (!zink && !strcmp(dri2_dpy->driver_name, "zink")) {
       close(dri2_dpy->fd_render_gpu);
+      dri2_dpy->fd_render_gpu = -1;
       return DRI2_EGL_DRIVER_PREFER_ZINK;
    }
 
    if (!dri2_dpy->driver_name) {
       _eglLog(_EGL_WARNING, "DRI3: No driver found");
       close(dri2_dpy->fd_render_gpu);
+      dri2_dpy->fd_render_gpu = -1;
       return DRI2_EGL_DRIVER_FAILED;
    }
 

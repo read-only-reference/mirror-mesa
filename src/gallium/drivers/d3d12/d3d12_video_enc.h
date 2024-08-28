@@ -69,14 +69,6 @@ int d3d12_video_encoder_get_encode_headers(struct pipe_video_codec *codec,
                                            struct pipe_picture_desc *picture,
                                            void* bitstream_buf,
                                            unsigned *bitstream_buf_size);
-/**
- * Get feedback fence.
- *
- * Can be used to wait on the pipe_fence_handle directly instead
- * of waiting on the get_feedback blocking call
- */
-struct pipe_fence_handle*
-d3d12_video_encoder_get_feedback_fence(struct pipe_video_codec *codec, void *feedback);
 
 /**
  * get encoder feedback
@@ -90,7 +82,7 @@ d3d12_video_encoder_get_feedback(struct pipe_video_codec *codec,
 /**
  * end encoding of the current frame
  */
-void
+int
 d3d12_video_encoder_end_frame(struct pipe_video_codec * codec,
                               struct pipe_video_buffer *target,
                               struct pipe_picture_desc *picture);
@@ -106,8 +98,21 @@ d3d12_video_encoder_flush(struct pipe_video_codec *codec);
  * Waits until the async work from the fenceValue has been completed in the device
  * and releases the in-flight resources
  */
-void
-d3d12_video_encoder_sync_completion(struct pipe_video_codec *codec, uint64_t fenceValueToWaitOn, uint64_t timeout_ns);
+bool
+d3d12_video_encoder_sync_completion(struct pipe_video_codec *codec, ID3D12Fence *fence, uint64_t fenceValueToWaitOn, uint64_t timeout_ns);
+
+/**
+ * Get feedback fence.
+ */
+int
+d3d12_video_encoder_get_feedback_fence(struct pipe_video_codec *codec,
+                                       struct pipe_fence_handle *fence,
+                                       uint64_t timeout);
+
+struct pipe_video_buffer*
+d3d12_video_create_dpb_buffer(struct pipe_video_codec *codec,
+                              struct pipe_picture_desc *picture,
+                              const struct pipe_video_buffer *templat);
 
 ///
 /// Pipe video interface ends
@@ -128,6 +133,7 @@ enum d3d12_video_encoder_config_dirty_flags
    d3d12_video_encoder_config_dirty_flag_motion_precision_limit = 0x200,
    d3d12_video_encoder_config_dirty_flag_sequence_info          = 0x400,
    d3d12_video_encoder_config_dirty_flag_intra_refresh          = 0x800,
+   d3d12_video_encoder_config_dirty_flag_video_header           = 0x1000,
 };
 DEFINE_ENUM_FLAG_OPERATORS(d3d12_video_encoder_config_dirty_flags);
 
@@ -275,6 +281,7 @@ struct D3D12EncodeConfiguration
 
    struct pipe_h264_enc_seq_param m_encoderCodecSpecificSequenceStateDescH264;
    struct pipe_h265_enc_seq_param m_encoderCodecSpecificSequenceStateDescH265;
+   struct pipe_h265_enc_vid_param m_encoderCodecSpecificVideoStateDescH265;
 };
 
 struct EncodedBitstreamResolvedMetadata
@@ -423,6 +430,20 @@ struct d3d12_video_encoder
    };
 
    std::vector<InFlightEncodeResources> m_inflightResourcesPool;
+
+   // Used to track texture array allocations given by d3d12_video_create_dpb_buffer
+   // The visibility of these members must be at encoder level, so multiple
+   // encoder objects use their own tracking and allocation pool
+   // Some apps will destroy the encoder before d3d12_video_buffer_destroy(),
+   // so the lifetime of these can't be tied to d3d12_video_encoder_destroy()
+   // This is how these are managed:
+   // 1. Created on demand at d3d12_video_create_dpb_buffer
+   //    and the pointer is stored on each d3d12_video_buffer
+   // 2. On d3d12_video_buffer::destroy(), when all the slots
+   //    of the allocation pool are unused, the memory is released.
+   pipe_resource *m_pVideoTexArrayDPBPool;
+   static_assert(D3D12_VIDEO_TEXTURE_ARRAY_DPB_POOL_SIZE <= 16); // uint16_t used as a bitmap into m_pVideoTexArrayDPBPool
+   std::shared_ptr<uint16_t> m_spVideoTexArrayDPBPoolInUse;
 };
 
 bool
@@ -520,6 +541,9 @@ d3d12_video_encoder_update_picparams_region_of_interest_qpmap(struct d3d12_video
                                                               int32_t min_delta_qp,
                                                               int32_t max_delta_qp,
                                                               std::vector<T>& pQPMap);
+bool
+d3d12_video_encoder_uses_direct_dpb(enum pipe_video_format codec);
+
 ///
 /// d3d12_video_encoder functions ends
 ///

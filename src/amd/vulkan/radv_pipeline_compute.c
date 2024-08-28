@@ -100,6 +100,9 @@ radv_compile_cs(struct radv_device *device, struct vk_pipeline_cache *cache, str
                 bool keep_executable_info, bool keep_statistic_info, bool is_internal,
                 struct radv_shader_binary **cs_binary)
 {
+   struct radv_physical_device *pdev = radv_device_physical(device);
+   struct radv_instance *instance = radv_physical_device_instance(pdev);
+
    struct radv_shader *cs_shader;
 
    /* Compile SPIR-V shader to NIR. */
@@ -123,12 +126,14 @@ radv_compile_cs(struct radv_device *device, struct vk_pipeline_cache *cache, str
    /* Postprocess NIR. */
    radv_postprocess_nir(device, NULL, cs_stage);
 
-   if (radv_can_dump_shader(device, cs_stage->nir, false))
-      nir_print_shader(cs_stage->nir, stderr);
-
-   /* Compile NIR shader to AMD assembly. */
    bool dump_shader = radv_can_dump_shader(device, cs_stage->nir, false);
 
+   if (dump_shader) {
+      simple_mtx_lock(&instance->shader_dump_mtx);
+      nir_print_shader(cs_stage->nir, stderr);
+   }
+
+   /* Compile NIR shader to AMD assembly. */
    *cs_binary =
       radv_shader_nir_to_asm(device, cs_stage, &cs_stage->nir, 1, NULL, keep_executable_info, keep_statistic_info);
 
@@ -136,6 +141,9 @@ radv_compile_cs(struct radv_device *device, struct vk_pipeline_cache *cache, str
 
    radv_shader_generate_debug_info(device, dump_shader, keep_executable_info, *cs_binary, cs_shader, &cs_stage->nir, 1,
                                    &cs_stage->info);
+
+   if (dump_shader)
+      simple_mtx_unlock(&instance->shader_dump_mtx);
 
    if (keep_executable_info && cs_stage->spirv.size) {
       cs_shader->spirv = malloc(cs_stage->spirv.size);
@@ -160,7 +168,7 @@ radv_compute_pipeline_hash(const struct radv_device *device, const VkComputePipe
 
    _mesa_sha1_init(&ctx);
    radv_pipeline_hash(device, pipeline_layout, &ctx);
-   radv_pipeline_hash_shader_stage(sinfo, &stage_key, &ctx);
+   radv_pipeline_hash_shader_stage(create_flags, sinfo, &stage_key, &ctx);
    _mesa_sha1_final(&ctx, hash);
 }
 
@@ -210,7 +218,7 @@ radv_compute_pipeline_compile(const VkComputePipelineCreateInfo *pCreateInfo, st
    const struct radv_shader_stage_key stage_key =
       radv_pipeline_get_shader_key(device, &pCreateInfo->stage, pipeline->base.create_flags, pCreateInfo->pNext);
 
-   radv_pipeline_stage_init(pStage, pipeline_layout, &stage_key, &cs_stage);
+   radv_pipeline_stage_init(pipeline->base.create_flags, pStage, pipeline_layout, &stage_key, &cs_stage);
 
    pipeline->base.shaders[MESA_SHADER_COMPUTE] = radv_compile_cs(
       device, cache, &cs_stage, keep_executable_info, keep_statistic_info, pipeline->base.is_internal, &cs_binary);

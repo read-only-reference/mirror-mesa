@@ -60,7 +60,6 @@ typedef struct __DRIbufferRec			__DRIbuffer;
 typedef struct __DRIdri2ExtensionRec		__DRIdri2Extension;
 typedef struct __DRIdri2LoaderExtensionRec	__DRIdri2LoaderExtension;
 typedef struct __DRI2flushExtensionRec	__DRI2flushExtension;
-typedef struct __DRI2throttleExtensionRec	__DRI2throttleExtension;
 typedef struct __DRI2fenceExtensionRec          __DRI2fenceExtension;
 typedef struct __DRI2interopExtensionRec	__DRI2interopExtension;
 typedef struct __DRI2blobExtensionRec           __DRI2blobExtension;
@@ -230,24 +229,6 @@ struct __DRI2flushExtensionRec {
                              __DRIdrawable *drawable,
                              unsigned flags,
                              enum __DRI2throttleReason throttle_reason);
-};
-
-
-/**
- * Extension that the driver uses to request
- * throttle callbacks.
- *
- * Not used by the X server.
- */
-
-#define __DRI2_THROTTLE "DRI2_Throttle"
-#define __DRI2_THROTTLE_VERSION 1
-
-struct __DRI2throttleExtensionRec {
-   __DRIextension base;
-   void (*throttle)(__DRIcontext *ctx,
-		    __DRIdrawable *drawable,
-		    enum __DRI2throttleReason reason);
 };
 
 /**
@@ -1137,61 +1118,6 @@ struct __DRIdri2LoaderExtensionRec {
 #define __DRI_CTX_ERROR_UNKNOWN_FLAG		6
 /*@}*/
 
-struct __DRIdri2ExtensionRec {
-    __DRIextension base;
-
-    __DRIscreen *(*createNewScreen)(int screen, int fd,
-				    const __DRIextension **extensions,
-				    const __DRIconfig ***driver_configs,
-				    void *loaderPrivate);
-
-   __DRIcreateNewDrawableFunc   createNewDrawable;
-   __DRIcontext *(*createNewContext)(__DRIscreen *screen,
-                                     const __DRIconfig *config,
-                                     __DRIcontext *shared,
-                                     void *loaderPrivate);
-
-   /* Since version 2 */
-   __DRIgetAPIMaskFunc          getAPIMask;
-
-   __DRIcontext *(*createNewContextForAPI)(__DRIscreen *screen,
-					   int api,
-					   const __DRIconfig *config,
-					   __DRIcontext *shared,
-					   void *data);
-
-   __DRIbuffer *(*allocateBuffer)(__DRIscreen *screen,
-				  unsigned int attachment,
-				  unsigned int format,
-				  int width,
-				  int height);
-   void (*releaseBuffer)(__DRIscreen *screen,
-			 __DRIbuffer *buffer);
-
-   /**
-    * Create a context for a particular API with a set of attributes
-    *
-    * \since version 3
-    *
-    * \sa __DRIswrastExtensionRec::createContextAttribs
-    */
-   __DRIcreateContextAttribsFunc        createContextAttribs;
-
-   /**
-    * createNewScreen with the driver's extension list passed in.
-    *
-    * \since version 4
-    */
-   __DRIcreateNewScreen2Func            createNewScreen2;
-
-   /**
-    * createNewScreen with the driver's extension list passed in and implicit load flag.
-    *
-    * \since version 5
-    */
-   __DRIcreateNewScreen3Func            createNewScreen3;
-};
-
 
 /**
  * This extension provides functionality to enable various EGLImage
@@ -1785,9 +1711,6 @@ typedef struct __DRIconfigOptionsExtensionRec {
  * This allows the window system layer (either EGL or GLX) to query aspects of
  * hardware and driver support without creating a context.
  */
-#define __DRI2_RENDERER_QUERY "DRI_RENDERER_QUERY"
-#define __DRI2_RENDERER_QUERY_VERSION 1
-
 #define __DRI2_RENDERER_VENDOR_ID                             0x0000
 #define __DRI2_RENDERER_DEVICE_ID                             0x0001
 #define __DRI2_RENDERER_VERSION                               0x0002
@@ -1801,14 +1724,6 @@ typedef struct __DRIconfigOptionsExtensionRec {
 #define __DRI2_RENDERER_OPENGL_ES2_PROFILE_VERSION            0x000a
 
 #define __DRI2_RENDERER_PREFER_BACK_BUFFER_REUSE              0x000f
-
-typedef struct __DRI2rendererQueryExtensionRec __DRI2rendererQueryExtension;
-struct __DRI2rendererQueryExtensionRec {
-   __DRIextension base;
-
-   int (*queryInteger)(__DRIscreen *screen, int attribute, unsigned int *val);
-   int (*queryString)(__DRIscreen *screen, int attribute, const char **val);
-};
 
 /**
  * Image Loader extension. Drivers use this to allocate color buffers

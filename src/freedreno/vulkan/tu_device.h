@@ -186,6 +186,14 @@ struct tu_instance
     * See: https://github.com/doitsujin/dxvk/issues/3861
     */
    bool allow_oob_indirect_ubo_loads;
+
+   /* DXVK and VKD3D-Proton use customBorderColorWithoutFormat
+    * and have most of D24S8 images with USAGE_SAMPLED, in such case we
+    * disable UBWC for correctness. However, games don't use border color for
+    * depth-stencil images. So we elect to ignore this edge case and force
+    * UBWC to be enabled.
+    */
+   bool disable_d24s8_border_color_workaround;
 };
 VK_DEFINE_HANDLE_CASTS(tu_instance, vk.base, VkInstance,
                        VK_OBJECT_TYPE_INSTANCE)
@@ -509,10 +517,10 @@ void tu_setup_dynamic_framebuffer(struct tu_cmd_buffer *cmd_buffer,
                                   const VkRenderingInfo *pRenderingInfo);
 
 void
-tu_copy_timestamp_buffer(struct u_trace_context *utctx, void *cmdstream,
-                         void *ts_from, uint32_t from_offset,
-                         void *ts_to, uint32_t to_offset,
-                         uint32_t count);
+tu_copy_buffer(struct u_trace_context *utctx, void *cmdstream,
+               void *ts_from, uint64_t from_offset_B,
+               void *ts_to, uint64_t to_offset_B,
+               uint64_t size_B);
 
 
 VkResult
