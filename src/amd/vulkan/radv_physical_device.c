@@ -127,10 +127,44 @@ radv_emulate_rt(const struct radv_physical_device *pdev)
    return instance->perftest_flags & RADV_PERFTEST_EMULATE_RT;
 }
 
+static VkConformanceVersion
+radv_get_conformance_version(const struct radv_physical_device *pdev)
+{
+   VkConformanceVersion conformance_version;
+
+   if (pdev->info.gfx_level == GFX10_3) {
+      conformance_version = (VkConformanceVersion){
+         .major = 1,
+         .minor = 3,
+         .subminor = 0,
+         .patch = 0,
+      };
+   } else if (pdev->info.gfx_level >= GFX8) {
+      conformance_version = (VkConformanceVersion){
+         .major = 1,
+         .minor = 2,
+         .subminor = 7,
+         .patch = 1,
+      };
+   } else {
+      /* Non-conformat products. */
+      conformance_version = (VkConformanceVersion){
+         .major = 0,
+         .minor = 0,
+         .subminor = 0,
+         .patch = 0,
+      };
+   }
+
+   return conformance_version;
+}
+
 static bool
 radv_is_conformant(const struct radv_physical_device *pdev)
 {
-   return pdev->info.gfx_level >= GFX8;
+   VkConformanceVersion conformance_version = radv_get_conformance_version(pdev);
+
+   return conformance_version.major != 0;
 }
 
 static void
@@ -484,6 +518,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .KHR_16bit_storage = true,
       .KHR_acceleration_structure = radv_enable_rt(pdev, false),
       .KHR_calibrated_timestamps = radv_calibrated_timestamps_enabled(pdev),
+      .KHR_compute_shader_derivatives = true,
       .KHR_cooperative_matrix = pdev->info.gfx_level >= GFX11 && !pdev->use_llvm,
       .KHR_bind_memory2 = true,
       .KHR_buffer_device_address = true,
@@ -527,6 +562,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .KHR_map_memory2 = true,
       .KHR_multiview = true,
       .KHR_performance_query = radv_perf_query_supported(pdev),
+      .KHR_pipeline_binary = true,
       .KHR_pipeline_executable_properties = true,
       .KHR_pipeline_library = !pdev->use_llvm,
       /* Hide these behind dri configs for now since we cannot implement it reliably on
@@ -553,10 +589,12 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .KHR_shader_expect_assume = true,
       .KHR_shader_float16_int8 = true,
       .KHR_shader_float_controls = true,
+      .KHR_shader_float_controls2 = true,
       .KHR_shader_integer_dot_product = true,
       .KHR_shader_maximal_reconvergence = true,
       .KHR_shader_non_semantic_info = true,
       .KHR_shader_quad_control = true,
+      .KHR_shader_relaxed_extended_instruction = true,
       .KHR_shader_subgroup_extended_types = true,
       .KHR_shader_subgroup_rotate = true,
       .KHR_shader_subgroup_uniform_control_flow = true,
@@ -572,7 +610,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .KHR_uniform_buffer_standard_layout = true,
       .KHR_variable_pointers = true,
       .KHR_vertex_attribute_divisor = true,
-      .KHR_video_maintenance1 = true,
+      .KHR_video_maintenance1 = pdev->video_decode_enabled || pdev->video_encode_enabled,
       .KHR_video_queue = pdev->video_decode_enabled || pdev->video_encode_enabled,
       .KHR_video_decode_av1 = (pdev->info.vcn_ip_version >= VCN_3_0_0 && pdev->info.vcn_ip_version != VCN_3_0_33 &&
                                VIDEO_CODEC_AV1DEC && pdev->video_decode_enabled),
@@ -598,6 +636,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .EXT_debug_marker = instance->vk.trace_mode & RADV_TRACE_MODE_RGP,
       .EXT_depth_bias_control = true,
       .EXT_depth_clamp_zero_one = true,
+      .EXT_depth_clamp_control = true,
       .EXT_depth_clip_control = true,
       .EXT_depth_clip_enable = true,
       .EXT_depth_range_unrestricted = true,
@@ -629,7 +668,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .EXT_image_view_min_lod = true,
       .EXT_index_type_uint8 = pdev->info.gfx_level >= GFX8,
       .EXT_inline_uniform_block = true,
-      .EXT_legacy_vertex_attributes = !pdev->use_llvm && !instance->drirc.enable_dgc,
+      .EXT_legacy_vertex_attributes = !pdev->use_llvm,
       .EXT_line_rasterization = true,
       .EXT_load_store_op_none = true,
       .EXT_map_memory_placed = true,
@@ -884,7 +923,7 @@ radv_physical_device_get_features(const struct radv_physical_device *pdev, struc
       /* VK_EXT_depth_clip_enable */
       .depthClipEnable = true,
 
-      /* VK_NV_compute_shader_derivatives */
+      /* VK_KHR_compute_shader_derivatives */
       .computeDerivativeGroupQuads = false,
       .computeDerivativeGroupLinear = true,
 
@@ -1089,7 +1128,7 @@ radv_physical_device_get_features(const struct radv_physical_device *pdev, struc
       .performanceCounterMultipleQueryPools = has_perf_query,
 
       /* VK_NV_device_generated_commands */
-      .deviceGeneratedCommands = true,
+      .deviceGeneratedCommandsNV = true,
 
       /* VK_EXT_attachment_feedback_loop_layout */
       .attachmentFeedbackLoopLayout = true,
@@ -1236,6 +1275,18 @@ radv_physical_device_get_features(const struct radv_physical_device *pdev, struc
 
       /* VK_KHR_video_maintenance1 */
       .videoMaintenance1 = true,
+
+      /* VK_KHR_pipeline_binary */
+      .pipelineBinaries = true,
+
+      /* VK_KHR_shader_relaxed_extended_instruction */
+      .shaderRelaxedExtendedInstruction = true,
+
+      /* VK_KHR_shader_float_controls2 */
+      .shaderFloatControls2 = true,
+
+      /* VK_EXT_depth_clamp_control */
+      .depthClampControl = true,
    };
 }
 
@@ -1466,30 +1517,7 @@ radv_get_physical_device_properties(struct radv_physical_device *pdev)
    snprintf(p->driverInfo, VK_MAX_DRIVER_INFO_SIZE, "Mesa " PACKAGE_VERSION MESA_GIT_SHA1 "%s",
             radv_get_compiler_string(pdev));
 
-   if (radv_is_conformant(pdev)) {
-      if (pdev->info.gfx_level >= GFX10_3) {
-         p->conformanceVersion = (VkConformanceVersion){
-            .major = 1,
-            .minor = 3,
-            .subminor = 0,
-            .patch = 0,
-         };
-      } else {
-         p->conformanceVersion = (VkConformanceVersion){
-            .major = 1,
-            .minor = 2,
-            .subminor = 7,
-            .patch = 1,
-         };
-      }
-   } else {
-      p->conformanceVersion = (VkConformanceVersion){
-         .major = 0,
-         .minor = 0,
-         .subminor = 0,
-         .patch = 0,
-      };
-   }
+   p->conformanceVersion = radv_get_conformance_version(pdev);
 
    /* On AMD hardware, denormals and rounding modes for fp16/fp64 are
     * controlled by the same config register.
@@ -1906,12 +1934,12 @@ radv_get_physical_device_properties(struct radv_physical_device *pdev)
    p->defaultRobustnessImages = VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_2_EXT;
 
    /* VK_KHR_maintenance5 */
-   p->earlyFragmentMultisampleCoverageAfterSampleCounting = false;
-   p->earlyFragmentSampleMaskTestBeforeSampleCounting = false;
-   p->depthStencilSwizzleOneSupport = false;
+   p->earlyFragmentMultisampleCoverageAfterSampleCounting = true;
+   p->earlyFragmentSampleMaskTestBeforeSampleCounting = true;
+   p->depthStencilSwizzleOneSupport = true;
    p->polygonModePointSize = true;
-   p->nonStrictSinglePixelWideLinesUseParallelogram = false;
-   p->nonStrictWideLinesUseParallelogram = false;
+   p->nonStrictSinglePixelWideLinesUseParallelogram = true;
+   p->nonStrictWideLinesUseParallelogram = true;
 
    /* VK_KHR_cooperative_matrix */
    p->cooperativeMatrixSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -1950,6 +1978,16 @@ radv_get_physical_device_properties(struct radv_physical_device *pdev)
    p->maxDescriptorSetUpdateAfterBindTotalUniformBuffersDynamic = MAX_DYNAMIC_UNIFORM_BUFFERS;
    p->maxDescriptorSetUpdateAfterBindTotalStorageBuffersDynamic = MAX_DYNAMIC_STORAGE_BUFFERS;
    p->maxDescriptorSetUpdateAfterBindTotalBuffersDynamic = MAX_DYNAMIC_BUFFERS;
+
+   /* VK_KHR_pipeline_binary */
+   p->pipelineBinaryInternalCache = true;
+   p->pipelineBinaryInternalCacheControl = true;
+   p->pipelineBinaryPrefersInternalCache = false;
+   p->pipelineBinaryPrecompiledInternalCache = false;
+   p->pipelineBinaryCompressedData = false;
+
+   /* VK_KHR_compute_shader_derivatives */
+   p->meshAndTaskShaderDerivatives = radv_taskmesh_enabled(pdev);
 }
 
 static VkResult

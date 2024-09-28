@@ -131,9 +131,13 @@ enum d3d12_video_encoder_config_dirty_flags
    d3d12_video_encoder_config_dirty_flag_slices                 = 0x80,
    d3d12_video_encoder_config_dirty_flag_gop                    = 0x100,
    d3d12_video_encoder_config_dirty_flag_motion_precision_limit = 0x200,
-   d3d12_video_encoder_config_dirty_flag_sequence_info          = 0x400,
+   d3d12_video_encoder_config_dirty_flag_sequence_header        = 0x400,
    d3d12_video_encoder_config_dirty_flag_intra_refresh          = 0x800,
    d3d12_video_encoder_config_dirty_flag_video_header           = 0x1000,
+   d3d12_video_encoder_config_dirty_flag_picture_header         = 0x2000,
+   d3d12_video_encoder_config_dirty_flag_aud_header             = 0x4000,
+   d3d12_video_encoder_config_dirty_flag_sei_header             = 0x8000,
+   d3d12_video_encoder_config_dirty_flag_svcprefix_slice_header = 0x10000,
 };
 DEFINE_ENUM_FLAG_OPERATORS(d3d12_video_encoder_config_dirty_flags);
 
@@ -166,7 +170,7 @@ struct D3D12EncodeCapabilities
    {
       union{
          D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_SUPPORT_H264 m_H264CodecCaps;
-         D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_SUPPORT_HEVC m_HEVCCodecCaps;
+         D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_SUPPORT_HEVC1 m_HEVCCodecCaps;
          D3D12_VIDEO_ENCODER_AV1_CODEC_CONFIGURATION_SUPPORT  m_AV1CodecCaps;
       };
       D3D12_VIDEO_ENCODER_AV1_FRAME_SUBREGION_LAYOUT_CONFIG_SUPPORT m_AV1TileCaps;
@@ -232,7 +236,8 @@ struct D3D12EncodeConfiguration
       D3D12_VIDEO_ENCODER_AV1_LEVEL_TIER_CONSTRAINTS  m_AV1LevelSetting;
    } m_encoderLevelDesc = {};
 
-   struct D3D12EncodeRateControlState m_encoderRateControlDesc = {};
+   struct D3D12EncodeRateControlState m_encoderRateControlDesc[D3D12_VIDEO_ENC_MAX_RATE_CONTROL_TEMPORAL_LAYERS] = {};
+   UINT m_activeRateControlIndex = 0;
 
    union
    {
@@ -264,7 +269,7 @@ struct D3D12EncodeConfiguration
    union
    {
       D3D12_VIDEO_ENCODER_PICTURE_CONTROL_CODEC_DATA_H264 m_H264PicData;
-      D3D12_VIDEO_ENCODER_PICTURE_CONTROL_CODEC_DATA_HEVC m_HEVCPicData;
+      D3D12_VIDEO_ENCODER_PICTURE_CONTROL_CODEC_DATA_HEVC1 m_HEVCPicData;
       D3D12_VIDEO_ENCODER_AV1_PICTURE_CONTROL_CODEC_DATA m_AV1PicData;
    } m_encoderPicParamsDesc = {};
 
@@ -282,6 +287,9 @@ struct D3D12EncodeConfiguration
    struct pipe_h264_enc_seq_param m_encoderCodecSpecificSequenceStateDescH264;
    struct pipe_h265_enc_seq_param m_encoderCodecSpecificSequenceStateDescH265;
    struct pipe_h265_enc_vid_param m_encoderCodecSpecificVideoStateDescH265;
+   struct pipe_h265_enc_pic_param m_encoderCodecSpecificPictureStateDescH265;
+
+   bool m_bUsedAsReference; // Set if frame will be used as reference frame
 };
 
 struct EncodedBitstreamResolvedMetadata
@@ -403,6 +411,7 @@ struct d3d12_video_encoder
    std::shared_ptr<d3d12_video_dpb_storage_manager_interface>        m_upDPBStorageManager;
    std::unique_ptr<d3d12_video_bitstream_builder_interface>          m_upBitstreamBuilder;
 
+   pipe_resource* m_nalPrefixTmpBuffer = NULL;
    std::vector<uint8_t> m_BitstreamHeadersBuffer;
    std::vector<uint8_t> m_StagingHeadersBuffer;
    std::vector<EncodedBitstreamResolvedMetadata> m_spEncodedFrameMetadata;
@@ -442,8 +451,7 @@ struct d3d12_video_encoder
    // 2. On d3d12_video_buffer::destroy(), when all the slots
    //    of the allocation pool are unused, the memory is released.
    pipe_resource *m_pVideoTexArrayDPBPool;
-   static_assert(D3D12_VIDEO_TEXTURE_ARRAY_DPB_POOL_SIZE <= 16); // uint16_t used as a bitmap into m_pVideoTexArrayDPBPool
-   std::shared_ptr<uint16_t> m_spVideoTexArrayDPBPoolInUse;
+   std::shared_ptr<uint32_t> m_spVideoTexArrayDPBPoolInUse;
 };
 
 bool

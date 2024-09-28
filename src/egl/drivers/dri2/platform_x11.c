@@ -43,6 +43,7 @@
 /* clang-format on */
 #ifdef HAVE_LIBDRM
 #include <xf86drm.h>
+#include "platform_x11_dri3.h"
 #endif
 #include "util/bitscan.h"
 #include "util/macros.h"
@@ -57,9 +58,6 @@
 #include "drm-uapi/drm_fourcc.h"
 #include "dri_util.h"
 
-#ifdef HAVE_DRI3
-#include "platform_x11_dri3.h"
-#endif
 
 static EGLBoolean
 dri2_x11_swap_interval(_EGLDisplay *disp, _EGLSurface *surf, EGLint interval);
@@ -479,7 +477,7 @@ dri2_x11_create_surface(_EGLDisplay *disp, EGLint type, _EGLConfig *conf,
       goto cleanup_pixmap;
 
 #ifdef HAVE_X11_DRI2
-   if (disp->Options.fd > 0) {
+   if (!dri2_dpy->swrast) {
       xcb_void_cookie_t cookie;
       int conn_error;
 
@@ -574,7 +572,7 @@ dri2_x11_destroy_surface(_EGLDisplay *disp, _EGLSurface *surf)
 
    driDestroyDrawable(dri2_surf->dri_drawable);
 
-   if (disp->Options.fd > 0) {
+   if (!dri2_dpy->swrast) {
 #ifdef HAVE_X11_DRI2
       xcb_dri2_destroy_drawable(dri2_dpy->conn, dri2_surf->drawable);
 #endif
@@ -1347,10 +1345,11 @@ dri2_create_image_khr_pixmap(_EGLDisplay *disp, _EGLContext *ctx,
 
    _eglInitImage(&dri2_img->base, disp);
 
+   int offset = 0;
    dri2_img->dri_image = dri2_from_names(
       dri2_dpy->dri_screen_render_gpu, buffers_reply->width,
       buffers_reply->height, fourcc, (int *) &buffers[0].name, 1,
-      (int *) &buffers[0].pitch, 0, dri2_img);
+      (int *) &buffers[0].pitch, &offset, dri2_img);
 
    free(buffers_reply);
    free(geometry_reply);
@@ -1412,7 +1411,7 @@ dri2_x11_get_msc_rate(_EGLDisplay *display, _EGLSurface *surface,
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(display);
 
-#ifdef HAVE_DRI3
+#ifdef HAVE_LIBDRM
    loader_update_screen_resources(&dri2_dpy->screen_resources);
 
    if (dri2_dpy->screen_resources.num_crtcs == 0) {
@@ -1433,6 +1432,7 @@ dri2_x11_get_msc_rate(_EGLDisplay *display, _EGLSurface *surface,
    *numerator = 0;
    *denominator = 1;
 #endif
+
 
    /* In a multi-monitor setup, look at each CRTC and perform a box
     * intersection between the CRTC and surface.  Use the CRTC whose
@@ -1455,7 +1455,7 @@ dri2_x11_get_msc_rate(_EGLDisplay *display, _EGLSurface *surface,
       return EGL_FALSE;
    }
 
-#ifdef HAVE_DRI3
+#ifdef HAVE_LIBDRM
    int area = 0;
 
    for (unsigned c = 0; c < dri2_dpy->screen_resources.num_crtcs; c++) {
@@ -1471,7 +1471,6 @@ dri2_x11_get_msc_rate(_EGLDisplay *display, _EGLSurface *surface,
       }
    }
 #endif
-
    /* If the window is entirely off-screen, then area will still be 0.
     * We defaulted to the first CRTC in the list's refresh rate, earlier.
     */
@@ -1789,7 +1788,7 @@ dri2_x11_check_multibuffers(_EGLDisplay *disp)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
 
-#ifdef HAVE_DRI3_MODIFIERS
+#ifdef HAVE_X11_DRM
    bool err;
    dri2_dpy->multibuffers_available = x11_dri3_check_multibuffer(dri2_dpy->conn, &err, &dri2_dpy->explicit_modifiers);
 
@@ -1817,12 +1816,14 @@ dri2_initialize_x11_swrast(_EGLDisplay *disp)
     * here will allow is to simply free the memory at dri2_terminate().
     */
    dri2_dpy->driver_name = strdup(disp->Options.Zink ? "zink" : "swrast");
-#ifdef HAVE_DRI3
+
+#ifdef HAVE_LIBDRM
    if (disp->Options.Zink &&
        !debug_get_bool_option("LIBGL_DRI3_DISABLE", false) &&
-       !dri2_dpy->kopper_without_modifiers)
+       (!disp->Options.Zink || !debug_get_bool_option("LIBGL_KOPPER_DRI2", false)))
       dri3_x11_connect(dri2_dpy, disp->Options.Zink, disp->Options.ForceSoftware);
 #endif
+
    if (!dri2_load_driver(disp))
       goto cleanup;
 
@@ -1860,7 +1861,7 @@ dri2_initialize_x11_swrast(_EGLDisplay *disp)
       disp->Extensions.CHROMIUM_sync_control = EGL_TRUE;
       disp->Extensions.EXT_swap_buffers_with_damage = !!dri2_dpy->kopper;
 
-#ifdef HAVE_DRI3
+#ifdef HAVE_LIBDRM
       if (dri2_dpy->multibuffers_available)
          dri2_set_WL_bind_wayland_display(disp);
 #endif
@@ -1887,8 +1888,7 @@ cleanup:
    return EGL_FALSE;
 }
 
-#ifdef HAVE_DRI3
-
+#ifdef HAVE_LIBDRM
 static const __DRIextension *dri3_image_loader_extensions[] = {
    &dri3_image_loader_extension.base,
    &image_lookup_extension.base,
@@ -2072,7 +2072,7 @@ dri2_initialize_x11(_EGLDisplay *disp)
        (disp->Options.Zink && !debug_get_bool_option("LIBGL_KOPPER_DISABLE", false)))
       return dri2_initialize_x11_swrast(disp);
 
-#ifdef HAVE_DRI3
+#ifdef HAVE_LIBDRM
    if (!debug_get_bool_option("LIBGL_DRI3_DISABLE", false)) {
       status = dri2_initialize_x11_dri3(disp);
       if (status == DRI2_EGL_DRIVER_LOADED)
@@ -2093,7 +2093,7 @@ dri2_initialize_x11(_EGLDisplay *disp)
 void
 dri2_teardown_x11(struct dri2_egl_display *dri2_dpy)
 {
-#ifdef HAVE_DRI3
+#ifdef HAVE_LIBDRM
    if (dri2_dpy->dri2_major >= 3)
       loader_destroy_screen_resources(&dri2_dpy->screen_resources);
 #endif

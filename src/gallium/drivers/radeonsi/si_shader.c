@@ -954,9 +954,13 @@ static void *pre_upload_binary(struct si_screen *sscreen, struct si_shader *shad
 
       return ret;
    } else {
-      return sscreen->ws->buffer_map(sscreen->ws,
+      void *ptr = sscreen->ws->buffer_map(sscreen->ws,
          shader->bo->buf, NULL,
-         PIPE_MAP_READ_WRITE | PIPE_MAP_UNSYNCHRONIZED | RADEON_MAP_TEMPORARY) + bo_offset;
+         PIPE_MAP_READ_WRITE | PIPE_MAP_UNSYNCHRONIZED | RADEON_MAP_TEMPORARY);
+      if (!ptr)
+         return NULL;
+
+      return ptr + bo_offset;
    }
 }
 
@@ -982,9 +986,9 @@ static void post_upload_binary(struct si_screen *sscreen, struct si_shader *shad
        * them available.
        */
       si_cp_dma_copy_buffer(upload_ctx, &shader->bo->b.b, staging, 0, staging_offset,
-                            binary_size, SI_OP_SYNC_AFTER, SI_COHERENCY_SHADER,
-                            sscreen->info.gfx_level >= GFX7 ? L2_LRU : L2_BYPASS);
-      upload_ctx->flags |= SI_CONTEXT_INV_ICACHE | SI_CONTEXT_INV_L2;
+                            binary_size);
+      si_barrier_after_simple_buffer_op(upload_ctx, 0, &shader->bo->b.b, staging);
+      upload_ctx->barrier_flags |= SI_BARRIER_INV_ICACHE | SI_BARRIER_INV_L2;
 
 #if 0 /* debug: validate whether the copy was successful */
       uint32_t *dst_binary = malloc(binary_size);
@@ -1307,7 +1311,7 @@ void si_shader_dump_stats_for_shader_db(struct si_screen *screen, struct si_shad
        * for performance and can be optimized.
        */
       if (shader->key.ge.as_ls)
-         num_ls_outputs = shader->selector->info.lshs_vertex_stride / 16;
+         num_ls_outputs = si_shader_lshs_vertex_stride(shader) / 16;
       else if (shader->selector->stage == MESA_SHADER_TESS_CTRL)
          num_hs_outputs = util_last_bit64(shader->selector->info.outputs_written_before_tes_gs);
       else if (shader->key.ge.as_es)
@@ -1842,12 +1846,18 @@ static bool si_lower_io_to_mem(struct si_shader *shader, nir_shader *nir,
                                uint64_t tcs_vgpr_only_inputs)
 {
    struct si_shader_selector *sel = shader->selector;
+   struct si_shader_selector *next_sel = shader->next_shader ? shader->next_shader->selector : sel;
    const union si_shader_key *key = &shader->key;
+   const bool is_gfx9_mono_tcs = shader->is_monolithic && next_sel->stage == MESA_SHADER_TESS_CTRL &&
+                                 sel->screen->info.gfx_level >= GFX9;
 
    if (nir->info.stage == MESA_SHADER_VERTEX) {
       if (key->ge.as_ls) {
-         NIR_PASS_V(nir, ac_nir_lower_ls_outputs_to_mem, si_map_io_driver_location,
-                    key->ge.opt.same_patch_vertices, ~0ULL, tcs_vgpr_only_inputs);
+         NIR_PASS_V(nir, ac_nir_lower_ls_outputs_to_mem,
+                    is_gfx9_mono_tcs ? NULL : si_map_io_driver_location,
+                    key->ge.opt.same_patch_vertices,
+                    is_gfx9_mono_tcs ? next_sel->info.base.inputs_read : ~0ull,
+                    tcs_vgpr_only_inputs);
          return true;
       } else if (key->ge.as_es) {
          NIR_PASS_V(nir, ac_nir_lower_es_outputs_to_mem, si_map_io_driver_location,
@@ -1855,8 +1865,9 @@ static bool si_lower_io_to_mem(struct si_shader *shader, nir_shader *nir,
          return true;
       }
    } else if (nir->info.stage == MESA_SHADER_TESS_CTRL) {
-      NIR_PASS_V(nir, ac_nir_lower_hs_inputs_to_mem, si_map_io_driver_location,
-                 key->ge.opt.same_patch_vertices);
+      NIR_PASS_V(nir, ac_nir_lower_hs_inputs_to_mem,
+                 is_gfx9_mono_tcs ? NULL : si_map_io_driver_location,
+                 key->ge.opt.same_patch_vertices, sel->info.tcs_vgpr_only_inputs);
 
       /* Used by hs_emit_write_tess_factors() when monolithic shader. */
       nir->info.tess._primitive_mode = key->ge.opt.tes_prim_mode;
@@ -1865,9 +1876,6 @@ static bool si_lower_io_to_mem(struct si_shader *shader, nir_shader *nir,
                  sel->screen->info.gfx_level,
                  ~0ULL, ~0U, /* no TES inputs filter */
                  shader->wave_size,
-                 /* ALL TCS inputs are passed by register. */
-                 key->ge.opt.same_patch_vertices &&
-                 !(sel->info.base.inputs_read & ~sel->info.tcs_vgpr_only_inputs),
                  sel->info.tessfactors_are_def_in_all_invocs);
       return true;
    } else if (nir->info.stage == MESA_SHADER_TESS_EVAL) {
@@ -3619,6 +3627,7 @@ nir_shader *si_get_prev_stage_nir_shader(struct si_shader *shader,
       prev_shader->key.ge.as_ngg = key->ge.as_ngg;
    }
 
+   prev_shader->next_shader = shader;
    prev_shader->key.ge.mono = key->ge.mono;
    prev_shader->key.ge.opt = key->ge.opt;
    prev_shader->key.ge.opt.inline_uniforms = false; /* only TCS/GS can inline uniforms */

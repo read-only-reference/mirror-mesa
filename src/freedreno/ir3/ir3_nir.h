@@ -29,7 +29,6 @@ bool ir3_nir_lower_driver_params_to_ubo(nir_shader *nir,
 bool ir3_nir_move_varying_inputs(nir_shader *shader);
 int ir3_nir_coord_offset(nir_def *ssa);
 bool ir3_nir_lower_tex_prefetch(nir_shader *shader);
-bool ir3_nir_lower_wide_load_store(nir_shader *shader);
 bool ir3_nir_lower_layer_id(nir_shader *shader);
 
 void ir3_nir_lower_to_explicit_output(nir_shader *shader,
@@ -63,6 +62,8 @@ void ir3_nir_lower_variant(struct ir3_shader_variant *so, nir_shader *s);
 
 void ir3_setup_const_state(nir_shader *nir, struct ir3_shader_variant *v,
                            struct ir3_const_state *const_state);
+uint32_t ir3_const_state_get_free_space(const struct ir3_shader_variant *v,
+                                        const struct ir3_const_state *const_state);
 bool ir3_nir_lower_load_constant(nir_shader *nir, struct ir3_shader_variant *v);
 void ir3_nir_analyze_ubo_ranges(nir_shader *nir, struct ir3_shader_variant *v);
 bool ir3_nir_lower_ubo_loads(nir_shader *nir, struct ir3_shader_variant *v);

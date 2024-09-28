@@ -17,36 +17,6 @@
 #define RENCODE_FW_INTERFACE_MAJOR_VERSION         1
 #define RENCODE_FW_INTERFACE_MINOR_VERSION         1
 
-#define RENCODE_IB_PARAM_SESSION_INFO              0x00000001
-#define RENCODE_IB_PARAM_TASK_INFO                 0x00000002
-#define RENCODE_IB_PARAM_SESSION_INIT              0x00000003
-#define RENCODE_IB_PARAM_LAYER_CONTROL             0x00000004
-#define RENCODE_IB_PARAM_LAYER_SELECT              0x00000005
-#define RENCODE_IB_PARAM_RATE_CONTROL_SESSION_INIT 0x00000006
-#define RENCODE_IB_PARAM_RATE_CONTROL_LAYER_INIT   0x00000007
-#define RENCODE_IB_PARAM_QUALITY_PARAMS            0x00000009
-#define RENCODE_IB_PARAM_DIRECT_OUTPUT_NALU        0x0000000a
-#define RENCODE_IB_PARAM_SLICE_HEADER              0x0000000b
-#define RENCODE_IB_PARAM_INPUT_FORMAT              0x0000000c
-#define RENCODE_IB_PARAM_OUTPUT_FORMAT             0x0000000d
-#define RENCODE_IB_PARAM_ENCODE_PARAMS             0x0000000f
-#define RENCODE_IB_PARAM_INTRA_REFRESH             0x00000010
-#define RENCODE_IB_PARAM_ENCODE_CONTEXT_BUFFER     0x00000011
-#define RENCODE_IB_PARAM_VIDEO_BITSTREAM_BUFFER    0x00000012
-#define RENCODE_IB_PARAM_QP_MAP                    0x00000014
-#define RENCODE_IB_PARAM_FEEDBACK_BUFFER           0x00000015
-#define RENCODE_IB_PARAM_ENCODE_LATENCY            0x00000018
-#define RENCODE_IB_PARAM_ENCODE_STATISTICS         0x00000019
-
-#define RENCODE_HEVC_IB_PARAM_SLICE_CONTROL        0x00100001
-#define RENCODE_HEVC_IB_PARAM_SPEC_MISC            0x00100002
-#define RENCODE_HEVC_IB_PARAM_LOOP_FILTER          0x00100003
-
-#define RENCODE_H264_IB_PARAM_SLICE_CONTROL        0x00200001
-#define RENCODE_H264_IB_PARAM_SPEC_MISC            0x00200002
-#define RENCODE_H264_IB_PARAM_ENCODE_PARAMS        0x00200003
-#define RENCODE_H264_IB_PARAM_DEBLOCKING_FILTER    0x00200004
-
 static void radeon_enc_op_preset(struct radeon_encoder *enc)
 {
    uint32_t preset_mode;
@@ -68,15 +38,6 @@ static void radeon_enc_op_preset(struct radeon_encoder *enc)
 
 static void radeon_enc_quality_params(struct radeon_encoder *enc)
 {
-   enc->enc_pic.quality_params.vbaq_mode =
-      enc->enc_pic.rc_session_init.rate_control_method != RENCODE_RATE_CONTROL_METHOD_NONE ?
-      enc->enc_pic.quality_modes.vbaq_mode : 0;
-   enc->enc_pic.quality_params.scene_change_sensitivity = 0;
-   enc->enc_pic.quality_params.scene_change_min_idr_interval = 0;
-   enc->enc_pic.quality_params.two_pass_search_center_map_mode =
-                    (enc->enc_pic.quality_modes.pre_encode_mode) ? 1 : 0;
-   enc->enc_pic.quality_params.vbaq_strength = 0;
-
    RADEON_ENC_BEGIN(enc->cmd.quality_params);
    RADEON_ENC_CS(enc->enc_pic.quality_params.vbaq_mode);
    RADEON_ENC_CS(enc->enc_pic.quality_params.scene_change_sensitivity);
@@ -165,6 +126,21 @@ static void radeon_enc_ctx(struct radeon_encoder *enc)
 
    RADEON_ENC_END();
 }
+
+static void radeon_enc_spec_misc_hevc(struct radeon_encoder *enc)
+{
+   RADEON_ENC_BEGIN(enc->cmd.spec_misc_hevc);
+   RADEON_ENC_CS(enc->enc_pic.hevc_spec_misc.log2_min_luma_coding_block_size_minus3);
+   RADEON_ENC_CS(enc->enc_pic.hevc_spec_misc.amp_disabled);
+   RADEON_ENC_CS(enc->enc_pic.hevc_spec_misc.strong_intra_smoothing_enabled);
+   RADEON_ENC_CS(enc->enc_pic.hevc_spec_misc.constrained_intra_pred_flag);
+   RADEON_ENC_CS(enc->enc_pic.hevc_spec_misc.cabac_init_flag);
+   RADEON_ENC_CS(enc->enc_pic.hevc_spec_misc.half_pel_enabled);
+   RADEON_ENC_CS(enc->enc_pic.hevc_spec_misc.quarter_pel_enabled);
+   RADEON_ENC_CS(enc->enc_pic.hevc_spec_misc.cu_qp_delta_enabled_flag);
+   RADEON_ENC_END();
+}
+
 static void encode(struct radeon_encoder *enc)
 {
    unsigned i;
@@ -220,35 +196,8 @@ void radeon_enc_2_0_init(struct radeon_encoder *enc)
 
    if (u_reduce_video_profile(enc->base.profile) == PIPE_VIDEO_FORMAT_HEVC) {
       enc->deblocking_filter = radeon_enc_loop_filter_hevc;
+      enc->spec_misc = radeon_enc_spec_misc_hevc;
    }
-
-   enc->cmd.session_info = RENCODE_IB_PARAM_SESSION_INFO;
-   enc->cmd.task_info = RENCODE_IB_PARAM_TASK_INFO;
-   enc->cmd.session_init = RENCODE_IB_PARAM_SESSION_INIT;
-   enc->cmd.layer_control = RENCODE_IB_PARAM_LAYER_CONTROL;
-   enc->cmd.layer_select = RENCODE_IB_PARAM_LAYER_SELECT;
-   enc->cmd.rc_session_init = RENCODE_IB_PARAM_RATE_CONTROL_SESSION_INIT;
-   enc->cmd.rc_layer_init = RENCODE_IB_PARAM_RATE_CONTROL_LAYER_INIT;
-   enc->cmd.quality_params = RENCODE_IB_PARAM_QUALITY_PARAMS;
-   enc->cmd.nalu = RENCODE_IB_PARAM_DIRECT_OUTPUT_NALU;
-   enc->cmd.slice_header = RENCODE_IB_PARAM_SLICE_HEADER;
-   enc->cmd.input_format = RENCODE_IB_PARAM_INPUT_FORMAT;
-   enc->cmd.output_format = RENCODE_IB_PARAM_OUTPUT_FORMAT;
-   enc->cmd.enc_params = RENCODE_IB_PARAM_ENCODE_PARAMS;
-   enc->cmd.intra_refresh = RENCODE_IB_PARAM_INTRA_REFRESH;
-   enc->cmd.ctx = RENCODE_IB_PARAM_ENCODE_CONTEXT_BUFFER;
-   enc->cmd.bitstream = RENCODE_IB_PARAM_VIDEO_BITSTREAM_BUFFER;
-   enc->cmd.feedback = RENCODE_IB_PARAM_FEEDBACK_BUFFER;
-   enc->cmd.slice_control_hevc = RENCODE_HEVC_IB_PARAM_SLICE_CONTROL;
-   enc->cmd.spec_misc_hevc = RENCODE_HEVC_IB_PARAM_SPEC_MISC;
-   enc->cmd.deblocking_filter_hevc = RENCODE_HEVC_IB_PARAM_LOOP_FILTER;
-   enc->cmd.slice_control_h264 = RENCODE_H264_IB_PARAM_SLICE_CONTROL;
-   enc->cmd.spec_misc_h264 = RENCODE_H264_IB_PARAM_SPEC_MISC;
-   enc->cmd.enc_params_h264 = RENCODE_H264_IB_PARAM_ENCODE_PARAMS;
-   enc->cmd.deblocking_filter_h264 = RENCODE_H264_IB_PARAM_DEBLOCKING_FILTER;
-   enc->cmd.enc_statistics = RENCODE_IB_PARAM_ENCODE_STATISTICS;
-   enc->cmd.enc_qp_map = RENCODE_IB_PARAM_QP_MAP;
-   enc->cmd.enc_latency = RENCODE_IB_PARAM_ENCODE_LATENCY;
 
    enc->enc_pic.session_info.interface_version =
       ((RENCODE_FW_INTERFACE_MAJOR_VERSION << RENCODE_IF_MAJOR_VERSION_SHIFT) |

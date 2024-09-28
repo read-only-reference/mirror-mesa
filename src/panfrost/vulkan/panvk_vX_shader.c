@@ -29,11 +29,7 @@
 
 #include "genxml/gen_macros.h"
 
-/* FIXME: make the include statement unconditional when the CSF command buffer
- * logic is implemented. */
-#if PAN_ARCH <= 7
 #include "panvk_cmd_buffer.h"
-#endif
 #include "panvk_device.h"
 #include "panvk_instance.h"
 #include "panvk_mempool.h"
@@ -216,9 +212,9 @@ lower_layer_writes(nir_shader *nir)
 
    assert(temp_layer_var);
 
-   return nir_shader_instructions_pass(
-      nir, lower_gl_pos_layer_writes,
-      nir_metadata_block_index | nir_metadata_dominance, temp_layer_var);
+   return nir_shader_instructions_pass(nir, lower_gl_pos_layer_writes,
+                                       nir_metadata_control_flow,
+                                       temp_layer_var);
 }
 #endif
 
@@ -382,13 +378,32 @@ valhall_pack_buf_idx(nir_builder *b, nir_instr *instr, UNUSED void *data)
       return false;
 
    nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+   unsigned index_src;
 
-   if (intrin->intrinsic != nir_intrinsic_load_ubo &&
-       intrin->intrinsic != nir_intrinsic_load_ssbo)
+   switch (intrin->intrinsic) {
+   case nir_intrinsic_load_ubo:
+   case nir_intrinsic_load_ssbo:
+   case nir_intrinsic_ssbo_atomic:
+   case nir_intrinsic_ssbo_atomic_swap:
+      index_src = 0;
+      break;
+
+   case nir_intrinsic_store_ssbo:
+      index_src = 1;
+      break;
+
+   default:
+      return false;
+   }
+
+   nir_def *index = intrin->src[index_src].ssa;
+
+   /* The descriptor lowering pass can add UBO loads, and those already have the
+    * right index format. */
+   if (index->num_components == 1)
       return false;
 
    b->cursor = nir_before_instr(&intrin->instr);
-   nir_def *index = intrin->src[0].ssa;
 
    /* The valhall backend expects nir_address_format_32bit_index_offset,
     * but address mode is nir_address_format_vec2_index_32bit_offset to allow
@@ -399,10 +414,32 @@ valhall_pack_buf_idx(nir_builder *b, nir_instr *instr, UNUSED void *data)
     * have been lowered. */
    nir_def *packed_index =
       nir_iadd(b, nir_channel(b, index, 0), nir_channel(b, index, 1));
-   nir_src_rewrite(&intrin->src[0], packed_index);
+   nir_src_rewrite(&intrin->src[index_src], packed_index);
    return true;
 }
 #endif
+
+static bool
+valhall_lower_get_ssbo_size(struct nir_builder *b,
+                            nir_intrinsic_instr *intr, void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_get_ssbo_size)
+      return false;
+
+   b->cursor = nir_before_instr(&intr->instr);
+
+   nir_def *table_idx =
+      nir_ushr_imm(b, nir_channel(b, intr->src[0].ssa, 0), 24);
+   nir_def *res_table = nir_ior_imm(b, table_idx, pan_res_handle(62, 0));
+   nir_def *buf_idx = nir_channel(b, intr->src[0].ssa, 1);
+   nir_def *desc_offset = nir_imul_imm(b, buf_idx, PANVK_DESCRIPTOR_SIZE);
+   nir_def *size = nir_load_ubo(
+      b, 1, 32, res_table, nir_iadd_imm(b, desc_offset, 4), .range = ~0u,
+      .align_mul = PANVK_DESCRIPTOR_SIZE, .align_offset = 4);
+
+   nir_def_replace(&intr->def, size);
+   return true;
+}
 
 static void
 panvk_lower_nir(struct panvk_device *dev, nir_shader *nir,
@@ -416,8 +453,8 @@ panvk_lower_nir(struct panvk_device *dev, nir_shader *nir,
       to_panvk_instance(dev->vk.physical->instance);
    gl_shader_stage stage = nir->info.stage;
 
-   NIR_PASS_V(nir, panvk_per_arch(nir_lower_descriptors), dev, set_layout_count,
-              set_layouts, shader);
+   NIR_PASS_V(nir, panvk_per_arch(nir_lower_descriptors), dev, rs,
+              set_layout_count, set_layouts, shader);
 
    NIR_PASS_V(nir, nir_split_var_copies);
    NIR_PASS_V(nir, nir_lower_var_copies);
@@ -432,8 +469,11 @@ panvk_lower_nir(struct panvk_device *dev, nir_shader *nir,
               nir_address_format_64bit_global);
 
 #if PAN_ARCH >= 9
+   NIR_PASS_V(nir, nir_shader_intrinsics_pass,
+              valhall_lower_get_ssbo_size,
+              nir_metadata_control_flow, NULL);
    NIR_PASS_V(nir, nir_shader_instructions_pass, valhall_pack_buf_idx,
-              nir_metadata_block_index | nir_metadata_dominance, NULL);
+              nir_metadata_control_flow, NULL);
 #endif
 
    if (gl_shader_stage_uses_workgroup(stage)) {
@@ -1179,16 +1219,20 @@ varying_format(gl_varying_slot loc, enum pipe_format pfmt)
    }
 }
 
-static struct panvk_priv_mem
+static VkResult
 emit_varying_attrs(struct panvk_pool *desc_pool,
                    const struct pan_shader_varying *varyings,
                    unsigned varying_count, const struct varyings_info *info,
-                   unsigned *buf_offsets)
+                   unsigned *buf_offsets, struct panvk_priv_mem *mem)
 {
    unsigned attr_count = BITSET_COUNT(info->active);
-   struct panvk_priv_mem mem =
-      panvk_pool_alloc_desc_array(desc_pool, attr_count, ATTRIBUTE);
-   struct mali_attribute_packed *attrs = panvk_priv_mem_host_addr(mem);
+
+   *mem = panvk_pool_alloc_desc_array(desc_pool, attr_count, ATTRIBUTE);
+
+   if (attr_count && !panvk_priv_mem_dev_addr(*mem))
+      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+
+   struct mali_attribute_packed *attrs = panvk_priv_mem_host_addr(*mem);
    unsigned attr_idx = 0;
 
    for (unsigned i = 0; i < varying_count; i++) {
@@ -1213,10 +1257,10 @@ emit_varying_attrs(struct panvk_pool *desc_pool,
       }
    }
 
-   return mem;
+   return VK_SUCCESS;
 }
 
-void
+VkResult
 panvk_per_arch(link_shaders)(struct panvk_pool *desc_pool,
                              const struct panvk_shader *vs,
                              const struct panvk_shader *fs,
@@ -1233,9 +1277,11 @@ panvk_per_arch(link_shaders)(struct panvk_pool *desc_pool,
    assert(vs->info.stage == MESA_SHADER_VERTEX);
 
    if (PAN_ARCH >= 9) {
-      link->buf_strides[PANVK_VARY_BUF_GENERAL] =
-         MAX2(fs->info.varyings.input_count, vs->info.varyings.output_count);
-      return;
+      /* No need to calculate varying stride if there's no fragment shader. */
+      if (fs)
+         link->buf_strides[PANVK_VARY_BUF_GENERAL] =
+            MAX2(fs->info.varyings.input_count, vs->info.varyings.output_count);
+      return VK_SUCCESS;
    }
 
    collect_varyings_info(vs->info.varyings.output,
@@ -1296,16 +1342,22 @@ panvk_per_arch(link_shaders)(struct panvk_pool *desc_pool,
       buf_strides[buf_idx] += ALIGN_POT(out_size, 4);
    }
 
-   link->vs.attribs = emit_varying_attrs(desc_pool, vs->info.varyings.output,
-                                         vs->info.varyings.output_count,
-                                         &out_vars, buf_offsets);
+   VkResult result = emit_varying_attrs(
+      desc_pool, vs->info.varyings.output, vs->info.varyings.output_count,
+      &out_vars, buf_offsets, &link->vs.attribs);
+   if (result != VK_SUCCESS)
+      return result;
 
-   if (fs)
-      link->fs.attribs = emit_varying_attrs(desc_pool, fs->info.varyings.input,
-                                            fs->info.varyings.input_count,
-                                            &in_vars, buf_offsets);
+   if (fs) {
+      result = emit_varying_attrs(desc_pool, fs->info.varyings.input,
+                                  fs->info.varyings.input_count, &in_vars,
+                                  buf_offsets, &link->fs.attribs);
+      if (result != VK_SUCCESS)
+         return result;
+   }
 
    memcpy(link->buf_strides, buf_strides, sizeof(link->buf_strides));
+   return VK_SUCCESS;
 }
 
 static const struct vk_shader_ops panvk_shader_ops = {
@@ -1317,6 +1369,51 @@ static const struct vk_shader_ops panvk_shader_ops = {
       panvk_shader_get_executable_internal_representations,
 };
 
+static void
+panvk_cmd_bind_shader(struct panvk_cmd_buffer *cmd, const gl_shader_stage stage,
+                      struct panvk_shader *shader)
+{
+   switch (stage) {
+   case MESA_SHADER_COMPUTE:
+      cmd->state.compute.shader = shader;
+      memset(&cmd->state.compute.cs.desc, 0,
+             sizeof(cmd->state.compute.cs.desc));
+      break;
+   case MESA_SHADER_VERTEX:
+      cmd->state.gfx.vs.shader = shader;
+      cmd->state.gfx.linked = false;
+      memset(&cmd->state.gfx.vs.desc, 0, sizeof(cmd->state.gfx.vs.desc));
+      break;
+   case MESA_SHADER_FRAGMENT:
+      cmd->state.gfx.fs.shader = shader;
+      cmd->state.gfx.linked = false;
+#if PAN_ARCH <= 7
+      cmd->state.gfx.fs.rsd = 0;
+#endif
+      memset(&cmd->state.gfx.fs.desc, 0, sizeof(cmd->state.gfx.fs.desc));
+      break;
+   default:
+      assert(!"Unsupported stage");
+      break;
+   }
+}
+
+static void
+panvk_cmd_bind_shaders(struct vk_command_buffer *vk_cmd, uint32_t stage_count,
+                       const gl_shader_stage *stages,
+                       struct vk_shader **const shaders)
+{
+   struct panvk_cmd_buffer *cmd =
+      container_of(vk_cmd, struct panvk_cmd_buffer, vk);
+
+   for (uint32_t i = 0; i < stage_count; i++) {
+      struct panvk_shader *shader =
+         container_of(shaders[i], struct panvk_shader, vk);
+
+      panvk_cmd_bind_shader(cmd, stages[i], shader);
+   }
+}
+
 const struct vk_device_shader_ops panvk_per_arch(device_shader_ops) = {
    .get_nir_options = panvk_get_nir_options,
    .get_spirv_options = panvk_get_spirv_options,
@@ -1325,10 +1422,5 @@ const struct vk_device_shader_ops panvk_per_arch(device_shader_ops) = {
    .compile = panvk_compile_shaders,
    .deserialize = panvk_deserialize_shader,
    .cmd_set_dynamic_graphics_state = vk_cmd_set_dynamic_graphics_state,
-
-/* FIXME: make the assignment unconditional when the CSF command buffer logic is
- * implemented. */
-#if PAN_ARCH <= 7
-   .cmd_bind_shaders = panvk_per_arch(cmd_bind_shaders),
-#endif
+   .cmd_bind_shaders = panvk_cmd_bind_shaders,
 };

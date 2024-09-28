@@ -925,8 +925,8 @@ void gfx9_get_gs_info(struct si_shader_selector *es, struct si_shader_selector *
 static void gfx9_set_gs_sgpr_num_es_outputs(struct si_context *sctx, unsigned esgs_vertex_stride)
 {
    /* The stride must always be odd (e.g. a multiple of 4 + 1) to reduce LDS bank conflicts. */
-   assert(esgs_vertex_stride % 4 == 1);
-   unsigned num_es_outputs = (esgs_vertex_stride - 1) / 4;
+   assert(!esgs_vertex_stride || esgs_vertex_stride % 4 == 1);
+   unsigned num_es_outputs = esgs_vertex_stride / 4;
 
    /* If there are no ES outputs, GS doesn't use this SGPR field, so only set it if the number
     * is non-zero.
@@ -3769,8 +3769,8 @@ bool si_update_ngg(struct si_context *sctx)
        * pointers are set.
        */
       if (sctx->screen->info.has_vgt_flush_ngg_legacy_bug && !new_ngg) {
-         sctx->flags |= SI_CONTEXT_VGT_FLUSH;
-         si_mark_atom_dirty(sctx, &sctx->atoms.s.cache_flush);
+         sctx->barrier_flags |= SI_BARRIER_EVENT_VGT_FLUSH;
+         si_mark_atom_dirty(sctx, &sctx->atoms.s.barrier);
 
          if (sctx->gfx_level == GFX10) {
             /* Workaround for https://gitlab.freedesktop.org/mesa/mesa/-/issues/2941 */
@@ -4093,12 +4093,10 @@ static void si_emit_vgt_flush(struct radeon_cmdbuf *cs)
    radeon_begin(cs);
 
    /* This is required before VGT_FLUSH. */
-   radeon_emit(PKT3(PKT3_EVENT_WRITE, 0, 0));
-   radeon_emit(EVENT_TYPE(V_028A90_VS_PARTIAL_FLUSH) | EVENT_INDEX(4));
+   radeon_event_write(V_028A90_VS_PARTIAL_FLUSH);
 
    /* VGT_FLUSH is required even if VGT is idle. It resets VGT pointers. */
-   radeon_emit(PKT3(PKT3_EVENT_WRITE, 0, 0));
-   radeon_emit(EVENT_TYPE(V_028A90_VGT_FLUSH) | EVENT_INDEX(0));
+   radeon_event_write(V_028A90_VGT_FLUSH);
    radeon_end();
 }
 
@@ -4601,6 +4599,40 @@ static void si_set_patch_vertices(struct pipe_context *ctx, uint8_t patch_vertic
    }
 }
 
+unsigned si_shader_lshs_vertex_stride(struct si_shader *ls)
+{
+   unsigned num_slots;
+
+   if (ls->selector->stage == MESA_SHADER_VERTEX && !ls->next_shader) {
+      assert(ls->key.ge.as_ls);
+      assert(ls->selector->screen->info.gfx_level <= GFX8 || !ls->is_monolithic);
+      num_slots = util_last_bit64(ls->selector->info.outputs_written_before_tes_gs);
+   } else {
+      struct si_shader *tcs = ls->next_shader ? ls->next_shader : ls;
+
+      assert(tcs->selector->stage == MESA_SHADER_TESS_CTRL);
+      assert(tcs->selector->screen->info.gfx_level >= GFX9);
+
+      if (tcs->is_monolithic) {
+         uint64_t lds_inputs_read = tcs->selector->info.base.inputs_read;
+
+         /* Don't allocate LDS for inputs passed via VGPRs. */
+         if (tcs->key.ge.opt.same_patch_vertices)
+            lds_inputs_read &= ~tcs->selector->info.tcs_vgpr_only_inputs;
+
+         /* NIR lowering passes pack LS outputs/HS inputs if the usage masks of both are known. */
+         num_slots = util_bitcount64(lds_inputs_read);
+      } else {
+         num_slots = util_last_bit64(tcs->previous_stage_sel->info.outputs_written_before_tes_gs);
+      }
+   }
+
+   /* Add 1 dword to reduce LDS bank conflicts, so that each vertex starts on a different LDS
+    * bank.
+    */
+   return num_slots ? num_slots * 16 + 4 : 0;
+}
+
 /**
  * This calculates the LDS size for tessellation shaders (VS, TCS, TES).
  * LS.LDS_SIZE is shared by all 3 shader stages.
@@ -4618,7 +4650,6 @@ static void si_set_patch_vertices(struct pipe_context *ctx, uint8_t patch_vertic
 void si_update_tess_io_layout_state(struct si_context *sctx)
 {
    struct si_shader *ls_current;
-   struct si_shader_selector *ls;
    struct si_shader_selector *tcs = sctx->shader.tcs.cso;
    unsigned tess_uses_primid = sctx->ia_multi_vgt_param_key.u.tess_uses_prim_id;
    bool has_primid_instancing_bug = sctx->gfx_level == GFX6 && sctx->screen->info.max_se == 1;
@@ -4630,10 +4661,8 @@ void si_update_tess_io_layout_state(struct si_context *sctx)
    /* Since GFX9 has merged LS-HS in the TCS state, set LS = TCS. */
    if (sctx->gfx_level >= GFX9) {
       ls_current = sctx->shader.tcs.current;
-      ls = ls_current->key.ge.part.tcs.ls;
    } else {
       ls_current = sctx->shader.vs.current;
-      ls = sctx->shader.vs.cso;
 
       if (!ls_current) {
          sctx->do_update_shaders = true;
@@ -4658,17 +4687,10 @@ void si_update_tess_io_layout_state(struct si_context *sctx)
    unsigned num_tcs_output_cp = tcs->info.base.tess.tcs_vertices_out;
    unsigned num_tcs_patch_outputs = util_last_bit64(tcs->info.patch_outputs_written);
 
-   unsigned input_vertex_size = ls->info.lshs_vertex_stride;
-   unsigned num_vs_outputs = (input_vertex_size - 4) / 16;
+   unsigned input_vertex_size = si_shader_lshs_vertex_stride(ls_current);
+   unsigned num_vs_outputs = input_vertex_size / 16;
    unsigned output_vertex_size = num_tcs_outputs * 16;
-   unsigned input_patch_size;
-
-   /* Allocate LDS for TCS inputs only if it's used. */
-   if (!ls_current->key.ge.opt.same_patch_vertices ||
-       tcs->info.base.inputs_read & ~tcs->info.tcs_vgpr_only_inputs)
-      input_patch_size = num_tcs_input_cp * input_vertex_size;
-   else
-      input_patch_size = 0;
+   unsigned input_patch_size = num_tcs_input_cp * input_vertex_size;
 
    unsigned pervertex_output_patch_size = num_tcs_output_cp * output_vertex_size;
    unsigned output_patch_size = pervertex_output_patch_size + num_tcs_patch_outputs * 16;
@@ -4985,11 +5007,8 @@ static void si_emit_spi_ge_ring_state(struct si_context *sctx, unsigned index)
 
       radeon_begin(&sctx->gfx_cs);
       /* Required before writing tessellation config registers. */
-      radeon_emit(PKT3(PKT3_EVENT_WRITE, 0, 0));
-      radeon_emit(EVENT_TYPE(V_028A90_VS_PARTIAL_FLUSH) | EVENT_INDEX(4));
-
-      radeon_emit(PKT3(PKT3_EVENT_WRITE, 0, 0));
-      radeon_emit(EVENT_TYPE(V_028A90_VGT_FLUSH) | EVENT_INDEX(0));
+      radeon_event_write(V_028A90_VS_PARTIAL_FLUSH);
+      radeon_event_write(V_028A90_VGT_FLUSH);
 
       if (sctx->gfx_level >= GFX7) {
          radeon_set_uconfig_reg_seq(R_030938_VGT_TF_RING_SIZE, 3);
@@ -5012,37 +5031,17 @@ static void si_emit_spi_ge_ring_state(struct si_context *sctx, unsigned index)
    }
 
    if (sctx->gfx_level >= GFX11) {
-      radeon_begin(&sctx->gfx_cs);
       /* We must wait for idle using an EOP event before changing the attribute ring registers.
-       * Use the bottom-of-pipe EOP event, but increment the PWS counter instead of writing memory.
+       * Use the bottom-of-pipe EOP event, but use the PWS TS counter instead of the counter
+       * in memory.
        */
-      radeon_emit(PKT3(PKT3_RELEASE_MEM, 6, 0));
-      radeon_emit(S_490_EVENT_TYPE(V_028A90_BOTTOM_OF_PIPE_TS) |
-                  S_490_EVENT_INDEX(5) |
-                  S_490_PWS_ENABLE(1));
-      radeon_emit(0); /* DST_SEL, INT_SEL, DATA_SEL */
-      radeon_emit(0); /* ADDRESS_LO */
-      radeon_emit(0); /* ADDRESS_HI */
-      radeon_emit(0); /* DATA_LO */
-      radeon_emit(0); /* DATA_HI */
-      radeon_emit(0); /* INT_CTXID */
-
-      /* Wait for the PWS counter. */
-      radeon_emit(PKT3(PKT3_ACQUIRE_MEM, 6, 0));
-      radeon_emit(S_580_PWS_STAGE_SEL(V_580_CP_ME) |
-                  S_580_PWS_COUNTER_SEL(V_580_TS_SELECT) |
-                  S_580_PWS_ENA2(1) |
-                  S_580_PWS_COUNT(0));
-      radeon_emit(0xffffffff); /* GCR_SIZE */
-      radeon_emit(0x01ffffff); /* GCR_SIZE_HI */
-      radeon_emit(0); /* GCR_BASE_LO */
-      radeon_emit(0); /* GCR_BASE_HI */
-      radeon_emit(S_585_PWS_ENA(1));
-      radeon_emit(0); /* GCR_CNTL */
+      si_cp_release_acquire_mem_pws(sctx, &sctx->gfx_cs, V_028A90_BOTTOM_OF_PIPE_TS, 0,
+                                    V_580_CP_ME, 0);
 
       uint64_t attr_address = sscreen->attribute_pos_prim_ring->gpu_address;
       assert((attr_address >> 32) == sscreen->info.address32_hi);
 
+      radeon_begin(&sctx->gfx_cs);
       radeon_set_uconfig_reg_seq(R_031110_SPI_GS_THROTTLE_CNTL1, 4);
       radeon_emit(0x12355123);      /* SPI_GS_THROTTLE_CNTL1 */
       radeon_emit(0x1544D);         /* SPI_GS_THROTTLE_CNTL2 */

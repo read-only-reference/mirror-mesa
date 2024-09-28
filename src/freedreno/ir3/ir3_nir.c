@@ -744,6 +744,7 @@ ir3_nir_post_finalize(struct ir3_shader *shader)
             .lower_read_invocation_to_cond = true,
             .lower_shuffle = true,
             .lower_relative_shuffle = true,
+            .lower_rotate_to_shuffle = !compiler->has_shfl,
             .lower_inverse_ballot = true,
       };
 
@@ -850,6 +851,36 @@ lower_binning(nir_shader *s)
                                      nir_metadata_control_flow, NULL);
 }
 
+static nir_mem_access_size_align
+ir3_mem_access_size_align(nir_intrinsic_op intrin, uint8_t bytes,
+                 uint8_t bit_size, uint32_t align,
+                 uint32_t align_offset, bool offset_is_const,
+                 const void *cb_data)
+{
+   align = nir_combined_align(align, align_offset);
+   assert(util_is_power_of_two_nonzero(align));
+
+   /* But if we're only aligned to 1 byte, use 8-bit loads. If we're only
+    * aligned to 2 bytes, use 16-bit loads, unless we needed 8-bit loads due to
+    * the size.
+    */
+   if ((bytes & 1) || (align == 1))
+      bit_size = 8;
+   else if ((bytes & 2) || (align == 2))
+      bit_size = 16;
+   else if (bit_size >= 32)
+      bit_size = 32;
+
+   if (intrin == nir_intrinsic_load_ubo)
+      bit_size = 32;
+
+   return (nir_mem_access_size_align){
+      .num_components = MAX2(1, MIN2(bytes / (bit_size / 8), 4)),
+      .bit_size = bit_size,
+      .align = bit_size / 8,
+   };
+}
+
 void
 ir3_nir_lower_variant(struct ir3_shader_variant *so, nir_shader *s)
 {
@@ -949,7 +980,14 @@ ir3_nir_lower_variant(struct ir3_shader_variant *so, nir_shader *s)
       OPT_V(s, ir3_nir_lower_64b_regs);
    }
 
-   progress |= OPT(s, ir3_nir_lower_wide_load_store);
+   nir_lower_mem_access_bit_sizes_options mem_bit_size_options = {
+      .modes = nir_var_mem_constant | nir_var_mem_ubo |
+               nir_var_mem_global | nir_var_mem_shared |
+               nir_var_function_temp,
+      .callback = ir3_mem_access_size_align,
+   };
+
+   progress |= OPT(s, nir_lower_mem_access_bit_sizes, &mem_bit_size_options);
    progress |= OPT(s, ir3_nir_lower_64b_global);
    progress |= OPT(s, ir3_nir_lower_64b_intrinsics);
    progress |= OPT(s, ir3_nir_lower_64b_undef);
@@ -1209,6 +1247,16 @@ ir3_nir_scan_driver_consts(struct ir3_compiler *compiler, nir_shader *shader, st
    }
 }
 
+static unsigned
+ir3_align_constoff(struct ir3_const_state *const_state, unsigned constoff,
+                   unsigned aligment)
+{
+   constoff = align(constoff, aligment);
+   const_state->required_consts_aligment_vec4 =
+      MAX2(const_state->required_consts_aligment_vec4, aligment);
+   return constoff;
+}
+
 /* Sets up the variant-dependent constant state for the ir3_shader.  Note
  * that it is also used from ir3_nir_analyze_ubo_ranges() to figure out the
  * maximum number of driver params that would eventually be used, to leave
@@ -1221,6 +1269,7 @@ ir3_setup_const_state(nir_shader *nir, struct ir3_shader_variant *v,
    struct ir3_compiler *compiler = v->compiler;
 
    memset(&const_state->offsets, ~0, sizeof(const_state->offsets));
+   const_state->required_consts_aligment_vec4 = 1;
 
    ir3_nir_scan_driver_consts(compiler, nir, const_state);
 
@@ -1270,7 +1319,8 @@ ir3_setup_const_state(nir_shader *nir, struct ir3_shader_variant *v,
       /* offset cannot be 0 for vs params loaded by CP_DRAW_INDIRECT_MULTI */
       if (v->type == MESA_SHADER_VERTEX && compiler->gen >= 6)
          constoff = MAX2(constoff, 1);
-      constoff = align(constoff, upload_unit);
+      constoff = ir3_align_constoff(const_state, constoff, upload_unit);
+
       const_state->offsets.driver_param = constoff;
 
       constoff += align(const_state->num_driver_params / 4, upload_unit);
@@ -1321,4 +1371,15 @@ ir3_setup_const_state(nir_shader *nir, struct ir3_shader_variant *v,
    const_state->offsets.immediate = constoff;
 
    assert(constoff <= ir3_max_const(v));
+}
+
+uint32_t
+ir3_const_state_get_free_space(const struct ir3_shader_variant *v,
+                               const struct ir3_const_state *const_state)
+{
+   uint32_t free_space_vec4 = ir3_max_const(v) - const_state->offsets.immediate;
+   free_space_vec4 =
+      (free_space_vec4 / const_state->required_consts_aligment_vec4) *
+      const_state->required_consts_aligment_vec4;
+   return free_space_vec4;
 }

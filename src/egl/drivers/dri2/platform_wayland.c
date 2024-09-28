@@ -1703,17 +1703,13 @@ dri2_wl_swap_buffers_with_damage(_EGLDisplay *disp, _EGLSurface *draw,
    if (dri2_dpy->fd_render_gpu != dri2_dpy->fd_display_gpu) {
       _EGLContext *ctx = _eglGetCurrentContext();
       struct dri2_egl_context *dri2_ctx = dri2_egl_context(ctx);
+      __DRIdrawable *dri_drawable = dri2_dpy->vtbl->get_dri_drawable(draw);
       dri2_blit_image(
          dri2_ctx->dri_context, dri2_surf->current->linear_copy,
          dri2_surf->current->dri_image, 0, 0, dri2_surf->base.Width,
          dri2_surf->base.Height, 0, 0, dri2_surf->base.Width,
          dri2_surf->base.Height, 0);
-
-      if (dri2_dpy->swrast_not_kms) {
-         __DRIdrawable *dri_drawable = dri2_dpy->vtbl->get_dri_drawable(draw);
-
-         dri_flush_drawable(dri_drawable);
-      }
+      dri_flush_drawable(dri_drawable);
    }
 
    wl_surface_commit(dri2_surf->wl_surface_wrapper);
@@ -2631,12 +2627,6 @@ dri2_wl_swrast_put_image2(__DRIdrawable *draw, int op, int x, int y, int w,
    char *src, *dst;
 
    assert(copy_width <= stride);
-   if (wl_proxy_get_version((struct wl_proxy *)dri2_surf->wl_surface_wrapper) <
-       WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
-      wl_surface_damage(dri2_surf->wl_surface_wrapper, 0, 0, INT32_MAX, INT32_MAX);
-   else
-      wl_surface_damage_buffer(dri2_surf->wl_surface_wrapper,
-                               x, y, w, h);
 
    dst = dri2_wl_swrast_get_backbuffer_data(dri2_surf);
 
@@ -2723,6 +2713,13 @@ dri2_wl_swrast_swap_buffers_with_damage(_EGLDisplay *disp, _EGLSurface *draw,
          /* 'back' here will be promoted to 'current' */
          dri2_surf->back->wl_buffer, dri2_surf->dx,
          dri2_surf->dy);
+
+   /* If the compositor doesn't support damage_buffer, we deliberately
+    * ignore the damage region and post maximum damage, due to
+    * https://bugs.freedesktop.org/78190 */
+   if (!n_rects || !try_damage_buffer(dri2_surf, rects, n_rects))
+      wl_surface_damage(dri2_surf->wl_surface_wrapper, 0, 0, INT32_MAX,
+                        INT32_MAX);
 
    /* guarantee full copy for partial update */
    int w = n_rects == 1 ? (rects[2] - rects[0]) : 0;
@@ -2905,6 +2902,34 @@ kopperSetSurfaceCreateInfo(void *_draw, struct kopper_loader_info *out)
    wlsci->display = dri2_dpy->wl_dpy;
    wlsci->surface = dri2_surf->wl_surface_wrapper;
    out->present_opaque = dri2_surf->base.PresentOpaque;
+   /* convert to vulkan constants */
+   switch (dri2_surf->base.CompressionRate) {
+   case EGL_SURFACE_COMPRESSION_FIXED_RATE_NONE_EXT:
+      out->compression = 0;
+      break;
+   case EGL_SURFACE_COMPRESSION_FIXED_RATE_DEFAULT_EXT:
+      out->compression = UINT32_MAX;
+      break;
+#define EGL_VK_COMP(NUM) \
+   case EGL_SURFACE_COMPRESSION_FIXED_RATE_##NUM##BPC_EXT: \
+      out->compression = VK_IMAGE_COMPRESSION_FIXED_RATE_##NUM##BPC_BIT_EXT; \
+      break
+   EGL_VK_COMP(1);
+   EGL_VK_COMP(2);
+   EGL_VK_COMP(3);
+   EGL_VK_COMP(4);
+   EGL_VK_COMP(5);
+   EGL_VK_COMP(6);
+   EGL_VK_COMP(7);
+   EGL_VK_COMP(8);
+   EGL_VK_COMP(9);
+   EGL_VK_COMP(10);
+   EGL_VK_COMP(11);
+   EGL_VK_COMP(12);
+#undef EGL_VK_COMP
+   default:
+      unreachable("unknown compression rate");
+   }
 }
 
 static const __DRIkopperLoaderExtension kopper_loader_extension = {

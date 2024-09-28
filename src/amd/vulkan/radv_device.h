@@ -546,8 +546,6 @@ struct radv_device {
    uint32_t compute_scratch_size_per_wave;
    uint32_t compute_scratch_waves;
 
-   bool cache_disabled;
-
    /* PSO cache stats */
    simple_mtx_t pso_cache_stats_mtx;
    struct radv_pso_cache_stats pso_cache_stats[RADV_PIPELINE_TYPE_COUNT];
@@ -564,7 +562,7 @@ radv_device_physical(const struct radv_device *dev)
 static inline bool
 radv_uses_device_generated_commands(const struct radv_device *device)
 {
-   return device->vk.enabled_features.deviceGeneratedCommands || device->vk.enabled_features.deviceGeneratedCompute;
+   return device->vk.enabled_features.deviceGeneratedCommandsNV || device->vk.enabled_features.deviceGeneratedCompute;
 }
 
 static inline bool

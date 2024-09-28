@@ -34,7 +34,6 @@
 #include "genxml/gen_macros.h"
 
 #define ARM_VENDOR_ID        0x13b5
-#define MAX_VIEWPORTS        1
 #define MAX_PUSH_DESCRIPTORS 32
 /* We reserve one ubo for push constant, one for sysvals and one per-set for the
  * descriptor metadata  */
@@ -670,7 +669,7 @@ panvk_physical_device_init(struct panvk_physical_device *device,
                        path);
    }
 
-   if (strcmp(version->name, "panfrost")) {
+   if (strcmp(version->name, "panfrost") && strcmp(version->name, "panthor")) {
       drmFreeVersion(version);
       close(fd);
       return vk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
@@ -706,7 +705,13 @@ panvk_physical_device_init(struct panvk_physical_device *device,
 
    unsigned arch = pan_arch(device->kmod.props.gpu_prod_id);
 
-   if (arch <= 5 || arch >= 8) {
+   switch (arch) {
+   case 6:
+   case 7:
+   case 10:
+      break;
+
+   default:
       result = vk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
                          "%s not supported", device->model->name);
       goto fail;
@@ -899,6 +904,7 @@ panvk_GetPhysicalDeviceExternalFenceProperties(
 
 DEVICE_PER_ARCH_FUNCS(6);
 DEVICE_PER_ARCH_FUNCS(7);
+DEVICE_PER_ARCH_FUNCS(10);
 
 VKAPI_ATTR VkResult VKAPI_CALL
 panvk_CreateDevice(VkPhysicalDevice physicalDevice,
@@ -956,6 +962,18 @@ get_format_properties(struct panvk_physical_device *physical_device,
 {
    VkFormatFeatureFlags tex = 0, buffer = 0;
    enum pipe_format pfmt = vk_format_to_pipe_format(format);
+   unsigned arch = pan_arch(physical_device->kmod.props.gpu_prod_id);
+
+   /* FIXME: Valhall doesn't support interleaved D32_S8X24. Implement it as
+    * a multi-plane format, and we probably want to switch Bifrost to this
+    * layout too, since:
+    * - it's more cache-friendly (you load more samples on a cache-line if you don't
+    *   have those 24 dummy bits)
+    * - it takes less memory (you don't lose those 24bits per texel)
+    * - we can use AFBC
+    */
+   if (arch >= 9 && format == VK_FORMAT_D32_SFLOAT_S8_UINT)
+      goto end;
 
    if (pfmt == PIPE_FORMAT_NONE)
       goto end;
@@ -968,9 +986,6 @@ get_format_properties(struct panvk_physical_device *physical_device,
    /* 3byte formats are not supported by the buffer <-> image copy helpers. */
    if (util_format_get_blocksize(pfmt) == 3)
       goto end;
-
-   buffer |=
-      VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
 
    /* Reject sRGB formats (see
     * https://github.com/KhronosGroup/Vulkan-Docs/issues/2214).
@@ -989,21 +1004,33 @@ get_format_properties(struct panvk_physical_device *physical_device,
       if (!util_format_is_scaled(pfmt) && !util_format_is_pure_integer(pfmt))
          tex |= VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
 
-      buffer |= VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT;
+      if (!util_format_is_depth_or_stencil(pfmt))
+         buffer |= VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT;
 
       tex |= VK_FORMAT_FEATURE_BLIT_SRC_BIT;
    }
 
-   /* SNORM rendering isn't working yet, disable */
-   if (fmt.bind & PAN_BIND_RENDER_TARGET && !util_format_is_snorm(pfmt)) {
-      tex |= VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
-             VK_FORMAT_FEATURE_BLIT_DST_BIT;
-
+   if (fmt.bind & PAN_BIND_RENDER_TARGET) {
+      tex |= VK_FORMAT_FEATURE_BLIT_DST_BIT;
       tex |= VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
-      buffer |= VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_BIT;
 
-      /* Can always blend via blend shaders */
-      tex |= VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT;
+      /* SNORM rendering isn't working yet (nir_lower_blend bugs), disable for
+       * now.
+       *
+       * XXX: Enable once fixed.
+       */
+      if (!util_format_is_snorm(pfmt)) {
+         tex |= VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
+         tex |= VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT;
+      }
+
+      if (!util_format_is_depth_and_stencil(pfmt))
+         buffer |= VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_BIT;
+   }
+
+   if (pfmt == PIPE_FORMAT_R32_UINT || pfmt == PIPE_FORMAT_R32_SINT) {
+      buffer |= VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_ATOMIC_BIT;
+      tex |= VK_FORMAT_FEATURE_STORAGE_IMAGE_ATOMIC_BIT;
    }
 
    if (fmt.bind & PAN_BIND_DEPTH_STENCIL)

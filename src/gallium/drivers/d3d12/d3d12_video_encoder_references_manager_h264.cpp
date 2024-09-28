@@ -306,7 +306,7 @@ d3d12_video_encoder_references_manager_h264::begin_frame(D3D12_VIDEO_ENCODER_PIC
       // mirror indices between DPB entries and allocation arrays
       m_CurrentFrameReferencesData.pReferenceFramesReconPictureDescriptors[i].ReconstructedPictureResourceIndex = i;
       m_CurrentFrameReferencesData.pReferenceFramesReconPictureDescriptors[i].TemporalLayerIndex =
-         0u;   // h264Pic->dpb[i].temporal_id;
+         h264Pic->dpb[i].temporal_id;
 
       //
       // Set texture allocations
@@ -331,8 +331,7 @@ d3d12_video_encoder_references_manager_h264::begin_frame(D3D12_VIDEO_ENCODER_PIC
    m_curFrameState.idr_pic_id = h264Pic->idr_pic_id;
    m_curFrameState.FrameType = d3d12_video_encoder_convert_frame_type_h264(h264Pic->picture_type);
    m_curFrameState.PictureOrderCountNumber = h264Pic->pic_order_cnt;
-   m_curFrameState.FrameDecodingOrderNumber = h264Pic->frame_num;
-   m_curFrameState.TemporalLayerIndex = 0u;   // h264Pic->temporal_id;
+   m_curFrameState.FrameDecodingOrderNumber = h264Pic->slice.frame_num;
 
    ///
    /// Set MMCO info
@@ -391,6 +390,11 @@ d3d12_video_encoder_references_manager_h264::begin_frame(D3D12_VIDEO_ENCODER_PIC
       // assume that the client is attempting to set the H264 slice header long_term_reference_flag and will do so in
       // the output bitstream for such EncodeFrame call.
       m_curFrameState.adaptive_ref_pic_marking_mode_flag = 1;
+
+      // Workaround for D3D12 validation bug requiring pRefPicMarkingOperationsCommands for IDR frames
+      m_curFrameState.RefPicMarkingOperationsCommandsCount = 1u;
+      m_CurrentFrameReferencesData.pMemoryOps.resize(m_curFrameState.RefPicMarkingOperationsCommandsCount);
+      m_curFrameState.pRefPicMarkingOperationsCommands = m_CurrentFrameReferencesData.pMemoryOps.data();
    }
 
    ///

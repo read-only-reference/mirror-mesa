@@ -471,25 +471,37 @@ d3d12_video_create_dpb_buffer(struct pipe_video_codec *codec,
                               struct pipe_picture_desc *picture,
                               const struct pipe_video_buffer *templat)
 {
-   // Indicate to the d3d12 resource creation path this needs decode/encode reference only resource flags
    pipe_video_buffer tmpl = *templat;
-   if (codec->entrypoint == PIPE_VIDEO_ENTRYPOINT_BITSTREAM)
-      tmpl.bind |= PIPE_BIND_VIDEO_DECODE_DPB;
-   else if (codec->entrypoint == PIPE_VIDEO_ENTRYPOINT_ENCODE)
-      tmpl.bind |= PIPE_BIND_VIDEO_ENCODE_DPB;
 
-   struct d3d12_video_encoder *pD3D12Enc = (struct d3d12_video_encoder *) codec;
-   assert(pD3D12Enc);
+   //
+   // Check if the IHV requires texture array or opaque reference only allocations
+   //
+   bool bTextureArray = false;
+   if (codec->entrypoint == PIPE_VIDEO_ENTRYPOINT_BITSTREAM) {
+      struct d3d12_video_decoder *pD3D12Dec = (struct d3d12_video_decoder *) codec;
 
-   if (pD3D12Enc->m_currentEncodeCapabilities.m_SupportFlags &
-      D3D12_VIDEO_ENCODER_SUPPORT_FLAG_RECONSTRUCTED_FRAMES_REQUIRE_TEXTURE_ARRAYS)
-   {
+      if (pD3D12Dec->m_ConfigDecoderSpecificFlags &
+         d3d12_video_decode_config_specific_flag_reference_only_textures_required)
+         tmpl.bind |= PIPE_BIND_VIDEO_DECODE_DPB;
+
+      bTextureArray = ((pD3D12Dec->m_ConfigDecoderSpecificFlags &
+         d3d12_video_decode_config_specific_flag_array_of_textures) == 0);
+
+   } else if (codec->entrypoint == PIPE_VIDEO_ENTRYPOINT_ENCODE) {
+      struct d3d12_video_encoder *pD3D12Enc = (struct d3d12_video_encoder *) codec;
+
+      if ((pD3D12Enc->m_currentEncodeCapabilities.m_SupportFlags &
+           D3D12_VIDEO_ENCODER_SUPPORT_FLAG_READABLE_RECONSTRUCTED_PICTURE_LAYOUT_AVAILABLE) == 0)
+         tmpl.bind |= PIPE_BIND_VIDEO_ENCODE_DPB;
+
+      bTextureArray = (pD3D12Enc->m_currentEncodeCapabilities.m_SupportFlags &
+         D3D12_VIDEO_ENCODER_SUPPORT_FLAG_RECONSTRUCTED_FRAMES_REQUIRE_TEXTURE_ARRAYS);
+   }
+
+   if (bTextureArray)
       return d3d12_video_create_dpb_buffer_texarray(codec, picture, &tmpl);
-   }
    else
-   {
       return d3d12_video_create_dpb_buffer_aot(codec, picture, &tmpl);
-   }
 }
 
 struct pipe_video_buffer*
@@ -515,17 +527,11 @@ d3d12_video_create_dpb_buffer_texarray(struct pipe_video_codec *codec,
    if (!pD3D12Enc->m_pVideoTexArrayDPBPool)
    {
       pipe_resource resource_creation_info = {};
-      // In theory, d3d12_video_encoder_get_current_max_dpb_capacity(pD3D12Enc) should give upfront the max DPB size
-      // but in some frontends like VA, this is not always accurate. To avoid reallocating/copying the texture array
-      // and also keeping a balance of not allocating ARRAY_SIZE(pipe_h264_enc_picture_desc::dpb) slots
-      // let's use the max possible elements in the DPB based on d3d12 capabilities (e.g no interlaced support)
-      // We cannot use the max number of references reported by the IHV, since the DPB may hold references not used
-      // by the current pic but used by future pics (e.g mmco in H264, LTR in HEVC/AV1)
-      resource_creation_info.array_size = D3D12_VIDEO_TEXTURE_ARRAY_DPB_POOL_SIZE;
-      static_assert(D3D12_VIDEO_TEXTURE_ARRAY_DPB_POOL_SIZE <= 16); // uint16_t used as a usage bitmap into m_pVideoTexArrayDPBPool
+      resource_creation_info.array_size = d3d12_video_encoder_get_current_max_dpb_capacity(pD3D12Enc);
+      assert(resource_creation_info.array_size <= 32); // uint32_t used as a usage bitmap into m_pVideoTexArrayDPBPool
       buf = (d3d12_video_buffer*) d3d12_video_buffer_create_impl(codec->context, templat, &resource_creation_info, d3d12_video_buffer_creation_mode::create_resource, NULL, 0);
       pD3D12Enc->m_pVideoTexArrayDPBPool = &buf->texture->base.b;
-      pD3D12Enc->m_spVideoTexArrayDPBPoolInUse = std::make_shared<uint16_t>();
+      pD3D12Enc->m_spVideoTexArrayDPBPoolInUse = std::make_shared<uint32_t>();
    }
    else
    {

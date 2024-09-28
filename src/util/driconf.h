@@ -281,6 +281,9 @@
 #define DRI_CONF_TRANSCODE_ASTC(def) \
    DRI_CONF_OPT_B(transcode_astc, def, "Transcode ASTC formats to DXTC if unsupported")
 
+#define DRI_CONF_ALLOW_COMPRESSED_FALLBACK(def) \
+   DRI_CONF_OPT_B(allow_compressed_fallback, def, "Allow fallback to uncompressed formats for unsupported compressed formats")
+
 #define DRI_CONF_MESA_EXTENSION_OVERRIDE() \
    DRI_CONF_OPT_S_NODEF(mesa_extension_override, \
                   "Allow enabling/disabling a list of extensions")
@@ -559,6 +562,18 @@
                   "Report the non-MSAA-only texture size limit")
 
 /**
+ * \brief wgl specific configuration options
+ */
+
+#define DRI_CONF_WGL_FRAME_LATENCY(def) \
+   DRI_CONF_OPT_I(wgl_frame_latency, def, 1, 16, \
+                  "Override default maximum frame latency")
+
+#define DRI_CONF_WGL_SWAP_INTERVAL(def) \
+   DRI_CONF_OPT_I(wgl_swap_interval, def, 1, 4, \
+                  "Override default swap interval")
+
+/**
  * \brief virgl specific configuration options
  */
 
@@ -672,6 +687,10 @@
 #define DRI_CONF_RADV_DISABLE_SINKING_LOAD_INPUT_FS(def) \
    DRI_CONF_OPT_B(radv_disable_sinking_load_input_fs, def, \
                   "Disable sinking load inputs for fragment shaders")
+
+#define DRI_CONF_RADV_DISABLE_DEPTH_STORAGE(def) \
+  DRI_CONF_OPT_B(radv_disable_depth_storage, def, \
+                 "Hides support for storage access to depth formats")
 
 #define DRI_CONF_RADV_DGC(def) \
    DRI_CONF_OPT_B(radv_dgc, def, \

@@ -199,8 +199,6 @@ init_program(Program* program, Stage stage, const struct aco_shader_info* info,
 
    program->progress = CompilationProgress::after_isel;
 
-   program->next_fp_mode.preserve_signed_zero_inf_nan32 = false;
-   program->next_fp_mode.preserve_signed_zero_inf_nan16_64 = false;
    program->next_fp_mode.must_flush_denorms32 = false;
    program->next_fp_mode.must_flush_denorms16_64 = false;
    program->next_fp_mode.care_about_round32 = false;
@@ -433,7 +431,8 @@ can_use_DPP(amd_gfx_level gfx_level, const aco_ptr<Instruction>& instr, bool dpp
           instr->opcode != aco_opcode::v_permlanex16_b32 &&
           instr->opcode != aco_opcode::v_permlane64_b32 &&
           instr->opcode != aco_opcode::v_readlane_b32_e64 &&
-          instr->opcode != aco_opcode::v_writelane_b32_e64;
+          instr->opcode != aco_opcode::v_writelane_b32_e64 &&
+          instr->opcode != aco_opcode::p_v_cvt_pk_u8_f32;
 }
 
 aco_ptr<Instruction>

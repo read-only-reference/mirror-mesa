@@ -97,7 +97,7 @@ struct ntv_context {
          workgroup_id_var, num_workgroups_var,
          local_invocation_id_var, global_invocation_id_var,
          local_invocation_index_var, helper_invocation_var,
-         local_group_size_var,
+         local_group_size_var, view_index_var,
          base_vertex_var, base_instance_var, draw_id_var;
 
    SpvId shared_mem_size;
@@ -2615,6 +2615,24 @@ emit_load_front_face(struct ntv_context *ctx, nir_intrinsic_instr *intr)
 }
 
 static void
+emit_load_view_index(struct ntv_context *ctx, nir_intrinsic_instr *intr)
+{
+   SpvId var_type = spirv_builder_type_uint(&ctx->builder, 32);
+   spirv_builder_emit_extension(&ctx->builder, "SPV_KHR_multiview");
+   spirv_builder_emit_cap(&ctx->builder, SpvCapabilityMultiView);
+   if (!ctx->view_index_var)
+      ctx->view_index_var = create_builtin_var(ctx, var_type,
+                                               SpvStorageClassInput,
+                                               "gl_ViewIndex",
+                                               SpvBuiltInViewIndex);
+
+   SpvId result = spirv_builder_emit_load(&ctx->builder, var_type,
+                                          ctx->view_index_var);
+   assert(1 == intr->def.num_components);
+   store_def(ctx, intr->def.index, result, nir_type_uint);
+}
+
+static void
 emit_load_uint_input(struct ntv_context *ctx, nir_intrinsic_instr *intr, SpvId *var_id, const char *var_name, SpvBuiltIn builtin)
 {
    SpvId var_type = spirv_builder_type_uint(&ctx->builder, 32);
@@ -3276,6 +3294,10 @@ emit_intrinsic(struct ntv_context *ctx, nir_intrinsic_instr *intr)
 
    case nir_intrinsic_load_front_face:
       emit_load_front_face(ctx, intr);
+      break;
+
+   case nir_intrinsic_load_view_index:
+      emit_load_view_index(ctx, intr);
       break;
 
    case nir_intrinsic_load_base_instance:
@@ -4763,12 +4785,12 @@ nir_to_spirv(struct nir_shader *s, const struct zink_shader_info *sinfo, const s
          spirv_builder_emit_specid(&ctx.builder, ctx.shared_mem_size, ZINK_VARIABLE_SHARED_MEM);
          spirv_builder_emit_name(&ctx.builder, ctx.shared_mem_size, "variable_shared_mem");
       }
-      if (s->info.cs.derivative_group) {
+      if (s->info.derivative_group) {
          SpvCapability caps[] = { 0, SpvCapabilityComputeDerivativeGroupQuadsNV, SpvCapabilityComputeDerivativeGroupLinearNV };
          SpvExecutionMode modes[] = { 0, SpvExecutionModeDerivativeGroupQuadsNV, SpvExecutionModeDerivativeGroupLinearNV };
          spirv_builder_emit_extension(&ctx.builder, "SPV_NV_compute_shader_derivatives");
-         spirv_builder_emit_cap(&ctx.builder, caps[s->info.cs.derivative_group]);
-         spirv_builder_emit_exec_mode(&ctx.builder, entry_point, modes[s->info.cs.derivative_group]);
+         spirv_builder_emit_cap(&ctx.builder, caps[s->info.derivative_group]);
+         spirv_builder_emit_exec_mode(&ctx.builder, entry_point, modes[s->info.derivative_group]);
          ctx.explicit_lod = false;
       }
       break;

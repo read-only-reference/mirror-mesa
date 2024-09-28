@@ -522,8 +522,8 @@ fast_clear_depth(struct iris_context *ice,
 
       /* Also set the indirect clear color if it exists. */
       if (res->aux.clear_color_bo) {
-         uint32_t packed_depth;
-         isl_color_value_pack(&clear_value, res->surf.format, &packed_depth);
+         uint32_t packed_depth[4] = {};
+         isl_color_value_pack(&clear_value, res->surf.format, packed_depth);
 
          const uint64_t clear_pixel_offset = res->aux.clear_color_offset +
             isl_get_sampler_clear_field_offset(devinfo, res->surf.format);
@@ -531,7 +531,7 @@ fast_clear_depth(struct iris_context *ice,
          iris_emit_pipe_control_write(batch, "update fast clear value (Z)",
                                       PIPE_CONTROL_WRITE_IMMEDIATE,
                                       res->aux.clear_color_bo,
-                                      clear_pixel_offset, packed_depth);
+                                      clear_pixel_offset, packed_depth[0]);
 
          /* From the TGL PRMs, Volume 9: Render Engine, State Caching :
           *
@@ -560,7 +560,8 @@ fast_clear_depth(struct iris_context *ice,
    }
 
    iris_resource_set_aux_state(ice, res, level, box->z, box->depth,
-                               ISL_AUX_STATE_CLEAR);
+                               devinfo->ver < 20 ? ISL_AUX_STATE_CLEAR :
+                               ISL_AUX_STATE_COMPRESSED_NO_CLEAR);
    ice->state.dirty |= IRIS_DIRTY_DEPTH_BUFFER;
    ice->state.stage_dirty |= IRIS_ALL_STAGE_DIRTY_BINDINGS;
 }

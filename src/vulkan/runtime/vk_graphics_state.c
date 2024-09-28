@@ -64,6 +64,7 @@ get_dynamic_state_groups(BITSET_WORD *dynamic,
       BITSET_SET(dynamic, MESA_VK_DYNAMIC_VP_SCISSOR_COUNT);
       BITSET_SET(dynamic, MESA_VK_DYNAMIC_VP_SCISSORS);
       BITSET_SET(dynamic, MESA_VK_DYNAMIC_VP_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE);
+      BITSET_SET(dynamic, MESA_VK_DYNAMIC_VP_DEPTH_CLAMP_RANGE);
    }
 
    if (groups & MESA_VK_GRAPHICS_STATE_DISCARD_RECTANGLES_BIT) {
@@ -293,6 +294,7 @@ vk_get_dynamic_graphics_states(BITSET_WORD *dynamic,
       CASE( LINE_STIPPLE_ENABLE_EXT,      RS_LINE_STIPPLE_ENABLE)
       CASE( DEPTH_CLIP_NEGATIVE_ONE_TO_ONE_EXT, VP_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE)
       CASE( ATTACHMENT_FEEDBACK_LOOP_ENABLE_EXT, ATTACHMENT_FEEDBACK_LOOP_ENABLE)
+      CASE( DEPTH_CLAMP_RANGE_EXT,        VP_DEPTH_CLAMP_RANGE)
       default:
          unreachable("Unsupported dynamic graphics state");
       }
@@ -497,6 +499,17 @@ vk_viewport_state_init(struct vk_viewport_state *vp,
       if (vp_dcc_info != NULL)
          vp->depth_clip_negative_one_to_one = vp_dcc_info->negativeOneToOne;
    }
+
+   if (!IS_DYNAMIC(VP_DEPTH_CLAMP_RANGE)) {
+      const VkPipelineViewportDepthClampControlCreateInfoEXT *vp_dcc_info =
+         vk_find_struct_const(vp_info->pNext,
+                              PIPELINE_VIEWPORT_DEPTH_CLAMP_CONTROL_CREATE_INFO_EXT);
+      if (vp_dcc_info != NULL) {
+         vp->depth_clamp_mode = vp_dcc_info->depthClampMode;
+         if (vp->depth_clamp_mode == VK_DEPTH_CLAMP_MODE_USER_DEFINED_RANGE_EXT)
+            vp->depth_clamp_range = *vp_dcc_info->pDepthClampRange;
+      }
+   }
 }
 
 static void
@@ -513,6 +526,8 @@ vk_dynamic_graphics_state_init_vp(struct vk_dynamic_graphics_state *dst,
       typed_memcpy(dst->vp.scissors, vp->scissors, vp->scissor_count);
 
    dst->vp.depth_clip_negative_one_to_one = vp->depth_clip_negative_one_to_one;
+   dst->vp.depth_clamp_mode = vp->depth_clamp_mode;
+   dst->vp.depth_clamp_range = vp->depth_clamp_range;
 }
 
 static void
@@ -782,7 +797,7 @@ vk_multisample_sample_locations_state_init(
 
    assert(ms->sample_locations == NULL);
    if (!IS_DYNAMIC(MS_SAMPLE_LOCATIONS)) {
-      if (ms->sample_locations_enable) {
+      if (sl_info && ms->sample_locations_enable) {
          vk_sample_locations_state_init(sl, &sl_info->sampleLocationsInfo);
          ms->sample_locations = sl;
       } else if (!IS_DYNAMIC(MS_RASTERIZATION_SAMPLES)) {
@@ -1073,6 +1088,7 @@ vk_color_attachment_location_state_init(struct vk_color_attachment_location_stat
    for (uint32_t a = 0; a < MIN2(cal_info->colorAttachmentCount,
                                  MESA_VK_MAX_COLOR_ATTACHMENTS); a++) {
       cal->color_map[a] =
+         cal_info->pColorAttachmentLocations == NULL ? a :
          cal_info->pColorAttachmentLocations[a] == VK_ATTACHMENT_UNUSED ?
          MESA_VK_ATTACHMENT_UNUSED : cal_info->pColorAttachmentLocations[a];
    }
@@ -2085,6 +2101,12 @@ vk_dynamic_graphics_state_copy(struct vk_dynamic_graphics_state *dst,
    COPY_IF_SET(VP_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE,
                vp.depth_clip_negative_one_to_one);
 
+   if (IS_SET_IN_SRC(VP_DEPTH_CLAMP_RANGE)) {
+      COPY_MEMBER(VP_DEPTH_CLAMP_RANGE, vp.depth_clamp_mode);
+      COPY_MEMBER(VP_DEPTH_CLAMP_RANGE, vp.depth_clamp_range.minDepthClamp);
+      COPY_MEMBER(VP_DEPTH_CLAMP_RANGE, vp.depth_clamp_range.maxDepthClamp);
+   }
+
    COPY_IF_SET(DR_ENABLE, dr.enable);
    COPY_IF_SET(DR_MODE, dr.mode);
    if (IS_SET_IN_SRC(DR_RECTANGLES)) {
@@ -3092,21 +3114,30 @@ vk_common_CmdSetDepthBias2EXT(
    }
 }
 
+void
+vk_cmd_set_rendering_attachment_locations(struct vk_command_buffer *cmd,
+                                          const VkRenderingAttachmentLocationInfoKHR *info)
+{
+   struct vk_dynamic_graphics_state *dyn = &cmd->dynamic_graphics_state;
+
+   assert(info->colorAttachmentCount <= MESA_VK_MAX_COLOR_ATTACHMENTS);
+   for (uint32_t i = 0; i < info->colorAttachmentCount; i++) {
+      const uint8_t val =
+         info->pColorAttachmentLocations == NULL ? i :
+         info->pColorAttachmentLocations[i] == VK_ATTACHMENT_UNUSED ?
+         MESA_VK_ATTACHMENT_UNUSED : info->pColorAttachmentLocations[i];
+      SET_DYN_VALUE(dyn, COLOR_ATTACHMENT_MAP, cal.color_map[i], val);
+   }
+}
+
 VKAPI_ATTR void VKAPI_CALL
 vk_common_CmdSetRenderingAttachmentLocationsKHR(
     VkCommandBuffer                             commandBuffer,
     const VkRenderingAttachmentLocationInfoKHR* pLocationInfo)
 {
    VK_FROM_HANDLE(vk_command_buffer, cmd, commandBuffer);
-   struct vk_dynamic_graphics_state *dyn = &cmd->dynamic_graphics_state;
 
-   assert(pLocationInfo->colorAttachmentCount <= MESA_VK_MAX_COLOR_ATTACHMENTS);
-   for (uint32_t i = 0; i < pLocationInfo->colorAttachmentCount; i++) {
-      uint8_t val =
-         pLocationInfo->pColorAttachmentLocations[i] == VK_ATTACHMENT_UNUSED ?
-         MESA_VK_ATTACHMENT_UNUSED : pLocationInfo->pColorAttachmentLocations[i];
-      SET_DYN_VALUE(dyn, COLOR_ATTACHMENT_MAP, cal.color_map[i], val);
-   }
+   vk_cmd_set_rendering_attachment_locations(cmd, pLocationInfo);
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -3143,6 +3174,23 @@ vk_common_CmdSetRenderingInputAttachmentIndicesKHR(
       MESA_VK_ATTACHMENT_UNUSED : *pLocationInfo->pStencilInputAttachmentIndex;
    SET_DYN_VALUE(dyn, INPUT_ATTACHMENT_MAP, ial.depth_att, depth_att);
    SET_DYN_VALUE(dyn, INPUT_ATTACHMENT_MAP, ial.stencil_att, stencil_att);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+vk_common_CmdSetDepthClampRangeEXT(VkCommandBuffer commandBuffer,
+                                   VkDepthClampModeEXT depthClampMode,
+                                   const VkDepthClampRangeEXT* pDepthClampRange)
+{
+   VK_FROM_HANDLE(vk_command_buffer, cmd, commandBuffer);
+   struct vk_dynamic_graphics_state *dyn = &cmd->dynamic_graphics_state;
+
+   SET_DYN_BOOL(dyn, VP_DEPTH_CLAMP_RANGE, vp.depth_clamp_mode, depthClampMode);
+   if (depthClampMode == VK_DEPTH_CLAMP_MODE_USER_DEFINED_RANGE_EXT) {
+      SET_DYN_VALUE(dyn, VP_DEPTH_CLAMP_RANGE, vp.depth_clamp_range.minDepthClamp,
+                    pDepthClampRange->minDepthClamp);
+      SET_DYN_VALUE(dyn, VP_DEPTH_CLAMP_RANGE, vp.depth_clamp_range.maxDepthClamp,
+                    pDepthClampRange->maxDepthClamp);
+   }
 }
 
 /* These are stubs required by VK_EXT_shader_object */
@@ -3239,6 +3287,7 @@ vk_dynamic_graphic_state_to_str(enum mesa_vk_dynamic_graphics_state state)
       NAME(VP_SCISSOR_COUNT);
       NAME(VP_SCISSORS);
       NAME(VP_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE);
+      NAME(VP_DEPTH_CLAMP_RANGE);
       NAME(DR_RECTANGLES);
       NAME(DR_MODE);
       NAME(DR_ENABLE);

@@ -392,6 +392,10 @@ intrinsic("interp_deref_at_vertex", src_comp=[1, 1], dest_comp=0,
 intrinsic("deref_buffer_array_length", src_comp=[-1], dest_comp=1,
           indices=[ACCESS], flags=[CAN_ELIMINATE, CAN_REORDER])
 
+# Gets the length of an unsized array
+intrinsic("deref_implicit_array_length", src_comp=[-1], dest_comp=1,
+          flags=[CAN_ELIMINATE, CAN_REORDER])
+
 # Ask the driver for the size of a given SSBO. It takes the buffer index
 # as source.
 intrinsic("get_ssbo_size", src_comp=[-1], dest_comp=1, bit_sizes=[32],
@@ -1162,8 +1166,8 @@ load("per_primitive_input", [1], [BASE, COMPONENT, DEST_TYPE, IO_SEMANTICS], [CA
 
 # src[] = { buffer_index, offset }.
 load("ssbo", [-1, 1], [ACCESS, ALIGN_MUL, ALIGN_OFFSET], [CAN_ELIMINATE])
-# src[] = { buffer_index }
-load("ssbo_address", [1], [], [CAN_ELIMINATE, CAN_REORDER])
+# src[] = { buffer_index, offset }
+load("ssbo_address", [1, 1], [], [CAN_ELIMINATE, CAN_REORDER])
 # src[] = { offset }.
 load("output", [1], [BASE, RANGE, COMPONENT, DEST_TYPE, IO_SEMANTICS], flags=[CAN_ELIMINATE])
 # src[] = { vertex, offset }.
@@ -1535,6 +1539,11 @@ store("global_amd", [1, 1], indices=[BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET, WRIT
 # Same as shared_atomic_add, but with GDS. src[] = {store_val, gds_addr, m0}
 intrinsic("gds_atomic_add_amd",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE])
 
+# Optimized shared_atomic_add (1/-1) with constant address
+# returning the uniform pre-op value for all invocations.
+intrinsic("shared_append_amd",  src_comp=[], dest_comp=1, bit_sizes=[32], indices=[BASE])
+intrinsic("shared_consume_amd",  src_comp=[], dest_comp=1, bit_sizes=[32], indices=[BASE])
+
 # src[] = { sample_id, num_samples }
 intrinsic("load_sample_positions_amd", src_comp=[1, 1], dest_comp=2, flags=[CAN_ELIMINATE, CAN_REORDER])
 
@@ -1594,8 +1603,8 @@ system_value("streamout_offset_amd", 1, indices=[BASE])
 # AMD merged shader intrinsics
 
 # Whether the current invocation index in the subgroup is less than the source. The source must be
-# subgroup uniform and bits 0-7 must be less than or equal to the wave size.
-intrinsic("is_subgroup_invocation_lt_amd", src_comp=[1], dest_comp=1, bit_sizes=[1], flags=[CAN_ELIMINATE])
+# subgroup uniform and the 8 bits starting at the base bit must be less than or equal to the wave size.
+intrinsic("is_subgroup_invocation_lt_amd", src_comp=[1], dest_comp=1, bit_sizes=[1], indices=[BASE], flags=[CAN_ELIMINATE])
 
 # AMD NGG intrinsics
 
@@ -1923,7 +1932,7 @@ intrinsic("load_uvs_index_agx", dest_comp = 1, bit_sizes=[16],
 # converting between floating-point registers and normalized memory formats.
 #
 # The format is the pipe_format of the local memory (the source), see
-# agx_internal_formats.h for the supported list.
+# ail for the supported list.
 #
 # Logically, this loads/stores a single sample. The sample to load is
 # specified by the bitfield sample mask source. However, for stores multiple
@@ -1955,18 +1964,17 @@ intrinsic("store_zs_agx", [1, 1, 1], indices=[BASE], flags=[])
 # kernels.
 #
 # The format is the pipe_format of the local memory (the source), see
-# agx_internal_formats.h for the supported list. The image format is
+# ail for the supported list. The image format is
 # specified in the PBE descriptor.
 #
 # The image dimension is used to distinguish multisampled images from
 # non-multisampled images. It must be 2D or MS.
 #
-# src[] = { image index, logical offset within shared memory, coordinates/layer }
-intrinsic("block_image_store_agx", [1, 1, -1], bit_sizes=[32, 16, 0],
-          indices=[FORMAT, IMAGE_DIM, IMAGE_ARRAY, EXPLICIT_COORD], flags=[])
+# extra src[] = { logical offset within shared memory, coordinates/layer }
+image("store_block_agx", [1, -1], extra_indices=[EXPLICIT_COORD])
 
-# Formatted load/store. The format is the pipe_format in memory (see
-# agx_internal_formats.h for the supported list). This accesses:
+# Formatted load/store. The format is the pipe_format in memory (see ail for the
+# supported list). This accesses:
 #
 #     address + extend(index) << (format shift + shift)
 #

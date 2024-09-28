@@ -540,6 +540,8 @@ vlVaPutSurface(VADriverContextP ctx, VASurfaceID surface_id, void* draw, short s
       return status;
    }
 
+   drv->pipe->flush_resource(drv->pipe, tex);
+
    /* flush before calling flush_frontbuffer so that rendering is flushed
     * to back buffer so the texture can be copied in flush_frontbuffer
     */
@@ -1559,12 +1561,17 @@ vlVaQueryVideoProcPipelineCaps(VADriverContextP ctx, VAContextID context,
    if (pipe_blend_modes & PIPE_VIDEO_VPP_BLEND_MODE_GLOBAL_ALPHA)
       pipeline_cap->blend_flags |= VA_BLEND_GLOBAL_ALPHA;
 
+   vlVaDriver *drv = VL_VA_DRIVER(ctx);
+
+   mtx_lock(&drv->mutex);
    for (i = 0; i < num_filters; i++) {
-      vlVaBuffer *buf = handle_table_get(VL_VA_DRIVER(ctx)->htab, filters[i]);
+      vlVaBuffer *buf = handle_table_get(drv->htab, filters[i]);
       VAProcFilterParameterBufferBase *filter;
 
-      if (!buf || buf->type != VAProcFilterParameterBufferType)
+      if (!buf || buf->type != VAProcFilterParameterBufferType) {
+         mtx_unlock(&drv->mutex);
          return VA_STATUS_ERROR_INVALID_BUFFER;
+      }
 
       filter = buf->data;
       switch (filter->type) {
@@ -1577,9 +1584,11 @@ vlVaQueryVideoProcPipelineCaps(VADriverContextP ctx, VAContextID context,
          break;
       }
       default:
+         mtx_unlock(&drv->mutex);
          return VA_STATUS_ERROR_UNIMPLEMENTED;
       }
    }
+   mtx_unlock(&drv->mutex);
 
    return VA_STATUS_SUCCESS;
 }

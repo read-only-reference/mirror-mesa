@@ -2,6 +2,7 @@
 # shellcheck disable=SC1091 # The relative paths in this file only become valid at runtime.
 # shellcheck disable=SC2034 # Variables are used in scripts called from here
 # shellcheck disable=SC2086 # we want word splitting
+# shellcheck disable=SC2016 # non-expanded variables are intentional
 # When changing this file, you need to bump the following
 # .gitlab-ci/image-tags.yml tags:
 # KERNEL_ROOTFS_TAG
@@ -295,7 +296,7 @@ rm -rf /apitrace
 ############### Build ANGLE
 if [[ "$DEBIAN_ARCH" = "amd64" ]]; then
   . .gitlab-ci/container/build-angle.sh
-  mv /angle /lava-files/rootfs-${DEBIAN_ARCH}/.
+  mv /angle $ROOTFS/.
   rm -rf /angle
 fi
 
@@ -364,7 +365,7 @@ fi
 ############### Build ci-kdl
 section_start kdl "Prepare a venv for kdl"
 . .gitlab-ci/container/build-kdl.sh
-mv ci-kdl.venv $ROOTFS
+mv /ci-kdl $ROOTFS/
 section_end kdl
 
 ############### Build local stuff for use by igt and kernel testing, which

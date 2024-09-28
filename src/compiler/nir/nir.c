@@ -503,6 +503,7 @@ nir_function_create(nir_shader *shader, const char *name)
    func->dont_inline = false;
    func->should_inline = false;
    func->is_subroutine = false;
+   func->is_tmp_globals_wrapper = false;
    func->subroutine_index = 0;
    func->num_subroutine_types = 0;
    func->subroutine_types = NULL;
@@ -2198,8 +2199,8 @@ bool
 nir_shader_supports_implicit_lod(nir_shader *shader)
 {
    return (shader->info.stage == MESA_SHADER_FRAGMENT ||
-           (shader->info.stage == MESA_SHADER_COMPUTE &&
-            shader->info.cs.derivative_group != DERIVATIVE_GROUP_NONE));
+           (gl_shader_stage_uses_workgroup(shader->info.stage) &&
+            shader->info.derivative_group != DERIVATIVE_GROUP_NONE));
 }
 
 nir_intrinsic_op
@@ -2619,6 +2620,7 @@ nir_rewrite_image_intrinsic(nir_intrinsic_instr *intrin, nir_def *src,
       CASE(load_raw_intel)
       CASE(store_raw_intel)
       CASE(fragment_mask_load_amd)
+      CASE(store_block_agx)
 #undef CASE
    default:
       unreachable("Unhanded image intrinsic");
@@ -3497,4 +3499,21 @@ nir_static_workgroup_size(const nir_shader *s)
 {
    return s->info.workgroup_size[0] * s->info.workgroup_size[1] *
           s->info.workgroup_size[2];
+}
+
+bool
+nir_block_contains_work(nir_block *block)
+{
+   if (!nir_cf_node_is_last(&block->cf_node))
+      return true;
+
+   nir_foreach_instr(instr, block) {
+      if (instr->type == nir_instr_type_phi)
+         continue;
+      if (instr->type != nir_instr_type_alu ||
+          !nir_op_is_vec_or_mov(nir_instr_as_alu(instr)->op))
+         return true;
+   }
+
+   return false;
 }

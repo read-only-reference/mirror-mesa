@@ -177,6 +177,7 @@ get_device_extensions(const struct v3dv_physical_device *device,
       .KHR_shader_expect_assume             = true,
       .KHR_shader_float_controls            = true,
       .KHR_shader_non_semantic_info         = true,
+      .KHR_shader_relaxed_extended_instruction = true,
       .KHR_sampler_mirror_clamp_to_edge     = true,
       .KHR_sampler_ycbcr_conversion         = true,
       .KHR_spirv_1_4                        = true,
@@ -223,6 +224,7 @@ get_device_extensions(const struct v3dv_physical_device *device,
       .EXT_primitive_topology_list_restart  = true,
       .EXT_private_data                     = true,
       .EXT_provoking_vertex                 = true,
+      .EXT_queue_family_foreign             = true,
       .EXT_separate_stencil_usage           = true,
       .EXT_shader_demote_to_helper_invocation = true,
       .EXT_shader_module_identifier         = true,
@@ -238,7 +240,6 @@ get_device_extensions(const struct v3dv_physical_device *device,
    if (vk_android_get_ugralloc() != NULL) {
       ext->ANDROID_external_memory_android_hardware_buffer = true;
       ext->ANDROID_native_buffer = true;
-      ext->EXT_queue_family_foreign = true;
    }
 #endif
 }
@@ -507,6 +508,9 @@ get_features(const struct v3dv_physical_device *physical_device,
       /* VK_EXT_swapchain_maintenance1 */
       .swapchainMaintenance1 = true,
 #endif
+
+      /* VK_KHR_shader_relaxed_extended_instruction */
+      .shaderRelaxedExtendedInstruction = true,
    };
 }
 

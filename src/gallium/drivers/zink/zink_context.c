@@ -971,7 +971,7 @@ create_bvci(struct zink_context *ctx, struct zink_resource *res, enum pipe_forma
    memset(&bvci, 0, sizeof(bvci));
    bvci.sType = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
    bvci.pNext = NULL;
-   if (screen->format_props[format].bufferFeatures & VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_BIT)
+   if (zink_get_format_props(screen, format)->bufferFeatures & VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_BIT)
       bvci.buffer = res->obj->storage_buffer ? res->obj->storage_buffer : res->obj->buffer;
    else
       bvci.buffer = res->obj->buffer;
@@ -1140,7 +1140,7 @@ zink_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *pres,
 
       ivci = create_ivci(screen, res, &templ, state->target);
       ivci.subresourceRange.levelCount = state->u.tex.last_level - state->u.tex.first_level + 1;
-      ivci.subresourceRange.aspectMask = sampler_aspect_from_format(state->format);
+      ivci.subresourceRange.aspectMask = util_format_is_depth_or_stencil(state->format) ? sampler_aspect_from_format(state->format) : res->aspect;
       bool red_depth_sampler_view = false;
       /* samplers for stencil aspects of packed formats need to always use stencil swizzle */
       if (ivci.subresourceRange.aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
@@ -2771,6 +2771,7 @@ zink_update_rendering_info(struct zink_context *ctx)
       struct zink_surface *surf = zink_csurface(ctx->fb_state.cbufs[i]);
       ctx->gfx_pipeline_state.rendering_formats[i] = surf ? surf->info.format[0] : VK_FORMAT_UNDEFINED;
    }
+   ctx->gfx_pipeline_state.rendering_info.viewMask = ctx->fb_state.viewmask;
    ctx->gfx_pipeline_state.rendering_info.depthAttachmentFormat = VK_FORMAT_UNDEFINED;
    ctx->gfx_pipeline_state.rendering_info.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
    if (ctx->fb_state.zsbuf && zink_is_zsbuf_used(ctx)) {
@@ -2823,7 +2824,8 @@ begin_rendering(struct zink_context *ctx, bool check_msaa_expand)
          else
             ctx->dynamic_fb.attachments[i].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
          if (use_tc_info) {
-            if (!ctx->dynamic_fb.tc_info.has_resolve && ctx->dynamic_fb.tc_info.cbuf_invalidate & BITFIELD_BIT(i))
+            /* can't skip stores if this is not a winsys resolve */
+            if ((!ctx->dynamic_fb.tc_info.has_resolve || ctx->fb_state.resolve) && ctx->dynamic_fb.tc_info.cbuf_invalidate & BITFIELD_BIT(i))
                ctx->dynamic_fb.attachments[i].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
             else
                ctx->dynamic_fb.attachments[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -2987,8 +2989,26 @@ begin_rendering(struct zink_context *ctx, bool check_msaa_expand)
             /* dead swapchain */
             return 0;
 
+      } else {
+         ctx->dynamic_fb.attachments[i].resolveMode = VK_RESOLVE_MODE_NONE;
       }
       ctx->dynamic_fb.attachments[i].imageView = iv;
+   }
+   if (ctx->fb_state.resolve && use_tc_info && ctx->dynamic_fb.tc_info.has_resolve) {
+      struct zink_resource *res = zink_resource(ctx->fb_state.resolve);
+      struct zink_surface *surf = zink_csurface(res->surface);
+      if (zink_is_swapchain(res)) {
+         if (!zink_kopper_acquire(ctx, res, UINT64_MAX))
+            return 0;
+         zink_surface_swapchain_update(ctx, surf);
+      }
+      zink_batch_resource_usage_set(ctx->bs, res, true, false);
+      VkImageLayout layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+      zink_screen(ctx->base.screen)->image_barrier(ctx, res, layout, 0, 0);
+      res->obj->unordered_read = res->obj->unordered_write = false;
+      ctx->dynamic_fb.attachments[0].resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+      ctx->dynamic_fb.attachments[0].resolveImageLayout = zink_resource(surf->base.texture)->layout;
+      ctx->dynamic_fb.attachments[0].resolveImageView = surf->image_view;
    }
    if (has_swapchain) {
       ASSERTED struct zink_resource *res = zink_resource(ctx->fb_state.cbufs[0]->texture);
@@ -3277,6 +3297,7 @@ hash_rendering_state(const void *key)
    const VkPipelineRenderingCreateInfo *info = key;
    uint32_t hash = 0;
    /*
+    uint32_t           viewMask;
     uint32_t           colorAttachmentCount;
     const VkFormat*    pColorAttachmentFormats;
     VkFormat           depthAttachmentFormat;
@@ -3284,6 +3305,7 @@ hash_rendering_state(const void *key)
     * this data is not optimally arranged, so it must be manually hashed
     */
    hash = XXH32(&info->colorAttachmentCount, sizeof(uint32_t), hash);
+   hash = XXH32(&info->viewMask, sizeof(uint32_t), hash);
    hash = XXH32(&info->depthAttachmentFormat, sizeof(uint32_t), hash);
    hash = XXH32(&info->stencilAttachmentFormat, sizeof(VkFormat), hash);
    return XXH32(info->pColorAttachmentFormats, sizeof(VkFormat) * info->colorAttachmentCount, hash);
@@ -3296,6 +3318,7 @@ equals_rendering_state(const void *a, const void *b)
    const VkPipelineRenderingCreateInfo *bi = b;
    return ai->colorAttachmentCount == bi->colorAttachmentCount &&
           ai->depthAttachmentFormat == bi->depthAttachmentFormat &&
+          ai->viewMask == bi->viewMask &&
           ai->stencilAttachmentFormat == bi->stencilAttachmentFormat &&
           !memcmp(ai->pColorAttachmentFormats, bi->pColorAttachmentFormats, sizeof(VkFormat) * ai->colorAttachmentCount);
 }
@@ -3761,6 +3784,8 @@ zink_set_framebuffer_state(struct pipe_context *pctx,
    /* renderpass changes if the number or types of attachments change */
    ctx->rp_changed |= ctx->fb_state.nr_cbufs != state->nr_cbufs;
    ctx->rp_changed |= !!ctx->fb_state.zsbuf != !!state->zsbuf;
+   if (ctx->tc && screen->driver_workarounds.track_renderpasses)
+      ctx->rp_changed |= ctx->fb_state.resolve != state->resolve;
    if (ctx->fb_state.nr_cbufs != state->nr_cbufs) {
       ctx->blend_state_changed |= screen->have_full_ds3;
       if (state->nr_cbufs && screen->have_full_ds3)
@@ -3779,6 +3804,8 @@ zink_set_framebuffer_state(struct pipe_context *pctx,
    ctx->dynamic_fb.info.colorAttachmentCount = ctx->fb_state.nr_cbufs;
    ctx->rp_changed |= ctx->dynamic_fb.info.layerCount != layers;
    ctx->dynamic_fb.info.layerCount = layers;
+   ctx->rp_changed |= ctx->dynamic_fb.info.viewMask != state->viewmask;
+   ctx->dynamic_fb.info.viewMask = state->viewmask;
    ctx->gfx_pipeline_state.rendering_info.colorAttachmentCount = ctx->fb_state.nr_cbufs;
 
    ctx->void_clears = 0;
@@ -3849,6 +3876,20 @@ zink_set_framebuffer_state(struct pipe_context *pctx,
       }
    } else {
       ctx->depth_bias_scale_factor = 0;
+   }
+
+   if (ctx->fb_state.resolve) {
+      struct zink_resource *res = zink_resource(ctx->fb_state.resolve);
+      if (!res->surface) {
+         struct pipe_surface tmpl = {0};
+         tmpl.format = res->base.b.format;
+         zink_screen_lock_context(screen);
+         res->surface = screen->copy_context->base.create_surface(&screen->copy_context->base, &res->base.b, &tmpl);
+         zink_screen_unlock_context(screen);
+         /* delete extra ref: the resource controls the surface lifetime, not the other way around */
+         struct pipe_resource *pres = ctx->fb_state.resolve;
+         pipe_resource_reference(&pres, NULL);
+      }
    }
    if (depth_bias_scale_factor != ctx->depth_bias_scale_factor &&
        ctx->rast_state && ctx->rast_state->base.offset_units_unscaled)
@@ -3995,20 +4036,20 @@ zink_flush(struct pipe_context *pctx,
 
    bool has_work = ctx->bs->has_work | ctx->bs->has_reordered_work | ctx->bs->has_unsync;
    if (!has_work) {
-       if (pfence) {
-          /* reuse last fence */
-          bs = ctx->last_batch_state;
-       }
-       if (!deferred) {
-          struct zink_batch_state *last = ctx->last_batch_state;
-          if (last) {
-             sync_flush(ctx, last);
-             if (last->is_device_lost)
-                check_device_lost(ctx);
-          }
-       }
-       if (ctx->tc && !ctx->track_renderpasses)
-         tc_driver_internal_flush_notify(ctx->tc);
+      if (pfence) {
+         /* reuse last fence */
+         bs = ctx->last_batch_state;
+      }
+      if (!deferred) {
+         struct zink_batch_state *last = ctx->last_batch_state;
+         if (last) {
+            sync_flush(ctx, last);
+            if (last->is_device_lost)
+               check_device_lost(ctx);
+         }
+      }
+      if (ctx->tc && !ctx->track_renderpasses)
+      tc_driver_internal_flush_notify(ctx->tc);
    } else {
       bs = ctx->bs;
       if (deferred && !(flags & PIPE_FLUSH_FENCE_FD) && pfence)
@@ -5377,6 +5418,7 @@ zink_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
       VkRenderingAttachmentInfo *att = &ctx->dynamic_fb.attachments[i];
       att->sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
       att->imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+      att->resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
       att->storeOp = VK_ATTACHMENT_STORE_OP_STORE;
    }
    ctx->gfx_pipeline_state.rendering_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
