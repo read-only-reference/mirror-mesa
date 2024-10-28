@@ -40,7 +40,6 @@
 #include "panvk_physical_device.h"
 #include "panvk_priv_bo.h"
 
-#include "pan_blitter.h"
 #include "pan_desc.h"
 #include "pan_encoder.h"
 #include "pan_props.h"
@@ -76,6 +75,39 @@ emit_tls(struct panvk_cmd_buffer *cmdbuf)
    }
 }
 
+/**
+ * Write all sync point updates to seqno registers and reset the relative sync
+ * points to 0.
+ */
+static void
+flush_sync_points(struct panvk_cmd_buffer *cmdbuf)
+{
+   for (uint32_t i = 0; i < ARRAY_SIZE(cmdbuf->state.cs); i++) {
+      struct cs_builder *b = panvk_get_cs_builder(cmdbuf, i);
+
+      if (!cs_is_valid(b)) {
+         vk_command_buffer_set_error(&cmdbuf->vk,
+                                     VK_ERROR_OUT_OF_DEVICE_MEMORY);
+         return;
+      }
+
+      cs_update_progress_seqno(b) {
+         for (uint32_t j = 0; j < PANVK_SUBQUEUE_COUNT; j++) {
+            uint32_t rel_sync_point = cmdbuf->state.cs[j].relative_sync_point;
+
+            if (!rel_sync_point)
+               continue;
+
+            cs_add64(b, cs_progress_seqno_reg(b, j), cs_progress_seqno_reg(b, j),
+                     rel_sync_point);
+         }
+      }
+   }
+
+   for (uint32_t i = 0; i < ARRAY_SIZE(cmdbuf->state.cs); i++)
+      cmdbuf->state.cs[i].relative_sync_point = 0;
+}
+
 static void
 finish_cs(struct panvk_cmd_buffer *cmdbuf, uint32_t subqueue)
 {
@@ -83,18 +115,6 @@ finish_cs(struct panvk_cmd_buffer *cmdbuf, uint32_t subqueue)
    struct panvk_instance *instance =
       to_panvk_instance(dev->vk.physical->instance);
    struct cs_builder *b = panvk_get_cs_builder(cmdbuf, subqueue);
-
-   cs_update_progress_seqno(b) {
-      for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
-         uint32_t rel_sync_point = cmdbuf->state.cs[i].relative_sync_point;
-
-         if (!rel_sync_point)
-            continue;
-
-         cs_add64(b, cs_progress_seqno_reg(b, i), cs_progress_seqno_reg(b, i),
-                  rel_sync_point);
-      }
-   }
 
    /* We need a clean because descriptor/CS memory can be returned to the
     * command pool where they get recycled. If we don't clean dirty cache lines,
@@ -124,9 +144,9 @@ finish_cs(struct panvk_cmd_buffer *cmdbuf, uint32_t subqueue)
       cs_load32_to(b, error, debug_sync_addr,
                    offsetof(struct panvk_cs_sync32, error));
       cs_wait_slots(b, SB_ALL_MASK, false);
-      cs_sync32_add(b, true, MALI_CS_SYNC_SCOPE_SYSTEM, one, debug_sync_addr,
-                    cs_now());
-
+      if (cmdbuf->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+         cs_sync32_add(b, true, MALI_CS_SYNC_SCOPE_SYSTEM, one,
+                       debug_sync_addr, cs_now());
       cs_match(b, error, cmp_scratch) {
          cs_case(b, 0) {
             /* Do nothing. */
@@ -151,6 +171,7 @@ panvk_per_arch(EndCommandBuffer)(VkCommandBuffer commandBuffer)
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
 
    emit_tls(cmdbuf);
+   flush_sync_points(cmdbuf);
 
    for (uint32_t i = 0; i < ARRAY_SIZE(cmdbuf->state.cs); i++) {
       struct cs_builder *b = &cmdbuf->state.cs[i].builder;
@@ -317,7 +338,6 @@ collect_cs_deps(struct panvk_cmd_buffer *cmdbuf,
    uint32_t wait_subqueue_mask = 0;
    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
       uint32_t sb_mask = src_stages_to_subqueue_sb_mask(i, src_stages);
-      assert((sb_mask != 0) == stages_cover_subqueue(i, src_stages));
       if (!sb_mask)
          continue;
 
@@ -622,7 +642,7 @@ panvk_create_cmdbuf(struct vk_command_pool *vk_pool, VkCommandBufferLevel level,
    cmdbuf = vk_zalloc(&device->vk.alloc, sizeof(*cmdbuf), 8,
                       VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (!cmdbuf)
-      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return panvk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    VkResult result = vk_command_buffer_init(
       &pool->vk, &cmdbuf->vk, &panvk_per_arch(cmd_buffer_ops), level);
@@ -702,5 +722,94 @@ panvk_per_arch(BeginCommandBuffer)(VkCommandBuffer commandBuffer,
    if (instance->debug_flags & PANVK_DEBUG_TRACE)
       cmdbuf->flags &= ~VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
 
+   panvk_per_arch(cmd_inherit_render_state)(cmdbuf, pBeginInfo);
+
    return VK_SUCCESS;
+}
+
+static void
+panvk_cmd_invalidate_state(struct panvk_cmd_buffer *cmdbuf)
+{
+   /* From the Vulkan 1.3.275 spec:
+    *
+    *    "...There is one exception to this rule - if the primary command
+    *    buffer is inside a render pass instance, then the render pass and
+    *    subpass state is not disturbed by executing secondary command
+    *    buffers."
+    *
+    * We need to reset everything EXCEPT the render pass state.
+    */
+   struct panvk_rendering_state render_save = cmdbuf->state.gfx.render;
+   memset(&cmdbuf->state.gfx, 0, sizeof(cmdbuf->state.gfx));
+   cmdbuf->state.gfx.render = render_save;
+
+   cmdbuf->state.gfx.fs.desc.res_table = 0;
+   cmdbuf->state.gfx.fs.spd = 0;
+   cmdbuf->state.gfx.vs.desc.res_table = 0;
+   cmdbuf->state.gfx.vs.spds.pos = 0;
+   cmdbuf->state.gfx.vs.spds.var = 0;
+   cmdbuf->state.gfx.vb.dirty = true;
+   cmdbuf->state.gfx.ib.dirty = true;
+
+   vk_dynamic_graphics_state_dirty_all(&cmdbuf->vk.dynamic_graphics_state);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+panvk_per_arch(CmdExecuteCommands)(VkCommandBuffer commandBuffer,
+                                   uint32_t commandBufferCount,
+                                   const VkCommandBuffer *pCommandBuffers)
+{
+   VK_FROM_HANDLE(panvk_cmd_buffer, primary, commandBuffer);
+
+   if (commandBufferCount == 0)
+      return;
+
+   /* Write out any pending seqno changes to registers before calling
+    * secondary command buffers. */
+   flush_sync_points(primary);
+
+   for (uint32_t i = 0; i < commandBufferCount; i++) {
+      VK_FROM_HANDLE(panvk_cmd_buffer, secondary, pCommandBuffers[i]);
+
+      /* make sure the CS context is setup properly
+       * to inherit the primary command buffer state
+       */
+      primary->state.tls.info.tls.size =
+         MAX2(primary->state.tls.info.tls.size,
+              secondary->state.tls.info.tls.size);
+      panvk_per_arch(cmd_prepare_exec_cmd_for_draws)(primary, secondary);
+
+      for (uint32_t j = 0; j < ARRAY_SIZE(primary->state.cs); j++) {
+         struct cs_builder *sec_b = panvk_get_cs_builder(secondary, j);
+         assert(cs_is_valid(sec_b));
+         if (!cs_is_empty(sec_b)) {
+            struct cs_builder *prim_b = panvk_get_cs_builder(primary, j);
+            struct cs_index addr = cs_scratch_reg64(prim_b, 0);
+            struct cs_index size = cs_scratch_reg32(prim_b, 2);
+            cs_move64_to(prim_b, addr, cs_root_chunk_gpu_addr(sec_b));
+            cs_move32_to(prim_b, size, cs_root_chunk_size(sec_b));
+            cs_call(prim_b, addr, size);
+         }
+      }
+   }
+
+   /* From the Vulkan 1.3.275 spec:
+    *
+    *    "When secondary command buffer(s) are recorded to execute on a
+    *    primary command buffer, the secondary command buffer inherits no
+    *    state from the primary command buffer, and all state of the primary
+    *    command buffer is undefined after an execute secondary command buffer
+    *    command is recorded. There is one exception to this rule - if the
+    *    primary command buffer is inside a render pass instance, then the
+    *    render pass and subpass state is not disturbed by executing secondary
+    *    command buffers. For state dependent commands (such as draws and
+    *    dispatches), any state consumed by those commands must not be
+    *    undefined."
+    *
+    * Therefore, it's the client's job to reset all the state in the primary
+    * after the secondary executes.  However, if we're doing any internal
+    * dirty tracking, we may miss the fact that a secondary has messed with
+    * GPU state if we don't invalidate all our internal tracking.
+    */
+   panvk_cmd_invalidate_state(primary);
 }

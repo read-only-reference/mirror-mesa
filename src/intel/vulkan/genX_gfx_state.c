@@ -1683,6 +1683,20 @@ cmd_buffer_gfx_state_emission(struct anv_cmd_buffer *cmd_buffer)
    const bool protected = cmd_buffer->vk.pool->flags &
                           VK_COMMAND_POOL_CREATE_PROTECTED_BIT;
 
+#if INTEL_WA_16011107343_GFX_VER
+   /* Will be emitted in front of every draw instead */
+   if (intel_needs_workaround(cmd_buffer->device->info, 16011107343) &&
+       anv_pipeline_has_stage(pipeline, MESA_SHADER_TESS_CTRL))
+      BITSET_CLEAR(hw_state->dirty, ANV_GFX_STATE_HS);
+#endif
+
+#if INTEL_WA_22018402687_GFX_VER
+   /* Will be emitted in front of every draw instead */
+   if (intel_needs_workaround(cmd_buffer->device->info, 22018402687) &&
+       anv_pipeline_has_stage(pipeline, MESA_SHADER_TESS_EVAL))
+      BITSET_CLEAR(hw_state->dirty, ANV_GFX_STATE_DS);
+#endif
+
    if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_URB)) {
       genX(urb_workaround)(cmd_buffer, &pipeline->urb_cfg);
 
@@ -2353,6 +2367,13 @@ genX(cmd_buffer_flush_gfx_hw_state)(struct anv_cmd_buffer *cmd_buffer)
     * Put potential workarounds here if you need to reemit an instruction
     * because of another one is changing.
     */
+
+   /* Wa_16012775297 - Emit dummy VF statistics before each 3DSTATE_VF. */
+#if INTEL_WA_16012775297_GFX_VER
+   if (intel_needs_workaround(device->info, 16012775297) &&
+       BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_VF))
+      BITSET_SET(hw_state->dirty, ANV_GFX_STATE_VF_STATISTICS);
+#endif
 
    /* Since Wa_16011773973 will disable 3DSTATE_STREAMOUT, we need to reemit
     * it after.

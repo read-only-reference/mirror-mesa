@@ -759,8 +759,8 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TEXTURE_SWIZZLE:
       return 1;
 
-   case PIPE_CAP_VERTEX_ATTRIB_ELEMENT_ALIGNED_ONLY:
-      return !screen->info.have_EXT_legacy_vertex_attributes;
+   case PIPE_CAP_VERTEX_INPUT_ALIGNMENT:
+      return screen->info.have_EXT_legacy_vertex_attributes ? PIPE_VERTEX_INPUT_ALIGNMENT_NONE : PIPE_VERTEX_INPUT_ALIGNMENT_ELEMENT;
 
    case PIPE_CAP_GL_CLAMP:
       return 0;
@@ -2600,10 +2600,9 @@ zink_query_dmabuf_modifiers(struct pipe_screen *pscreen, enum pipe_format format
    const struct zink_modifier_props *props = zink_get_modifier_props(screen, format);
    *count = props->drmFormatModifierCount;
    for (int i = 0; i < MIN2(max, *count); i++) {
-      if (external_only)
-         external_only[i] = 0;
-
       modifiers[i] = props->pDrmFormatModifierProperties[i].drmFormatModifier;
+      if (external_only)
+         external_only[i] = !(props->pDrmFormatModifierProperties[i].drmFormatModifierTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
    }
 }
 
@@ -3281,6 +3280,13 @@ zink_screen_get_fd(struct pipe_screen *pscreen)
    return screen->drm_fd;
 }
 
+static const char*
+zink_cl_cts_version(struct pipe_screen *pscreen)
+{
+   /* https://www.khronos.org/conformance/adopters/conformant-products/opencl#submission_437 */
+   return "v2024-08-08-00";
+}
+
 static struct zink_screen *
 zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev_major, int64_t dev_minor, uint64_t adapter_luid)
 {
@@ -3550,6 +3556,7 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
    screen->base.get_driver_query_group_info = zink_get_driver_query_group_info;
    screen->base.get_driver_query_info = zink_get_driver_query_info;
    screen->base.set_damage_region = zink_set_damage_region;
+   screen->base.get_cl_cts_version = zink_cl_cts_version;
 
    if (screen->info.have_EXT_sample_locations) {
       VkMultisamplePropertiesEXT prop;
