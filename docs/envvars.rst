@@ -365,14 +365,21 @@ Core Mesa environment variables
    - Creating RMV captures requires the ``scripts/setup.sh`` script in the
      Radeon Developer Tools folder to be run beforehand
 
+.. envvar:: MESA_VK_TRACE_PER_SUBMIT
+
+   Enables per-submit capture for compute-only workload. Disabled by default
+   and only valid with MESA_VK_TRACE=rgp.
+
 .. envvar:: MESA_VK_TRACE_FRAME
 
    Specifies a frame index at which a trace capture is automatically triggered.
+   Ignored when MESA_VK_TRACE_PER_SUBMIT is enabled.
 
 .. envvar:: MESA_VK_TRACE_TRIGGER
 
    Specifies a trigger file. Creating the file triggers the capture. (e.g.
    ``export MESA_VK_TRACE_TRIGGER=/tmp/trigger`` and then ``touch /tmp/trigger``)
+   Ignored when MESA_VK_TRACE_PER_SUBMIT is enabled.
 
 .. envvar:: MESA_LOADER_DRIVER_OVERRIDE
 
@@ -1329,6 +1336,8 @@ RADV driver environment variables
       force all allocated buffers to be referenced in submissions
    ``checkir``
       validate the LLVM IR before LLVM compiles the shader
+   ``dump_trap_handler``
+      dump the trap handler shader
    ``epilogs``
       dump fragment shader epilogs
    ``extra_md``
@@ -1393,9 +1402,11 @@ RADV driver environment variables
    ``novrsflatshading``
       disable VRS for flat shading (only on GFX10.3+)
    ``preoptir``
-      dump LLVM IR before any optimizations
+      Dump backend IR (ACO or LLVM) before any optimizations.
    ``prologs``
       dump vertex shader prologs
+   ``psocachestats``
+     dump PSO cache stats (hits/misses) to verify precompilation of shaders
    ``shaders``
       dump shaders
    ``shaderstats``
@@ -1412,6 +1423,28 @@ RADV driver environment variables
       synchronize shaders after all draws/dispatches
    ``zerovram``
       initialize all memory allocated in VRAM as zero
+   ``vs``
+      Dump vertex shaders.
+   ``tcs``
+      Dump tessellation control shaders.
+   ``tes``
+      Dump tessellation evaluation shaders.
+   ``gs``
+      Dump geometry shaders.
+   ``ps``
+      Dump fragment shaders.
+   ``task``
+      Dump task shaders.
+   ``mesh``
+      Dump mesh shaders.
+   ``cs``
+      Dump compute (and ray tracing) shaders.
+   ``nir``
+      Dump NIR for selected shader stages.
+   ``ir``
+      Dump backend IR (ACO or LLVM) for selected shader stages.
+   ``asm``
+      Dump shader disassembly for selected shader stages.
 
 .. envvar:: RADV_FORCE_FAMILY
 
@@ -1663,7 +1696,7 @@ RadeonSI driver environment variables
    ``nongg``
       Disable NGG and use the legacy pipeline.
    ``nggc``
-      Always use NGG culling even when it can hurt.
+      Always use NGG culling even on GPUs where it is disabled by default.
    ``nonggc``
       Disable NGG culling.
    ``switch_on_eop``
@@ -1869,6 +1902,13 @@ r300 driver environment variables
       Disable AA compression and fast AA clear
    ``notcl``
       Disable hardware accelerated Transform/Clip/Lighting
+   ``ieeemath``
+      Force IEEE versions of VS math opcodes where applicable
+      and also IEEE handling of multiply by zero (R5xx only)
+   ``ffmath``
+      Force FF versions of VS math opcodes where applicable
+      and 0 * anything = 0 rules in FS
+
 
 Asahi driver environment variables
 ----------------------------------
@@ -1947,6 +1987,53 @@ PowerVR driver environment variables
 .. envvar:: ROGUE_COLOR
 
    if set to ``auto`` Rogue IR will be colorized if stdout is not a pipe.
+   Color is forced off if set to ``off``/``0`` or on if set to ``on``/``1``.
+   Defaults to ``auto``.
+
+.. envvar:: PCO_DEBUG
+
+   A comma-separated list of named flags for the PCO compiler,
+   which control various compilation options:
+
+   ``val_skip``
+      Skip IR validation.
+
+   ``reindex``
+      Reindex IR at the end of each pass.
+
+.. envvar:: PCO_SKIP_PASSES
+
+   A comma-separated list of passes to skip.
+
+.. envvar:: PCO_PRINT
+
+   A comma-separated list of named flags for the PCO compiler,
+   which control debug printing options:
+
+   ``vs``
+      Print the IR for vertex shaders.
+   ``fs``
+      Print the IR for fragment shaders.
+   ``cs``
+      Print the IR for compute shaders.
+   ``all``
+      Print the IR for all shaders.
+   ``internal``
+      Print the IR for internal shader types.
+   ``passes``
+      Print the IR after each pass.
+   ``nir``
+      Print the resulting NIR.
+   ``binary``
+      Print the resulting binary.
+   ``verbose``
+      Print verbose IR.
+   ``ra``
+      Print register alloc info.
+
+.. envvar:: PCO_COLOR
+
+   if set to ``auto`` PCO IR will be colorized if stdout is not a pipe.
    Color is forced off if set to ``off``/``0`` or on if set to ``on``/``1``.
    Defaults to ``auto``.
 

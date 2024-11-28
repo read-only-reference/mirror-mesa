@@ -43,6 +43,7 @@
 #include "util/u_upload_mgr.h"
 #include "util/xmlconfig.h"
 #include "agx_bg_eot.h"
+#include "agx_bo.h"
 #include "agx_device.h"
 #include "agx_disk_cache.h"
 #include "agx_fence.h"
@@ -114,7 +115,7 @@ agx_resource_debug(struct agx_resource *res, const char *msg)
 
    agx_msg(
       "%s%s %dx%dx%d %dL %d/%dM %dS M:%llx %s %s%s S:0x%llx LS:0x%llx CS:0x%llx "
-      "Base=0x%llx Size=0x%llx Meta=0x%llx/0x%llx (%s) %s%s%s%s%s%sfd:%d(%d) @ %p\n",
+      "Base=0x%llx Size=0x%llx Meta=0x%llx/0x%llx (%s) %s%s%s%s%s%sfd:%d(%d) B:%x @ %p\n",
       msg ?: "", util_format_short_name(res->base.format), res->base.width0,
       res->base.height0, res->base.depth0, res->base.array_size,
       res->base.last_level, res->layout.levels, res->layout.sample_count_sa,
@@ -135,7 +136,7 @@ agx_resource_debug(struct agx_resource *res, const char *msg)
       res->bo->flags & AGX_BO_WRITEBACK ? "WB " : "",
       res->bo->flags & AGX_BO_SHAREABLE ? "SA " : "",
       res->bo->flags & AGX_BO_READONLY ? "RO " : "", res->bo->prime_fd, ino,
-      res);
+      res->base.bind, res);
 }
 
 static void
@@ -196,6 +197,8 @@ agx_resource_from_handle(struct pipe_screen *pscreen,
 
    pipe_reference_init(&prsc->reference, 1);
    prsc->screen = pscreen;
+
+   prsc->bind |= PIPE_BIND_SHARED;
 
    rsc->bo = agx_bo_import(dev, whandle->handle);
    /* Sometimes an import can fail e.g. on an invalid buffer fd, out of
@@ -1517,12 +1520,12 @@ agx_cmdbuf(struct agx_device *dev, struct drm_asahi_cmd_render *c,
       c->flags |= ASAHI_RENDER_VERTEX_SPILLS;
       c->vertex_helper_arg = batch->ctx->scratch_vs.buf->va->addr;
       c->vertex_helper_cfg = batch->vs_preamble_scratch << 16;
-      c->vertex_helper_program = dev->helper->va->addr | 1;
+      c->vertex_helper_program = agx_helper_program(&batch->ctx->bg_eot);
    }
    if (batch->fs_scratch) {
       c->fragment_helper_arg = batch->ctx->scratch_fs.buf->va->addr;
       c->fragment_helper_cfg = batch->fs_preamble_scratch << 16;
-      c->fragment_helper_program = dev->helper->va->addr | 1;
+      c->fragment_helper_program = agx_helper_program(&batch->ctx->bg_eot);
    }
 }
 
@@ -1644,7 +1647,7 @@ agx_flush_compute(struct agx_context *ctx, struct agx_batch *batch,
       cmdbuf->helper_arg = ctx->scratch_cs.buf->va->addr;
       cmdbuf->helper_cfg = batch->cs_preamble_scratch << 16;
       // cmdbuf->helper_cfg |= 0x40;
-      cmdbuf->helper_program = dev->helper->va->addr | 1;
+      cmdbuf->helper_program = agx_helper_program(&batch->ctx->bg_eot);
    }
 }
 
@@ -1854,6 +1857,8 @@ agx_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
       priority = 2;
    else if (flags & PIPE_CONTEXT_PRIORITY_HIGH)
       priority = 1;
+   else if (flags & PIPE_CONTEXT_PRIORITY_REALTIME)
+      priority = 0;
 
    ctx->queue_id = agx_create_command_queue(agx_device(screen),
                                             DRM_ASAHI_QUEUE_CAP_RENDER |
@@ -2203,7 +2208,7 @@ agx_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
    case PIPE_CAP_CONTEXT_PRIORITY_MASK:
       return PIPE_CONTEXT_PRIORITY_LOW | PIPE_CONTEXT_PRIORITY_MEDIUM |
-             PIPE_CONTEXT_PRIORITY_HIGH;
+             PIPE_CONTEXT_PRIORITY_HIGH | PIPE_CONTEXT_PRIORITY_REALTIME;
 
    default:
       return u_pipe_screen_get_param_defaults(pscreen, param);
@@ -2368,6 +2373,8 @@ static int
 agx_get_compute_param(struct pipe_screen *pscreen, enum pipe_shader_ir ir_type,
                       enum pipe_compute_cap param, void *ret)
 {
+   struct agx_device *dev = agx_device(pscreen);
+
 #define RET(x)                                                                 \
    do {                                                                        \
       if (ret)                                                                 \
@@ -2414,10 +2421,10 @@ agx_get_compute_param(struct pipe_screen *pscreen, enum pipe_shader_ir ir_type,
       RET((uint64_t[]){4096});
 
    case PIPE_COMPUTE_CAP_MAX_CLOCK_FREQUENCY:
-      RET((uint32_t[]){800 /* MHz -- TODO */});
+      RET((uint32_t[]){dev->params.max_frequency_khz / 1000});
 
    case PIPE_COMPUTE_CAP_MAX_COMPUTE_UNITS:
-      RET((uint32_t[]){4 /* TODO */});
+      RET((uint32_t[]){agx_get_num_cores(dev)});
 
    case PIPE_COMPUTE_CAP_IMAGES_SUPPORTED:
       RET((uint32_t[]){1});
@@ -2731,6 +2738,20 @@ agx_screen_create(int fd, struct renderonly *ro,
          U_TRANSFER_HELPER_MSAA_MAP | U_TRANSFER_HELPER_Z24_IN_Z32F);
 
    agx_disk_cache_init(agx_screen);
+
+   /* TODO: Refactor readonly data? */
+   {
+      struct agx_bo *bo =
+         agx_bo_create(&agx_screen->dev, 16384, 0, 0, "Rodata");
+
+      agx_pack_txf_sampler((struct agx_sampler_packed *)bo->map);
+
+      agx_pack(&agx_screen->dev.txf_sampler, USC_SAMPLER, cfg) {
+         cfg.start = 0;
+         cfg.count = 1;
+         cfg.buffer = bo->va->addr;
+      }
+   }
 
    return screen;
 }

@@ -199,8 +199,6 @@ void st_init_limits(struct pipe_screen *screen,
 
    c->HasFBFetch = screen->get_param(screen, PIPE_CAP_FBFETCH);
 
-   c->CombinedClipCullDistanceArrays = !screen->get_param(screen, PIPE_CAP_CULL_DISTANCE_NOCOMBINE);
-
    c->PointSizeFixed = screen->get_param(screen, PIPE_CAP_POINT_SIZE_FIXED) != PIPE_POINT_SIZE_LOWER_ALWAYS;
 
    for (sh = 0; sh < PIPE_SHADER_TYPES; ++sh) {
@@ -1160,6 +1158,10 @@ void st_init_extensions(struct pipe_screen *screen,
          extension_table[cap_mapping[i].extension_offset] = GL_TRUE;
       }
    }
+
+   /* MESA_texture_const_bandwidth depends on EXT_memory_object */
+   if (!extensions->EXT_memory_object)
+      extensions->MESA_texture_const_bandwidth = GL_FALSE;
 
    /* EXT implies ARB here */
    if (extensions->EXT_texture_filter_minmax)

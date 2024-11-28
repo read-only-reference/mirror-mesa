@@ -94,32 +94,66 @@ create_resource(struct pipe_context *context, TfLiteTensor tensor)
 }
 
 static void
-fill_operation(struct teflon_delegate *delegate, TfLiteContext *tf_context, TfLiteNode *node, TfLiteRegistration *node_registration, struct pipe_ml_operation *operation, struct pipe_tensor *tensors)   
+fill_operation(struct teflon_delegate *delegate, TfLiteContext *tf_context, TfLiteNode *node, TfLiteRegistration *node_registration, struct pipe_ml_operation *operation, struct pipe_tensor *tensors)
 {
-   TfLiteConvParams* params = (TfLiteConvParams*)node->builtin_data;
+   operation->input_count = node->inputs->size;
+   operation->input_tensors = calloc(operation->input_count, sizeof(void*));
+   for (unsigned i = 0; i < node->inputs->size; i++)
+      operation->input_tensors[i] = &tensors[node->inputs->data[i]];
 
-   operation->input_tensor = &tensors[node->inputs->data[0]];
-   operation->output_tensor = &tensors[node->outputs->data[0]];
+   operation->output_count = node->outputs->size;
+   operation->output_tensors = calloc(operation->output_count, sizeof(void*));
+   for (unsigned i = 0; i < node->outputs->size; i++)
+      operation->output_tensors[i] = &tensors[node->outputs->data[i]];
 
    switch(node_registration->builtin_code) {
       case kTfLiteBuiltinConv2d:
-      case kTfLiteBuiltinDepthwiseConv2d:
+      case kTfLiteBuiltinDepthwiseConv2d: {
          operation->type = PIPE_ML_OPERATION_TYPE_CONVOLUTION;
          operation->conv.weight_tensor = &tensors[node->inputs->data[1]];
          operation->conv.bias_tensor = &tensors[node->inputs->data[2]];
-         operation->conv.stride_x = params->stride_width;
-         operation->conv.stride_y = params->stride_height;
-         operation->conv.padding_same = params->padding == kTfLitePaddingSame;
-         operation->conv.depthwise = node_registration->builtin_code == kTfLiteBuiltinDepthwiseConv2d;
+         if (node_registration->builtin_code == kTfLiteBuiltinConv2d) {
+            TfLiteConvParams* params = (TfLiteConvParams*)node->builtin_data;
+
+            assert(params->activation == kTfLiteActNone ||
+                   params->activation == kTfLiteActRelu ||
+                   params->activation == kTfLiteActRelu6);
+            if (node_registration->version >= 2) {
+               assert(params->dilation_width_factor == 1);
+               assert(params->dilation_height_factor == 1);
+            }
+            operation->conv.stride_x = params->stride_width;
+            operation->conv.stride_y = params->stride_height;
+            operation->conv.padding_same = params->padding == kTfLitePaddingSame;
+            operation->conv.depthwise = false;
+            operation->conv.relu = params->activation == kTfLiteActRelu ||
+                                   params->activation == kTfLiteActRelu6;
+         } else {
+            TfLiteDepthwiseConvParams* params = (TfLiteDepthwiseConvParams*)node->builtin_data;
+
+            assert(params->activation == kTfLiteActNone ||
+                   params->activation == kTfLiteActRelu ||
+                   params->activation == kTfLiteActRelu6);
+            if (node_registration->version >= 2) {
+               assert(params->dilation_width_factor == 1);
+               assert(params->dilation_height_factor == 1);
+            }
+            operation->conv.stride_x = params->stride_width;
+            operation->conv.stride_y = params->stride_height;
+            operation->conv.padding_same = params->padding == kTfLitePaddingSame;
+            operation->conv.depthwise = true;
+            operation->conv.relu = params->activation == kTfLiteActRelu ||
+                                   params->activation == kTfLiteActRelu6;
+         }
          operation->conv.pointwise = operation->conv.weight_tensor->dims[1] == 1 && \
                                      operation->conv.weight_tensor->dims[2] == 1;
          break;
+      }
       case kTfLiteBuiltinAveragePool2d:
          operation->type = PIPE_ML_OPERATION_TYPE_POOLING;
          break;
       case kTfLiteBuiltinAdd:
          operation->type = PIPE_ML_OPERATION_TYPE_ADD;
-         operation->add.input_tensor = &tensors[node->inputs->data[1]];
          break;
       default:
          unreachable("Unsupported ML operation type");
@@ -175,40 +209,35 @@ dump_graph(struct pipe_tensor *tensors, unsigned tensor_count, struct pipe_ml_op
    }
 
    teflon_debug("\n");
-   teflon_debug("%3s %-6s %3s %3s  %s\n", "idx", "type", "in", "out", "operation type-specific");
+   teflon_debug("%3s %-6s %25s %25s  %s\n", "idx", "type", "inputs", "outputs", "operation type-specific");
    teflon_debug("================================================================================================\n");
    for (int i = 0; i < operation_count; i++) {
+      teflon_debug("%3d ", i);
+
       switch(operations[i].type) {
-      case PIPE_ML_OPERATION_TYPE_ADD:
-         teflon_debug("%3d %-6s %3d %3d  in: %d",
-                     i,
-                     "ADD",
-                     operations[i].input_tensor->index,
-                     operations[i].output_tensor->index,
-                     operations[i].add.input_tensor->index);
-         break;
-      case PIPE_ML_OPERATION_TYPE_CONVOLUTION:
-         teflon_debug("%3d %-6s %3d %3d  w: %d b: %d stride: %d pad: %s",
-                     i,
-                     operations[i].conv.depthwise ? "DWCONV" : "CONV",
-                     operations[i].input_tensor->index,
-                     operations[i].output_tensor->index,
-                     operations[i].conv.weight_tensor->index,
-                     operations[i].conv.bias_tensor->index,
-                     operations[i].conv.stride_x,
-                     operations[i].conv.padding_same ? "SAME" : "VALID");
-         break;
-      case PIPE_ML_OPERATION_TYPE_POOLING:
-         teflon_debug("%3d %-6s %3d %3d  filter: %dx%d stride: %d pad: %s",
-                     i,
-                     "POOL",
-                     operations[i].input_tensor->index,
-                     operations[i].output_tensor->index,
-                     operations[i].pooling.filter_height,
-                     operations[i].pooling.filter_width,
-                     operations[i].pooling.stride_x,
-                     operations[i].pooling.padding_same ? "SAME" : "VALID");
-         break;
+         case PIPE_ML_OPERATION_TYPE_ADD:
+            teflon_debug("%-6s ", "ADD");
+            break;
+         case PIPE_ML_OPERATION_TYPE_CONVOLUTION:
+            teflon_debug("%-6s ", operations[i].conv.depthwise ? "DWCONV" : "CONV");
+            break;
+         case PIPE_ML_OPERATION_TYPE_POOLING:
+            teflon_debug("%-6s ", "POOL");
+            break;
+      }
+
+      for (unsigned j = 0; j < operations[i].input_count; j++) {
+         teflon_debug("%d", operations[i].input_tensors[j]->index);
+         if (j < operations[i].input_count - 1)
+            teflon_debug(",");
+      }
+
+      teflon_debug(" ");
+
+      for (unsigned j = 0; j < operations[i].output_count; j++) {
+         teflon_debug("%d", operations[i].output_tensors[j]->index);
+         if (j < operations[i].output_count - 1)
+            teflon_debug(",");
       }
 
       teflon_debug("\n");
@@ -325,18 +354,35 @@ partition_invoke(TfLiteContext *tf_context, TfLiteNode *node)
       start = (long)time.tv_sec * 1000 + (long)time.tv_nsec / 1000000;
    }
 
-   struct pipe_tensor input = {0};
-   /* FIXME: Support mutiple inputs */
-   fill_tensor(delegate, tf_context, &input, tsubgraph->input_tensors[0]);
-   context->ml_subgraph_invoke(context, subgraph, &input);
+   void **buffers = malloc(tsubgraph->input_count * sizeof(*buffers));
+   bool *is_signed = malloc(tsubgraph->input_count * sizeof(*is_signed));
+   for (unsigned i = 0; i < tsubgraph->input_count; i++) {
+      TfLiteTensor tf_tensor = tf_context->tensors[tsubgraph->input_tensors[i]];
 
-   void **buffers = malloc(tsubgraph->output_count * sizeof(*buffers));
-   for (unsigned i = 0; i < tsubgraph->output_count; i++)
-      buffers[i] = tf_context->tensors[tsubgraph->output_tensors[i]].data.data;
-   context->ml_subgraph_read_output(context, subgraph, tsubgraph->output_count, tsubgraph->output_tensors, buffers);
+      buffers[i] = tf_tensor.data.data;
+      is_signed[i] = !(tf_tensor.type == kTfLiteUInt8 ||
+                       tf_tensor.type == kTfLiteUInt16 ||
+                       tf_tensor.type == kTfLiteUInt32 ||
+                       tf_tensor.type == kTfLiteUInt64);
+   }
+   context->ml_subgraph_invoke(context, subgraph, tsubgraph->input_count, tsubgraph->input_tensors, buffers, is_signed);
    free(buffers);
+   free(is_signed);
 
-   pipe_resource_reference(&input.resource, NULL);
+   buffers = malloc(tsubgraph->output_count * sizeof(*buffers));
+   is_signed = malloc(tsubgraph->output_count * sizeof(*is_signed));
+   for (unsigned i = 0; i < tsubgraph->output_count; i++) {
+      TfLiteTensor tf_tensor = tf_context->tensors[tsubgraph->output_tensors[i]];
+
+      buffers[i] = tf_tensor.data.data;
+      is_signed[i] = !(tf_tensor.type == kTfLiteUInt8 ||
+                       tf_tensor.type == kTfLiteUInt16 ||
+                       tf_tensor.type == kTfLiteUInt32 ||
+                       tf_tensor.type == kTfLiteUInt64);
+   }
+   context->ml_subgraph_read_output(context, subgraph, tsubgraph->output_count, tsubgraph->output_tensors, buffers, is_signed);
+   free(buffers);
+   free(is_signed);
 
    if (unlikely(debug_get_option_debug_teflon() & TEFLON_DEBUG_VERBOSE)) {
       struct timespec time;
@@ -346,6 +392,63 @@ partition_invoke(TfLiteContext *tf_context, TfLiteNode *node)
    }
 
    return kTfLiteOk;
+}
+
+static bool
+tensor_quantization_supported(TfLiteTensor *tensor)
+{
+   if (tensor->quantization.type == kTfLiteAffineQuantization) {
+      TfLiteAffineQuantization *affine = (TfLiteAffineQuantization *)tensor->quantization.params;
+
+      /*
+       * Per-axis quantization not supported, for details see:
+       * https://ai.google.dev/edge/litert/models/quantization_spec#per-axis_vs_per-tensor
+       */
+      return affine->scale->size == 1 && affine->zero_point->size == 1;
+   }
+   return false;
+}
+
+static bool
+fused_relu6_supported(TfLiteTensor *tensor)
+{
+   TfLiteAffineQuantization *affine;
+   int quantized_max;
+
+   switch (tensor->type) {
+      case kTfLiteInt8:
+         quantized_max = INT8_MAX;
+         break;
+      case kTfLiteUInt8:
+         quantized_max = UINT8_MAX;
+         break;
+      default:
+         return false;
+   }
+
+   assert(tensor->quantization.type == kTfLiteAffineQuantization);
+   affine = (TfLiteAffineQuantization *)tensor->quantization.params;
+
+   assert(affine->scale->size == affine->zero_point->size);
+   for (int i = 0; i < affine->zero_point->size; i++) {
+      if ((quantized_max - affine->zero_point->data[i]) * affine->scale->data[i] > 6.0f)
+         return false;
+   }
+   return true;
+}
+
+static bool
+fused_activation_supported(TfLiteFusedActivation activation, TfLiteTensor *tensor)
+{
+   switch (activation) {
+      case kTfLiteActNone:
+      case kTfLiteActRelu:
+         return true;
+      case kTfLiteActRelu6:
+         return fused_relu6_supported(tensor);
+      default:
+         return false;
+   }
 }
 
 static TfLiteStatus
@@ -367,8 +470,46 @@ PrepareDelegate(TfLiteContext *context, TfLiteDelegate *delegate)
           context, node_index, &node, &registration));
 
       switch(registration->builtin_code) {
-         case kTfLiteBuiltinConv2d:
-         case kTfLiteBuiltinDepthwiseConv2d:
+         case kTfLiteBuiltinConv2d: {
+            TfLiteTensor *input_tensor = &context->tensors[node->inputs->data[0]];
+            TfLiteTensor *weight_tensor = &context->tensors[node->inputs->data[1]];
+            TfLiteTensor *bias_tensor = &context->tensors[node->inputs->data[2]];
+            TfLiteTensor *output_tensor = &context->tensors[node->outputs->data[0]];
+            TfLiteConvParams* params = (TfLiteConvParams*)node->builtin_data;
+
+            // Dilation and per-axis quantization not yet implemented
+            if (tensor_quantization_supported(input_tensor) &&
+                tensor_quantization_supported(weight_tensor) &&
+                tensor_quantization_supported(bias_tensor) &&
+                tensor_quantization_supported(output_tensor) &&
+                fused_activation_supported(params->activation, output_tensor) &&
+                (registration->version < 2 ||
+                 (params->dilation_width_factor == 1 &&
+                  params->dilation_height_factor == 1))) {
+               supported = true;
+            }
+            break;
+         }
+         case kTfLiteBuiltinDepthwiseConv2d: {
+            TfLiteTensor *input_tensor = &context->tensors[node->inputs->data[0]];
+            TfLiteTensor *weight_tensor = &context->tensors[node->inputs->data[1]];
+            TfLiteTensor *bias_tensor = &context->tensors[node->inputs->data[2]];
+            TfLiteTensor *output_tensor = &context->tensors[node->outputs->data[0]];
+            TfLiteDepthwiseConvParams* params = (TfLiteDepthwiseConvParams*)node->builtin_data;
+
+            // Dilation and per-axis quantization not yet implemented
+            if (tensor_quantization_supported(input_tensor) &&
+                tensor_quantization_supported(weight_tensor) &&
+                tensor_quantization_supported(bias_tensor) &&
+                tensor_quantization_supported(output_tensor) &&
+                fused_activation_supported(params->activation, output_tensor) &&
+                (registration->version < 2 ||
+                 (params->dilation_width_factor == 1 &&
+                  params->dilation_height_factor == 1))) {
+               supported = true;
+            }
+            break;
+         }
          case kTfLiteBuiltinAdd:
             supported = true;
             break;

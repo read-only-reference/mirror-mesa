@@ -447,6 +447,10 @@ intrinsic("is_helper_invocation", dest_comp=1, flags=[CAN_ELIMINATE])
 # SpvOpTerminateInvocation from SPIR-V.  Essentially a discard "for real".
 barrier("terminate")
 
+# NonSemantic.DebugBreak from SPIR-V. Essentially used to emit breakpoints in
+# shaders.
+barrier("debug_break")
+
 # Control/Memory barrier with explicit scope.  Follows the semantics of SPIR-V
 # OpMemoryBarrier and OpControlBarrier, used to implement Vulkan Memory Model.
 # Storage that the barrier applies is represented using NIR variable modes.
@@ -483,6 +487,11 @@ intrinsic("as_uniform", src_comp=[0], dest_comp=0, bit_sizes=src0, flags=[CAN_EL
 # Returns the value of the first source for the lane where the second source is
 # true. The second source must be true for exactly one lane.
 intrinsic("read_invocation_cond_ir3", src_comp=[0, 1], dest_comp=0, flags=[CAN_ELIMINATE])
+
+# Like read_first_invocation but using the getlast instruction instead of
+# getone. More specifically, this will read the value from the last active
+# invocation of the first cluster of 8 invocations with an active invocation.
+intrinsic("read_getlast_ir3", src_comp=[0], dest_comp=0, bit_sizes=src0, flags=[CAN_ELIMINATE])
 
 # Additional SPIR-V ballot intrinsics
 #
@@ -1182,7 +1191,7 @@ load("task_payload", [1], [BASE, ALIGN_MUL, ALIGN_OFFSET], [CAN_ELIMINATE])
 # src[] = { offset }.
 load("push_constant", [1], [BASE, RANGE, ALIGN_MUL, ALIGN_OFFSET], [CAN_ELIMINATE, CAN_REORDER])
 # src[] = { offset }.
-load("constant", [1], [BASE, RANGE, ALIGN_MUL, ALIGN_OFFSET],
+load("constant", [1], [BASE, RANGE, ACCESS, ALIGN_MUL, ALIGN_OFFSET],
      [CAN_ELIMINATE, CAN_REORDER])
 # src[] = { address }.
 load("global", [1], [ACCESS, ALIGN_MUL, ALIGN_OFFSET], [CAN_ELIMINATE])

@@ -873,6 +873,29 @@ emit_alu(struct ir3_context *ctx, nir_alu_instr *alu)
       dst = ir3_SHR_B_rpt(ctx->block, dst_sz, src[0], 0,
                           resize_shift_amount(ctx, dst_sz, src[1], bs[0]), 0);
       break;
+   case nir_op_shrm_ir3:
+      dst = ir3_SHRM_rpt(ctx->block, dst_sz,
+                         resize_shift_amount(ctx, dst_sz, src[1], bs[0]), 0,
+                         src[0], 0, src[2], 0);
+      break;
+   case nir_op_shlm_ir3:
+      dst = ir3_SHLM_rpt(ctx->block, dst_sz,
+                         resize_shift_amount(ctx, dst_sz, src[1], bs[0]), 0,
+                         src[0], 0, src[2], 0);
+      break;
+   case nir_op_shrg_ir3:
+      dst = ir3_SHRG_rpt(ctx->block, dst_sz,
+                         resize_shift_amount(ctx, dst_sz, src[1], bs[0]), 0,
+                         src[0], 0, src[2], 0);
+      break;
+   case nir_op_shlg_ir3:
+      dst = ir3_SHLG_rpt(ctx->block, dst_sz,
+                         resize_shift_amount(ctx, dst_sz, src[1], bs[0]), 0,
+                         src[0], 0, src[2], 0);
+      break;
+   case nir_op_andg_ir3:
+      dst = ir3_ANDG_rpt(ctx->block, dst_sz, src[0], 0, src[1], 0, src[2], 0);
+      break;
    case nir_op_ilt:
       dst = ir3_CMPS_S_rpt(b, dst_sz, src[0], 0, src[1], 0);
       set_cat2_condition(dst.rpts, dst_sz, IR3_COND_LT);
@@ -1085,6 +1108,7 @@ emit_alu(struct ir3_context *ctx, nir_alu_instr *alu)
       case nir_op_ixor:
       case nir_op_inot:
       case nir_op_bcsel:
+      case nir_op_andg_ir3:
          break;
       default:
          compile_assert(ctx, alu->def.bit_size != 1);
@@ -2869,6 +2893,7 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
       break;
    case nir_intrinsic_load_sample_mask_in:
       if (!ctx->samp_mask_in) {
+         ctx->so->reads_smask = true;
          ctx->samp_mask_in =
             create_sysval_input(ctx, SYSTEM_VALUE_SAMPLE_MASK_IN, 0x1);
       }
@@ -2918,6 +2943,15 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
          }
       }
       break;
+   case nir_intrinsic_load_frag_shading_rate: {
+      if (!ctx->frag_shading_rate) {
+         ctx->so->reads_shading_rate = true;
+         ctx->frag_shading_rate =
+            create_sysval_input(ctx, SYSTEM_VALUE_FRAG_SHADING_RATE, 0x1);
+      }
+      dst[0] = ctx->frag_shading_rate;
+      break;
+   }
    case nir_intrinsic_load_base_workgroup_id:
       for (int i = 0; i < dest_components; i++) {
          dst[i] = create_driver_param(ctx, IR3_DP_CS(base_group_x) + i);
@@ -3085,6 +3119,19 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
    case nir_intrinsic_read_first_invocation: {
       struct ir3_instruction *src = ir3_get_src(ctx, &intr->src[0])[0];
       dst[0] = ir3_READ_FIRST_MACRO(ctx->block, src, 0);
+      dst[0]->dsts[0]->flags |= IR3_REG_SHARED;
+      /* See above. */
+      if (src->dsts[0]->flags & IR3_REG_HALF) {
+         dst[0] = ir3_MOV(b, dst[0], TYPE_U32);
+         if (!ctx->compiler->has_scalar_alu)
+            dst[0]->dsts[0]->flags &= ~IR3_REG_SHARED;
+      }
+      break;
+   }
+
+   case nir_intrinsic_read_getlast_ir3: {
+      struct ir3_instruction *src = ir3_get_src(ctx, &intr->src[0])[0];
+      dst[0] = ir3_READ_GETLAST_MACRO(ctx->block, src, 0);
       dst[0]->dsts[0]->flags |= IR3_REG_SHARED;
       /* See above. */
       if (src->dsts[0]->flags & IR3_REG_HALF) {
@@ -5025,6 +5072,9 @@ setup_output(struct ir3_context *ctx, nir_intrinsic_instr *intr)
       case VARYING_SLOT_VIEWPORT:
          so->writes_viewport = true;
          break;
+      case VARYING_SLOT_PRIMITIVE_SHADING_RATE:
+         so->writes_shading_rate = true;
+         break;
       case VARYING_SLOT_PRIMITIVE_ID:
       case VARYING_SLOT_GS_VERTEX_FLAGS_IR3:
          assert(ctx->so->type == MESA_SHADER_GEOMETRY);
@@ -5452,6 +5502,12 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
       so->local_size[1] = ctx->s->info.workgroup_size[1];
       so->local_size[2] = ctx->s->info.workgroup_size[2];
       so->local_size_variable = ctx->s->info.workgroup_size_variable;
+   }
+
+   if (so->type == MESA_SHADER_FRAGMENT && so->reads_shading_rate &&
+       !so->reads_smask &&
+       compiler->reading_shading_rate_requires_smask_quirk) {
+      create_sysval_input(ctx, SYSTEM_VALUE_SAMPLE_MASK_IN, 0x1);
    }
 
    /* Vertex shaders in a tessellation or geometry pipeline treat END as a

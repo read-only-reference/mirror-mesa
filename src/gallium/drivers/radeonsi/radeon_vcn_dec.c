@@ -35,6 +35,7 @@
 #define NUM_AV1_REFS   8
 #define NUM_AV1_REFS_PER_FRAME 7
 
+static enum pipe_format get_buffer_format(struct radeon_decoder *dec);
 static unsigned calc_dpb_size(struct radeon_decoder *dec);
 static unsigned calc_ctx_size_h264_perf(struct radeon_decoder *dec);
 static unsigned calc_ctx_size_h265_main(struct radeon_decoder *dec);
@@ -999,7 +1000,9 @@ static rvcn_dec_message_av1_t get_av1_msg(struct radeon_decoder *dec,
    }
 
    if (pic->picture_parameter.bit_depth_idx) {
-      if (target->buffer_format == PIPE_FORMAT_P010 || target->buffer_format == PIPE_FORMAT_P016) {
+      if (target->buffer_format == PIPE_FORMAT_P010 ||
+          target->buffer_format == PIPE_FORMAT_P012 ||
+          target->buffer_format == PIPE_FORMAT_P016) {
          result.p010_mode = 1;
          result.msb_mode = 1;
       } else {
@@ -1106,7 +1109,7 @@ static rvcn_dec_message_av1_t get_av1_msg(struct radeon_decoder *dec,
    }
 
    if (dec->dpb_type == DPB_DYNAMIC_TIER_2) {
-      dec->ref_codec.bts = pic->picture_parameter.bit_depth_idx ? CODEC_10_BITS : CODEC_8_BITS;
+      dec->ref_codec.bts = pic->picture_parameter.bit_depth_idx;
       dec->ref_codec.index = result.curr_pic_idx;
       dec->ref_codec.ref_size = 8;
       dec->ref_codec.num_refs = num_refs;
@@ -1371,7 +1374,7 @@ static unsigned rvcn_dec_dynamic_dpb_t2_message(struct radeon_decoder *dec, rvcn
    width = align(decode->width_in_samples, dec->db_alignment);
    height = align(decode->height_in_samples, dec->db_alignment);
    size = align((width * height * 3) / 2, 256);
-   if (dec->ref_codec.bts == CODEC_10_BITS)
+   if (dec->ref_codec.bts == CODEC_10_BITS || dec->ref_codec.bts == CODEC_12_BITS)
       size = (((struct si_screen *)dec->screen)->info.vcn_ip_version == VCN_5_0_0) ? size * 2 : size * 3 / 2;
 
    list_for_each_entry_safe(struct rvcn_dec_dynamic_dpb_t2, d, &dec->dpb_ref_list, list) {
@@ -1448,7 +1451,7 @@ static unsigned rvcn_dec_dynamic_dpb_t2_message(struct radeon_decoder *dec, rvcn
       if (dec->dpb_use_surf) {
          struct pipe_video_buffer templat;
          memset(&templat, 0, sizeof(templat));
-         templat.buffer_format = (dec->ref_codec.bts != CODEC_10_BITS) ? PIPE_FORMAT_NV12 : PIPE_FORMAT_P010;
+         templat.buffer_format = get_buffer_format(dec);
          templat.width = width;
          templat.height = height;
          if (encrypted)
@@ -1529,7 +1532,7 @@ static unsigned rvcn_dec_dynamic_dpb_t2_message(struct radeon_decoder *dec, rvcn
       dynamic_dpb_t2->dpbChromaAlignedSize = dynamic_dpb_t2->dpbChromaPitch *
          dynamic_dpb_t2->dpbChromaAlignedHeight * 2;
 
-      if (dec->ref_codec.bts == CODEC_10_BITS) {
+      if (dec->ref_codec.bts == CODEC_10_BITS || dec->ref_codec.bts == CODEC_12_BITS) {
           if (((struct si_screen *)dec->screen)->info.vcn_ip_version == VCN_5_0_0) {
              dynamic_dpb_t2->dpbLumaAlignedSize = dynamic_dpb_t2->dpbLumaAlignedSize * 2;
              dynamic_dpb_t2->dpbChromaAlignedSize = dynamic_dpb_t2->dpbChromaAlignedSize * 2;
@@ -1689,7 +1692,6 @@ static struct pb_buffer_lean *rvcn_dec_message_decode(struct radeon_decoder *dec
             RVID_ERR("Can't allocated dpb.\n");
             return NULL;
          }
-         si_vid_clear_buffer(dec->base.context, &dec->dpb);
       } else if (dec->dpb_type == DPB_DYNAMIC_TIER_1 && dec->dpb.res &&
                  (dec->max_width < dec->base.width || dec->max_height < dec->base.height)) {
          struct rvid_buf_offset_info buf_offset_info;
@@ -1728,7 +1730,6 @@ static struct pb_buffer_lean *rvcn_dec_message_decode(struct radeon_decoder *dec
             RVID_ERR("Can't allocated context buffer.\n");
             return NULL;
          }
-         si_vid_clear_buffer(dec->base.context, &dec->ctx);
       } else if (fmt == PIPE_VIDEO_FORMAT_VP9) {
          unsigned ctx_size;
          uint8_t *ptr;
@@ -1762,7 +1763,6 @@ static struct pb_buffer_lean *rvcn_dec_message_decode(struct radeon_decoder *dec
             RVID_ERR("Can't allocated context buffer.\n");
             return NULL;
          }
-         si_vid_clear_buffer(dec->base.context, &dec->ctx);
 
          /* ctx needs probs table */
          ptr = dec->ws->buffer_map(dec->ws, dec->ctx.res->buf, &dec->cs,
@@ -1787,7 +1787,6 @@ static struct pb_buffer_lean *rvcn_dec_message_decode(struct radeon_decoder *dec
             RVID_ERR("Can't allocated context buffer.\n");
             return NULL;
          }
-         si_vid_clear_buffer(dec->base.context, &dec->ctx);
       }
    }
    if (encrypted != dec->ws->cs_is_secure(&dec->cs)) {
@@ -1954,7 +1953,6 @@ static struct pb_buffer_lean *rvcn_dec_message_decode(struct radeon_decoder *dec
 
          if (!si_vid_create_buffer(dec->screen, &dec->ctx, ctx_size, PIPE_USAGE_DEFAULT))
             RVID_ERR("Can't allocated context buffer.\n");
-         si_vid_clear_buffer(dec->base.context, &dec->ctx);
 
          ptr = dec->ws->buffer_map(dec->ws, dec->ctx.res->buf, &dec->cs, PIPE_MAP_WRITE | RADEON_MAP_TEMPORARY);
 
@@ -2689,26 +2687,7 @@ static bool radeon_has_video_preferred_gfx12_swizzle_mode(struct radeon_decoder 
 
    return true;
 }
-/**
- * update render list when target buffer got updated, use the existing
- * index and update the new buffer to associate with it.
- */
-static void radeon_dec_update_render_list(struct pipe_video_codec *decoder,
-                                          struct pipe_video_buffer *old,
-                                          struct pipe_video_buffer *updated)
-{
-   struct radeon_decoder *dec = (struct radeon_decoder *)decoder;
-   void *index = vl_video_buffer_get_associated_data(old, decoder);
 
-   vl_video_buffer_set_associated_data(updated, decoder, index,
-                                       old->destroy_associated_data);
-   for (int i = 0; i < ARRAY_SIZE(dec->render_pic_list); ++i) {
-      if (dec->render_pic_list[i] == old) {
-         dec->render_pic_list[i] = updated;
-         break;
-      }
-   }
-}
 /**
  * create and HW decoder
  */
@@ -2784,7 +2763,6 @@ struct pipe_video_codec *radeon_create_decoder(struct pipe_context *context,
    dec->base.flush = radeon_dec_flush;
    dec->base.fence_wait = radeon_dec_fence_wait;
    dec->base.destroy_fence = radeon_dec_destroy_fence;
-   dec->base.update_decoder_target =  radeon_dec_update_render_list;
 
    dec->stream_type = stream_type;
    dec->stream_handle = si_vid_alloc_stream_handle();
@@ -2797,8 +2775,9 @@ struct pipe_video_codec *radeon_create_decoder(struct pipe_context *context,
       ring = AMD_IP_VCN_UNIFIED;
    }
 
-   dec->sq.ib_total_size_in_dw = NULL;
-   dec->sq.ib_checksum = NULL;
+   dec->sq.signature_ib_total_size_in_dw = NULL;
+   dec->sq.signature_ib_checksum = NULL;
+   dec->sq.engine_ib_size_of_packages = NULL;
 
    if (!ws->cs_create(&dec->cs,
                       (sctx->vcn_has_ctx) ? ((struct si_context *)dec->ectx)->ctx : sctx->ctx,
@@ -2880,9 +2859,6 @@ struct pipe_video_codec *radeon_create_decoder(struct pipe_context *context,
          goto error;
       }
 
-      si_vid_clear_buffer(context, &dec->msg_fb_it_probs_buffers[i]);
-      si_vid_clear_buffer(context, &dec->bs_buffers[i]);
-
       if (have_probs(dec) && dec->stream_type == RDECODE_CODEC_VP9) {
          struct rvid_buffer *buf;
          void *ptr;
@@ -2929,7 +2905,6 @@ struct pipe_video_codec *radeon_create_decoder(struct pipe_context *context,
       RVID_ERR("Can't allocated session ctx.\n");
       goto error;
    }
-   si_vid_clear_buffer(context, &dec->sessionctx);
 
    dec->addr_gfx_mode = RDECODE_ARRAY_MODE_LINEAR;
    dec->av1_version = RDECODE_AV1_VER_0;
@@ -3098,4 +3073,16 @@ err:
    FREE(dec);
 
    return NULL;
+}
+
+static enum pipe_format get_buffer_format(struct radeon_decoder *dec)
+{
+   switch (dec->ref_codec.bts) {
+   case CODEC_10_BITS:
+      return PIPE_FORMAT_P010;
+   case CODEC_12_BITS:
+      return PIPE_FORMAT_P012;
+   default:
+      return PIPE_FORMAT_NV12;
+   }
 }
