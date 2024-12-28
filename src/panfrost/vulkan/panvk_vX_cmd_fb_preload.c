@@ -180,6 +180,8 @@ get_preload_shader(struct panvk_device *dev,
 
    VkResult result = panvk_per_arch(create_internal_shader)(
       dev, nir, &inputs, &shader);
+   ralloc_free(nir);
+
    if (result != VK_SUCCESS)
       return result;
 
@@ -487,9 +489,10 @@ cmd_emit_dcd(struct panvk_cmd_buffer *cmdbuf, struct pan_fb_info *fbinfo,
       fbinfo->bifrost.pre_post.modes[dcd_idx] =
          MALI_PRE_POST_FRAME_SHADER_MODE_INTERSECT;
    } else {
-      enum pipe_format fmt = fbinfo->zs.view.zs
-                                ? fbinfo->zs.view.zs->planes[0]->layout.format
-                                : fbinfo->zs.view.s->planes[0]->layout.format;
+      const struct pan_image *plane =
+         fbinfo->zs.view.zs ? pan_image_view_get_zs_plane(fbinfo->zs.view.zs)
+                            : pan_image_view_get_s_plane(fbinfo->zs.view.s);
+      enum pipe_format fmt = plane->layout.format;
       bool always = false;
 
       /* If we're dealing with a combined ZS resource and only one

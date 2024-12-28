@@ -424,8 +424,8 @@ panvk_draw_prepare_fs_rsd(struct panvk_cmd_buffer *cmdbuf,
       cfg.stencil_mask_misc.single_sampled_lines =
          dyns->ms.rasterization_samples <= 1;
 
-      cfg.depth_units = rs->depth_bias.constant;
-      cfg.depth_factor = rs->depth_bias.slope;
+      cfg.depth_units = rs->depth_bias.constant_factor;
+      cfg.depth_factor = rs->depth_bias.slope_factor;
       cfg.depth_bias_clamp = rs->depth_bias.clamp;
 
       cfg.stencil_front.mask = ds->stencil.front.compare_mask;
@@ -911,7 +911,10 @@ panvk_emit_tiler_primitive(struct panvk_cmd_buffer *cmdbuf,
       if (writes_point_size)
          cfg.point_size_array_format = MALI_POINT_SIZE_ARRAY_FORMAT_FP16;
 
-      cfg.first_provoking_vertex = true;
+      cfg.first_provoking_vertex =
+         cmdbuf->vk.dynamic_graphics_state.rs.provoking_vertex ==
+            VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT;
+
       if (ia->primitive_restart_enable)
          cfg.primitive_restart = MALI_PRIMITIVE_RESTART_IMPLICIT;
       cfg.job_task_split = 6;
@@ -1010,6 +1013,23 @@ panvk_emit_tiler_dcd(struct panvk_cmd_buffer *cmdbuf,
       cfg.occlusion_query = cmdbuf->state.gfx.occlusion_query.mode;
       cfg.occlusion = cmdbuf->state.gfx.occlusion_query.ptr;
    }
+}
+
+static void
+set_provoking_vertex_mode(struct panvk_cmd_buffer *cmdbuf)
+{
+   struct pan_fb_info *fbinfo = &cmdbuf->state.gfx.render.fb.info;
+   bool first_provoking_vertex =
+      cmdbuf->vk.dynamic_graphics_state.rs.provoking_vertex ==
+         VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT;
+
+   /* If this is not the first draw, first_provoking_vertex should match
+    * the one from the previous draws. Unfortunately, we can't check it
+    * when the render pass is inherited. */
+   assert(!cmdbuf->cur_batch->fb.desc.gpu ||
+          fbinfo->first_provoking_vertex == first_provoking_vertex);
+
+   fbinfo->first_provoking_vertex = first_provoking_vertex;
 }
 
 static VkResult
@@ -1229,6 +1249,8 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info *draw)
    bool active_occlusion =
       cmdbuf->state.gfx.occlusion_query.mode != MALI_OCCLUSION_MODE_DISABLED;
    bool needs_tiling = !rs->rasterizer_discard_enable || active_occlusion;
+
+   set_provoking_vertex_mode(cmdbuf);
 
    if (!rs->rasterizer_discard_enable) {
       struct pan_fb_info *fbinfo = &cmdbuf->state.gfx.render.fb.info;

@@ -3042,7 +3042,11 @@ static bool visit_intrinsic(struct ac_nir_context *ctx, nir_intrinsic_instr *ins
       result = emit_load_frag_shading_rate(ctx);
       break;
    case nir_intrinsic_load_front_face:
-      result = emit_i2b(&ctx->ac, ac_get_arg(&ctx->ac, ctx->args->front_face));
+      result = emit_float_cmp(&ctx->ac, LLVMRealOLT, ctx->ac.f32_0,
+                              ac_get_arg(&ctx->ac, ctx->args->front_face));
+      break;
+   case nir_intrinsic_load_front_face_fsign:
+      result = ac_get_arg(&ctx->ac, ctx->args->front_face);
       break;
    case nir_intrinsic_load_helper_invocation:
    case nir_intrinsic_is_helper_invocation:
@@ -4089,8 +4093,9 @@ static void visit_tex(struct ac_nir_context *ctx, nir_tex_instr *instr)
 
    LLVMValueRef code = NULL;
    if (instr->is_sparse) {
-      code = ac_llvm_extract_elem(&ctx->ac, result, 4);
-      result = ac_trim_vector(&ctx->ac, result, 4);
+      unsigned num_color_components = num_components - 1;
+      code = ac_llvm_extract_elem(&ctx->ac, result, num_color_components);
+      result = ac_trim_vector(&ctx->ac, result, num_color_components);
    }
 
    if (is_new_style_shadow)
@@ -4103,8 +4108,10 @@ static void visit_tex(struct ac_nir_context *ctx, nir_tex_instr *instr)
       result = LLVMBuildSelect(ctx->ac.builder, tmp,
                                LLVMBuildExtractElement(ctx->ac.builder, result, ctx->ac.i32_0, ""),
                                LLVMConstInt(ctx->ac.i32, 0x76543210, false), "");
-   } else
-      result = ac_trim_vector(&ctx->ac, result, num_components);
+   } else {
+      unsigned num_color_components = num_components - (instr->is_sparse ? 1 : 0);
+      result = ac_trim_vector(&ctx->ac, result, num_color_components);
+   }
 
    if (instr->is_sparse)
       result = ac_build_concat(&ctx->ac, result, code);

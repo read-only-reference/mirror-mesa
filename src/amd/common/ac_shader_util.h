@@ -20,9 +20,11 @@
 extern "C" {
 #endif
 
-#define AC_SENDMSG_GS           2
-#define AC_SENDMSG_GS_DONE      3
-#define AC_SENDMSG_GS_ALLOC_REQ 9
+#define AC_SENDMSG_HS_TESSFACTOR    2
+
+#define AC_SENDMSG_GS               2
+#define AC_SENDMSG_GS_DONE          3
+#define AC_SENDMSG_GS_ALLOC_REQ     9
 
 #define AC_SENDMSG_GS_OP_NOP      (0 << 4)
 #define AC_SENDMSG_GS_OP_CUT      (1 << 4)
@@ -255,8 +257,6 @@ uint32_t ac_vgt_gs_mode(unsigned gs_max_vert_out, enum amd_gfx_level gfx_level);
 
 unsigned ac_get_tbuffer_format(enum amd_gfx_level gfx_level, unsigned dfmt, unsigned nfmt);
 
-const struct ac_data_format_info *ac_get_data_format_info(unsigned dfmt);
-
 const struct ac_vtx_format_info *ac_get_vtx_format_info_table(enum amd_gfx_level level,
                                                               enum radeon_family family);
 
@@ -304,9 +304,6 @@ uint32_t ac_compute_num_tess_patches(const struct radeon_info *info, uint32_t nu
                                      uint32_t lds_per_patch, uint32_t wave_size,
                                      bool tess_uses_primid);
 
-uint32_t ac_compute_tess_lds_size(const struct radeon_info *info,
-                                  uint32_t lds_per_patch, uint32_t num_patches);
-
 uint32_t ac_apply_cu_en(uint32_t value, uint32_t clear_mask, unsigned value_shift,
                         const struct radeon_info *info);
 
@@ -340,6 +337,8 @@ union ac_hw_cache_flags ac_get_hw_cache_flags(enum amd_gfx_level gfx_level,
 unsigned ac_get_all_edge_flag_bits(enum amd_gfx_level gfx_level);
 
 unsigned ac_shader_io_get_unique_index_patch(unsigned semantic);
+
+unsigned ac_nir_lower_bit_size_callback(const nir_instr *instr, void *data);
 
 #ifdef __cplusplus
 }

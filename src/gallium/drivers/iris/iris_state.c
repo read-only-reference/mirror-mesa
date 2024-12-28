@@ -1148,6 +1148,18 @@ iris_disable_rhwo_optimization(struct iris_batch *batch, bool disable)
 #endif
 }
 
+static void
+state_system_mem_fence_address_emit(struct iris_batch *batch)
+{
+#if GFX_VERx10 >= 200
+   struct iris_screen *screen = batch->screen;
+   struct iris_address addr = { .bo = iris_bufmgr_get_mem_fence_bo(screen->bufmgr) };
+   iris_emit_cmd(batch, GENX(STATE_SYSTEM_MEM_FENCE_ADDRESS), mem_fence_addr) {
+      mem_fence_addr.SystemMemoryFenceAddress = addr;
+   }
+#endif
+}
+
 /**
  * Upload initial GPU state for any kind of context.
  *
@@ -1196,6 +1208,8 @@ iris_init_common_context(struct iris_batch *batch)
       reg.CrossTilePartialWriteMergeEnable = true;
    }
 #endif
+
+   state_system_mem_fence_address_emit(batch);
 }
 
 static void
@@ -1542,6 +1556,8 @@ iris_init_copy_context(struct iris_batch *batch)
 #if GFX_VER >= 12
    init_aux_map_state(batch);
 #endif
+
+   state_system_mem_fence_address_emit(batch);
 
    iris_batch_sync_region_end(batch);
 }
@@ -2475,12 +2491,21 @@ fill_sampler_state(uint32_t *sampler_state,
 
       if (max_anisotropy >= 2) {
          if (state->min_img_filter == PIPE_TEX_FILTER_LINEAR) {
+#if GFX_VER >= 30
+            samp.MinModeFilter = MAPFILTER_ANISOTROPIC_FAST;
+#else
             samp.MinModeFilter = MAPFILTER_ANISOTROPIC;
+#endif
             samp.AnisotropicAlgorithm = EWAApproximation;
          }
 
-         if (state->mag_img_filter == PIPE_TEX_FILTER_LINEAR)
+         if (state->mag_img_filter == PIPE_TEX_FILTER_LINEAR) {
+#if GFX_VER >= 30
+            samp.MagModeFilter = MAPFILTER_ANISOTROPIC_FAST;
+#else
             samp.MagModeFilter = MAPFILTER_ANISOTROPIC;
+#endif
+         }
 
          samp.MaximumAnisotropy =
             MIN2((max_anisotropy - 2) / 2, RATIO161);
@@ -4397,7 +4422,8 @@ static void
 iris_set_stream_output_targets(struct pipe_context *ctx,
                                unsigned num_targets,
                                struct pipe_stream_output_target **targets,
-                               const unsigned *offsets)
+                               const unsigned *offsets,
+                               enum mesa_prim output_prim)
 {
    struct iris_context *ice = (struct iris_context *) ctx;
    struct iris_genx_state *genx = ice->state.genx;
@@ -8171,10 +8197,12 @@ iris_upload_dirty_render_state(struct iris_context *ice,
 #if GFX_VERx10 >= 125
    if (dirty & IRIS_DIRTY_VFG) {
       iris_emit_cmd(batch, GENX(3DSTATE_VFG), vfg) {
-         /* If 3DSTATE_TE: TE Enable == 1 then RR_STRICT else RR_FREE*/
+         /* Gfx12.5: If 3DSTATE_TE: TE Enable == 1 then RR_STRICT else RR_FREE */
          vfg.DistributionMode =
-            ice->shaders.prog[MESA_SHADER_TESS_EVAL] != NULL ? RR_STRICT :
-                                                               RR_FREE;
+#if GFX_VER < 20
+            ice->shaders.prog[MESA_SHADER_TESS_EVAL] == NULL ? RR_FREE :
+#endif
+                                                               RR_STRICT;
          if (intel_needs_workaround(batch->screen->devinfo, 14019166699) &&
              program_uses_primitive_id)
             vfg.DistributionGranularity = InstanceLevelGranularity;
@@ -8941,6 +8969,16 @@ static void iris_emit_execute_indirect_dispatch(struct iris_context *ice,
    body.ExecutionMask       = dispatch.right_mask;
    body.PostSync.MOCS       = iris_mocs(NULL, &screen->isl_dev, 0);
    body.InterfaceDescriptor = idd;
+   /* HSD 14016252163: Use of Morton walk order (and batching using a batch
+    * size of 4) is expected to increase sampler cache hit rates by
+    * increasing sample address locality within a subslice.
+    */
+#if GFX_VER >= 30
+   body.DispatchWalkOrder =
+      cs_data->uses_sampler ? MortonWalk : LinearWalk;
+   body.ThreadGroupBatchSize =
+      cs_data->uses_sampler ? TG_BATCH_4 : TG_BATCH_1;
+#endif
 
    struct iris_address indirect_bo = ro_bo(indirect, grid->indirect_offset);
    iris_emit_cmd(batch, GENX(EXECUTE_INDIRECT_DISPATCH), ind) {

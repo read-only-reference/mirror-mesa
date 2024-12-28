@@ -37,6 +37,7 @@
 #include "tu_dynamic_rendering.h"
 #include "tu_image.h"
 #include "tu_pass.h"
+#include "tu_queue.h"
 #include "tu_query_pool.h"
 #include "tu_rmv.h"
 #include "tu_tracepoints.h"
@@ -76,7 +77,7 @@ tu_device_get_cache_uuid(struct tu_physical_device *device, void *uuid)
    return 0;
 }
 
-#define TU_API_VERSION VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)
+#define TU_API_VERSION VK_MAKE_VERSION(1, 4, VK_HEADER_VERSION)
 
 VKAPI_ATTR VkResult VKAPI_CALL
 tu_EnumerateInstanceVersion(uint32_t *pApiVersion)
@@ -462,6 +463,9 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->shaderIntegerDotProduct             = true;
    features->maintenance4                        = true;
 
+   /* Vulkan 1.4 */
+   features->pushDescriptor = true;
+
    /* VK_KHR_compute_shader_derivatives */
    features->computeDerivativeGroupQuads = pdevice->info->chip >= 7;
    features->computeDerivativeGroupLinear = pdevice->info->chip >= 7;
@@ -767,12 +771,21 @@ tu_get_physical_device_properties_1_2(struct tu_physical_device *pdevice,
    memset(p->driverInfo, 0, sizeof(p->driverInfo));
    snprintf(p->driverInfo, VK_MAX_DRIVER_INFO_SIZE,
             "Mesa " PACKAGE_VERSION MESA_GIT_SHA1);
-   p->conformanceVersion = (VkConformanceVersion) {
-      .major = 1,
-      .minor = 2,
-      .subminor = 7,
-      .patch = 1,
-   };
+   if (pdevice->info->chip >= 7) {
+      p->conformanceVersion = (VkConformanceVersion) {
+         .major = 1,
+         .minor = 4,
+         .subminor = 0,
+         .patch = 0,
+      };
+   } else {
+      p->conformanceVersion = (VkConformanceVersion) {
+         .major = 1,
+         .minor = 2,
+         .subminor = 7,
+         .patch = 1,
+      };
+   }
 
    p->denormBehaviorIndependence =
       VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_ALL;
@@ -1031,11 +1044,17 @@ tu_get_properties(struct tu_physical_device *pdevice,
 
    props->apiVersion =
       (pdevice->info->a6xx.has_hw_multiview || TU_DEBUG(NOCONFORM)) ?
-         TU_API_VERSION : VK_MAKE_VERSION(1, 0, VK_HEADER_VERSION);
+         ((pdevice->info->chip >= 7) ? TU_API_VERSION :
+            VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION))
+         : VK_MAKE_VERSION(1, 0, VK_HEADER_VERSION);
    props->driverVersion = vk_get_driver_version();
    props->vendorID = 0x5143;
    props->deviceID = pdevice->dev_id.chip_id;
    props->deviceType = VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+
+   /* Vulkan 1.4 */
+   props->dynamicRenderingLocalReadDepthStencilAttachments = true;
+   props->dynamicRenderingLocalReadMultisampledAttachments = true;
 
    /* sparse properties */
    props->sparseResidencyStandard2DBlockShape = { 0 };
@@ -1632,7 +1651,7 @@ static const VkQueueFamilyProperties tu_queue_family_properties = {
    .minImageTransferGranularity = { 1, 1, 1 },
 };
 
-static void
+void
 tu_physical_device_get_global_priority_properties(const struct tu_physical_device *pdevice,
                                                   VkQueueFamilyGlobalPriorityPropertiesKHR *props)
 {
@@ -1654,41 +1673,6 @@ tu_physical_device_get_global_priority_properties(const struct tu_physical_devic
       unreachable("unexpected priority count");
       break;
    }
-}
-
-static int
-tu_physical_device_get_submitqueue_priority(const struct tu_physical_device *pdevice,
-                                            VkQueueGlobalPriorityKHR global_priority,
-                                            bool global_priority_query)
-{
-   if (global_priority_query) {
-      VkQueueFamilyGlobalPriorityPropertiesKHR props;
-      tu_physical_device_get_global_priority_properties(pdevice, &props);
-
-      bool valid = false;
-      for (uint32_t i = 0; i < props.priorityCount; i++) {
-         if (props.priorities[i] == global_priority) {
-            valid = true;
-            break;
-         }
-      }
-
-      if (!valid)
-         return -1;
-   }
-
-   /* Valid values are from 0 to (pdevice->submitqueue_priority_count - 1),
-    * with 0 being the highest priority.  This matches what freedreno does.
-    */
-   int priority;
-   if (global_priority == VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR)
-      priority = pdevice->submitqueue_priority_count / 2;
-   else if (global_priority < VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR)
-      priority = pdevice->submitqueue_priority_count - 1;
-   else
-      priority = 0;
-
-   return priority;
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -1841,53 +1825,6 @@ tu_GetPhysicalDeviceFragmentShadingRatesKHR(
    return vk_outarray_status(&out);
 }
 
-static VkResult
-tu_queue_init(struct tu_device *device,
-              struct tu_queue *queue,
-              int idx,
-              const VkDeviceQueueCreateInfo *create_info,
-              bool global_priority_query)
-{
-   const VkDeviceQueueGlobalPriorityCreateInfoKHR *priority_info =
-      vk_find_struct_const(create_info->pNext,
-            DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR);
-   const enum VkQueueGlobalPriorityKHR global_priority = priority_info ?
-      priority_info->globalPriority :
-      (TU_DEBUG(HIPRIO) ? VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR :
-       VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR);
-
-   const int priority = tu_physical_device_get_submitqueue_priority(
-         device->physical_device, global_priority, global_priority_query);
-   if (priority < 0) {
-      return vk_startup_errorf(device->instance, VK_ERROR_INITIALIZATION_FAILED,
-                               "invalid global priority");
-   }
-
-   VkResult result = vk_queue_init(&queue->vk, &device->vk, create_info, idx);
-   if (result != VK_SUCCESS)
-      return result;
-
-   queue->device = device;
-   queue->priority = priority;
-   queue->vk.driver_submit = tu_queue_submit;
-
-   int ret = tu_drm_submitqueue_new(device, priority, &queue->msm_queue_id);
-   if (ret)
-      return vk_startup_errorf(device->instance, VK_ERROR_INITIALIZATION_FAILED,
-                               "submitqueue create failed");
-
-   queue->fence = -1;
-
-   return VK_SUCCESS;
-}
-
-static void
-tu_queue_finish(struct tu_queue *queue)
-{
-   vk_queue_finish(&queue->vk);
-   tu_drm_submitqueue_close(queue->device, queue->msm_queue_id);
-}
-
 uint64_t
 tu_device_ticks_to_ns(struct tu_device *dev, uint64_t ts)
 {
@@ -1964,7 +1901,8 @@ tu_trace_read_ts(struct u_trace_context *utctx,
 
    /* Only need to stall on results for the first entry: */
    if (offset_B == 0) {
-      tu_device_wait_u_trace(device, submission_data->syncobj);
+      tu_queue_wait_fence(submission_data->queue, submission_data->fence,
+                          1000000000);
    }
 
    if (tu_bo_map(device, bo, NULL) != VK_SUCCESS) {
@@ -2195,7 +2133,6 @@ tu_u_trace_submission_data_finish(
    }
 
    vk_free(&device->vk.alloc, submission_data->cmd_trace_data);
-   vk_free(&device->vk.alloc, submission_data->syncobj);
    vk_free(&device->vk.alloc, submission_data);
 }
 
@@ -2515,8 +2452,7 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
       device->queue_count[qfi] = queue_create->queueCount;
 
       for (unsigned q = 0; q < queue_create->queueCount; q++) {
-         result = tu_queue_init(device, &device->queues[qfi][q], q, queue_create,
-                                device->vk.enabled_features.globalPriorityQuery);
+         result = tu_queue_init(device, &device->queues[qfi][q], q, queue_create);
          if (result != VK_SUCCESS) {
             device->queue_count[qfi] = q;
             goto fail_queues;
@@ -2782,7 +2718,8 @@ fail_empty_shaders:
 fail_global_bo_map:
    TU_RMV(resource_destroy, device, device->global_bo);
    tu_bo_finish(device, device->global_bo);
-   vk_free(&device->vk.alloc, device->bo_list);
+   vk_free(&device->vk.alloc, device->submit_bo_list);
+   util_dynarray_fini(&device->dump_bo_list);
 fail_global_bo:
    ir3_compiler_destroy(device->compiler);
    util_sparse_array_finish(&device->bo_map);
@@ -2886,7 +2823,8 @@ tu_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
 
    pthread_cond_destroy(&device->timeline_cond);
    _mesa_hash_table_destroy(device->bo_sizes, NULL);
-   vk_free(&device->vk.alloc, device->bo_list);
+   vk_free(&device->vk.alloc, device->submit_bo_list);
+   util_dynarray_fini(&device->dump_bo_list);
    vk_device_finish(&device->vk);
    vk_free(&device->vk.alloc, device);
 }
@@ -3488,6 +3426,36 @@ tu_debug_bos_print_stats(struct tu_device *dev)
    util_dynarray_fini(&dyn);
 
    mtx_unlock(&dev->bo_mutex);
+}
+
+void
+tu_dump_bo_init(struct tu_device *dev, struct tu_bo *bo)
+{
+   bo->dump_bo_list_idx = ~0;
+
+   if (!FD_RD_DUMP(ENABLE))
+      return;
+
+   mtx_lock(&dev->bo_mutex);
+   uint32_t idx =
+      util_dynarray_num_elements(&dev->dump_bo_list, struct tu_bo *);
+   bo->dump_bo_list_idx = idx;
+   util_dynarray_append(&dev->dump_bo_list, struct tu_bo *, bo);
+   mtx_unlock(&dev->bo_mutex);
+}
+
+void
+tu_dump_bo_del(struct tu_device *dev, struct tu_bo *bo)
+{
+   if (bo->dump_bo_list_idx != ~0) {
+      mtx_lock(&dev->bo_mutex);
+      struct tu_bo *exchanging_bo =
+         util_dynarray_pop(&dev->dump_bo_list, struct tu_bo *);
+      *util_dynarray_element(&dev->dump_bo_list, struct tu_bo *,
+                             bo->dump_bo_list_idx) = exchanging_bo;
+      exchanging_bo->dump_bo_list_idx = bo->dump_bo_list_idx;
+      mtx_unlock(&dev->bo_mutex);
+   }
 }
 
 void

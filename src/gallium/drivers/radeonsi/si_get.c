@@ -513,8 +513,6 @@ static int si_get_shader_param(struct pipe_screen *pscreen, enum pipe_shader_typ
    case PIPE_SHADER_CAP_INTEGERS:
    case PIPE_SHADER_CAP_INT64_ATOMICS:
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
-   case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR: /* lowered in finalize_nir */
-   case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR: /* lowered in finalize_nir */
       return 1;
 
    case PIPE_SHADER_CAP_FP16_CONST_BUFFERS:
@@ -684,8 +682,18 @@ static int si_get_video_param(struct pipe_screen *screen, enum pipe_video_profil
       case PIPE_VIDEO_CAP_NPOT_TEXTURES:
          return 1;
       case PIPE_VIDEO_CAP_MIN_WIDTH:
+         if (sscreen->info.vcn_ip_version >= VCN_5_0_0) {
+            if (codec == PIPE_VIDEO_FORMAT_MPEG4_AVC)
+               return 96;
+            else if (codec == PIPE_VIDEO_FORMAT_HEVC)
+               return 384;
+            else if (codec == PIPE_VIDEO_FORMAT_AV1)
+               return 320;
+         }
          return (codec == PIPE_VIDEO_FORMAT_HEVC) ? 130 : 128;
       case PIPE_VIDEO_CAP_MIN_HEIGHT:
+         if (sscreen->info.vcn_ip_version >= VCN_5_0_0 && codec == PIPE_VIDEO_FORMAT_MPEG4_AVC)
+            return 32;
          return 128;
       case PIPE_VIDEO_CAP_MAX_WIDTH:
          if (codec != PIPE_VIDEO_FORMAT_UNKNOWN && QUERYABLE_KERNEL)
@@ -1115,7 +1123,6 @@ static bool si_vid_is_format_supported(struct pipe_screen *screen, enum pipe_for
       switch (format) {
       case PIPE_FORMAT_NV12:
       case PIPE_FORMAT_YUYV:
-      case PIPE_FORMAT_L8_UNORM:
       case PIPE_FORMAT_Y8_400_UNORM:
          return true;
       case PIPE_FORMAT_Y8_U8_V8_444_UNORM:
@@ -1597,5 +1604,4 @@ void si_init_screen_get_functions(struct si_screen *sscreen)
                                       BITFIELD_BIT(MESA_SHADER_TESS_EVAL);
    options->support_indirect_outputs = BITFIELD_BIT(MESA_SHADER_TESS_CTRL);
    options->varying_expression_max_cost = si_varying_expression_max_cost;
-   options->varying_estimate_instr_cost = ac_nir_varying_estimate_instr_cost;
 }

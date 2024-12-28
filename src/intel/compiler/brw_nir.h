@@ -21,8 +21,7 @@
  * IN THE SOFTWARE.
  */
 
-#ifndef BRW_NIR_H
-#define BRW_NIR_H
+#pragma once
 
 #include "brw_reg.h"
 #include "compiler/nir/nir.h"
@@ -201,6 +200,8 @@ bool brw_nir_lower_mem_access_bit_sizes(nir_shader *shader,
                                         const struct
                                         intel_device_info *devinfo);
 
+bool brw_nir_lower_simd(nir_shader *nir, unsigned dispatch_width);
+
 void brw_postprocess_nir(nir_shader *nir,
                          const struct brw_compiler *compiler,
                          bool debug_enabled,
@@ -295,5 +296,3 @@ bool brw_nir_uses_inline_data(nir_shader *shader);
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* BRW_NIR_H */

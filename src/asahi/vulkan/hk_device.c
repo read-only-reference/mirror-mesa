@@ -27,6 +27,8 @@
 #include "vulkan/wsi/wsi_common.h"
 #include "vk_cmd_enqueue_entrypoints.h"
 #include "vk_common_entrypoints.h"
+#include "vk_debug_utils.h"
+#include "vk_device.h"
 #include "vk_pipeline_cache.h"
 
 #include <fcntl.h>
@@ -58,7 +60,7 @@ hk_upload_rodata(struct hk_device *dev)
    if (!dev->rodata.bo)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-   uint8_t *map = dev->rodata.bo->map;
+   uint8_t *map = agx_bo_map(dev->rodata.bo);
    uint32_t offs = 0;
 
    offs = align(offs, 8);
@@ -85,7 +87,7 @@ hk_upload_rodata(struct hk_device *dev)
       cfg.buffer = dev->rodata.bo->va->addr + offs;
    }
 
-   uint64_t *image_heap_ptr = dev->rodata.bo->map + offs;
+   uint64_t *image_heap_ptr = (void *)map + offs;
    *image_heap_ptr = dev->images.bo->va->addr;
    offs += sizeof(uint64_t);
 
@@ -106,7 +108,7 @@ hk_upload_rodata(struct hk_device *dev)
     */
    offs = align(offs, 16);
    dev->rodata.zero_sink = dev->rodata.bo->va->addr + offs;
-   memset(dev->rodata.bo->map + offs, 0, 16);
+   memset(map + offs, 0, 16);
    offs += 16;
 
    /* For null storage descriptors, we need to reserve 16 bytes to catch writes.
@@ -276,6 +278,15 @@ hk_sampler_heap_remove(struct hk_device *dev, struct hk_rc_sampler *rc)
    simple_mtx_unlock(&h->lock);
 }
 
+static VkResult
+hk_check_status(struct vk_device *device)
+{
+   struct hk_device *dev = container_of(device, struct hk_device, vk);
+   return vk_check_printf_status(&dev->vk, &dev->dev.printf,
+                                 dev->dev.libagx->printf_info,
+                                 dev->dev.libagx->printf_info_count);
+}
+
 /*
  * To implement nullDescriptor, the descriptor set code will reference
  * preuploaded null descriptors at fixed offsets in the image heap. Here we
@@ -387,6 +398,7 @@ hk_CreateDevice(VkPhysicalDevice physicalDevice,
 
    vk_device_set_drm_fd(&dev->vk, dev->dev.fd);
    dev->vk.command_buffer_ops = &hk_cmd_buffer_ops;
+   dev->vk.check_status = hk_check_status;
 
    result = hk_descriptor_table_init(dev, &dev->images, AGX_TEXTURE_LENGTH,
                                      1024, 1024 * 1024);

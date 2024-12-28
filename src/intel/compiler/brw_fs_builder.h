@@ -22,12 +22,14 @@
  * IN THE SOFTWARE.
  */
 
-#ifndef BRW_FS_BUILDER_H
-#define BRW_FS_BUILDER_H
+#pragma once
 
 #include "brw_ir_fs.h"
 #include "brw_eu.h"
 #include "brw_fs.h"
+
+static inline brw_reg offset(const brw_reg &, const brw::fs_builder &,
+                             unsigned);
 
 namespace brw {
    /**
@@ -383,13 +385,19 @@ namespace brw {
          /* FIXME: We use a vector chan_index and dst to allow constant and
           * copy propagration to move result all the way into the consuming
           * instruction (typically a surface index or sampler index for a
-          * send). This uses 1 or 3 extra hw registers in 16 or 32 wide
-          * dispatch. Once we teach const/copy propagation about scalars we
+          * send). Once we teach const/copy propagation about scalars we
           * should go back to scalar destinations here.
           */
-         const brw_reg chan_index = vgrf(BRW_TYPE_UD);
+         const fs_builder xbld = scalar_group();
+         const brw_reg chan_index = xbld.vgrf(BRW_TYPE_UD);
 
-         exec_all().emit(SHADER_OPCODE_FIND_LIVE_CHANNEL, chan_index);
+         /* FIND_LIVE_CHANNEL will only write a single component after
+          * lowering. Munge size_written here to match the allocated size of
+          * chan_index.
+          */
+         exec_all().emit(SHADER_OPCODE_FIND_LIVE_CHANNEL, chan_index)
+            ->size_written = chan_index.component_size(xbld.dispatch_width());
+
          return BROADCAST(src, component(chan_index, 0));
       }
 
@@ -397,8 +405,9 @@ namespace brw {
       move_to_vgrf(const brw_reg &src, unsigned num_components) const
       {
          brw_reg *const src_comps = new brw_reg[num_components];
+
          for (unsigned i = 0; i < num_components; i++)
-            src_comps[i] = offset(src, dispatch_width(), i);
+            src_comps[i] = offset(src, *this, i);
 
          const brw_reg dst = vgrf(src.type, num_components);
          LOAD_PAYLOAD(dst, src_comps, num_components, 0);
@@ -792,7 +801,26 @@ namespace brw {
       brw_reg
       BROADCAST(brw_reg value, brw_reg index) const
       {
-         const brw_reg dst = vgrf(value.type);
+         const fs_builder xbld = scalar_group();
+         const brw_reg dst = xbld.vgrf(value.type);
+
+         assert(is_uniform(index));
+
+         /* A broadcast will always be at the full dispatch width even if the
+          * use of the broadcast result is smaller. If the source is_scalar,
+          * it may be allocated at less than the full dispatch width (e.g.,
+          * allocated at SIMD8 with SIMD32 dispatch). The input may or may
+          * not be stride=0. If it is not, the generated broadcast
+          *
+          *    broadcast(32) dst, value<1>, index<0>
+          *
+          * is invalid because it may read out of bounds from value.
+          *
+          * To account for this, modify the stride of an is_scalar input to be
+          * zero.
+          */
+         if (value.is_scalar)
+            value = component(value, 0);
 
          /* Ensure that the source of a broadcast is always register aligned.
           * See brw_broadcast() non-scalar case for more details.
@@ -800,7 +828,12 @@ namespace brw {
          if (reg_offset(value) % (REG_SIZE * reg_unit(shader->devinfo)) != 0)
             value = MOV(value);
 
-         exec_all().emit(SHADER_OPCODE_BROADCAST, dst, value, index);
+         /* BROADCAST will only write a single component after lowering. Munge
+          * size_written here to match the allocated size of dst.
+          */
+         exec_all().emit(SHADER_OPCODE_BROADCAST, dst, value, index)
+            ->size_written = dst.component_size(xbld.dispatch_width());
+
          return component(dst, 0);
       }
 
@@ -812,6 +845,10 @@ namespace brw {
       fs_inst *NOP()      { return emit(BRW_OPCODE_NOP); }
       fs_inst *WHILE()    { return emit(BRW_OPCODE_WHILE); }
       fs_inst *CONTINUE() { return emit(BRW_OPCODE_CONTINUE); }
+
+      bool has_writemask_all() const {
+         return force_writemask_all;
+      }
 
    private:
       /**
@@ -874,10 +911,36 @@ namespace brw {
    };
 }
 
+/**
+ * Offset by a number of components into a VGRF
+ *
+ * It is assumed that the VGRF represents a vector (e.g., returned by
+ * load_uniform or a texture operation). Convergent and divergent values are
+ * stored differently, so care must be taken to offset properly.
+ */
 static inline brw_reg
 offset(const brw_reg &reg, const brw::fs_builder &bld, unsigned delta)
 {
+   /* If the value is convergent (stored as one or more SIMD8), offset using
+    * SIMD8 and select component 0.
+    */
+   if (reg.is_scalar) {
+      const unsigned allocation_width = 8 * reg_unit(bld.shader->devinfo);
+
+      brw_reg offset_reg = offset(reg, allocation_width, delta);
+
+      /* If the dispatch width is larger than the allocation width, that
+       * implies that the register can only be used as a source. Otherwise the
+       * instruction would write past the allocation size of the register.
+       */
+      if (bld.dispatch_width() > allocation_width)
+         return component(offset_reg, 0);
+      else
+         return offset_reg;
+   }
+
+   /* Offset to the component assuming the value was allocated in
+    * dispatch_width units.
+    */
    return offset(reg, bld.dispatch_width(), delta);
 }
-
-#endif

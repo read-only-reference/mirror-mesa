@@ -545,7 +545,7 @@ static struct iris_resource *
 iris_alloc_resource(struct pipe_screen *pscreen,
                     const struct pipe_resource *templ)
 {
-   struct iris_resource *res = calloc(1, sizeof(struct iris_resource));
+   struct iris_resource *res = CALLOC_STRUCT(iris_resource);
    if (!res)
       return NULL;
 
@@ -1157,7 +1157,12 @@ iris_resource_create_for_image(struct pipe_screen *pscreen,
 
    /* Allocate space for the indirect clear color. */
    if (iris_get_aux_clear_color_state_size(screen, res) > 0) {
-      res->aux.clear_color_offset = align64(bo_size, 64);
+      /* Kernel expects a 4k alignment, otherwise the display rejects the
+       * surface.
+       */
+      const uint64_t clear_color_alignment =
+         (res->mod_info && res->mod_info->supports_clear_color) ? 4096 : 64;
+      res->aux.clear_color_offset = align64(bo_size, clear_color_alignment);
       bo_size = res->aux.clear_color_offset +
                 iris_get_aux_clear_color_state_size(screen, res);
    }
@@ -1877,6 +1882,9 @@ iris_resource_get_handle(struct pipe_screen *pscreen,
              aux_state == ISL_AUX_STATE_PASS_THROUGH);
    }
 #endif
+
+   /* TODO: TILE64 modifier support in the KMD */
+   assert(res->surf.tiling != ISL_TILING_64);
 
    switch (whandle->type) {
    case WINSYS_HANDLE_TYPE_SHARED:

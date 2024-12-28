@@ -1364,6 +1364,7 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
          case nir_intrinsic_load_per_vertex_input:
          case nir_intrinsic_load_input_vertex:
          case nir_intrinsic_load_coefficients_agx:
+         case nir_intrinsic_load_attribute_pan:
             mode = nir_var_shader_in;
             break;
 
@@ -1371,6 +1372,7 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
          case nir_intrinsic_store_output:
          case nir_intrinsic_store_per_primitive_output:
          case nir_intrinsic_store_per_vertex_output:
+         case nir_intrinsic_store_per_view_output:
             mode = nir_var_shader_out;
             break;
 
@@ -1423,7 +1425,8 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
              state->shader->info.stage == MESA_SHADER_GEOMETRY &&
              (instr->intrinsic == nir_intrinsic_store_output ||
               instr->intrinsic == nir_intrinsic_store_per_primitive_output ||
-              instr->intrinsic == nir_intrinsic_store_per_vertex_output)) {
+              instr->intrinsic == nir_intrinsic_store_per_vertex_output ||
+              instr->intrinsic == nir_intrinsic_store_per_view_output)) {
             unsigned gs_streams = io.gs_streams;
             fprintf(fp, " gs_streams(");
             for (unsigned i = 0; i < 4; i++) {
@@ -1651,6 +1654,7 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
    case nir_intrinsic_load_output:
    case nir_intrinsic_store_output:
    case nir_intrinsic_store_per_vertex_output:
+   case nir_intrinsic_store_per_view_output:
       var_mode = nir_var_shader_out;
       break;
    default:

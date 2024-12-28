@@ -464,6 +464,15 @@ bi_copy_component(bi_builder *b, nir_intrinsic_instr *instr, bi_index tmp)
 static void
 bi_emit_load_attr(bi_builder *b, nir_intrinsic_instr *instr)
 {
+   bi_index vertex_id =
+      instr->intrinsic == nir_intrinsic_load_attribute_pan ?
+         bi_src_index(&instr->src[0]) :
+         bi_vertex_id(b);
+   bi_index instance_id =
+      instr->intrinsic == nir_intrinsic_load_attribute_pan ?
+         bi_src_index(&instr->src[1]) :
+         bi_instance_id(b);
+
    /* Disregard the signedness of an integer, since loading 32-bits into a
     * 32-bit register should be bit exact so should not incur any clamping.
     *
@@ -487,7 +496,7 @@ bi_emit_load_attr(bi_builder *b, nir_intrinsic_instr *instr)
    bi_instr *I;
 
    if (immediate) {
-      I = bi_ld_attr_imm_to(b, dest, bi_vertex_id(b), bi_instance_id(b), regfmt,
+      I = bi_ld_attr_imm_to(b, dest, vertex_id, instance_id, regfmt,
                             vecsize, pan_res_handle_get_index(imm_index));
 
       if (b->shader->arch >= 9)
@@ -500,8 +509,7 @@ bi_emit_load_attr(bi_builder *b, nir_intrinsic_instr *instr)
       else if (base != 0)
          idx = bi_iadd_u32(b, idx, bi_imm_u32(base), false);
 
-      I = bi_ld_attr_to(b, dest, bi_vertex_id(b), bi_instance_id(b), idx,
-                        regfmt, vecsize);
+      I = bi_ld_attr_to(b, dest, vertex_id, instance_id, idx, regfmt, vecsize);
    }
 
    bi_copy_component(b, instr, dest);
@@ -1047,7 +1055,8 @@ bifrost_nir_specialize_idvs(nir_builder *b, nir_instr *instr, void *data)
 
    nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
 
-   if (intr->intrinsic != nir_intrinsic_store_output)
+   if (intr->intrinsic != nir_intrinsic_store_output &&
+       intr->intrinsic != nir_intrinsic_store_per_view_output)
       return false;
 
    if (bi_should_remove_store(intr, *idvs)) {
@@ -1127,11 +1136,12 @@ bi_emit_store_vary(bi_builder *b, nir_intrinsic_instr *instr)
                 bi_imm_u32(format), regfmt, nr - 1);
    } else if (b->shader->arch >= 9 && b->shader->idvs != BI_IDVS_NONE) {
       bi_index index = bi_preload(b, 59);
+      unsigned index_offset = 0;
       unsigned pos_attr_offset = 0;
       unsigned src_bit_sz = nir_src_bit_size(instr->src[0]);
 
       if (psiz || layer)
-         index = bi_iadd_imm_i32(b, index, 4);
+         index_offset += 4;
 
       if (layer) {
          assert(nr == 1 && src_bit_sz == 32);
@@ -1143,10 +1153,28 @@ bi_emit_store_vary(bi_builder *b, nir_intrinsic_instr *instr)
       if (psiz)
          assert(T_size == 16 && "should've been lowered");
 
+      bool varying = (b->shader->idvs == BI_IDVS_VARYING);
+
+      if (instr->intrinsic == nir_intrinsic_store_per_view_output) {
+         unsigned view_index = nir_src_as_uint(instr->src[1]);
+
+         if (varying) {
+            index_offset += view_index * 4;
+         } else {
+            /* We don't patch these offsets in the no_psiz variant, so if
+             * multiview is enabled we can't switch to the basic format by
+             * using no_psiz */
+            bool extended_position_fifo = b->shader->nir->info.outputs_written &
+               (VARYING_BIT_LAYER | VARYING_BIT_PSIZ);
+            unsigned position_fifo_stride = extended_position_fifo ? 8 : 4;
+            index_offset += view_index * position_fifo_stride;
+         }
+      }
+
+      if (index_offset != 0)
+         index = bi_iadd_imm_i32(b, index, index_offset);
       bi_index address = bi_lea_buf_imm(b, index);
       bi_emit_split_i32(b, a, address, 2);
-
-      bool varying = (b->shader->idvs == BI_IDVS_VARYING);
 
       bi_store(b, nr * src_bit_sz, data, a[0], a[1],
                varying ? BI_SEG_VARY : BI_SEG_POS,
@@ -1726,6 +1754,11 @@ bi_emit_intrinsic(bi_builder *b, nir_intrinsic_instr *instr)
    case nir_intrinsic_load_barycentric_at_offset:
       /* handled later via load_vary */
       break;
+   case nir_intrinsic_load_attribute_pan:
+      assert(stage == MESA_SHADER_VERTEX);
+      bi_emit_load_attr(b, instr);
+      break;
+
    case nir_intrinsic_load_interpolated_input:
    case nir_intrinsic_load_input:
       if (b->shader->inputs->is_blend)
@@ -1739,6 +1772,7 @@ bi_emit_intrinsic(bi_builder *b, nir_intrinsic_instr *instr)
       break;
 
    case nir_intrinsic_store_output:
+   case nir_intrinsic_store_per_view_output:
       if (stage == MESA_SHADER_FRAGMENT)
          bi_emit_fragment_out(b, instr);
       else if (stage == MESA_SHADER_VERTEX)
@@ -1978,6 +2012,7 @@ bi_emit_intrinsic(bi_builder *b, nir_intrinsic_instr *instr)
       bi_emit_derivative(b, dst, instr, 2, true);
       break;
 
+   case nir_intrinsic_load_view_index:
    case nir_intrinsic_load_layer_id:
       assert(b->shader->arch >= 9);
       bi_mov_i32_to(b, dst, bi_u8_to_u32(b, bi_byte(bi_preload(b, 62), 0)));
@@ -4798,7 +4833,7 @@ mem_vectorize_cb(unsigned align_mul, unsigned align_offset, unsigned bit_size,
 static void
 bi_optimize_nir(nir_shader *nir, unsigned gpu_id, bool is_blend)
 {
-   NIR_PASS_V(nir, nir_opt_shrink_stores, true);
+   NIR_PASS(_, nir, nir_opt_shrink_stores, true);
 
    bool progress;
 
@@ -4878,9 +4913,9 @@ bi_optimize_nir(nir_shader *nir, unsigned gpu_id, bool is_blend)
    NIR_PASS(progress, nir, nir_opt_dce);
 
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
-      NIR_PASS_V(nir, nir_shader_intrinsics_pass,
-                 bifrost_nir_lower_blend_components,
-                 nir_metadata_control_flow, NULL);
+      NIR_PASS(_, nir, nir_shader_intrinsics_pass,
+               bifrost_nir_lower_blend_components, nir_metadata_control_flow,
+               NULL);
    }
 
    /* Backend scheduler is purely local, so do some global optimizations
@@ -4889,8 +4924,8 @@ bi_optimize_nir(nir_shader *nir, unsigned gpu_id, bool is_blend)
                                nir_move_load_input | nir_move_comparisons |
                                nir_move_copies | nir_move_load_ssbo;
 
-   NIR_PASS_V(nir, nir_opt_sink, move_all);
-   NIR_PASS_V(nir, nir_opt_move, move_all);
+   NIR_PASS(_, nir, nir_opt_sink, move_all);
+   NIR_PASS(_, nir, nir_opt_move, move_all);
 
    /* We might lower attribute, varying, and image indirects. Use the
     * gathered info to skip the extra analysis in the happy path. */
@@ -4901,9 +4936,9 @@ bi_optimize_nir(nir_shader *nir, unsigned gpu_id, bool is_blend)
                         nir->info.images_used[0];
 
    if (any_indirects) {
-      NIR_PASS_V(nir, nir_divergence_analysis);
-      NIR_PASS_V(nir, bi_lower_divergent_indirects,
-                 pan_subgroup_size(pan_arch(gpu_id)));
+      nir_divergence_analysis(nir);
+      NIR_PASS(_, nir, bi_lower_divergent_indirects,
+               pan_subgroup_size(pan_arch(gpu_id)));
    }
 }
 
@@ -5188,11 +5223,11 @@ bifrost_preprocess_nir(nir_shader *nir, unsigned gpu_id)
     * (so we don't accidentally duplicate the epilogue since mesa/st has
     * messed with our I/O quite a bit already) */
 
-   NIR_PASS_V(nir, nir_lower_vars_to_ssa);
+   NIR_PASS(_, nir, nir_lower_vars_to_ssa);
 
    if (nir->info.stage == MESA_SHADER_VERTEX) {
-      NIR_PASS_V(nir, nir_lower_viewport_transform);
-      NIR_PASS_V(nir, nir_lower_point_size, 1.0, 0.0);
+      NIR_PASS(_, nir, nir_lower_viewport_transform);
+      NIR_PASS(_, nir, nir_lower_point_size, 1.0, 0.0);
 
       nir_variable *psiz = nir_find_variable_with_location(
          nir, nir_var_shader_out, VARYING_SLOT_PSIZ);
@@ -5201,7 +5236,7 @@ bifrost_preprocess_nir(nir_shader *nir, unsigned gpu_id)
    }
 
    /* Get rid of any global vars before we lower to scratch. */
-   NIR_PASS_V(nir, nir_lower_global_vars_to_local);
+   NIR_PASS(_, nir, nir_lower_global_vars_to_local);
 
    /* Valhall introduces packed thread local storage, which improves cache
     * locality of TLS access. However, access to packed TLS cannot
@@ -5213,38 +5248,38 @@ bifrost_preprocess_nir(nir_shader *nir, unsigned gpu_id)
       (gpu_id >= 0x9000) ? glsl_get_vec4_size_align_bytes
                          : glsl_get_natural_size_align_bytes;
    /* Lower large arrays to scratch and small arrays to bcsel */
-   NIR_PASS_V(nir, nir_lower_vars_to_scratch, nir_var_function_temp, 256,
-              vars_to_scratch_size_align_func, vars_to_scratch_size_align_func);
-   NIR_PASS_V(nir, nir_lower_indirect_derefs, nir_var_function_temp, ~0);
+   NIR_PASS(_, nir, nir_lower_vars_to_scratch, nir_var_function_temp, 256,
+            vars_to_scratch_size_align_func, vars_to_scratch_size_align_func);
+   NIR_PASS(_, nir, nir_lower_indirect_derefs, nir_var_function_temp, ~0);
 
-   NIR_PASS_V(nir, nir_split_var_copies);
-   NIR_PASS_V(nir, nir_lower_var_copies);
-   NIR_PASS_V(nir, nir_lower_vars_to_ssa);
-   NIR_PASS_V(nir, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
-              glsl_type_size, nir_lower_io_use_interpolated_input_intrinsics);
+   NIR_PASS(_, nir, nir_split_var_copies);
+   NIR_PASS(_, nir, nir_lower_var_copies);
+   NIR_PASS(_, nir, nir_lower_vars_to_ssa);
+   NIR_PASS(_, nir, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
+            glsl_type_size, nir_lower_io_use_interpolated_input_intrinsics);
 
    /* nir_lower[_explicit]_io is lazy and emits mul+add chains even for
     * offsets it could figure out are constant.  Do some constant folding
     * before bifrost_nir_lower_store_component below.
     */
-   NIR_PASS_V(nir, nir_opt_constant_folding);
+   NIR_PASS(_, nir, nir_opt_constant_folding);
 
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
-      NIR_PASS_V(nir, nir_lower_mediump_io,
-                 nir_var_shader_in | nir_var_shader_out,
-                 ~bi_fp32_varying_mask(nir), false);
+      NIR_PASS(_, nir, nir_lower_mediump_io,
+               nir_var_shader_in | nir_var_shader_out,
+               ~bi_fp32_varying_mask(nir), false);
 
-      NIR_PASS_V(nir, nir_shader_intrinsics_pass, bi_lower_sample_mask_writes,
-                 nir_metadata_control_flow, NULL);
+      NIR_PASS(_, nir, nir_shader_intrinsics_pass, bi_lower_sample_mask_writes,
+               nir_metadata_control_flow, NULL);
 
-      NIR_PASS_V(nir, bifrost_nir_lower_load_output);
+      NIR_PASS(_, nir, bifrost_nir_lower_load_output);
    } else if (nir->info.stage == MESA_SHADER_VERTEX) {
       if (gpu_id >= 0x9000) {
-         NIR_PASS_V(nir, nir_lower_mediump_io, nir_var_shader_out,
-                    BITFIELD64_BIT(VARYING_SLOT_PSIZ), false);
+         NIR_PASS(_, nir, nir_lower_mediump_io, nir_var_shader_out,
+                  BITFIELD64_BIT(VARYING_SLOT_PSIZ), false);
       }
 
-      NIR_PASS_V(nir, pan_nir_lower_store_component);
+      NIR_PASS(_, nir, pan_nir_lower_store_component);
    }
 
    nir_lower_mem_access_bit_sizes_options mem_size_options = {
@@ -5254,51 +5289,51 @@ bifrost_preprocess_nir(nir_shader *nir, unsigned gpu_id)
                nir_var_mem_global | nir_var_mem_shared,
       .callback = mem_access_size_align_cb,
    };
-   NIR_PASS_V(nir, nir_lower_mem_access_bit_sizes, &mem_size_options);
+   NIR_PASS(_, nir, nir_lower_mem_access_bit_sizes, &mem_size_options);
 
-   NIR_PASS_V(nir, nir_shader_intrinsics_pass,
-              bi_lower_load_push_const_with_dyn_offset,
-              nir_metadata_control_flow, NULL);
+   NIR_PASS(_, nir, nir_shader_intrinsics_pass,
+            bi_lower_load_push_const_with_dyn_offset, nir_metadata_control_flow,
+            NULL);
 
    nir_lower_ssbo_options ssbo_opts = {
       .native_loads = pan_arch(gpu_id) >= 9,
       .native_offset = pan_arch(gpu_id) >= 9,
    };
-   NIR_PASS_V(nir, nir_lower_ssbo, &ssbo_opts);
+   NIR_PASS(_, nir, nir_lower_ssbo, &ssbo_opts);
 
-   NIR_PASS_V(nir, pan_lower_sample_pos);
-   NIR_PASS_V(nir, nir_lower_bit_size, bi_lower_bit_size, NULL);
-   NIR_PASS_V(nir, nir_lower_64bit_phis);
-   NIR_PASS_V(nir, pan_lower_helper_invocation);
-   NIR_PASS_V(nir, nir_lower_int64);
+   NIR_PASS(_, nir, pan_lower_sample_pos);
+   NIR_PASS(_, nir, nir_lower_bit_size, bi_lower_bit_size, NULL);
+   NIR_PASS(_, nir, nir_lower_64bit_phis);
+   NIR_PASS(_, nir, pan_lower_helper_invocation);
+   NIR_PASS(_, nir, nir_lower_int64);
 
-   NIR_PASS_V(nir, nir_opt_idiv_const, 8);
-   NIR_PASS_V(nir, nir_lower_idiv,
-              &(nir_lower_idiv_options){.allow_fp16 = true});
+   NIR_PASS(_, nir, nir_opt_idiv_const, 8);
+   NIR_PASS(_, nir, nir_lower_idiv,
+            &(nir_lower_idiv_options){.allow_fp16 = true});
 
-   NIR_PASS_V(nir, nir_lower_tex,
-              &(nir_lower_tex_options){
-                 .lower_txs_lod = true,
-                 .lower_txp = ~0,
-                 .lower_tg4_broadcom_swizzle = true,
-                 .lower_txd_cube_map = true,
-                 .lower_invalid_implicit_lod = true,
-                 .lower_index_to_offset = true,
-              });
+   NIR_PASS(_, nir, nir_lower_tex,
+            &(nir_lower_tex_options){
+               .lower_txs_lod = true,
+               .lower_txp = ~0,
+               .lower_tg4_broadcom_swizzle = true,
+               .lower_txd_cube_map = true,
+               .lower_invalid_implicit_lod = true,
+               .lower_index_to_offset = true,
+            });
 
-   NIR_PASS_V(nir, nir_lower_image_atomics_to_global);
+   NIR_PASS(_, nir, nir_lower_image_atomics_to_global);
 
    /* on bifrost, lower MSAA load/stores to 3D load/stores */
    if (pan_arch(gpu_id) < 9)
-      NIR_PASS_V(nir, pan_nir_lower_image_ms);
+      NIR_PASS(_, nir, pan_nir_lower_image_ms);
 
-   NIR_PASS_V(nir, nir_lower_alu_to_scalar, bi_scalarize_filter, NULL);
-   NIR_PASS_V(nir, nir_lower_load_const_to_scalar);
-   NIR_PASS_V(nir, nir_lower_phis_to_scalar, true);
-   NIR_PASS_V(nir, nir_lower_flrp, 16 | 32 | 64, false /* always_precise */);
-   NIR_PASS_V(nir, nir_lower_var_copies);
-   NIR_PASS_V(nir, nir_lower_alu);
-   NIR_PASS_V(nir, nir_lower_frag_coord_to_pixel_coord);
+   NIR_PASS(_, nir, nir_lower_alu_to_scalar, bi_scalarize_filter, NULL);
+   NIR_PASS(_, nir, nir_lower_load_const_to_scalar);
+   NIR_PASS(_, nir, nir_lower_phis_to_scalar, true);
+   NIR_PASS(_, nir, nir_lower_flrp, 16 | 32 | 64, false /* always_precise */);
+   NIR_PASS(_, nir, nir_lower_var_copies);
+   NIR_PASS(_, nir, nir_lower_alu);
+   NIR_PASS(_, nir, nir_lower_frag_coord_to_pixel_coord);
 }
 
 static bi_context *
@@ -5329,8 +5364,8 @@ bi_compile_variant_nir(nir_shader *nir,
       if (offset == 0)
          ctx->nir = nir = nir_shader_clone(ctx, nir);
 
-      NIR_PASS_V(nir, nir_shader_instructions_pass, bifrost_nir_specialize_idvs,
-                 nir_metadata_control_flow, &idvs);
+      NIR_PASS(_, nir, nir_shader_instructions_pass,
+               bifrost_nir_specialize_idvs, nir_metadata_control_flow, &idvs);
 
       /* After specializing, clean up the mess */
       bool progress = true;
@@ -5687,7 +5722,7 @@ bifrost_compile_shader_nir(nir_shader *nir,
    /* Combine stores late, to give the driver a chance to lower dual-source
     * blending as regular store_output intrinsics.
     */
-   NIR_PASS_V(nir, pan_nir_lower_zs_store);
+   NIR_PASS(_, nir, pan_nir_lower_zs_store);
 
    bi_optimize_nir(nir, inputs->gpu_id, inputs->is_blend);
 

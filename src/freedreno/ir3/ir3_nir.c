@@ -926,7 +926,8 @@ output_slot_used_for_binning(gl_varying_slot slot)
 static bool
 remove_nonbinning_output(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 {
-   if (intr->intrinsic != nir_intrinsic_store_output)
+   if (intr->intrinsic != nir_intrinsic_store_output &&
+       intr->intrinsic != nir_intrinsic_store_per_view_output)
       return false;
 
    nir_io_semantics io = nir_intrinsic_io_semantics(intr);
@@ -1031,15 +1032,6 @@ ir3_nir_lower_variant(struct ir3_shader_variant *so,
       }
    }
 
-   if (so->binning_pass) {
-      if (OPT(s, lower_binning)) {
-         progress = true;
-
-         /* outputs_written has changed. */
-         nir_shader_gather_info(s, nir_shader_get_entrypoint(s));
-      }
-   }
-
    /* Note that it is intentional to use the VS lowering pass for GS, since we
     * lower GS into something that looks more like a VS in ir3_nir_lower_gs():
     */
@@ -1048,6 +1040,15 @@ ir3_nir_lower_variant(struct ir3_shader_variant *so,
    } else if (s->info.stage == MESA_SHADER_FRAGMENT) {
       if (so->key.ucp_enables && !so->compiler->has_clip_cull)
          progress |= OPT(s, nir_lower_clip_fs, so->key.ucp_enables, true, true);
+   }
+
+   if (so->binning_pass) {
+      if (OPT(s, lower_binning)) {
+         progress = true;
+
+         /* outputs_written has changed. */
+         nir_shader_gather_info(s, nir_shader_get_entrypoint(s));
+      }
    }
 
    /* Move large constant variables to the constants attached to the NIR

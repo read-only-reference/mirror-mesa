@@ -1461,6 +1461,7 @@ radv_amdgpu_winsys_cs_dump(struct radeon_cmdbuf *_cs, FILE *file, const int *tra
             .trace_ids = trace_ids,
             .trace_id_count = trace_id_count,
             .gfx_level = ws->info.gfx_level,
+            .vcn_version = ws->info.vcn_ip_version,
             .family = ws->info.family,
             .ip_type = cs->hw_ip,
             .addr_callback = radv_amdgpu_winsys_get_cpu_addr,
@@ -1501,6 +1502,7 @@ radv_amdgpu_winsys_cs_dump(struct radeon_cmdbuf *_cs, FILE *file, const int *tra
                .trace_ids = trace_ids,
                .trace_id_count = trace_id_count,
                .gfx_level = ws->info.gfx_level,
+               .vcn_version = ws->info.vcn_ip_version,
                .family = ws->info.family,
                .ip_type = cs->hw_ip,
                .addr_callback = radv_amdgpu_winsys_get_cpu_addr,
@@ -1578,7 +1580,7 @@ radv_amdgpu_ctx_create(struct radeon_winsys *_ws, enum radeon_ctx_priority prior
 
    r = ac_drm_cs_ctx_create2(ws->fd, amdgpu_priority, &ctx->ctx_handle);
    if (r && r == -EACCES) {
-      result = VK_ERROR_NOT_PERMITTED_KHR;
+      result = VK_ERROR_NOT_PERMITTED;
       goto fail_create;
    } else if (r) {
       fprintf(stderr, "radv/amdgpu: radv_amdgpu_cs_ctx_create2 failed. (%i)\n", r);

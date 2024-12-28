@@ -76,8 +76,8 @@ v3d_screen_destroy(struct pipe_screen *pscreen)
 {
         struct v3d_screen *screen = v3d_screen(pscreen);
 
-        ralloc_free(screen->perfcnt_names);
-        screen->perfcnt_names = NULL;
+        v3d_perfcntrs_fini(screen->perfcnt);
+        screen->perfcnt = NULL;
 
         _mesa_hash_table_destroy(screen->bo_handles, NULL);
         v3d_bufmgr_destroy(pscreen);
@@ -399,19 +399,6 @@ v3d_screen_get_shader_param(struct pipe_screen *pscreen, enum pipe_shader_type s
                 return 16;
         case PIPE_SHADER_CAP_CONT_SUPPORTED:
                 return 0;
-        case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
-                /* We don't currently support this in the backend, but that is
-                 * okay because our NIR compiler sets the option
-                 * lower_all_io_to_temps, which will eliminate indirect
-                 * indexing on all input/output variables by translating it to
-                 * indirect indexing on temporary variables instead, which we
-                 * will then lower to scratch. We prefer this over setting this
-                 * to 0, which would cause if-ladder injection to eliminate
-                 * indirect indexing on inputs.
-                 */
-                return 1;
-        case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
-                return 1;
         case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
                 return 1;
         case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
@@ -756,6 +743,17 @@ v3d_screen_get_compiler_options(struct pipe_screen *pscreen,
                 .has_uclz = true,
                 .divergence_analysis_options =
                        nir_divergence_multiple_workgroup_per_compute_subgroup,
+                /* We don't currently support this in the backend, but that is
+                 * okay because our NIR compiler sets the option
+                 * lower_all_io_to_temps, which will eliminate indirect
+                 * indexing on all input/output variables by translating it to
+                 * indirect indexing on temporary variables instead, which we
+                 * will then lower to scratch. We prefer this over setting this
+                 * to 0, which would cause if-ladder injection to eliminate
+                 * indirect indexing on inputs.
+                 */
+                .support_indirect_inputs = (uint8_t)BITFIELD_MASK(PIPE_SHADER_TYPES),
+                .support_indirect_outputs = (uint8_t)BITFIELD_MASK(PIPE_SHADER_TYPES),
                 /* This will enable loop unrolling in the state tracker so we won't
                  * be able to selectively disable it in backend if it leads to
                  * lower thread counts or TMU spills. Choose a conservative maximum to
@@ -764,6 +762,7 @@ v3d_screen_get_compiler_options(struct pipe_screen *pscreen,
                 .max_unroll_iterations = 16,
                 .force_indirect_unrolling_sampler = true,
                 .scalarize_ddx = true,
+                .max_varying_expression_cost = 4,
         };
 
         if (!initialized) {
@@ -944,14 +943,9 @@ v3d_screen_create(int fd, const struct pipe_screen_config *config,
         if (!v3d_get_device_info(screen->fd, &screen->devinfo, &v3d_ioctl))
                 goto fail;
 
-        const uint8_t max_perfcnt = screen->devinfo.max_perfcnt;
-        if (max_perfcnt) {
-                screen->perfcnt_names = rzalloc_array(screen, char*, max_perfcnt);
-                if (!screen->perfcnt_names) {
-                        fprintf(stderr, "Error allocating performance counters names");
-                        goto fail;
-                }
-        }
+        screen->perfcnt = v3d_perfcntrs_init(&screen->devinfo, screen->fd);
+        if (!screen->perfcnt)
+                goto fail;
 
         driParseConfigFiles(config->options, config->options_info, 0, "v3d",
                             NULL, NULL, NULL, 0, NULL, 0);

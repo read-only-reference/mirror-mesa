@@ -681,7 +681,8 @@ void util_blitter_restore_vertex_states(struct blitter_context *blitter)
          offsets[i] = (unsigned)-1;
       pipe->set_stream_output_targets(pipe,
                                       ctx->base.saved_num_so_targets,
-                                      ctx->base.saved_so_targets, offsets);
+                                      ctx->base.saved_so_targets, offsets,
+                                      ctx->base.saved_so_output_prim);
 
       for (i = 0; i < ctx->base.saved_num_so_targets; i++)
          pipe_so_target_reference(&ctx->base.saved_so_targets[i], NULL);
@@ -1391,7 +1392,7 @@ static void blitter_set_common_draw_rect_state(struct blitter_context_priv *ctx,
       pipe->bind_tes_state(pipe, NULL);
    }
    if (ctx->has_stream_out)
-      pipe->set_stream_output_targets(pipe, 0, NULL, NULL);
+      pipe->set_stream_output_targets(pipe, 0, NULL, NULL, 0);
 }
 
 static void blitter_draw(struct blitter_context_priv *ctx,
@@ -2254,6 +2255,7 @@ util_blitter_blit(struct blitter_context *blitter,
    struct pipe_context *pipe = ctx->base.pipe;
    struct pipe_surface *dst_view, dst_templ;
    struct pipe_sampler_view src_templ, *src_view;
+   const uint8_t *swizzle = info->swizzle_enable ? info->swizzle : NULL;
 
    /* Initialize the surface. */
    util_blitter_default_dst_texture(&dst_templ, dst, info->dst.level,
@@ -2264,6 +2266,12 @@ util_blitter_blit(struct blitter_context *blitter,
    /* Initialize the sampler view. */
    util_blitter_default_src_texture(blitter, &src_templ, src, info->src.level);
    src_templ.format = info->src.format;
+   if (swizzle) {
+      src_templ.swizzle_r = swizzle[0];
+      src_templ.swizzle_g = swizzle[1];
+      src_templ.swizzle_b = swizzle[2];
+      src_templ.swizzle_a = swizzle[3];
+   }
    src_view = pipe->create_sampler_view(pipe, src, &src_templ);
 
    /* Copy. */
@@ -2654,7 +2662,7 @@ void util_blitter_clear_buffer(struct blitter_context *blitter,
    pipe->bind_rasterizer_state(pipe, ctx->rs_discard_state);
 
    so_target = pipe->create_stream_output_target(pipe, dst, offset, size);
-   pipe->set_stream_output_targets(pipe, 1, &so_target, offsets);
+   pipe->set_stream_output_targets(pipe, 1, &so_target, offsets, MESA_PRIM_POINTS);
 
    util_draw_arrays(pipe, MESA_PRIM_POINTS, 0, size / 4);
 

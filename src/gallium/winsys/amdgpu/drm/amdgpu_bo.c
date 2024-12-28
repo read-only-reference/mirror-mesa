@@ -137,6 +137,71 @@ static bool amdgpu_bo_wait(struct radeon_winsys *rws,
    return true; /* idle */
 }
 
+static void amdgpu_bo_get_syncobjs(struct amdgpu_winsys *aws, struct amdgpu_winsys_bo *bo,
+                                   uint32_t *syncobj, uint32_t *num_fences)
+{
+   if (p_atomic_read(&bo->num_active_ioctls))
+      os_wait_until_zero(&bo->num_active_ioctls, OS_TIMEOUT_INFINITE);
+
+   simple_mtx_lock(&aws->bo_fence_lock);
+   u_foreach_bit(queue_index, bo->fences.valid_fence_mask) {
+      struct pipe_fence_handle **fence = get_fence_from_ring(aws, &bo->fences, queue_index);
+      if (fence) {
+         if (!amdgpu_fence_wait(*fence, 0, 0)) {
+            syncobj[(*num_fences)++] = ((struct amdgpu_fence*)*fence)->syncobj;
+         } else {
+            amdgpu_fence_reference(fence, NULL);
+            /* remove the fence from the BO */
+            bo->fences.valid_fence_mask &= ~BITFIELD_BIT(queue_index);
+         }
+      }
+   }
+
+   if (bo->alt_fence) {
+      if (!amdgpu_fence_wait(bo->alt_fence, 0, 0))
+         syncobj[(*num_fences)++] = ((struct amdgpu_fence*)bo->alt_fence)->syncobj;
+      else
+         amdgpu_fence_reference(&bo->alt_fence, NULL);
+   }
+   simple_mtx_unlock(&aws->bo_fence_lock);
+}
+
+static int amdgpu_bo_va_op_common(struct amdgpu_winsys *aws, struct amdgpu_winsys_bo *bo,
+                                  uint32_t bo_handle, bool send_input_fence,
+                                  uint64_t *vm_timeline_point, uint64_t offset, uint64_t size,
+                                  uint64_t addr, uint64_t flags, uint32_t ops)
+{
+   int r;
+
+   if (aws->info.use_userq) {
+      uint32_t syncobj_arr[AMDGPU_MAX_QUEUES + 1];
+      uint32_t num_fences = 0;
+
+      if (send_input_fence)
+         amdgpu_bo_get_syncobjs(aws, bo, &syncobj_arr[0], &num_fences);
+
+      /* The lock guarantees that the execution ordering of the vm ioctls match the timeline
+       * sequence number ordering.
+       */
+      simple_mtx_lock(&aws->vm_ioctl_lock);
+      aws->vm_timeline_seq_num++;
+      if (vm_timeline_point) {
+         /* Sparse buffers can be updated concurrently by another thread so we use atomic operation
+          * to get a valid seqno.
+          */
+         p_atomic_set(vm_timeline_point, aws->vm_timeline_seq_num);
+      }
+      r = ac_drm_bo_va_op_raw2(aws->fd, bo_handle, offset, size, addr, flags, ops,
+                               aws->vm_timeline_syncobj, aws->vm_timeline_seq_num,
+                               (uintptr_t)&syncobj_arr, num_fences);
+      simple_mtx_unlock(&aws->vm_ioctl_lock);
+   } else {
+      r = ac_drm_bo_va_op_raw(aws->fd, bo_handle, offset, size, addr, flags, ops);
+   }
+
+   return r;
+}
+
 static inline unsigned get_slab_entry_offset(struct amdgpu_winsys_bo *bo)
 {
    struct amdgpu_bo_slab_entry *slab_entry_bo = get_slab_entry_bo(bo);
@@ -181,8 +246,10 @@ void amdgpu_bo_destroy(struct amdgpu_winsys *aws, struct pb_buffer_lean *_buf)
    _mesa_hash_table_remove_key(aws->bo_export_table, bo->bo_handle);
 
    if (bo->b.base.placement & RADEON_DOMAIN_VRAM_GTT) {
-      ac_drm_bo_va_op(aws->fd, bo->kms_handle, 0, bo->b.base.size,
-                      amdgpu_va_get_start_addr(bo->va_handle), 0, AMDGPU_VA_OP_UNMAP);
+      amdgpu_bo_va_op_common(aws, amdgpu_winsys_bo(_buf), bo->kms_handle, true, NULL, 0,
+                             bo->b.base.size, amdgpu_va_get_start_addr(bo->va_handle),
+                             AMDGPU_VM_PAGE_READABLE | AMDGPU_VM_PAGE_WRITEABLE |
+                                AMDGPU_VM_PAGE_EXECUTABLE, AMDGPU_VA_OP_UNMAP);
       amdgpu_va_range_free(bo->va_handle);
    }
 
@@ -484,7 +551,8 @@ static struct amdgpu_winsys_bo *amdgpu_create_bo(struct amdgpu_winsys *aws,
    /* VRAM or GTT must be specified, but not both at the same time. */
    assert(util_bitcount(initial_domain & (RADEON_DOMAIN_VRAM_GTT |
                                           RADEON_DOMAIN_GDS |
-                                          RADEON_DOMAIN_OA)) == 1);
+                                          RADEON_DOMAIN_OA |
+                                          RADEON_DOMAIN_DOORBELL)) == 1);
 
    alignment = amdgpu_get_optimal_alignment(aws, size, alignment);
 
@@ -532,18 +600,25 @@ static struct amdgpu_winsys_bo *amdgpu_create_bo(struct amdgpu_winsys *aws,
       request.preferred_heap |= AMDGPU_GEM_DOMAIN_GDS;
    if (initial_domain & RADEON_DOMAIN_OA)
       request.preferred_heap |= AMDGPU_GEM_DOMAIN_OA;
+   if (initial_domain & RADEON_DOMAIN_DOORBELL)
+      request.preferred_heap |= AMDGPU_GEM_DOMAIN_DOORBELL;
 
    if (flags & RADEON_FLAG_NO_CPU_ACCESS)
       request.flags |= AMDGPU_GEM_CREATE_NO_CPU_ACCESS;
    if (flags & RADEON_FLAG_GTT_WC)
       request.flags |= AMDGPU_GEM_CREATE_CPU_GTT_USWC;
 
+   if (aws->info.has_local_buffers &&
+       initial_domain & (RADEON_DOMAIN_VRAM_GTT | RADEON_DOMAIN_DOORBELL) &&
+       flags & RADEON_FLAG_NO_INTERPROCESS_SHARING)
+      request.flags |= AMDGPU_GEM_CREATE_VM_ALWAYS_VALID;
+
    if (flags & RADEON_FLAG_DISCARDABLE &&
        aws->info.drm_minor >= 47)
       request.flags |= AMDGPU_GEM_CREATE_DISCARDABLE;
 
-   if (aws->zero_all_vram_allocs &&
-       (request.preferred_heap & AMDGPU_GEM_DOMAIN_VRAM))
+   if ((flags & RADEON_FLAG_CLEAR_VRAM) || (aws->zero_all_vram_allocs &&
+        (request.preferred_heap & AMDGPU_GEM_DOMAIN_VRAM)))
       request.flags |= AMDGPU_GEM_CREATE_VRAM_CLEARED;
 
    if ((flags & RADEON_FLAG_ENCRYPTED) &&
@@ -594,7 +669,8 @@ static struct amdgpu_winsys_bo *amdgpu_create_bo(struct amdgpu_winsys *aws,
       if (flags & RADEON_FLAG_GL2_BYPASS)
          vm_flags |= AMDGPU_VM_MTYPE_UC;
 
-      r = ac_drm_bo_va_op_raw(aws->fd, kms_handle, 0, size, va, vm_flags, AMDGPU_VA_OP_MAP);
+      r = amdgpu_bo_va_op_common(aws, NULL, kms_handle, false, &bo->vm_timeline_point, 0,
+                                 size, va, vm_flags, AMDGPU_VA_OP_MAP);
       if (r)
          goto error_va_map;
    }
@@ -1033,9 +1109,9 @@ static void amdgpu_bo_sparse_destroy(struct radeon_winsys *rws, struct pb_buffer
    struct amdgpu_bo_sparse *bo = get_sparse_bo(amdgpu_winsys_bo(_buf));
    int r;
 
-   r = ac_drm_bo_va_op_raw(aws->fd, 0, 0,
-                           (uint64_t)bo->num_va_pages * RADEON_SPARSE_PAGE_SIZE,
-                           amdgpu_va_get_start_addr(bo->va_handle), 0, AMDGPU_VA_OP_CLEAR);
+   r = amdgpu_bo_va_op_common(aws, amdgpu_winsys_bo(_buf), 0, true, NULL, 0,
+                              (uint64_t)bo->num_va_pages * RADEON_SPARSE_PAGE_SIZE,
+                              amdgpu_va_get_start_addr(bo->va_handle), 0, AMDGPU_VA_OP_CLEAR);
    if (r) {
       fprintf(stderr, "amdgpu: clearing PRT VA region on destroy failed (%d)\n", r);
    }
@@ -1100,8 +1176,8 @@ amdgpu_bo_sparse_create(struct amdgpu_winsys *aws, uint64_t size,
    if (r)
       goto error_va_alloc;
 
-   r = ac_drm_bo_va_op_raw(aws->fd, 0, 0, map_size, gpu_address,
-                           AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_MAP);
+   r = amdgpu_bo_va_op_common(aws, NULL, 0, false, &bo->vm_timeline_point, 0, map_size,
+                              gpu_address, AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_MAP);
    if (r)
       goto error_va_map;
 
@@ -1170,15 +1246,14 @@ amdgpu_bo_sparse_commit(struct radeon_winsys *rws, struct pb_buffer_lean *buf,
                goto out;
             }
 
-            r = ac_drm_bo_va_op_raw(aws->fd, backing->bo->kms_handle,
-                                    (uint64_t)backing_start * RADEON_SPARSE_PAGE_SIZE,
-                                    (uint64_t)backing_size * RADEON_SPARSE_PAGE_SIZE,
-                                    amdgpu_va_get_start_addr(bo->va_handle) +
-                                    (uint64_t)span_va_page * RADEON_SPARSE_PAGE_SIZE,
-                                    AMDGPU_VM_PAGE_READABLE |
-                                    AMDGPU_VM_PAGE_WRITEABLE |
-                                    AMDGPU_VM_PAGE_EXECUTABLE,
-                                    AMDGPU_VA_OP_REPLACE);
+            r = amdgpu_bo_va_op_common(aws, amdgpu_winsys_bo(buf), backing->bo->kms_handle,
+                                       true, &bo->vm_timeline_point,
+                                       (uint64_t)backing_start * RADEON_SPARSE_PAGE_SIZE,
+                                       (uint64_t)backing_size * RADEON_SPARSE_PAGE_SIZE,
+                                       amdgpu_va_get_start_addr(bo->va_handle) +
+                                       (uint64_t)span_va_page * RADEON_SPARSE_PAGE_SIZE,
+                                       AMDGPU_VM_PAGE_READABLE | AMDGPU_VM_PAGE_WRITEABLE |
+                                          AMDGPU_VM_PAGE_EXECUTABLE, AMDGPU_VA_OP_REPLACE);
             if (r) {
                ok = sparse_backing_free(aws, bo, backing, backing_start, backing_size);
                assert(ok && "sufficient memory should already be allocated");
@@ -1197,11 +1272,11 @@ amdgpu_bo_sparse_commit(struct radeon_winsys *rws, struct pb_buffer_lean *buf,
          }
       }
    } else {
-      r = ac_drm_bo_va_op_raw(aws->fd, 0, 0,
-                              (uint64_t)(end_va_page - va_page) * RADEON_SPARSE_PAGE_SIZE,
-                              amdgpu_va_get_start_addr(bo->va_handle) +
-                              (uint64_t)va_page * RADEON_SPARSE_PAGE_SIZE,
-                              AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_REPLACE);
+      r = amdgpu_bo_va_op_common(aws, amdgpu_winsys_bo(buf), 0, true, &bo->vm_timeline_point,
+                                 0, (uint64_t)(end_va_page - va_page) * RADEON_SPARSE_PAGE_SIZE,
+                                 amdgpu_va_get_start_addr(bo->va_handle) +
+                                    (uint64_t)va_page * RADEON_SPARSE_PAGE_SIZE,
+                                 AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_REPLACE);
       if (r) {
          ok = false;
          goto out;
@@ -1435,8 +1510,9 @@ no_slab:
       alignment = align(alignment, aws->info.gart_page_size);
    }
 
-   bool use_reusable_pool = flags & RADEON_FLAG_NO_INTERPROCESS_SHARING &&
-                            !(flags & RADEON_FLAG_DISCARDABLE);
+   bool use_reusable_pool = !(domain & RADEON_DOMAIN_DOORBELL) &&
+      (flags & RADEON_FLAG_NO_INTERPROCESS_SHARING) &&
+      !(flags & (RADEON_FLAG_DISCARDABLE | RADEON_FLAG_CLEAR_VRAM));
 
    if (use_reusable_pool) {
        /* RADEON_FLAG_NO_SUBALLOC is irrelevant for the cache. */
@@ -1564,11 +1640,11 @@ static struct pb_buffer_lean *amdgpu_bo_from_handle(struct radeon_winsys *rws,
    if (!bo)
       goto error;
 
-   r = ac_drm_bo_va_op_raw(aws->fd, kms_handle, 0, result.alloc_size, va,
-                           AMDGPU_VM_PAGE_READABLE | AMDGPU_VM_PAGE_WRITEABLE |
-                           AMDGPU_VM_PAGE_EXECUTABLE |
-                           (is_prime_linear_buffer ? AMDGPU_VM_MTYPE_UC : 0),
-                           AMDGPU_VA_OP_MAP);
+   r = amdgpu_bo_va_op_common(aws, NULL, kms_handle, false, &bo->vm_timeline_point, 0,
+                              result.alloc_size, va, AMDGPU_VM_PAGE_READABLE |
+                                 AMDGPU_VM_PAGE_WRITEABLE | AMDGPU_VM_PAGE_EXECUTABLE |
+                                 (is_prime_linear_buffer ? AMDGPU_VM_MTYPE_UC : 0),
+                              AMDGPU_VA_OP_MAP);
    if (r)
       goto error;
 
@@ -1652,7 +1728,7 @@ static bool amdgpu_bo_get_handle(struct radeon_winsys *rws,
       type = amdgpu_bo_handle_type_gem_flink_name;
       break;
    case WINSYS_HANDLE_TYPE_KMS:
-      if (sws->fd == aws->input_fd) {
+      if (sws->fd == aws->fd) {
          whandle->handle = bo->kms_handle;
 
          if (bo->is_shared)
@@ -1744,8 +1820,11 @@ static struct pb_buffer_lean *amdgpu_bo_from_ptr(struct radeon_winsys *rws,
     uint32_t kms_handle;
     amdgpu_bo_export(buf_handle, amdgpu_bo_handle_type_kms, &kms_handle);
 
-    if (ac_drm_bo_va_op(aws->fd, kms_handle, 0, aligned_size, va, 0, AMDGPU_VA_OP_MAP))
-        goto error_va_map;
+    if (amdgpu_bo_va_op_common(aws, NULL, kms_handle, false, &bo->vm_timeline_point, 0,
+                               aligned_size, va, AMDGPU_VM_PAGE_READABLE |
+                                  AMDGPU_VM_PAGE_WRITEABLE | AMDGPU_VM_PAGE_EXECUTABLE,
+                               AMDGPU_VA_OP_MAP))
+       goto error_va_map;
 
     /* Initialize it. */
     bo->is_user_ptr = true;

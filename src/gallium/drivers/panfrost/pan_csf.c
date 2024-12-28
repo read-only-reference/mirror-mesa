@@ -92,17 +92,19 @@ csf_update_tiler_oom_ctx(struct cs_builder *b, uint64_t addr)
     (PAN_INCREMENTAL_RENDERING_##_pass##_PASS * sizeof(struct panfrost_ptr)) + \
     offsetof(struct panfrost_ptr, gpu))
 
-static void
+static int
 csf_oom_handler_init(struct panfrost_context *ctx)
 {
+   struct panfrost_bo *cs_bo = NULL, *reg_save_bo = NULL;
    struct panfrost_device *dev = pan_device(ctx->base.screen);
-   struct panfrost_bo *cs_bo =
-      panfrost_bo_create(dev, 4096, 0, "Temporary CS buffer");
-   assert(cs_bo);
 
-   struct panfrost_bo *reg_save_bo =
+   cs_bo =
+      panfrost_bo_create(dev, 4096, 0, "Temporary CS buffer");
+   reg_save_bo =
       panfrost_bo_create(dev, 4096, 0, "reg save bo");
-   assert(reg_save_bo);
+
+   if (!cs_bo || !reg_save_bo)
+      goto fail;
 
    struct cs_buffer queue = {
       .cpu = cs_bo->ptr.cpu,
@@ -189,6 +191,17 @@ csf_oom_handler_init(struct panfrost_context *ctx)
    ctx->csf.tiler_oom_handler.cs_bo = cs_bo;
    ctx->csf.tiler_oom_handler.length = handler.length * sizeof(uint64_t);
    ctx->csf.tiler_oom_handler.save_bo = reg_save_bo;
+
+   return 0;
+
+fail:
+   if (cs_bo)
+      panfrost_bo_unreference(cs_bo);
+
+   if (reg_save_bo)
+      panfrost_bo_unreference(reg_save_bo);
+
+   return -1;
 }
 
 #undef FBD_OFFSET
@@ -211,14 +224,15 @@ alloc_fbd(struct panfrost_batch *batch)
       PAN_DESC_ARRAY(MAX2(batch->key.nr_cbufs, 1), RENDER_TARGET));
 }
 
-void
+int
 GENX(csf_init_batch)(struct panfrost_batch *batch)
 {
    struct panfrost_device *dev = pan_device(batch->ctx->base.screen);
 
    /* Initialize the CS chunk pool. */
-   panfrost_pool_init(&batch->csf.cs_chunk_pool, NULL, dev, 0, 32768,
-                      "CS chunk pool", false, true);
+   if (panfrost_pool_init(&batch->csf.cs_chunk_pool, NULL, dev, 0, 32768,
+                          "CS chunk pool", false, true))
+      return -1;
 
    if (dev->debug & PAN_DBG_CS) {
       /* Load/store tracker if extra checks are enabled. */
@@ -229,6 +243,9 @@ GENX(csf_init_batch)(struct panfrost_batch *batch)
 
    /* Allocate and bind the command queue */
    struct cs_buffer queue = csf_alloc_cs_buffer(batch);
+   if (!queue.gpu)
+      return -1;
+
    const struct cs_builder_conf conf = {
       .nr_registers = 96,
       .nr_kernel_registers = 4,
@@ -249,8 +266,14 @@ GENX(csf_init_batch)(struct panfrost_batch *batch)
    cs_set_scoreboard_entry(b, 2, 0);
 
    batch->framebuffer = alloc_fbd(batch);
+   if (!batch->framebuffer.gpu)
+      return -1;
 
    batch->tls = pan_pool_alloc_desc(&batch->pool.base, LOCAL_STORAGE);
+   if (!batch->tls.cpu)
+      return -1;
+
+   return 0;
 }
 
 static void
@@ -300,7 +323,7 @@ csf_submit_gsubmit(struct panfrost_context *ctx,
    return 0;
 }
 
-static void
+static int
 csf_emit_batch_end(struct panfrost_batch *batch)
 {
    struct panfrost_device *dev = pan_device(batch->ctx->base.screen);
@@ -312,6 +335,9 @@ csf_emit_batch_end(struct panfrost_batch *batch)
    if (dev->debug & PAN_DBG_SYNC) {
       /* Get the CS state */
       batch->csf.cs.state = pan_pool_alloc_aligned(&batch->pool.base, 8, 8);
+      if (!batch->csf.cs.state.cpu)
+         return -1;
+
       memset(batch->csf.cs.state.cpu, ~0, 8);
       cs_move64_to(b, cs_reg64(b, 90), batch->csf.cs.state.gpu);
       cs_store_state(b, cs_reg64(b, 90), 0, MALI_CS_STATE_ERROR_STATUS,
@@ -326,8 +352,11 @@ csf_emit_batch_end(struct panfrost_batch *batch)
    cs_wait_slot(b, 0, false);
 
    /* Finish the command stream */
-   assert(cs_is_valid(batch->csf.cs.builder));
+   if (!cs_is_valid(batch->csf.cs.builder))
+      return -1;
+
    cs_finish(batch->csf.cs.builder);
+   return 0;
 }
 
 static int
@@ -564,8 +593,12 @@ csf_submit_wait_and_dump(struct panfrost_batch *batch,
 int
 GENX(csf_submit_batch)(struct panfrost_batch *batch)
 {
+   int ret;
+
    /* Close the batch before submitting. */
-   csf_emit_batch_end(batch);
+   ret = csf_emit_batch_end(batch);
+   if (ret)
+      return ret;
 
    uint64_t cs_start = cs_root_chunk_gpu_addr(batch->csf.cs.builder);
    uint32_t cs_size = cs_root_chunk_size(batch->csf.cs.builder);
@@ -573,7 +606,6 @@ GENX(csf_submit_batch)(struct panfrost_batch *batch)
    struct panfrost_device *dev = pan_device(ctx->base.screen);
    uint32_t vm_sync_handle = panthor_kmod_vm_sync_handle(dev->kmod.vm);
    struct util_dynarray syncops;
-   int ret;
 
    util_dynarray_init(&syncops, NULL);
 
@@ -1418,7 +1450,8 @@ GENX(csf_init_context)(struct panfrost_context *ctx)
    if (cs_bo == NULL)
       goto err_tiler_heap_cs_bo;
 
-   csf_oom_handler_init(ctx);
+   if (csf_oom_handler_init(ctx))
+      goto err_g_submit;
 
    struct cs_buffer init_buffer = {
       .cpu = cs_bo->ptr.cpu,

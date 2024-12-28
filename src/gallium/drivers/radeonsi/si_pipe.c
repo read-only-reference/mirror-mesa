@@ -66,6 +66,7 @@ static const struct debug_named_value radeonsi_debug_options[] = {
    {"mono", DBG(MONOLITHIC_SHADERS), "Use old-style monolithic shaders compiled on demand"},
    {"nooptvariant", DBG(NO_OPT_VARIANT), "Disable compiling optimized shader variants."},
    {"useaco", DBG(USE_ACO), "Use ACO as shader compiler when possible"},
+   {"usellvm", DBG(USE_LLVM), "Use LLVM as shader compiler when possible"},
 
    /* Information logging options: */
    {"info", DBG(INFO), "Print driver information"},
@@ -1111,13 +1112,8 @@ static void si_disk_cache_create(struct si_screen *sscreen)
    if (!disk_cache_get_function_identifier(si_disk_cache_create, &ctx))
       return;
 
-   /* ACO and LLVM shader binary have different cache id distinguished by if adding
-    * the LLVM function identifier. ACO is a built-in component in mesa, so no need
-    * to add aco function here.
-    */
 #if AMD_LLVM_AVAILABLE
-   if (!sscreen->use_aco &&
-       !disk_cache_get_function_identifier(LLVMInitializeAMDGPUTargetInfo, &ctx))
+   if (!disk_cache_get_function_identifier(LLVMInitializeAMDGPUTargetInfo, &ctx))
       return;
 #endif
 
@@ -1189,22 +1185,38 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
    if (sscreen->debug_flags & DBG(SHADOW_REGS))
       sscreen->info.register_shadowing_required = true;
 
+   bool support_aco = aco_is_gpu_supported(&sscreen->info);
+
 #if AMD_LLVM_AVAILABLE
    /* For GFX11.5, LLVM < 19 is missing a workaround that can cause GPU hangs. ACO is the only
     * alternative that has the workaround and is always available.
     */
    if (sscreen->info.gfx_level == GFX11_5 && LLVM_VERSION_MAJOR < 19)
       sscreen->use_aco = true;
-   else
+   else if (sscreen->info.gfx_level >= GFX10)
       sscreen->use_aco = (sscreen->debug_flags & DBG(USE_ACO));
+   else
+      sscreen->use_aco = support_aco && sscreen->info.has_image_opcodes &&
+                         !(sscreen->debug_flags & DBG(USE_LLVM));
 #else
    sscreen->use_aco = true;
 #endif
 
-   if (sscreen->use_aco && !aco_is_gpu_supported(&sscreen->info)) {
+   if (sscreen->use_aco && !support_aco) {
       fprintf(stderr, "radeonsi: ACO does not support this chip yet\n");
       FREE(sscreen);
       return NULL;
+   }
+
+   if (!sscreen->use_aco && support_aco) {
+      const char *shader_blake = debug_get_option("AMD_FORCE_SHADER_USE_ACO", NULL);
+      if (shader_blake) {
+         sscreen->force_shader_use_aco =
+            _mesa_blake3_from_printed_string(sscreen->use_aco_shader_blake, shader_blake);
+
+         if (!sscreen->force_shader_use_aco)
+            fprintf(stderr, "radeonsi: invalid AMD_SHADER_FORCE_ACO value\n");
+      }
    }
 
    if ((sscreen->debug_flags & DBG(TMZ)) &&

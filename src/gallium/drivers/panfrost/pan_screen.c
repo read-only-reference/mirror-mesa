@@ -464,11 +464,6 @@ panfrost_get_shader_param(struct pipe_screen *screen,
    case PIPE_SHADER_CAP_CONT_SUPPORTED:
       return 0;
 
-   case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
-      return 1;
-   case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
-      return 0;
-
    case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
       return dev->arch >= 6;
 
@@ -621,8 +616,8 @@ panfrost_is_format_supported(struct pipe_screen *screen,
    /* Check we support the format with the given bind */
 
    unsigned pan_bind_flags = pipe_to_pan_bind_flags(bind);
-
    struct panfrost_format fmt = dev->formats[format];
+   unsigned fmt_bind_flags = fmt.bind;
 
    /* Also check that compressed texture formats are supported on this
     * particular chip. They may not be depending on system integration
@@ -635,7 +630,24 @@ panfrost_is_format_supported(struct pipe_screen *screen,
    if (!supported)
       return false;
 
-   return MALI_EXTRACT_INDEX(fmt.hw) && ((pan_bind_flags & ~fmt.bind) == 0);
+   if (bind & PIPE_BIND_DEPTH_STENCIL) {
+      /* On panfrost, S8_UINT is actually stored as X8S8_UINT, which
+       * causes us headaches when we try to bind it as DEPTH_STENCIL;
+       * the gallium driver doesn't handle this correctly. So reject
+       * it for now.
+       */
+      switch (format) {
+      case PIPE_FORMAT_S8_UINT:
+         fmt_bind_flags &= ~PAN_BIND_DEPTH_STENCIL;
+         break;
+      default:
+         /* no other special handling required yet */
+         break;
+      }
+   }
+
+   return MALI_EXTRACT_INDEX(fmt.hw) &&
+      ((pan_bind_flags & ~fmt_bind_flags) == 0);
 }
 
 static void
@@ -653,31 +665,6 @@ panfrost_query_compression_rates(struct pipe_screen *screen,
    *count = panfrost_afrc_query_rates(format, max, rates);
 }
 
-static void
-panfrost_query_compression_modifiers(struct pipe_screen *screen,
-                                     enum pipe_format format, uint32_t rate,
-                                     int max, uint64_t *modifiers, int *count)
-{
-   struct panfrost_device *dev = pan_device(screen);
-
-   if (!dev->has_afrc || rate == PIPE_COMPRESSION_FIXED_RATE_NONE) {
-      int mod_count = 0;
-      for (unsigned i = 0; i < PAN_MODIFIER_COUNT; ++i) {
-         if (drm_is_afrc(pan_best_modifiers[i]))
-            continue;
-         if (mod_count < max)
-            modifiers[mod_count] = pan_best_modifiers[i];
-         mod_count++;
-         if (max > 0 && mod_count >= max)
-            break;
-      }
-      *count = mod_count;
-      return;
-   }
-
-   *count = panfrost_afrc_get_modifiers(format, rate, max, modifiers);
-}
-
 /* We always support linear and tiled operations, both external and internal.
  * We support AFBC for a subset of formats, and colourspace transform for a
  * subset of those. */
@@ -686,7 +673,7 @@ static void
 panfrost_walk_dmabuf_modifiers(struct pipe_screen *screen,
                                enum pipe_format format, int max,
                                uint64_t *modifiers, unsigned int *external_only,
-                               int *out_count, uint64_t test_modifier)
+                               int *out_count, uint64_t test_modifier, bool allow_afrc)
 {
    /* Query AFBC status */
    struct panfrost_device *dev = pan_device(screen);
@@ -694,7 +681,7 @@ panfrost_walk_dmabuf_modifiers(struct pipe_screen *screen,
       dev->has_afbc && panfrost_format_supports_afbc(dev->arch, format);
    bool ytr = panfrost_afbc_can_ytr(format);
    bool tiled_afbc = panfrost_afbc_can_tile(dev->arch);
-   bool afrc = dev->has_afrc && panfrost_format_supports_afrc(format);
+   bool afrc = allow_afrc && dev->has_afrc && panfrost_format_supports_afrc(format);
 
    unsigned count = 0;
 
@@ -740,7 +727,27 @@ panfrost_query_dmabuf_modifiers(struct pipe_screen *screen,
                                 unsigned int *external_only, int *out_count)
 {
    panfrost_walk_dmabuf_modifiers(screen, format, max, modifiers, external_only,
-                                  out_count, DRM_FORMAT_MOD_INVALID);
+                                  out_count, DRM_FORMAT_MOD_INVALID, true);
+}
+
+static void
+panfrost_query_compression_modifiers(struct pipe_screen *screen,
+                                     enum pipe_format format, uint32_t rate,
+                                     int max, uint64_t *modifiers, int *count)
+{
+   struct panfrost_device *dev = pan_device(screen);
+
+   if (rate == PIPE_COMPRESSION_FIXED_RATE_NONE)
+      /* no compression requested, return all non-afrc formats */
+      panfrost_walk_dmabuf_modifiers(screen, format, max, modifiers,
+                                     NULL, /* external_only */
+                                     count,
+                                     DRM_FORMAT_MOD_INVALID,
+                                     false /* disallow afrc */);
+   else if (dev->has_afrc)
+      *count = panfrost_afrc_get_modifiers(format, rate, max, modifiers);
+   else
+      *count = 0;  /* compression requested but not supported */
 }
 
 static bool
@@ -754,7 +761,7 @@ panfrost_is_dmabuf_modifier_supported(struct pipe_screen *screen,
    int count;
 
    panfrost_walk_dmabuf_modifiers(screen, format, 1, &unused, &uint_extern_only,
-                                  &count, modifier);
+                                  &count, modifier, true);
 
    if (external_only)
       *external_only = uint_extern_only ? true : false;
@@ -960,7 +967,11 @@ panfrost_create_screen(int fd, const struct pipe_screen_config *config,
       debug_get_flags_option("PAN_MESA_DEBUG", panfrost_debug_options, 0);
    screen->max_afbc_packing_ratio = debug_get_num_option(
       "PAN_MAX_AFBC_PACKING_RATIO", DEFAULT_MAX_AFBC_PACKING_RATIO);
-   panfrost_open_device(screen, fd, dev);
+
+   if (panfrost_open_device(screen, fd, dev)) {
+      ralloc_free(screen);
+      return NULL;
+   }
 
    if (dev->debug & PAN_DBG_NO_AFBC)
       dev->has_afbc = false;
@@ -1031,10 +1042,14 @@ panfrost_create_screen(int fd, const struct pipe_screen_config *config,
 
    panfrost_disk_cache_init(screen);
 
-   panfrost_pool_init(&screen->mempools.bin, NULL, dev, PAN_BO_EXECUTE, 4096,
-                      "Preload shaders", false, true);
-   panfrost_pool_init(&screen->mempools.desc, NULL, dev, 0, 65536,
-                      "Preload RSDs", false, true);
+   if (panfrost_pool_init(&screen->mempools.bin, NULL, dev, PAN_BO_EXECUTE,
+                          4096, "Preload shaders", false, true) ||
+       panfrost_pool_init(&screen->mempools.desc, NULL, dev, 0, 65536,
+                          "Preload RSDs", false, true)) {
+      panfrost_destroy_screen(&(screen->base));
+      return NULL;
+   }
+
    if (dev->arch == 4)
       panfrost_cmdstream_screen_init_v4(screen);
    else if (dev->arch == 5)

@@ -199,7 +199,7 @@ void fs_visitor::calculate_payload_ranges(bool allow_spilling,
                continue;
 
             for (unsigned j = reg_nr / reg_unit(devinfo);
-                 j < DIV_ROUND_UP(reg_nr + regs_read(inst, i),
+                 j < DIV_ROUND_UP(reg_nr + regs_read(devinfo, inst, i),
                                   reg_unit(devinfo));
                  j++) {
                payload_last_use_ip[j] = use_ip;
@@ -600,7 +600,7 @@ fs_reg_alloc::setup_inst_interference(const fs_inst *inst)
     * We could just do "something high".  Instead, we just pick the highest
     * register that works.
     */
-   if (inst->eot) {
+   if (inst->eot && devinfo->ver < 30) {
       const int vgrf = inst->opcode == SHADER_OPCODE_SEND ?
                        inst->src[2].nr : inst->src[0].nr;
       const int size = DIV_ROUND_UP(fs->alloc.sizes[vgrf], reg_unit(devinfo));
@@ -773,7 +773,7 @@ fs_reg_alloc::emit_unspill(const fs_builder &bld,
          /* LSC is limited to SIMD16 load/store but we can load more using
           * transpose messages.
           */
-         const bool use_transpose = bld.dispatch_width() > 16;
+         const bool use_transpose = bld.dispatch_width() > 16 || bld.has_writemask_all();
          const fs_builder ubld = use_transpose ? bld.exec_all().group(1, 0) : bld;
          brw_reg offset;
          if (use_transpose) {
@@ -933,7 +933,7 @@ fs_reg_alloc::set_spill_costs()
    foreach_block_and_inst(block, fs_inst, inst, fs->cfg) {
       for (unsigned int i = 0; i < inst->sources; i++) {
 	 if (inst->src[i].file == VGRF)
-            spill_costs[inst->src[i].nr] += regs_read(inst, i) * block_scale;
+            spill_costs[inst->src[i].nr] += regs_read(devinfo, inst, i) * block_scale;
       }
 
       if (inst->dst.file == VGRF)
@@ -1079,7 +1079,7 @@ fs_reg_alloc::spill_reg(unsigned spill_reg)
 	 if (inst->src[i].file == VGRF &&
              inst->src[i].nr == spill_reg) {
             /* Count registers needed in units of physical registers */
-            int count = align(regs_read(inst, i), reg_unit(devinfo));
+            int count = align(regs_read(devinfo, inst, i), reg_unit(devinfo));
             /* Align the spilling offset the physical register size */
             int subset_spill_offset = spill_offset +
                ROUND_DOWN_TO(inst->src[i].offset, REG_SIZE * reg_unit(devinfo));
@@ -1272,7 +1272,7 @@ brw_assign_regs(fs_visitor &s, bool allow_spilling, bool spill_all)
    bool success = alloc.assign_regs(allow_spilling, spill_all);
    if (!success && allow_spilling) {
       s.fail("no register to spill:\n");
-      brw_print_instructions(s, NULL);
+      brw_print_instructions(s);
    }
    return success;
 }

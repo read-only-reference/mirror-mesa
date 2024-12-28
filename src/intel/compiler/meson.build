@@ -42,6 +42,7 @@ libintel_compiler_brw_files = files(
   'brw_eu_compact.c',
   'brw_eu_defines.h',
   'brw_eu_emit.c',
+  'brw_eu_inst.h',
   'brw_eu.h',
   'brw_eu_validate.c',
   'brw_fs_bank_conflicts.cpp',
@@ -74,7 +75,6 @@ libintel_compiler_brw_files = files(
   'brw_fs_validate.cpp',
   'brw_fs_visitor.cpp',
   'brw_fs_workaround.cpp',
-  'brw_inst.h',
   'brw_ir.h',
   'brw_ir_allocator.h',
   'brw_ir_analysis.h',
@@ -99,10 +99,12 @@ libintel_compiler_brw_files = files(
   'brw_nir_rt.h',
   'brw_nir_rt.c',
   'brw_nir_rt_builder.h',
+  'brw_opt_txf_combiner.cpp',
   'brw_packed_float.c',
   'brw_print.cpp',
   'brw_prim.h',
   'brw_private.h',
+  'brw_reg.cpp',
   'brw_reg.h',
   'brw_reg_type.c',
   'brw_reg_type.h',
@@ -160,7 +162,7 @@ idep_intel_compiler_brw = declare_dependency(
 )
 
 # For now this tool is only going to be used by Anv
-if get_option('intel-clc') == 'system'
+if get_option('intel-clc') == 'system' or get_option('precomp-compiler') == 'system'
   prog_intel_clc = find_program('intel_clc', native : true)
   dep_prog_intel_clc = []
 elif with_intel_clc
@@ -184,7 +186,7 @@ elif with_intel_clc
     # Most commonly this happens when doing a cross compile from an x86_64 build
     # machine to an x86 host
     native : not meson.can_run_host_binaries(),
-    install : get_option('install-intel-clc'),
+    install : get_option('install-intel-clc') or get_option('install-precomp-compiler'),
   )
   dep_prog_intel_clc = [prog_intel_clc]
 endif

@@ -47,7 +47,14 @@ nggc_bool_setting(nir_builder *b, unsigned mask, lower_abi_state *s)
 static nir_def *
 shader_query_bool_setting(nir_builder *b, unsigned mask, lower_abi_state *s)
 {
-   nir_def *settings = GET_SGPR_FIELD_NIR(s->args->ngg_state, NGG_STATE_QUERY);
+   nir_def *settings;
+
+   if (b->shader->info.stage == MESA_SHADER_TASK) {
+      settings = ac_nir_load_arg(b, &s->args->ac, s->args->task_state);
+   } else {
+      settings = GET_SGPR_FIELD_NIR(s->args->ngg_state, NGG_STATE_QUERY);
+   }
+
    return nir_test_mask(b, settings, mask);
 }
 
@@ -371,30 +378,28 @@ lower_abi_instr(nir_builder *b, nir_intrinsic_instr *intrin, void *state)
       break;
    }
    case nir_intrinsic_atomic_add_gs_emit_prim_count_amd:
-      nir_gds_atomic_add_amd(b, 32, intrin->src[0].ssa, nir_imm_int(b, RADV_SHADER_QUERY_GS_PRIM_EMIT_OFFSET),
-                             nir_imm_int(b, 0x100));
-      break;
-   case nir_intrinsic_atomic_add_gen_prim_count_amd: {
-      uint32_t offset = stage == MESA_SHADER_MESH ? RADV_SHADER_QUERY_MS_PRIM_GEN_OFFSET
-                                                  : RADV_SHADER_QUERY_PRIM_GEN_OFFSET(nir_intrinsic_stream_id(intrin));
-
-      nir_gds_atomic_add_amd(b, 32, intrin->src[0].ssa, nir_imm_int(b, offset), nir_imm_int(b, 0x100));
-      break;
-   }
+   case nir_intrinsic_atomic_add_gen_prim_count_amd:
    case nir_intrinsic_atomic_add_xfb_prim_count_amd:
-      nir_gds_atomic_add_amd(b, 32, intrin->src[0].ssa,
-                             nir_imm_int(b, RADV_SHADER_QUERY_PRIM_XFB_OFFSET(nir_intrinsic_stream_id(intrin))),
-                             nir_imm_int(b, 0x100));
-      break;
    case nir_intrinsic_atomic_add_shader_invocation_count_amd: {
       uint32_t offset;
 
-      if (stage == MESA_SHADER_MESH) {
-         offset = RADV_SHADER_QUERY_MS_INVOCATION_OFFSET;
-      } else if (stage == MESA_SHADER_TASK) {
-         offset = RADV_SHADER_QUERY_TS_INVOCATION_OFFSET;
+      if (intrin->intrinsic == nir_intrinsic_atomic_add_gs_emit_prim_count_amd) {
+         offset = RADV_SHADER_QUERY_GS_PRIM_EMIT_OFFSET;
+      } else if (intrin->intrinsic == nir_intrinsic_atomic_add_gen_prim_count_amd) {
+         offset = stage == MESA_SHADER_MESH ? RADV_SHADER_QUERY_MS_PRIM_GEN_OFFSET
+                                            : RADV_SHADER_QUERY_PRIM_GEN_OFFSET(nir_intrinsic_stream_id(intrin));
+      } else if (intrin->intrinsic == nir_intrinsic_atomic_add_xfb_prim_count_amd) {
+         offset = RADV_SHADER_QUERY_PRIM_XFB_OFFSET(nir_intrinsic_stream_id(intrin));
       } else {
-         offset = RADV_SHADER_QUERY_GS_INVOCATION_OFFSET;
+         assert(intrin->intrinsic == nir_intrinsic_atomic_add_shader_invocation_count_amd);
+
+         if (stage == MESA_SHADER_MESH) {
+            offset = RADV_SHADER_QUERY_MS_INVOCATION_OFFSET;
+         } else if (stage == MESA_SHADER_TASK) {
+            offset = RADV_SHADER_QUERY_TS_INVOCATION_OFFSET;
+         } else {
+            offset = RADV_SHADER_QUERY_GS_INVOCATION_OFFSET;
+         }
       }
 
       nir_gds_atomic_add_amd(b, 32, intrin->src[0].ssa, nir_imm_int(b, offset), nir_imm_int(b, 0x100));
@@ -491,7 +496,7 @@ lower_abi_instr(nir_builder *b, nir_intrinsic_instr *intrin, void *state)
    }
    case nir_intrinsic_load_poly_line_smooth_enabled: {
       nir_def *line_rast_mode = GET_SGPR_FIELD_NIR(s->args->ps_state, PS_STATE_LINE_RAST_MODE);
-      replacement = nir_ieq_imm(b, line_rast_mode, VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH_KHR);
+      replacement = nir_ieq_imm(b, line_rast_mode, VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH);
       break;
    }
    case nir_intrinsic_load_initial_edgeflags_amd:

@@ -39,10 +39,6 @@ static bool do_winsys_init(struct amdgpu_winsys *aws,
    if (!ac_query_gpu_info(fd, aws->dev, &aws->info, false))
       goto fail;
 
-   /* TODO: Enable this once the kernel handles it efficiently. */
-   if (aws->info.has_dedicated_vram)
-      aws->info.has_local_buffers = false;
-
    aws->addrlib = ac_addrlib_create(&aws->info, &aws->info.max_alignment);
    if (!aws->addrlib) {
       fprintf(stderr, "amdgpu: Cannot create addrlib.\n");
@@ -60,6 +56,14 @@ static bool do_winsys_init(struct amdgpu_winsys *aws,
                       strstr(debug_get_option("AMD_DEBUG", ""), "sqtt") != NULL;
    aws->zero_all_vram_allocs = strstr(debug_get_option("R600_DEBUG", ""), "zerovram") != NULL ||
                               driQueryOptionb(config->options, "radeonsi_zerovram");
+   aws->info.use_userq = debug_get_bool_option("AMD_USERQ", false);
+
+   for (unsigned i = 0; i < ARRAY_SIZE(aws->queues); i++)
+      simple_mtx_init(&aws->queues[i].userq.lock, mtx_plain);
+
+   /* TODO: Enable this once the kernel handles it efficiently. */
+   if (aws->info.has_dedicated_vram && !aws->info.use_userq)
+      aws->info.has_local_buffers = false;
 
    return true;
 
@@ -78,13 +82,15 @@ static void do_winsys_deinit(struct amdgpu_winsys *aws)
       for (unsigned j = 0; j < ARRAY_SIZE(aws->queues[i].fences); j++)
          amdgpu_fence_reference(&aws->queues[i].fences[j], NULL);
 
+      amdgpu_userq_deinit(aws, &aws->queues[i].userq);
+      simple_mtx_destroy(&aws->queues[i].userq.lock);
+
       amdgpu_ctx_reference(&aws->queues[i].last_ctx, NULL);
    }
 
    if (util_queue_is_initialized(&aws->cs_queue))
       util_queue_destroy(&aws->cs_queue);
 
-   simple_mtx_destroy(&aws->bo_fence_lock);
    if (aws->bo_slabs.groups)
       pb_slabs_deinit(&aws->bo_slabs);
    pb_cache_deinit(&aws->bo_cache);
@@ -97,6 +103,9 @@ static void do_winsys_deinit(struct amdgpu_winsys *aws)
 
    ac_addrlib_destroy(aws->addrlib);
    amdgpu_device_deinitialize(aws->dev);
+   drmSyncobjDestroy(aws->fd, aws->vm_timeline_syncobj);
+   simple_mtx_destroy(&aws->bo_fence_lock);
+
    FREE(aws);
 }
 
@@ -127,10 +136,12 @@ static void amdgpu_winsys_destroy_locked(struct radeon_winsys *rws, bool locked)
    if (!locked)
       simple_mtx_unlock(&dev_tab_mutex);
 
+   if (sws->fd != aws->fd)
+      close(sws->fd);
+
    if (destroy)
       do_winsys_deinit(aws);
 
-   close(sws->fd);
    FREE(rws);
 }
 
@@ -375,7 +386,7 @@ amdgpu_winsys_create(int fd, const struct pipe_screen_config *config,
       return NULL;
 
    pipe_reference_init(&sws->reference, 1);
-   sws->fd = os_dupfd_cloexec(fd);
+   sws->fd = -1;
 
    /* Look up the winsys from the dev table. */
    simple_mtx_lock(&dev_tab_mutex);
@@ -384,7 +395,7 @@ amdgpu_winsys_create(int fd, const struct pipe_screen_config *config,
 
    /* Initialize the amdgpu device. This should always return the same pointer
     * for the same fd. */
-   r = amdgpu_device_initialize(sws->fd, &drm_major, &drm_minor, &dev);
+   r = amdgpu_device_initialize(fd, &drm_major, &drm_minor, &dev);
    if (r) {
       fprintf(stderr, "amdgpu: amdgpu_device_initialize failed.\n");
       goto fail;
@@ -403,8 +414,7 @@ amdgpu_winsys_create(int fd, const struct pipe_screen_config *config,
 
       simple_mtx_lock(&aws->sws_list_lock);
       for (sws_iter = aws->sws_list; sws_iter; sws_iter = sws_iter->next) {
-         if (are_file_descriptions_equal(sws_iter->fd, sws->fd)) {
-            close(sws->fd);
+         if (are_file_descriptions_equal(sws_iter->fd, fd)) {
             FREE(sws);
             sws = sws_iter;
             pipe_reference(NULL, &sws->reference);
@@ -427,28 +437,26 @@ amdgpu_winsys_create(int fd, const struct pipe_screen_config *config,
          goto fail;
 
       aws->dev = dev;
-      aws->fd = amdgpu_device_get_fd(dev);
-
       /* The device fd might be different from the one we passed because of
        * libdrm_amdgpu device dedup logic. This can happen if radv is initialized
        * first.
        * Get the correct fd or the buffer sharing will not work (see #3424).
        */
+      aws->fd = amdgpu_device_get_fd(dev);
       if (!are_file_descriptions_equal(aws->fd, fd)) {
          sws->kms_handles = _mesa_hash_table_create(NULL, kms_handle_hash,
                                                    kms_handle_equals);
          if (!sws->kms_handles)
             goto fail;
-         /* We could avoid storing the fd and use amdgpu_device_get_fd() where
-          * we need it but we'd have to use os_same_file_description() to
-          * compare the fds.
-          */
-         aws->input_fd = aws->fd;
       } else {
-         aws->input_fd = sws->fd;
+         sws->fd = aws->fd;
       }
       aws->info.drm_major = drm_major;
       aws->info.drm_minor = drm_minor;
+
+      if (amdgpu_cs_create_syncobj(dev, &aws->vm_timeline_syncobj))
+         goto fail_alloc;
+      simple_mtx_init(&aws->vm_ioctl_lock, mtx_plain);
 
       /* Only aws and buffer functions are used. */
       aws->dummy_sws.aws = aws;
@@ -516,6 +524,9 @@ amdgpu_winsys_create(int fd, const struct pipe_screen_config *config,
       }
    }
 
+   if (sws->fd < 0)
+      sws->fd = os_dupfd_cloexec(fd);
+
    sws->aws = aws;
 
    /* Set functions. */
@@ -564,7 +575,6 @@ fail_alloc:
 fail:
    if (sws->kms_handles)
       _mesa_hash_table_destroy(sws->kms_handles, NULL);
-   close(sws->fd);
    FREE(sws);
    simple_mtx_unlock(&dev_tab_mutex);
    return NULL;

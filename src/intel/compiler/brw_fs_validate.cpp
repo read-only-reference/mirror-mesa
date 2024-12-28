@@ -239,6 +239,8 @@ brw_validate_instruction_phase(const fs_visitor &s, fs_inst *inst)
    case SHADER_OPCODE_VOTE_EQUAL:
    case SHADER_OPCODE_BALLOT:
    case SHADER_OPCODE_QUAD_SWAP:
+   case SHADER_OPCODE_READ_FROM_LIVE_CHANNEL:
+   case SHADER_OPCODE_READ_FROM_CHANNEL:
       invalid_from = BRW_SHADER_PHASE_AFTER_EARLY_LOWERING;
       break;
 
@@ -364,7 +366,12 @@ brw_fs_validate(const fs_visitor &s)
                const unsigned stride_in_bytes = byte_stride(inst->src[i]);
                const unsigned size_in_bytes = brw_type_size_bytes(inst->src[i].type);
                if (stride_in_bytes == 0) {
-                  fsv_assert_lte(size_in_bytes, 4);
+                  /* If the source is_scalar, then the stride will be
+                   * converted to <4;4,1> in brw_lower_scalar_fp64_MAD after
+                   * SIMD splitting.
+                   */
+                  if (!inst->src[i].is_scalar)
+                     fsv_assert_lte(size_in_bytes, 4);
                } else {
                   fsv_assert_eq(stride_in_bytes, size_in_bytes);
                }
@@ -375,11 +382,14 @@ brw_fs_validate(const fs_visitor &s)
       if (inst->dst.file == VGRF) {
          fsv_assert_lte(inst->dst.offset / REG_SIZE + regs_written(inst),
                         s.alloc.sizes[inst->dst.nr]);
+
+         if (inst->exec_size > 1)
+            fsv_assert_ne(inst->dst.stride, 0);
       }
 
       for (unsigned i = 0; i < inst->sources; i++) {
          if (inst->src[i].file == VGRF) {
-            fsv_assert_lte(inst->src[i].offset / REG_SIZE + regs_read(inst, i),
+            fsv_assert_lte(inst->src[i].offset / REG_SIZE + regs_read(devinfo, inst, i),
                            s.alloc.sizes[inst->src[i].nr]);
          }
       }
@@ -408,7 +418,8 @@ brw_fs_validate(const fs_visitor &s)
           * potential problems sooner rather than later.
           */
          for (unsigned i = 0; i < inst->sources; i++) {
-            fsv_assert(!is_uniform(inst->src[i]) ||
+            fsv_assert(inst->src[i].is_scalar ||
+                       !is_uniform(inst->src[i]) ||
                        inst->src[i].type != BRW_TYPE_HF);
          }
       }

@@ -21,8 +21,7 @@
  * IN THE SOFTWARE.
  */
 
-#ifndef BRW_COMPILER_H
-#define BRW_COMPILER_H
+#pragma once
 
 #include <stdio.h>
 #include "c11/threads.h"
@@ -882,6 +881,9 @@ struct brw_cs_prog_data {
    uint8_t generate_local_id;
    enum intel_compute_walk_order walk_order;
 
+   /* True if shader has any sample operation */
+   bool uses_sampler;
+
    struct {
       struct brw_push_const_block cross_thread;
       struct brw_push_const_block per_thread;
@@ -1561,5 +1563,3 @@ enum brw_topology_id
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
-
-#endif /* BRW_COMPILER_H */

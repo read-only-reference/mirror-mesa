@@ -4,9 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "ac_gpu_info.h"
 #include "ac_nir.h"
 #include "ac_nir_helpers.h"
 #include "nir_builder.h"
+#include "util/u_math.h"
 
 /*
  * These NIR passes are used to lower NIR cross-stage I/O intrinsics into the
@@ -61,8 +63,8 @@
  * TCS per-vertex inputs for patch 1
  * TCS per-vertex inputs for patch 2  <─── hs_per_vertex_input_lds_offset (rel_patch_id = 2)
  * ...
- * TCS per-vertex outputs for patch 0 <─── output_patch0_offset
- * TCS per-patch outputs for patch 0  <─── output_patch0_patch_data_offset
+ * TCS per-vertex outputs for patch 0 <─── hs_output_lds_offset (rel_patch_id = 0, per-vertex)
+ * TCS per-patch outputs for patch 0  <─── hs_output_lds_offset (rel_patch_id = 0, per-patch)
  * TCS per-vertex outputs for patch 1
  * TCS per-patch outputs for patch 1
  * TCS per-vertex outputs for patch 2 <─── hs_output_lds_offset (rel_patch_id = 2, per-vertex)
@@ -110,25 +112,27 @@ typedef struct {
    /* I/O semantic -> real location used by lowering. */
    ac_nir_map_io_driver_location map_io;
 
-   /* True if merged VS+TCS (on GFX9+) has the same number
-    * of input and output patch size.
-    */
-   bool tcs_in_out_eq;
-
-   /* Bit mask of TCS per-vertex inputs (VS outputs) which
-    * are passed between the two stages only in temporaries (registers).
+   /* Bit mask of TCS per-vertex inputs (VS outputs) which are passed via temporaries (VGPRs)
+    * from VS to TCS because they are read using gl_InvocationIndex as the vertex index.
     *
-    * A VS output can be passed to TCS in registers when:
-    * - VS is known to write, and TCS is known to read it
-    * - Neither VS nor TCS accesses it indirecty
-    * - There are no TCS cross-invocation reads to this input
+    * If TCS cross-invocation reads or indirect reads of these inputs are present, they don't
+    * prevent fast access via gl_InvocationIndex because those are just different ways of reading
+    * the same values.
+    *
+    * An example where a TCS input is indexed by gl_InvocationIndex and some other index is
+    * Unigine Heaven where the position input is used for patch culling (with cross-invocation
+    * access) and also read with gl_InvocationIndex to forward it to TES.
+    *
+    * Passing TCS inputs in VGPRs is only possible when:
+    * - VS+TCS are merged (GFX9+).
+    * - Input and output patch sizes are the same.
     */
-   uint64_t tcs_temp_only_inputs;
+   uint64_t tcs_inputs_via_temp;
 
-   /* Bit mask of inputs read by the TCS,
-    * this is used for linking VS outputs to TCS inputs.
+   /* Bit mask of TCS per-vertex inputs (VS outputs) which are passed via LDS for cross-invocation
+    * reads or indirect reads.
     */
-   uint64_t tcs_inputs_read;
+   uint64_t tcs_inputs_via_lds;
 
    /* Bit mask of TCS outputs read by TES. */
    uint64_t tes_inputs_read;
@@ -264,33 +268,34 @@ lower_ls_output_store(nir_builder *b,
    lower_tess_io_state *st = (lower_tess_io_state *) state;
 
    /* When a VS output isn't read by TCS, don't emit anything. */
-   if ((io_sem.no_varying || !(st->tcs_inputs_read & BITFIELD64_BIT(io_sem.location)))) {
+   if ((io_sem.no_varying ||
+        !((st->tcs_inputs_via_temp | st->tcs_inputs_via_lds) & BITFIELD64_BIT(io_sem.location)))) {
       nir_instr_remove(&intrin->instr);
       return true;
    }
 
-   /* If this is a temp-only TCS input, we don't need to use shared memory at all. */
-   if (st->tcs_temp_only_inputs & BITFIELD64_BIT(io_sem.location))
-      return false;
+   if (st->tcs_inputs_via_lds & BITFIELD64_BIT(io_sem.location)) {
+      b->cursor = nir_before_instr(&intrin->instr);
 
-   b->cursor = nir_before_instr(&intrin->instr);
+      nir_def *vertex_idx = nir_load_local_invocation_index(b);
+      nir_def *base_off_var = nir_imul(b, vertex_idx, nir_load_lshs_vertex_stride_amd(b));
 
-   nir_def *vertex_idx = nir_load_local_invocation_index(b);
-   nir_def *base_off_var = nir_imul(b, vertex_idx, nir_load_lshs_vertex_stride_amd(b));
+      unsigned mapped = ac_nir_map_io_location(io_sem.location, st->tcs_inputs_via_lds, st->map_io);
+      nir_def *io_off = ac_nir_calc_io_off(b, intrin, nir_imm_int(b, 16u), 4u, mapped);
+      unsigned write_mask = nir_intrinsic_write_mask(intrin);
 
-   unsigned mapped = ac_nir_map_io_location(io_sem.location, st->tcs_inputs_read & ~st->tcs_temp_only_inputs,
-                                            st->map_io);
-   nir_def *io_off = ac_nir_calc_io_off(b, intrin, nir_imm_int(b, 16u), 4u, mapped);
-   unsigned write_mask = nir_intrinsic_write_mask(intrin);
+      nir_def *off = nir_iadd_nuw(b, base_off_var, io_off);
 
-   nir_def *off = nir_iadd_nuw(b, base_off_var, io_off);
-   AC_NIR_STORE_IO(b, intrin->src[0].ssa, 0, write_mask, io_sem.high_16bits,
-                   nir_store_shared, off, .write_mask = store_write_mask, .base = store_const_offset);
+      /* The first vec4 is reserved for the tf0/1 shader message group vote. */
+      if (st->gfx_level >= GFX11)
+         off = nir_iadd_imm_nuw(b, off, AC_HS_MSG_VOTE_LDS_BYTES);
 
-   /* NOTE: don't remove the store_output intrinsic on GFX9+ when tcs_in_out_eq,
-    * it will be used by same-invocation TCS input loads.
-    */
-   if (!st->tcs_in_out_eq)
+      AC_NIR_STORE_IO(b, intrin->src[0].ssa, 0, write_mask, io_sem.high_16bits,
+                      nir_store_shared, off, .write_mask = store_write_mask, .base = store_const_offset);
+   }
+
+   /* The store_output intrinsic on GFX9+ is used to pass the output to TCS via VGPRs. */
+   if (!(st->tcs_inputs_via_temp & BITFIELD64_BIT(io_sem.location)))
       nir_instr_remove(&intrin->instr);
 
    return true;
@@ -308,29 +313,21 @@ filter_load_tcs_per_vertex_input(const nir_instr *instr,
 
    if (intrin->intrinsic != nir_intrinsic_load_per_vertex_input)
       return false;
-   if (!st->tcs_in_out_eq)
-      return true;
 
-   /* tcs_in_out_eq: a same-invocation input load, without indirect offset,
-    * can use temporaries, no need to use shared memory.
-    */
    nir_src *off_src = nir_get_io_offset_src(intrin);
    nir_src *vertex_index_src = nir_get_io_arrayed_index_src(intrin);
    nir_instr *vertex_index_instr = vertex_index_src->ssa->parent_instr;
-
-
    const nir_io_semantics io_sem = nir_intrinsic_io_semantics(intrin);
 
-   /* If this is a temp-only TCS input, we don't need to use shared memory at all. */
-   if (st->tcs_temp_only_inputs & BITFIELD64_BIT(io_sem.location)) {
-      ASSERTED bool can_use_temps =
-         nir_src_is_const(*off_src) &&
-         vertex_index_instr->type == nir_instr_type_intrinsic &&
-         nir_instr_as_intrinsic(vertex_index_instr)->intrinsic == nir_intrinsic_load_invocation_id;
-
-      assert(can_use_temps);
+   /* If this is accessed via gl_InvocationIndex, don't use LDS if tcs_inputs_via_temp is also set,
+    * which indicates that VS and TCS have the same number of patch vertices and the input can be
+    * read from VGPRs.
+    */
+   if (st->tcs_inputs_via_temp & BITFIELD64_BIT(io_sem.location) &&
+       nir_src_is_const(*off_src) && /* array indexing */
+       vertex_index_instr->type == nir_instr_type_intrinsic &&
+       nir_instr_as_intrinsic(vertex_index_instr)->intrinsic == nir_intrinsic_load_invocation_id)
       return false;
-   }
 
    return true;
 }
@@ -351,11 +348,12 @@ hs_per_vertex_input_lds_offset(nir_builder *b,
    nir_def *tcs_in_current_patch_offset = nir_imul(b, rel_patch_id, tcs_in_patch_stride);
 
    const nir_io_semantics io_sem = nir_intrinsic_io_semantics(instr);
-   const unsigned mapped = ac_nir_map_io_location(io_sem.location, st->tcs_inputs_read & ~st->tcs_temp_only_inputs,
-                                                  st->map_io);
+   const unsigned mapped = ac_nir_map_io_location(io_sem.location, st->tcs_inputs_via_lds, st->map_io);
    nir_def *io_offset = ac_nir_calc_io_off(b, instr, nir_imm_int(b, 16u), 4u, mapped);
+   nir_def *lds_offset = nir_iadd_nuw(b, nir_iadd_nuw(b, tcs_in_current_patch_offset, vertex_index_off), io_offset);
 
-   return nir_iadd_nuw(b, nir_iadd_nuw(b, tcs_in_current_patch_offset, vertex_index_off), io_offset);
+   /* The first LDS vec4 is reserved for the tf0/1 shader message group vote. */
+   return st->gfx_level >= GFX11 ? nir_iadd_imm_nuw(b, lds_offset, AC_HS_MSG_VOTE_LDS_BYTES) : lds_offset;
 }
 
 static unsigned
@@ -419,17 +417,21 @@ hs_output_lds_offset(nir_builder *b,
    nir_def *input_patch_size = nir_imul(b, tcs_in_vtxcnt, nir_load_lshs_vertex_stride_amd(b));
    nir_def *output_patch0_offset = nir_imul(b, input_patch_size, tcs_num_patches);
    nir_def *output_patch_offset = nir_iadd_nuw(b, patch_offset, output_patch0_offset);
+   nir_def *lds_offset;
 
    if (per_vertex) {
       nir_def *vertex_index = nir_get_io_arrayed_index_src(intrin)->ssa;
       nir_def *vertex_index_off = nir_imul_imm(b, vertex_index, output_vertex_size);
 
       off = nir_iadd_nuw(b, off, vertex_index_off);
-      return nir_iadd_nuw(b, off, output_patch_offset);
+      lds_offset = nir_iadd_nuw(b, off, output_patch_offset);
    } else {
       off = nir_iadd_imm_nuw(b, off, pervertex_output_patch_size);
-      return nir_iadd_nuw(b, off, output_patch_offset);
+      lds_offset = nir_iadd_nuw(b, off, output_patch_offset);
    }
+
+   /* The first LDS vec4 is reserved for the tf0/1 shader message group vote. */
+   return st->gfx_level >= GFX11 ? nir_iadd_imm_nuw(b, lds_offset, AC_HS_MSG_VOTE_LDS_BYTES) : lds_offset;
 }
 
 static unsigned
@@ -758,6 +760,213 @@ hs_resize_tess_factor(nir_builder *b, nir_def *tf, unsigned comps)
       return tf;
 }
 
+static nir_if *
+hs_if_invocation_id_zero(nir_builder *b)
+{
+   nir_def *invocation_id = nir_load_invocation_id(b);
+
+   /* Only the 1st invocation of each patch needs to do this. */
+   nir_if *invocation_id_zero = nir_push_if(b, nir_ieq_imm(b, invocation_id, 0));
+
+   /* When the output patch size is <= 32 then we can flatten the branch here
+    * because we know for sure that at least 1 invocation in all waves will
+    * take the branch.
+    */
+   if (b->shader->info.tess.tcs_vertices_out <= 32)
+      invocation_id_zero->control = nir_selection_control_divergent_always_taken;
+
+   return invocation_id_zero;
+}
+
+static nir_def *
+tess_level_has_effect(nir_builder *b, nir_def *prim_mode, unsigned comp, bool outer)
+{
+   if (outer && comp <= 1)
+      return nir_imm_true(b);
+   else if ((outer && comp == 2) || (!outer && comp == 0))
+      return nir_ine_imm(b, prim_mode, TESS_PRIMITIVE_ISOLINES);
+   else if ((outer && comp == 3) || (!outer && comp == 1))
+      return nir_ieq_imm(b, prim_mode, TESS_PRIMITIVE_QUADS);
+   else
+      unreachable("invalid comp");
+}
+
+/* Return true if memory should be used. If false is returned, the shader message has been used. */
+static nir_def *
+hs_msg_group_vote_use_memory(nir_builder *b, lower_tess_io_state *st,
+                             tess_levels *tessfactors, nir_def *prim_mode)
+{
+   /* Don't do the group vote and send the message directly if tess level values were determined
+    * by nir_gather_tcs_info at compile time.
+    *
+    * Disable the shader cache if you set the environment variable.
+    */
+   if (debug_get_bool_option("AMD_FAST_HS_MSG", true) &&
+       (st->tcs_info.all_tess_levels_are_effectively_zero ||
+        st->tcs_info.all_tess_levels_are_effectively_one)) {
+      nir_if *if_subgroup0 = nir_push_if(b, nir_ieq_imm(b, nir_load_subgroup_id(b), 0));
+      {
+         /* m0[0] == 0 means all TF are 0 in the workgroup.
+          * m0[0] == 1 means all TF are 1 in the workgroup.
+          */
+         nir_def *m0 = nir_imm_int(b, st->tcs_info.all_tess_levels_are_effectively_zero ? 0 : 1);
+         nir_sendmsg_amd(b, m0, .base = AC_SENDMSG_HS_TESSFACTOR);
+      }
+      nir_pop_if(b, if_subgroup0);
+      return nir_imm_false(b);
+   }
+
+   /* Initialize the first LDS dword for the tf0/1 group vote at the beginning of TCS. */
+   nir_block *start_block = nir_start_block(nir_shader_get_entrypoint(b->shader));
+   nir_builder top_b = nir_builder_at(nir_before_block(start_block));
+
+   nir_if *thread0 = nir_push_if(&top_b,
+                                 nir_iand(&top_b, nir_ieq_imm(&top_b, nir_load_subgroup_id(&top_b), 0),
+                                          nir_inverse_ballot(&top_b, 1, nir_imm_ivec4(&top_b, 0x1, 0, 0, 0))));
+   {
+      /* 0x3 is the initial bitmask (tf0 | tf1). Each subgroup will do atomic iand on it for the vote. */
+      nir_store_shared(&top_b, nir_imm_int(&top_b, 0x3), nir_imm_int(&top_b, 0),
+                       .write_mask = 0x1, .align_mul = 4);
+   }
+   nir_pop_if(&top_b, thread0);
+
+   /* Insert a barrier to wait for initialization above if there hasn't been any other barrier
+    * in the shader.
+    */
+   if (!st->tcs_info.always_executes_barrier) {
+      nir_barrier(b, .execution_scope = SCOPE_WORKGROUP, .memory_scope = SCOPE_WORKGROUP,
+                  .memory_semantics = NIR_MEMORY_ACQ_REL, .memory_modes = nir_var_mem_shared);
+   }
+
+   /* Use s_sendmsg to tell the hw whether the whole workgroup has either of these cases:
+    *
+    * tf0: All patches in the workgroup have at least one outer tess level component either
+    *      in the [-inf, 0] range or equal to NaN, causing them to be discarded. Inner tess levels
+    *      have no effect.
+    *
+    * tf1: All patches in the workgroup have the values of tess levels set to 1 or equivalent numbers,
+    *      which doesn't discard any patches. Each spacing interprets different tess level ranges as 1:
+    *
+    *      1) equal_spacing, fractional_odd_spacing, and unknown spacing
+    *      For undiscarded patches, the tessellator clamps all tess levels to 1. If all tess levels
+    *      are in the (0, 1] range, which is effectively 1, untessellated patches are
+    *      drawn.
+    *
+    *      2) fractional_even_spacing
+    *      For undiscarded patches, the tessellator clamps all tess levels to 2 (both outer and inner)
+    *      except isolines, which clamp the first outer tess level component to 1. If all outer tess
+    *      levels are in the (0, 2] or (0, 1] range (for outer[0] of isolines) and all inner tess levels
+    *      are in the [-inf, 2] range, the tf1 message can be used. The tessellator will receive 1 via
+    *      the message, but will clamp them to 2 or keep 1 (for outer[0] of isolines).
+    *
+    *      If we make this mutually exclusive with tf0, we only have to compare against the upper bound.
+    */
+
+   /* Determine tf0/tf1 for the subgroup at the end of TCS. */
+   nir_if *if_invocation_id_zero = hs_if_invocation_id_zero(b);
+   {
+      *tessfactors = hs_load_tess_levels(b, st);
+
+      nir_def *lane_tf_effectively_0 = nir_imm_false(b);
+      for (unsigned i = 0; i < tessfactors->outer->num_components; i++) {
+         nir_def *valid = tess_level_has_effect(b, prim_mode, i, true);
+         /* fgeu returns true for NaN */
+         nir_def *le0 = nir_fgeu(b, nir_imm_float(b, 0), nir_channel(b, tessfactors->outer, i));
+         lane_tf_effectively_0 = nir_ior(b, lane_tf_effectively_0, nir_iand(b, le0, valid));
+      }
+
+      /* Use case 1: unknown spacing */
+      nir_def *lane_tf_effectively_1 = nir_imm_true(b);
+      for (unsigned i = 0; i < tessfactors->outer->num_components; i++) {
+         nir_def *valid = tess_level_has_effect(b, prim_mode, i, true);
+         nir_def *le1 = nir_fle_imm(b, nir_channel(b, tessfactors->outer, i), 1);
+         lane_tf_effectively_1 = nir_iand(b, lane_tf_effectively_1, nir_ior(b, le1, nir_inot(b, valid)));
+      }
+
+      if (tessfactors->inner) {
+         for (unsigned i = 0; i < tessfactors->inner->num_components; i++) {
+            nir_def *valid = tess_level_has_effect(b, prim_mode, i, false);
+            nir_def *le1 = nir_fle_imm(b, nir_channel(b, tessfactors->inner, i), 1);
+            lane_tf_effectively_1 = nir_iand(b, lane_tf_effectively_1, nir_ior(b, le1, nir_inot(b, valid)));
+         }
+      }
+
+      /* Make them mutually exclusive. */
+      lane_tf_effectively_1 = nir_iand(b, lane_tf_effectively_1, nir_inot(b, lane_tf_effectively_0));
+
+      nir_def *subgroup_uses_tf0 = nir_b2i32(b, nir_vote_all(b, 1, lane_tf_effectively_0));
+      nir_def *subgroup_uses_tf1 = nir_b2i32(b, nir_vote_all(b, 1, lane_tf_effectively_1));
+
+      /* Pack the value for LDS. Encoding:
+       *    0 = none of the below
+       *    1 = all tess factors are effectively 0
+       *    2 = all tess factors are effectively 1
+       *    3 = invalid
+       *
+       * Since we will do bitwise AND reduction across all waves, 3 can never occur.
+       */
+      nir_def *packed_tf01_mask = nir_ior(b, subgroup_uses_tf0,
+                                          nir_ishl_imm(b, subgroup_uses_tf1, 1));
+
+      /* This function is only called within a block that only executes for patch invocation 0, so we
+       * only need to mask out invocation 0 of other patches in the subgroup to execute on only 1 lane.
+       *
+       * Since patch invocations are placed sequentially in the subgroup, we know that invocation 0
+       * of the lowest patch must be somewhere in BITFIELD_MASK(tcs_vertices_out) lanes.
+       */
+      const unsigned tcs_vertices_out = b->shader->info.tess.tcs_vertices_out;
+      assert(tcs_vertices_out <= 32);
+      nir_def *is_first_active_lane =
+         nir_inverse_ballot(b, 1, nir_imm_ivec4(b, BITFIELD_MASK(tcs_vertices_out), 0, 0, 0));
+
+      /* Only the first active invocation in each subgroup performs the AND reduction through LDS. */
+      nir_if *if_first_active_lane = nir_push_if(b, is_first_active_lane);
+      if_first_active_lane->control = nir_selection_control_divergent_always_taken;
+      {
+         /* Use atomic iand to combine results from all subgroups. */
+         nir_shared_atomic(b, 32, nir_imm_int(b, 0), packed_tf01_mask,
+                           .atomic_op = nir_atomic_op_iand);
+      }
+      nir_pop_if(b, if_first_active_lane);
+   }
+   nir_pop_if(b, if_invocation_id_zero);
+   /* The caller will reuse these. */
+   tessfactors->outer = nir_if_phi(b, tessfactors->outer, nir_undef(b, tessfactors->outer->num_components, 32));
+   if (tessfactors->inner) /* Isolines don't have inner tess levels. */
+      tessfactors->inner = nir_if_phi(b, tessfactors->inner, nir_undef(b, tessfactors->inner->num_components, 32));
+
+   /* Wait for all waves to execute the LDS atomic. */
+   nir_barrier(b, .execution_scope = SCOPE_WORKGROUP, .memory_scope = SCOPE_WORKGROUP,
+               .memory_semantics = NIR_MEMORY_ACQ_REL, .memory_modes = nir_var_mem_shared);
+
+   /* Read the result from LDS. Only 1 lane should load it to prevent LDS bank conflicts. */
+   nir_def *lds_result;
+   nir_if *if_lane0 = nir_push_if(b, nir_inverse_ballot(b, 1, nir_imm_ivec4(b, 0x1, 0, 0, 0)));
+   if_lane0->control = nir_selection_control_divergent_always_taken;
+   {
+      lds_result = nir_load_shared(b, 1, 32, nir_imm_int(b, 0), .align_mul = 4);
+   }
+   nir_pop_if(b, if_lane0);
+   lds_result = nir_if_phi(b, lds_result, nir_undef(b, 1, 32));
+   lds_result = nir_read_invocation(b, lds_result, nir_imm_int(b, 0));
+
+   /* Determine the vote value and send the message. */
+   nir_def *use_memory = nir_ieq_imm(b, lds_result, 0);
+
+   nir_if *if_subgroup0_sendmsg = nir_push_if(b, nir_iand(b, nir_inot(b, use_memory),
+                                                          nir_ieq_imm(b, nir_load_subgroup_id(b), 0)));
+   {
+      /* m0[0] == 0 means all TF are 0 in the workgroup.
+       * m0[0] == 1 means all TF are 1 in the workgroup.
+       */
+      nir_def *m0 = nir_iadd_imm(b, lds_result, -1);
+      nir_sendmsg_amd(b, m0, .base = AC_SENDMSG_HS_TESSFACTOR);
+   }
+   nir_pop_if(b, if_subgroup0_sendmsg);
+
+   return use_memory;
+}
+
 static void
 hs_store_tess_factors_for_tessellator(nir_builder *b, enum amd_gfx_level gfx_level,
                                       enum tess_primitive_mode prim_mode,
@@ -833,27 +1042,8 @@ hs_store_tess_factors_for_tes(nir_builder *b, tess_levels tessfactors, lower_tes
    }
 }
 
-static nir_if *
-hs_if_invocation_id_zero(nir_builder *b)
-{
-   nir_def *invocation_id = nir_load_invocation_id(b);
-
-   /* Only the 1st invocation of each patch needs to do this. */
-   nir_if *invocation_id_zero = nir_push_if(b, nir_ieq_imm(b, invocation_id, 0));
-
-   /* When the output patch size is <= 32 then we can flatten the branch here
-    * because we know for sure that at least 1 invocation in all waves will
-    * take the branch.
-    */
-   if (b->shader->info.tess.tcs_vertices_out <= 32)
-      invocation_id_zero->control = nir_selection_control_divergent_always_taken;
-
-   return invocation_id_zero;
-}
-
 static void
-hs_finale(nir_shader *shader,
-          lower_tess_io_state *st)
+hs_finale(nir_shader *shader, lower_tess_io_state *st)
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
    assert(impl);
@@ -863,22 +1053,35 @@ hs_finale(nir_shader *shader,
    nir_builder builder = nir_builder_at(nir_after_block(last_block));
    nir_builder *b = &builder; /* This is to avoid the & */
 
-   /* If tess factors are load from LDS, wait previous LDS stores done. */
+   /* If tess factors are loaded from LDS, wait for their LDS stores. */
    if (!st->tcs_info.all_invocations_define_tess_levels) {
       mesa_scope scope = st->tcs_out_patch_fits_subgroup ? SCOPE_SUBGROUP : SCOPE_WORKGROUP;
       nir_barrier(b, .execution_scope = scope, .memory_scope = scope,
                      .memory_semantics = NIR_MEMORY_ACQ_REL, .memory_modes = nir_var_mem_shared);
+      st->tcs_info.always_executes_barrier = true;
    }
+
+   nir_def *prim_mode = nir_load_tcs_primitive_mode_amd(b);
+   nir_def *use_memory = NULL;
+   tess_levels tessfactors = {0};
+
+   /* This also loads tess levels for patch invocation 0. */
+   if (st->gfx_level >= GFX11)
+      use_memory = hs_msg_group_vote_use_memory(b, st, &tessfactors, prim_mode);
 
    /* Only the 1st invocation of each patch needs to access VRAM and/or LDS. */
    nir_if *if_invocation_id_zero = hs_if_invocation_id_zero(b);
    {
-      tess_levels tessfactors = hs_load_tess_levels(b, st);
+      if (!tessfactors.outer)
+         tessfactors = hs_load_tess_levels(b, st);
+
+      nir_if *if_use_memory = NULL;
+      if (use_memory != NULL)
+         if_use_memory = nir_push_if(b, use_memory);
 
       if (st->gfx_level <= GFX8)
          hs_store_dynamic_control_word_gfx6(b);
 
-      nir_def *prim_mode = nir_load_tcs_primitive_mode_amd(b);
       nir_if *if_triangles = nir_push_if(b, nir_ieq_imm(b, prim_mode, TESS_PRIMITIVE_TRIANGLES));
       {
          hs_store_tess_factors_for_tessellator(b, st->gfx_level, TESS_PRIMITIVE_TRIANGLES, tessfactors);
@@ -897,13 +1100,15 @@ hs_finale(nir_shader *shader,
       }
       nir_pop_if(b, if_triangles);
 
+      if (use_memory != NULL)
+         nir_pop_if(b, if_use_memory);
+
       nir_if *if_tes_reads_tf = nir_push_if(b, nir_load_tcs_tess_levels_to_tes_amd(b));
       {
          hs_store_tess_factors_for_tes(b, tessfactors, st);
       }
       nir_pop_if(b, if_tes_reads_tf);
    }
-
    nir_pop_if(b, if_invocation_id_zero);
 
    nir_metadata_preserve(impl, nir_metadata_none);
@@ -963,18 +1168,25 @@ filter_any_input_access(const nir_instr *instr,
 void
 ac_nir_lower_ls_outputs_to_mem(nir_shader *shader,
                                ac_nir_map_io_driver_location map,
+                               enum amd_gfx_level gfx_level,
                                bool tcs_in_out_eq,
-                               uint64_t tcs_inputs_read,
-                               uint64_t tcs_temp_only_inputs)
+                               uint64_t tcs_inputs_via_temp,
+                               uint64_t tcs_inputs_via_lds)
 {
    assert(shader->info.stage == MESA_SHADER_VERTEX);
+   assert(gfx_level >= GFX9 || !tcs_in_out_eq);
 
    lower_tess_io_state state = {
-      .tcs_in_out_eq = tcs_in_out_eq,
-      .tcs_inputs_read = tcs_inputs_read,
-      .tcs_temp_only_inputs = tcs_in_out_eq ? tcs_temp_only_inputs : 0,
+      .gfx_level = gfx_level,
       .map_io = map,
    };
+
+   if (tcs_in_out_eq) {
+      state.tcs_inputs_via_temp = tcs_inputs_via_temp;
+      state.tcs_inputs_via_lds = tcs_inputs_via_lds;
+   } else {
+      state.tcs_inputs_via_lds = tcs_inputs_via_lds | tcs_inputs_via_temp;
+   }
 
    nir_shader_intrinsics_pass(shader, lower_ls_output_store,
                                 nir_metadata_control_flow,
@@ -984,17 +1196,25 @@ ac_nir_lower_ls_outputs_to_mem(nir_shader *shader,
 void
 ac_nir_lower_hs_inputs_to_mem(nir_shader *shader,
                               ac_nir_map_io_driver_location map,
+                              enum amd_gfx_level gfx_level,
                               bool tcs_in_out_eq,
-                              uint64_t tcs_temp_only_inputs)
+                              uint64_t tcs_inputs_via_temp,
+                              uint64_t tcs_inputs_via_lds)
 {
    assert(shader->info.stage == MESA_SHADER_TESS_CTRL);
+   assert(gfx_level >= GFX9 || !tcs_in_out_eq);
 
    lower_tess_io_state state = {
-      .tcs_inputs_read = shader->info.inputs_read,
-      .tcs_in_out_eq = tcs_in_out_eq,
-      .tcs_temp_only_inputs = tcs_in_out_eq ? tcs_temp_only_inputs : 0,
+      .gfx_level = gfx_level,
       .map_io = map,
    };
+
+   if (tcs_in_out_eq) {
+      state.tcs_inputs_via_temp = tcs_inputs_via_temp;
+      state.tcs_inputs_via_lds = tcs_inputs_via_lds;
+   } else {
+      state.tcs_inputs_via_lds = shader->info.inputs_read;
+   }
 
    nir_shader_lower_instructions(shader,
                                  filter_load_tcs_per_vertex_input,
@@ -1003,7 +1223,7 @@ ac_nir_lower_hs_inputs_to_mem(nir_shader *shader,
 }
 
 void
-ac_nir_lower_hs_outputs_to_mem(nir_shader *shader,
+ac_nir_lower_hs_outputs_to_mem(nir_shader *shader, const nir_tcs_info *info,
                                ac_nir_map_io_driver_location map,
                                enum amd_gfx_level gfx_level,
                                uint64_t tes_inputs_read,
@@ -1014,14 +1234,12 @@ ac_nir_lower_hs_outputs_to_mem(nir_shader *shader,
 
    lower_tess_io_state state = {
       .gfx_level = gfx_level,
+      .tcs_info = *info,
       .tes_inputs_read = tes_inputs_read,
       .tes_patch_inputs_read = tes_patch_inputs_read,
       .tcs_out_patch_fits_subgroup = wave_size % shader->info.tess.tcs_vertices_out == 0,
       .map_io = map,
    };
-
-   nir_gather_tcs_info(shader, &state.tcs_info, shader->info.tess._primitive_mode,
-                       shader->info.tess.spacing);
 
    if (state.tcs_info.all_invocations_define_tess_levels) {
       nir_function_impl *impl = nir_shader_get_entrypoint(shader);
@@ -1063,4 +1281,45 @@ ac_nir_lower_tes_inputs_to_mem(nir_shader *shader,
                                  filter_any_input_access,
                                  lower_tes_input_load,
                                  &state);
+}
+
+void
+ac_nir_compute_tess_wg_info(const struct radeon_info *info, const struct shader_info *tcs_info,
+                            unsigned wave_size, bool tess_uses_primid, bool all_invocations_define_tess_levels,
+                            unsigned num_tcs_input_cp, unsigned lds_input_vertex_size,
+                            unsigned num_mem_tcs_outputs, unsigned num_mem_tcs_patch_outputs,
+                            unsigned *num_patches_per_wg, unsigned *hw_lds_size)
+{
+   unsigned num_tcs_output_cp = tcs_info->tess.tcs_vertices_out;
+   unsigned lds_output_vertex_size =
+      util_bitcount64(tcs_info->outputs_read & tcs_info->outputs_written & ~TESS_LVL_MASK) * 16;
+   unsigned lds_perpatch_output_patch_size =
+      (util_bitcount64(all_invocations_define_tess_levels ?
+                          0 : tcs_info->outputs_written & TESS_LVL_MASK) +
+       util_bitcount(tcs_info->patch_outputs_read & tcs_info->patch_outputs_written)) * 16;
+
+   unsigned lds_per_patch = num_tcs_input_cp * lds_input_vertex_size +
+                            num_tcs_output_cp * lds_output_vertex_size +
+                            lds_perpatch_output_patch_size;
+   unsigned mem_per_patch = (num_tcs_output_cp * num_mem_tcs_outputs + num_mem_tcs_patch_outputs) * 16;
+   unsigned num_patches = ac_compute_num_tess_patches(info, num_tcs_input_cp, num_tcs_output_cp, mem_per_patch,
+                                                      lds_per_patch, wave_size, tess_uses_primid);
+   unsigned lds_size = lds_per_patch * num_patches;
+   unsigned mem_size = mem_per_patch * num_patches;
+
+   /* The first vec4 is reserved for the tf0/1 shader message group vote. */
+   if (info->gfx_level >= GFX11)
+      lds_size += AC_HS_MSG_VOTE_LDS_BYTES;
+
+   /* SPI_SHADER_PGM_RSRC2_HS.LDS_SIZE specifies the allocation size for both LDS and the HS
+    * offchip ring buffer. LDS is only used for TCS inputs (with cross-invocation or indirect
+    * access only or if TCS in/out vertex counts are different) and for TCS outputs that are read
+    * (including tess level outputs if they need to be re-read in invocation 0), while the HS ring
+    * buffer is only used for TCS outputs consumed by TES.
+    */
+   unsigned merged_size = MAX2(lds_size, mem_size);
+   assert(merged_size <= (info->gfx_level >= GFX9 ? 65536 : 32768));
+
+   *num_patches_per_wg = num_patches;
+   *hw_lds_size = DIV_ROUND_UP(merged_size, info->lds_encode_granularity);
 }

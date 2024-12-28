@@ -13,7 +13,7 @@
 using namespace brw;
 
 void
-brw_print_instructions_to_file(const fs_visitor &s, FILE *file)
+brw_print_instructions(const fs_visitor &s, FILE *file)
 {
    if (s.cfg && s.grf_used == 0) {
       const brw::def_analysis &defs = s.def_analysis.require();
@@ -67,23 +67,6 @@ brw_print_instructions_to_file(const fs_visitor &s, FILE *file)
       foreach_in_list(fs_inst, inst, &s.instructions) {
          brw_print_instruction(s, inst, file);
       }
-   }
-}
-
-void
-brw_print_instructions(const fs_visitor &s, const char *name)
-{
-   FILE *file = stderr;
-   if (name && __normal_user()) {
-      file = fopen(name, "w");
-      if (!file)
-         file = stderr;
-   }
-
-   brw_print_instructions_to_file(s, file);
-
-   if (file != stderr) {
-      fclose(file);
    }
 }
 
@@ -307,6 +290,10 @@ brw_instruction_name(const struct brw_isa_info *isa, enum opcode op)
       return "ballot";
    case SHADER_OPCODE_QUAD_SWAP:
       return "quad_swap";
+   case SHADER_OPCODE_READ_FROM_LIVE_CHANNEL:
+      return "read_from_live_channel";
+   case SHADER_OPCODE_READ_FROM_CHANNEL:
+      return "read_from_channel";
    }
 
    unreachable("not reached");
@@ -384,7 +371,7 @@ print_memory_logical_source(FILE *file, const fs_inst *inst, unsigned i)
 }
 
 void
-brw_print_instruction_to_file(const fs_visitor &s, const fs_inst *inst, FILE *file, const brw::def_analysis *defs)
+brw_print_instruction(const fs_visitor &s, const fs_inst *inst, FILE *file, const brw::def_analysis *defs)
 {
    if (inst->predicate) {
       fprintf(file, "(%cf%d.%d) ",
@@ -596,7 +583,7 @@ brw_print_instruction_to_file(const fs_visitor &s, const fs_inst *inst, FILE *fi
          fprintf(file, ".%d", inst->src[i].subnr / brw_type_size_bytes(inst->src[i].type));
       } else if (inst->src[i].offset ||
           (!s.grf_used && inst->src[i].file == VGRF &&
-           s.alloc.sizes[inst->src[i].nr] * REG_SIZE != inst->size_read(i))) {
+           s.alloc.sizes[inst->src[i].nr] * REG_SIZE != inst->size_read(s.devinfo, i))) {
          const unsigned reg_size = (inst->src[i].file == UNIFORM ? 4 : REG_SIZE);
          fprintf(file, "+%d.%d", inst->src[i].offset / reg_size,
                  inst->src[i].offset % reg_size);
@@ -668,7 +655,8 @@ brw_print_swsb(FILE *f, const struct intel_device_info *devinfo, const tgl_swsb 
                swsb.pipe == TGL_PIPE_INT ? "I" :
                swsb.pipe == TGL_PIPE_LONG ? "L" :
                swsb.pipe == TGL_PIPE_ALL ? "A"  :
-               swsb.pipe == TGL_PIPE_MATH ? "M" : "" ),
+               swsb.pipe == TGL_PIPE_MATH ? "M" :
+               swsb.pipe == TGL_PIPE_SCALAR ? "S" : "" ),
               swsb.regdist);
    }
 

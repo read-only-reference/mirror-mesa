@@ -6,6 +6,7 @@
 
 #include "ac_shader_util.h"
 #include "ac_gpu_info.h"
+#include "ac_nir.h"
 
 #include "sid.h"
 #include "util/u_math.h"
@@ -96,6 +97,7 @@ void ac_set_nir_options(struct radeon_info *info, bool use_llvm,
    options->vectorize_vec2_16bit = info->has_packed_math_16bit;
    options->discard_is_demote = true;
    options->optimize_sample_mask_in = true;
+   options->optimize_load_front_face_fsign = true;
    options->io_options = nir_io_has_flexible_input_interpolation_except_flat |
                          (info->gfx_level >= GFX8 ? nir_io_16bit_input_output_support : 0) |
                          nir_io_prefer_scalar_fs_inputs |
@@ -195,9 +197,6 @@ ac_nir_mem_vectorize_callback(unsigned align_mul, unsigned align_offset, unsigne
 unsigned ac_get_spi_shader_z_format(bool writes_z, bool writes_stencil, bool writes_samplemask,
                                     bool writes_mrt0_alpha)
 {
-   /* If writes_mrt0_alpha is true, one other flag must be true too. */
-   assert(!writes_mrt0_alpha || writes_z || writes_stencil || writes_samplemask);
-
    if (writes_z || writes_mrt0_alpha) {
       /* Z needs 32 bits. */
       if (writes_samplemask || writes_mrt0_alpha)
@@ -556,30 +555,6 @@ unsigned ac_get_tbuffer_format(enum amd_gfx_level gfx_level, unsigned dfmt, unsi
    } else {
       return dfmt | (nfmt << 4);
    }
-}
-
-static const struct ac_data_format_info data_format_table[] = {
-   [V_008F0C_BUF_DATA_FORMAT_INVALID] = {0, 4, 0, V_008F0C_BUF_DATA_FORMAT_INVALID},
-   [V_008F0C_BUF_DATA_FORMAT_8] = {1, 1, 1, V_008F0C_BUF_DATA_FORMAT_8},
-   [V_008F0C_BUF_DATA_FORMAT_16] = {2, 1, 2, V_008F0C_BUF_DATA_FORMAT_16},
-   [V_008F0C_BUF_DATA_FORMAT_8_8] = {2, 2, 1, V_008F0C_BUF_DATA_FORMAT_8},
-   [V_008F0C_BUF_DATA_FORMAT_32] = {4, 1, 4, V_008F0C_BUF_DATA_FORMAT_32},
-   [V_008F0C_BUF_DATA_FORMAT_16_16] = {4, 2, 2, V_008F0C_BUF_DATA_FORMAT_16},
-   [V_008F0C_BUF_DATA_FORMAT_10_11_11] = {4, 3, 0, V_008F0C_BUF_DATA_FORMAT_10_11_11},
-   [V_008F0C_BUF_DATA_FORMAT_11_11_10] = {4, 3, 0, V_008F0C_BUF_DATA_FORMAT_11_11_10},
-   [V_008F0C_BUF_DATA_FORMAT_10_10_10_2] = {4, 4, 0, V_008F0C_BUF_DATA_FORMAT_10_10_10_2},
-   [V_008F0C_BUF_DATA_FORMAT_2_10_10_10] = {4, 4, 0, V_008F0C_BUF_DATA_FORMAT_2_10_10_10},
-   [V_008F0C_BUF_DATA_FORMAT_8_8_8_8] = {4, 4, 1, V_008F0C_BUF_DATA_FORMAT_8},
-   [V_008F0C_BUF_DATA_FORMAT_32_32] = {8, 2, 4, V_008F0C_BUF_DATA_FORMAT_32},
-   [V_008F0C_BUF_DATA_FORMAT_16_16_16_16] = {8, 4, 2, V_008F0C_BUF_DATA_FORMAT_16},
-   [V_008F0C_BUF_DATA_FORMAT_32_32_32] = {12, 3, 4, V_008F0C_BUF_DATA_FORMAT_32},
-   [V_008F0C_BUF_DATA_FORMAT_32_32_32_32] = {16, 4, 4, V_008F0C_BUF_DATA_FORMAT_32},
-};
-
-const struct ac_data_format_info *ac_get_data_format_info(unsigned dfmt)
-{
-   assert(dfmt < ARRAY_SIZE(data_format_table));
-   return &data_format_table[dfmt];
 }
 
 #define DUP2(v) v, v
@@ -1182,8 +1157,10 @@ uint32_t ac_compute_num_tess_patches(const struct radeon_info *info, uint32_t nu
     * use LDS for the inputs and outputs.
     */
    if (lds_per_patch) {
-      ASSERTED const unsigned max_lds_size = info->gfx_level >= GFX9 ? 64 * 1024 : 32 * 1024; /* hw limit */
-      const unsigned target_lds_size = max_lds_size / 2; /* target at least 2 workgroups per CU */
+      const unsigned max_lds_size = (info->gfx_level >= GFX9 ? 64 * 1024 : 32 * 1024); /* hw limit */
+      /* Target at least 2 workgroups per CU. */
+      const unsigned target_lds_size = max_lds_size / 2 -
+                                       (info->gfx_level >= GFX11 ? AC_HS_MSG_VOTE_LDS_BYTES : 0);
       num_patches = MIN2(num_patches, target_lds_size / lds_per_patch);
       assert(num_patches * lds_per_patch <= max_lds_size);
    }
@@ -1207,16 +1184,6 @@ uint32_t ac_compute_num_tess_patches(const struct radeon_info *info, uint32_t nu
    }
 
    return num_patches;
-}
-
-uint32_t
-ac_compute_tess_lds_size(const struct radeon_info *info, uint32_t lds_per_patch, uint32_t num_patches)
-{
-   const unsigned lds_size = lds_per_patch * num_patches;
-
-   assert(lds_size <= (info->gfx_level >= GFX9 ? 65536 : 32768));
-
-   return align(lds_size, info->lds_encode_granularity) / info->lds_encode_granularity;
 }
 
 uint32_t ac_apply_cu_en(uint32_t value, uint32_t clear_mask, unsigned value_shift,
@@ -1479,4 +1446,72 @@ ac_shader_io_get_unique_index_patch(unsigned semantic)
       assert(!"invalid semantic");
       return 0;
    }
+}
+
+unsigned
+ac_nir_lower_bit_size_callback(const nir_instr *instr, void *data)
+{
+   enum amd_gfx_level chip = *(enum amd_gfx_level *)data;
+
+   if (instr->type != nir_instr_type_alu)
+      return 0;
+   nir_alu_instr *alu = nir_instr_as_alu(instr);
+
+   /* If an instruction is not scalarized by this point,
+    * it can be emitted as packed instruction */
+   if (alu->def.num_components > 1)
+      return 0;
+
+   if (alu->def.bit_size & (8 | 16)) {
+      unsigned bit_size = alu->def.bit_size;
+      switch (alu->op) {
+      case nir_op_bitfield_select:
+      case nir_op_imul_high:
+      case nir_op_umul_high:
+      case nir_op_uadd_carry:
+      case nir_op_usub_borrow:
+         return 32;
+      case nir_op_iabs:
+      case nir_op_imax:
+      case nir_op_umax:
+      case nir_op_imin:
+      case nir_op_umin:
+      case nir_op_ishr:
+      case nir_op_ushr:
+      case nir_op_ishl:
+      case nir_op_isign:
+      case nir_op_uadd_sat:
+      case nir_op_usub_sat:
+         return (bit_size == 8 || !(chip >= GFX8 && alu->def.divergent)) ? 32 : 0;
+      case nir_op_iadd_sat:
+      case nir_op_isub_sat:
+         return bit_size == 8 || !alu->def.divergent ? 32 : 0;
+
+      default:
+         return 0;
+      }
+   }
+
+   if (nir_src_bit_size(alu->src[0].src) & (8 | 16)) {
+      unsigned bit_size = nir_src_bit_size(alu->src[0].src);
+      switch (alu->op) {
+      case nir_op_bit_count:
+      case nir_op_find_lsb:
+      case nir_op_ufind_msb:
+         return 32;
+      case nir_op_ilt:
+      case nir_op_ige:
+      case nir_op_ieq:
+      case nir_op_ine:
+      case nir_op_ult:
+      case nir_op_uge:
+      case nir_op_bitz:
+      case nir_op_bitnz:
+         return (bit_size == 8 || !(chip >= GFX8 && alu->def.divergent)) ? 32 : 0;
+      default:
+         return 0;
+      }
+   }
+
+   return 0;
 }

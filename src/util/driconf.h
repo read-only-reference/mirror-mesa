@@ -696,6 +696,14 @@
    DRI_CONF_OPT_B(radv_disable_dcc_mips, def, \
                   "Disable DCC for color images with mips")
 
+#define DRI_CONF_RADV_DISABLE_DCC_STORES(def) \
+   DRI_CONF_OPT_B(radv_disable_dcc_stores, def, \
+                  "Disable DCC for color storage images")
+
+#define DRI_CONF_RADV_LOWER_TERMINATE_TO_DISCARD(def) \
+   DRI_CONF_OPT_B(radv_lower_terminate_to_discard, def, \
+                  "Lower terminate to discard (which is implicitly demote)")
+
 #define DRI_CONF_RADV_DISABLE_ANISO_SINGLE_LEVEL(def) \
   DRI_CONF_OPT_B(radv_disable_aniso_single_level, def, \
                  "Disable anisotropic filtering for single level images")
@@ -827,9 +835,9 @@
    DRI_CONF_OPT_B(anv_disable_fcv, def, \
                   "Disable FCV optimization")
 
-#define DRI_CONF_ANV_DISABLE_XE2_CCS(def) \
-   DRI_CONF_OPT_B(anv_disable_xe2_ccs, def, \
-                  "Disable CCS optimization on Xe2")
+#define DRI_CONF_ANV_ENABLE_BUFFER_COMP(def) \
+   DRI_CONF_OPT_B(anv_enable_buffer_comp, def, \
+                  "Enable CCS on buffers where possible")
 
 #define DRI_CONF_ANV_EXTERNAL_MEMORY_IMPLICIT_SYNC(def) \
    DRI_CONF_OPT_B(anv_external_memory_implicit_sync, def, "Implicit sync on external BOs")

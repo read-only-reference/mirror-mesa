@@ -29,8 +29,7 @@
   *   Keith Whitwell <keithw@vmware.com>
   */
 
-#ifndef BRW_EU_DEFINES_H
-#define BRW_EU_DEFINES_H
+#pragma once
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -458,6 +457,21 @@ enum opcode {
     */
    SHADER_OPCODE_QUAD_SWAP,
 
+   /* Read value from the first live channel and broadcast the result
+    * to all channels.
+    *
+    * Source 0: Value.
+    */
+   SHADER_OPCODE_READ_FROM_LIVE_CHANNEL,
+
+   /* Read value from a specified channel and broadcast the result
+    * to all channels.
+    *
+    * Source 0: Value.
+    * Source 1: Index of the channel to pick value from.
+    */
+   SHADER_OPCODE_READ_FROM_CHANNEL,
+
    /* This turns into an align16 mov from src0 to dst with a swizzle
     * provided as an immediate in src1.
     */
@@ -788,6 +802,7 @@ enum ENUM_PACKED gfx10_align1_3src_exec_type {
 #define BRW_ARF_ACCUMULATOR           0x20
 #define BRW_ARF_FLAG                  0x30
 #define BRW_ARF_MASK                  0x40
+#define BRW_ARF_SCALAR                0x60
 #define BRW_ARF_STATE                 0x70
 #define BRW_ARF_CONTROL               0x80
 #define BRW_ARF_NOTIFICATION_COUNT    0x90
@@ -896,6 +911,9 @@ operator|=(tgl_sbid_mode &x, tgl_sbid_mode y)
  * the hardware to infer the pipeline based on the source types of the
  * instruction.  TGL_PIPE_ALL can be used when synchronization with all ALU
  * pipelines is intended.
+ *
+ * Xe3 adds TGL_PIPE_SCALAR for a very specific use case (writing immediates
+ * to scalar register).
  */
 enum tgl_pipe {
    TGL_PIPE_NONE = 0,
@@ -903,6 +921,7 @@ enum tgl_pipe {
    TGL_PIPE_INT,
    TGL_PIPE_LONG,
    TGL_PIPE_MATH,
+   TGL_PIPE_SCALAR,
    TGL_PIPE_ALL
 };
 
@@ -990,6 +1009,7 @@ tgl_swsb_encode(const struct intel_device_info *devinfo,
          swsb.pipe == TGL_PIPE_INT ? 0x18 :
          swsb.pipe == TGL_PIPE_LONG ? 0x20 :
          swsb.pipe == TGL_PIPE_MATH ? 0x28 :
+         swsb.pipe == TGL_PIPE_SCALAR ? 0x30 :
          swsb.pipe == TGL_PIPE_ALL ? 0x8 : 0;
       return pipe | swsb.regdist;
 
@@ -1852,5 +1872,3 @@ enum ENUM_PACKED lsc_vect_size {
 };
 
 #define LSC_ONE_ADDR_REG   1
-
-#endif /* BRW_EU_DEFINES_H */

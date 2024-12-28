@@ -102,6 +102,7 @@
 #include "vk_log.h"
 #include "vk_ycbcr_conversion.h"
 #include "vk_video.h"
+#include "vk_meta.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -165,7 +166,7 @@ struct intel_perf_query_result;
 #define MAX_RTS          8
 #define MAX_VIEWPORTS   16
 #define MAX_SCISSORS    16
-#define MAX_PUSH_CONSTANTS_SIZE 128
+#define MAX_PUSH_CONSTANTS_SIZE 256  /* Minimum requirement as of Vulkan 1.4 */
 #define MAX_DYNAMIC_BUFFERS 16
 #define MAX_PUSH_DESCRIPTORS 32 /* Minimum requirement */
 #define MAX_INLINE_UNIFORM_BLOCK_SIZE 4096
@@ -1136,7 +1137,10 @@ struct anv_physical_device {
       uint32_t                                  dynamic_visible_mem_types;
       /** Mask of memory types of protected buffers/images */
       uint32_t                                  protected_mem_types;
-      /** Mask of memory types of compressed buffers/images */
+      /**
+       * Mask of memory types of compressed buffers/images. This is generally
+       * a win for images, but a loss for buffers.
+       */
       uint32_t                                  compressed_mem_types;
     } memory;
 
@@ -1303,7 +1307,7 @@ struct anv_instance {
     unsigned                                    force_vk_vendor;
     bool                                        has_fake_sparse;
     bool                                        disable_fcv;
-    bool                                        disable_xe2_ccs;
+    bool                                        enable_buffer_comp;
     bool                                        compression_control_enabled;
     bool                                        anv_fake_nonlocal_memory;
     bool                                        anv_upper_bound_descriptor_pool_sampler;
@@ -1828,6 +1832,28 @@ enum anv_rt_bvh_build_method {
    ANV_BVH_BUILD_METHOD_NEW_SAH,
 };
 
+/* If serialization-breaking or algorithm-breaking changes are made,
+ * increment the digits at the end
+ */
+#define ANV_RT_UUID_MACRO             "ANV_RT_BVH_0001"
+
+enum bvh_dump_type {
+   BVH_ANV,
+   BVH_IR_HDR,
+   BVH_IR_AS
+};
+
+struct anv_bvh_dump {
+   struct anv_bo *bo;
+   uint32_t bvh_id;
+   uint64_t dump_size;
+   VkGeometryTypeKHR geometry_type;
+   enum bvh_dump_type dump_type;
+
+   /* Link in the anv_device.bvh_dumps list */
+   struct list_head link;
+};
+
 struct anv_device_astc_emu {
     struct vk_texcompress_astc_state           *texcompress;
 
@@ -1863,6 +1889,9 @@ struct anv_device {
 
     /** List of anv_image objects with a private binding for implicit CCS */
     struct list_head                            image_private_objects;
+
+    /** List of anv_bvh_dump objects that get dumped on cmd buf completion */
+    struct list_head                            bvh_dumps;
 
     /** Memory pool for batch buffers */
     struct anv_bo_pool                          batch_bo_pool;
@@ -1903,6 +1932,7 @@ struct anv_device {
     struct anv_address                          workaround_address;
 
     struct anv_bo *                             dummy_aux_bo;
+    struct anv_bo *                             mem_fence_bo;
 
     /**
      * Workarounds for game bugs.
@@ -2102,6 +2132,14 @@ struct anv_device {
         */
        struct util_dynarray                      prints;
     } printf;
+
+    struct {
+       simple_mtx_t  mutex;
+       struct radix_sort_vk *radix_sort;
+       struct vk_acceleration_structure_build_args build_args;
+   } accel_struct_build;
+
+   struct vk_meta_device meta_device;
 };
 
 static inline uint32_t
@@ -2259,6 +2297,8 @@ VkResult anv_device_print_init(struct anv_device *device);
 void anv_device_print_fini(struct anv_device *device);
 void anv_device_print_shader_prints(struct anv_device *device);
 
+void anv_dump_bvh_to_files(struct anv_device *device);
+
 VkResult anv_queue_init(struct anv_device *device, struct anv_queue *queue,
                         const VkDeviceQueueCreateInfo *pCreateInfo,
                         uint32_t index_in_family);
@@ -2286,6 +2326,12 @@ anv_queue_post_submit(struct anv_queue *queue, VkResult submit_result)
 
    if (INTEL_DEBUG(DEBUG_SHADER_PRINT))
       anv_device_print_shader_prints(queue->device);
+
+#if ANV_SUPPORT_RT && !ANV_SUPPORT_RT_GRL
+   /* The recorded bvh is dumped to files upon command buffer completion */
+   if (INTEL_DEBUG(DEBUG_BVH_ANY))
+      anv_dump_bvh_to_files(queue->device);
+#endif
 
    return result;
 }
@@ -3996,6 +4042,9 @@ struct anv_cmd_ray_tracing_state {
       struct anv_bo *bo;
       struct brw_rt_scratch_layout layout;
    } scratch;
+
+   uint32_t debug_marker_count;
+   enum vk_acceleration_structure_build_step debug_markers[5];
 
    struct anv_address build_priv_mem_addr;
    size_t             build_priv_mem_size;
@@ -5888,11 +5937,41 @@ anv_image_choose_isl_surf_usage(struct anv_physical_device *device,
                                 VkImageCompressionFlagsEXT comp_flags);
 
 void
+anv_cmd_copy_addr(struct anv_cmd_buffer *cmd_buffer,
+                  struct anv_address src_addr,
+                  struct anv_address dst_addr,
+                  uint64_t size);
+void
 anv_cmd_buffer_fill_area(struct anv_cmd_buffer *cmd_buffer,
                          struct anv_address address,
                          VkDeviceSize size,
                          uint32_t data,
                          bool protected);
+void
+anv_cmd_fill_buffer_addr(VkCommandBuffer cmd_buffer,
+                         VkDeviceAddress dstAddr,
+                         VkDeviceSize size,
+                         uint32_t data);
+void
+anv_cmd_buffer_update_addr(struct anv_cmd_buffer *cmd_buffer,
+                           struct anv_address address,
+                           VkDeviceSize dstOffset,
+                           VkDeviceSize dataSize,
+                           const void* pData,
+                           bool is_protected);
+void
+anv_cmd_write_buffer_cp(VkCommandBuffer cmd_buffer,
+                        VkDeviceAddress dstAddr,
+                        void *data,
+                        uint32_t size);
+void
+anv_cmd_dispatch_unaligned(VkCommandBuffer cmd_buffer,
+                           uint32_t invocations_x,
+                           uint32_t invocations_y,
+                           uint32_t invocations_z);
+
+void
+anv_cmd_flush_buffer_write_cp(VkCommandBuffer cmd_buffer);
 
 VkResult
 anv_cmd_buffer_ensure_rcs_companion(struct anv_cmd_buffer *cmd_buffer);

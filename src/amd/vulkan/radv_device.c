@@ -313,9 +313,9 @@ radv_device_init_vrs_state(struct radv_device *device)
    VkBufferCreateInfo buffer_create_info = {
       .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
       .pNext =
-         &(VkBufferUsageFlags2CreateInfoKHR){
-            .sType = VK_STRUCTURE_TYPE_BUFFER_USAGE_FLAGS_2_CREATE_INFO_KHR,
-            .usage = VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT_KHR,
+         &(VkBufferUsageFlags2CreateInfo){
+            .sType = VK_STRUCTURE_TYPE_BUFFER_USAGE_FLAGS_2_CREATE_INFO,
+            .usage = VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
          },
       .size = radv_image_from_handle(image)->planes[0].surface.meta_size,
       .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
@@ -713,7 +713,7 @@ radv_device_init_tools(struct radv_device *device)
    if (result != VK_SUCCESS)
       return result;
 
-   if ((instance->vk.trace_mode & RADV_TRACE_MODE_RRA) && radv_enable_rt(pdev, false)) {
+   if ((instance->vk.trace_mode & RADV_TRACE_MODE_RRA) && radv_enable_rt(pdev)) {
       result = radv_rra_trace_init(device);
       if (result != VK_SUCCESS)
          return result;
@@ -786,7 +786,7 @@ init_dispatch_tables(struct radv_device *device, struct radv_physical_device *pd
    if (instance->vk.trace_mode & RADV_TRACE_MODE_RGP)
       add_entrypoints(&b, &sqtt_device_entrypoints, RADV_RGP_DISPATCH_TABLE);
 
-   if ((instance->vk.trace_mode & RADV_TRACE_MODE_RRA) && radv_enable_rt(pdev, false))
+   if ((instance->vk.trace_mode & RADV_TRACE_MODE_RRA) && radv_enable_rt(pdev))
       add_entrypoints(&b, &rra_device_entrypoints, RADV_RRA_DISPATCH_TABLE);
 
 #ifndef _WIN32
@@ -855,7 +855,7 @@ radv_device_init_cache_key(struct radv_device *device)
    key->trap_excp_flags = device->trap_handler_shader && instance->trap_excp_flags;
    key->disable_trunc_coord = device->disable_trunc_coord;
    key->image_2d_view_of_3d = device->vk.enabled_features.image2DViewOf3D && pdev->info.gfx_level == GFX9;
-   key->mesh_shader_queries = device->vk.enabled_features.meshShaderQueries;
+   key->mesh_shader_queries = device->vk.enabled_features.meshShaderQueries && pdev->emulate_mesh_shader_queries;
    key->primitives_generated_query = radv_uses_primitives_generated_query(device);
 
    /* The Vulkan spec says:
@@ -1167,13 +1167,17 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
    /* With update after bind we can't attach bo's to the command buffer
     * from the descriptor set anymore, so we have to use a global BO list.
     */
-   device->use_global_bo_list =
-      (instance->perftest_flags & RADV_PERFTEST_BO_LIST) || device->vk.enabled_features.bufferDeviceAddress ||
-      device->vk.enabled_features.descriptorIndexing || device->vk.enabled_extensions.EXT_descriptor_indexing ||
-      device->vk.enabled_extensions.EXT_buffer_device_address ||
-      device->vk.enabled_extensions.KHR_buffer_device_address ||
-      device->vk.enabled_extensions.KHR_ray_tracing_pipeline ||
-      device->vk.enabled_extensions.KHR_acceleration_structure;
+   device->use_global_bo_list = (instance->perftest_flags & RADV_PERFTEST_BO_LIST) ||
+                                device->vk.enabled_features.bufferDeviceAddress ||
+                                device->vk.enabled_features.descriptorIndexing ||
+                                device->vk.enabled_features.descriptorBindingUniformBufferUpdateAfterBind ||
+                                device->vk.enabled_features.descriptorBindingSampledImageUpdateAfterBind ||
+                                device->vk.enabled_features.descriptorBindingStorageImageUpdateAfterBind ||
+                                device->vk.enabled_features.descriptorBindingStorageBufferUpdateAfterBind ||
+                                device->vk.enabled_features.descriptorBindingUniformTexelBufferUpdateAfterBind ||
+                                device->vk.enabled_features.descriptorBindingStorageTexelBufferUpdateAfterBind ||
+                                device->vk.enabled_features.descriptorBindingUpdateUnusedWhilePending ||
+                                device->vk.enabled_features.descriptorBindingPartiallyBound;
 
    radv_init_shader_arenas(device);
 
@@ -1186,8 +1190,8 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
    /* Create one context per queue priority. */
    for (unsigned i = 0; i < pCreateInfo->queueCreateInfoCount; i++) {
       const VkDeviceQueueCreateInfo *queue_create = &pCreateInfo->pQueueCreateInfos[i];
-      const VkDeviceQueueGlobalPriorityCreateInfoKHR *global_priority =
-         vk_find_struct_const(queue_create->pNext, DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR);
+      const VkDeviceQueueGlobalPriorityCreateInfo *global_priority =
+         vk_find_struct_const(queue_create->pNext, DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO);
       enum radeon_ctx_priority priority = radv_get_queue_global_priority(global_priority);
 
       if (device->hw_ctx[priority])
@@ -1201,8 +1205,8 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
    for (unsigned i = 0; i < pCreateInfo->queueCreateInfoCount; i++) {
       const VkDeviceQueueCreateInfo *queue_create = &pCreateInfo->pQueueCreateInfos[i];
       uint32_t qfi = queue_create->queueFamilyIndex;
-      const VkDeviceQueueGlobalPriorityCreateInfoKHR *global_priority =
-         vk_find_struct_const(queue_create->pNext, DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR);
+      const VkDeviceQueueGlobalPriorityCreateInfo *global_priority =
+         vk_find_struct_const(queue_create->pNext, DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO);
 
       device->queues[qfi] = vk_zalloc(&device->vk.alloc, queue_create->queueCount * sizeof(struct radv_queue), 8,
                                       VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
@@ -1858,8 +1862,8 @@ radv_ReleaseProfilingLockKHR(VkDevice _device)
 }
 
 VKAPI_ATTR void VKAPI_CALL
-radv_GetDeviceImageSubresourceLayoutKHR(VkDevice device, const VkDeviceImageSubresourceInfoKHR *pInfo,
-                                        VkSubresourceLayout2KHR *pLayout)
+radv_GetDeviceImageSubresourceLayout(VkDevice device, const VkDeviceImageSubresourceInfo *pInfo,
+                                     VkSubresourceLayout2 *pLayout)
 {
    UNUSED VkResult result;
    VkImage image;
@@ -1868,7 +1872,7 @@ radv_GetDeviceImageSubresourceLayoutKHR(VkDevice device, const VkDeviceImageSubr
       radv_image_create(device, &(struct radv_image_create_info){.vk_info = pInfo->pCreateInfo}, NULL, &image, true);
    assert(result == VK_SUCCESS);
 
-   radv_GetImageSubresourceLayout2KHR(device, image, pInfo->pSubresource, pLayout);
+   radv_GetImageSubresourceLayout2(device, image, pInfo->pSubresource, pLayout);
 
    radv_DestroyImage(device, image, NULL);
 }

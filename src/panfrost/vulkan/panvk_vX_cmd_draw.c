@@ -77,13 +77,34 @@ render_state_set_z_attachment(struct panvk_cmd_buffer *cmdbuf,
 
    state->render.z_attachment.fmt = iview->vk.format;
    state->render.bound_attachments |= MESA_VK_RP_ATTACHMENT_DEPTH_BIT;
-   fbinfo->zs.view.zs = &iview->pview;
+
+   state->render.zs_pview = iview->pview;
+   fbinfo->zs.view.zs = &state->render.zs_pview;
+
+   /* D32_S8 is a multiplanar format, so we need to adjust the format of the
+    * depth-only view to match the one of the depth plane.
+    */
+   if (iview->pview.format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT)
+      state->render.zs_pview.format = PIPE_FORMAT_Z32_FLOAT;
+
+   state->render.zs_pview.planes[0] = &img->planes[0];
+   state->render.zs_pview.planes[1] = NULL;
    fbinfo->nr_samples =
       MAX2(fbinfo->nr_samples, pan_image_view_get_nr_samples(&iview->pview));
    state->render.z_attachment.iview = iview;
 
-   if (vk_format_has_stencil(img->vk.format))
+   /* D24S8 is a single plane format where the depth/stencil are interleaved.
+    * If we touch the depth component, we need to make sure the stencil
+    * component is preserved, hence the preload, and the view format adjusment.
+    */
+   if (img->vk.format == VK_FORMAT_D24_UNORM_S8_UINT) {
       fbinfo->zs.preload.s = true;
+      cmdbuf->state.gfx.render.zs_pview.format =
+         PIPE_FORMAT_Z24_UNORM_S8_UINT;
+   } else {
+      state->render.zs_pview.format =
+         vk_format_to_pipe_format(vk_format_depth_only(img->vk.format));
+   }
 
    if (att->loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR) {
       fbinfo->zs.clear.z = true;
@@ -119,28 +140,48 @@ render_state_set_s_attachment(struct panvk_cmd_buffer *cmdbuf,
    state->render.s_attachment.fmt = iview->vk.format;
    state->render.bound_attachments |= MESA_VK_RP_ATTACHMENT_STENCIL_BIT;
 
-   if (drm_is_afbc(img->vk.drm_format_mod)) {
-      assert(fbinfo->zs.view.zs == &iview->pview || !fbinfo->zs.view.zs);
-      fbinfo->zs.view.zs = &iview->pview;
+   state->render.s_pview = iview->pview;
+   fbinfo->zs.view.s = &state->render.s_pview;
+
+   /* D32_S8 is a multiplanar format, so we need to adjust the format of the
+    * stencil-only view to match the one of the stencil plane.
+    */
+   state->render.s_pview.format = img->vk.format == VK_FORMAT_D24_UNORM_S8_UINT
+                                     ? PIPE_FORMAT_Z24_UNORM_S8_UINT
+                                     : PIPE_FORMAT_S8_UINT;
+   if (img->vk.format == VK_FORMAT_D32_SFLOAT_S8_UINT) {
+      state->render.s_pview.planes[0] = NULL;
+      state->render.s_pview.planes[1] = &img->planes[1];
    } else {
-      fbinfo->zs.view.s =
-         &iview->pview != fbinfo->zs.view.zs ? &iview->pview : NULL;
+      state->render.s_pview.planes[0] = &img->planes[0];
+      state->render.s_pview.planes[1] = NULL;
    }
 
-   fbinfo->zs.view.s =
-      &iview->pview != fbinfo->zs.view.zs ? &iview->pview : NULL;
    fbinfo->nr_samples =
       MAX2(fbinfo->nr_samples, pan_image_view_get_nr_samples(&iview->pview));
    state->render.s_attachment.iview = iview;
 
-   if (vk_format_has_depth(img->vk.format)) {
-      assert(fbinfo->zs.view.zs == NULL || &iview->pview == fbinfo->zs.view.zs);
-      fbinfo->zs.view.zs = &iview->pview;
-
+   /* If the depth and stencil attachments point to the same image,
+    * and the format is D24S8, we can combine them in a single view
+    * addressing both components.
+    */
+   if (img->vk.format == VK_FORMAT_D24_UNORM_S8_UINT &&
+       state->render.z_attachment.iview &&
+       state->render.z_attachment.iview->vk.image == iview->vk.image) {
+      state->render.zs_pview.format = PIPE_FORMAT_Z24_UNORM_S8_UINT;
       fbinfo->zs.preload.s = false;
-      fbinfo->zs.clear.s = false;
-      if (!fbinfo->zs.clear.z)
-         fbinfo->zs.preload.z = true;
+      fbinfo->zs.view.s = NULL;
+
+   /* If there was no depth attachment, and the image format is D24S8,
+    * we use the depth+stencil slot, so we can benefit from AFBC, which
+    * is not supported on the stencil-only slot on Bifrost.
+    */
+   } else if (img->vk.format == VK_FORMAT_D24_UNORM_S8_UINT &&
+              fbinfo->zs.view.zs == NULL) {
+      fbinfo->zs.view.zs = &state->render.s_pview;
+      state->render.s_pview.format = PIPE_FORMAT_Z24_UNORM_S8_UINT;
+      fbinfo->zs.preload.z = true;
+      fbinfo->zs.view.s = NULL;
    }
 
    if (att->loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR) {
@@ -186,7 +227,10 @@ panvk_per_arch(cmd_init_render_state)(struct panvk_cmd_buffer *cmdbuf,
    memset(&state->render.s_attachment, 0, sizeof(state->render.s_attachment));
    state->render.bound_attachments = 0;
 
-   state->render.layer_count = pRenderingInfo->layerCount;
+   cmdbuf->state.gfx.render.layer_count = pRenderingInfo->viewMask ?
+      util_last_bit(pRenderingInfo->viewMask) :
+      pRenderingInfo->layerCount;
+   cmdbuf->state.gfx.render.view_mask = pRenderingInfo->viewMask;
    *fbinfo = (struct pan_fb_info){
       .tile_buf_budget = panfrost_query_optimal_tib_size(phys_dev->model),
       .nr_samples = 1,
@@ -213,7 +257,8 @@ panvk_per_arch(cmd_init_render_state)(struct panvk_cmd_buffer *cmdbuf,
       const VkRenderingAttachmentInfo *att = pRenderingInfo->pDepthAttachment;
       VK_FROM_HANDLE(panvk_image_view, iview, att->imageView);
 
-      if (iview && (iview->vk.aspects & VK_IMAGE_ASPECT_DEPTH_BIT)) {
+      if (iview) {
+         assert(iview->vk.image->aspects & VK_IMAGE_ASPECT_DEPTH_BIT);
          render_state_set_z_attachment(cmdbuf, att);
          att_width = MAX2(iview->vk.extent.width, att_width);
          att_height = MAX2(iview->vk.extent.height, att_height);
@@ -225,30 +270,11 @@ panvk_per_arch(cmd_init_render_state)(struct panvk_cmd_buffer *cmdbuf,
       const VkRenderingAttachmentInfo *att = pRenderingInfo->pStencilAttachment;
       VK_FROM_HANDLE(panvk_image_view, iview, att->imageView);
 
-      if (iview && (iview->vk.aspects & VK_IMAGE_ASPECT_STENCIL_BIT)) {
+      if (iview) {
+         assert(iview->vk.image->aspects & VK_IMAGE_ASPECT_STENCIL_BIT);
          render_state_set_s_attachment(cmdbuf, att);
          att_width = MAX2(iview->vk.extent.width, att_width);
          att_height = MAX2(iview->vk.extent.height, att_height);
-      }
-   }
-
-   if (fbinfo->zs.view.zs) {
-      const struct util_format_description *fdesc =
-         util_format_description(fbinfo->zs.view.zs->format);
-      bool needs_depth = fbinfo->zs.clear.z | fbinfo->zs.preload.z |
-                         util_format_has_depth(fdesc);
-      bool needs_stencil = fbinfo->zs.clear.s | fbinfo->zs.preload.s |
-                           util_format_has_stencil(fdesc);
-      enum pipe_format new_fmt =
-         util_format_get_blocksize(fbinfo->zs.view.zs->format) == 4
-            ? PIPE_FORMAT_Z24_UNORM_S8_UINT
-            : PIPE_FORMAT_Z32_FLOAT_S8X24_UINT;
-
-      if (needs_depth && needs_stencil &&
-          fbinfo->zs.view.zs->format != new_fmt) {
-         state->render.zs_pview = *fbinfo->zs.view.zs;
-         state->render.zs_pview.format = new_fmt;
-         fbinfo->zs.view.zs = &state->render.zs_pview;
       }
    }
 
@@ -367,7 +393,7 @@ panvk_per_arch(cmd_resolve_attachments)(struct panvk_cmd_buffer *cmdbuf)
             .extent.height = fbinfo->extent.maxy - fbinfo->extent.miny + 1,
          },
       .layerCount = cmdbuf->state.gfx.render.layer_count,
-      .viewMask = 0,
+      .viewMask = cmdbuf->state.gfx.render.view_mask,
       .colorAttachmentCount = color_att_count,
       .pColorAttachments = color_atts,
       .pDepthAttachment = &z_att,
@@ -486,7 +512,7 @@ panvk_per_arch(cmd_force_fb_preload)(struct panvk_cmd_buffer *cmdbuf,
       VkClearRect clear_rect = {
          .rect = render_info->renderArea,
          .baseArrayLayer = 0,
-         .layerCount = render_info->layerCount,
+         .layerCount = render_info->viewMask ? 1 : render_info->layerCount,
       };
 
       panvk_per_arch(CmdClearAttachments)(panvk_cmd_buffer_to_handle(cmdbuf),

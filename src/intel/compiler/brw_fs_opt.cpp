@@ -85,6 +85,9 @@ brw_fs_optimize(fs_visitor &s)
    progress = false;
    pass_num = 0;
 
+   if (OPT(brw_opt_combine_convergent_txf))
+      OPT(brw_fs_opt_copy_propagation_defs);
+
    if (OPT(brw_fs_lower_pack)) {
       OPT(brw_fs_opt_register_coalesce);
       OPT(brw_fs_opt_dead_code_eliminate);
@@ -93,6 +96,7 @@ brw_fs_optimize(fs_visitor &s)
    OPT(brw_fs_lower_subgroup_ops);
    OPT(brw_fs_lower_csel);
    OPT(brw_fs_lower_simd_width);
+   OPT(brw_lower_scalar_fp64_MAD);
    OPT(brw_fs_lower_barycentrics);
    OPT(brw_fs_lower_logical_sends);
 
@@ -455,8 +459,16 @@ brw_fs_opt_eliminate_find_live_channel(fs_visitor &s)
          if (depth == 0) {
             inst->opcode = BRW_OPCODE_MOV;
             inst->src[0] = brw_imm_ud(0u);
-            inst->sources = 1;
             inst->force_writemask_all = true;
+
+            /* FIND_LIVE_CHANNEL emitted by emit_uniformize will have
+             * size_written set by hand to a smaller value. In this case,
+             * munge the exec_size to match.
+             */
+            if (inst->size_written == inst->dst.component_size(8 * reg_unit(s.devinfo)))
+               inst->exec_size = 8 * reg_unit(s.devinfo);
+
+            inst->resize_sources(1);
             progress = true;
 
             /* emit_uniformize() frequently emits FIND_LIVE_CHANNEL paired
@@ -475,8 +487,11 @@ brw_fs_opt_eliminate_find_live_channel(fs_visitor &s)
                bcast->opcode = BRW_OPCODE_MOV;
                if (!is_uniform(bcast->src[0]))
                   bcast->src[0] = component(bcast->src[0], 0);
-               bcast->sources = 1;
+
                bcast->force_writemask_all = true;
+               bcast->exec_size = 8 * reg_unit(s.devinfo);
+               assert(bcast->size_written == bcast->dst.component_size(bcast->exec_size));
+               bcast->resize_sources(1);
             }
          }
          break;
@@ -541,4 +556,3 @@ brw_fs_opt_remove_extra_rounding_modes(fs_visitor &s)
 
    return progress;
 }
-

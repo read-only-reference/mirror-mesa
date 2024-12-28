@@ -86,7 +86,7 @@
   # no need to wait on the "first one" to be done.
   # - job: windows-msvc
   #   optional: true
-  - job: python-test
+  - job: python-artifacts
     optional: true
 
 
@@ -812,17 +812,18 @@ debian-ppc64el:
     DRI_LOADERS:
       -D glvnd=disabled
 
-# This job tests our Python scripts, and also emits our scripts into
-# artifacts, so they can be reused for job submission to hardware devices.
-python-test:
+# This job emits our scripts into artifacts so they can be reused for
+# job submission to hardware devices.
+python-artifacts:
   stage: build-for-tests
   extends:
     - .use-debian/x86_64_pyutils
     - .build-common
   variables:
     GIT_STRATEGY: fetch
-    S3_ARTIFACT_NAME: mesa-python-test
+    S3_ARTIFACT_NAME: mesa-python-ci-artifacts
   timeout: 10m
   script:
-    - .gitlab-ci/run-pytest.sh
     - .gitlab-ci/prepare-artifacts-python.sh
+  tags:
+    - placeholder-job

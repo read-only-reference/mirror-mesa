@@ -17,6 +17,9 @@
 extern "C" {
 #endif
 
+/* Reserve this size at the beginning of LDS for the tf0/1 shader message group vote. */
+#define AC_HS_MSG_VOTE_LDS_BYTES 16
+
 enum
 {
    /* SPI_PS_INPUT_CNTL_i.OFFSET[0:4] */
@@ -76,18 +79,21 @@ bool ac_nir_optimize_outputs(nir_shader *nir, bool sprite_tex_disallowed,
 void
 ac_nir_lower_ls_outputs_to_mem(nir_shader *ls,
                                ac_nir_map_io_driver_location map,
+                               enum amd_gfx_level gfx_level,
                                bool tcs_in_out_eq,
-                               uint64_t tcs_inputs_read,
-                               uint64_t tcs_temp_only_inputs);
+                               uint64_t tcs_inputs_via_temp,
+                               uint64_t tcs_inputs_via_lds);
 
 void
 ac_nir_lower_hs_inputs_to_mem(nir_shader *shader,
                               ac_nir_map_io_driver_location map,
+                              enum amd_gfx_level gfx_level,
                               bool tcs_in_out_eq,
-                              uint64_t tcs_temp_only_inputs);
+                              uint64_t tcs_inputs_via_temp,
+                              uint64_t tcs_inputs_via_lds);
 
 void
-ac_nir_lower_hs_outputs_to_mem(nir_shader *shader,
+ac_nir_lower_hs_outputs_to_mem(nir_shader *shader, const nir_tcs_info *info,
                                ac_nir_map_io_driver_location map,
                                enum amd_gfx_level gfx_level,
                                uint64_t tes_inputs_read,
@@ -97,6 +103,13 @@ ac_nir_lower_hs_outputs_to_mem(nir_shader *shader,
 void
 ac_nir_lower_tes_inputs_to_mem(nir_shader *shader,
                                ac_nir_map_io_driver_location map);
+
+void
+ac_nir_compute_tess_wg_info(const struct radeon_info *info, const struct shader_info *tcs_info,
+                            unsigned wave_size, bool tess_uses_primid, bool all_invocations_define_tess_levels,
+                            unsigned num_tcs_input_cp, unsigned lds_input_vertex_size,
+                            unsigned num_mem_tcs_outputs, unsigned num_mem_tcs_patch_outputs,
+                            unsigned *num_patches_per_wg, unsigned *hw_lds_size);
 
 void
 ac_nir_lower_es_outputs_to_mem(nir_shader *shader,
@@ -142,6 +155,7 @@ typedef struct {
    bool passthrough;
    bool use_edgeflags;
    bool export_primitive_id;
+   bool export_primitive_id_per_prim;
    uint32_t instance_rate_inputs;
    uint32_t user_clip_plane_enable_mask;
 
@@ -190,9 +204,11 @@ typedef struct ac_nir_gs_output_info {
    const uint8_t *streams_16bit_lo;
    const uint8_t *streams_16bit_hi;
 
-   const uint8_t *usage_mask;
-   const uint8_t *usage_mask_16bit_lo;
-   const uint8_t *usage_mask_16bit_hi;
+   const uint8_t *varying_mask;
+   const uint8_t *varying_mask_16bit_lo;
+   const uint8_t *varying_mask_16bit_hi;
+
+   const uint8_t *sysval_mask;
 
    /* type for each 16bit slot component */
    nir_alu_type (*types_16bit_lo)[4];
@@ -240,16 +256,6 @@ ac_nir_lower_legacy_gs(nir_shader *nir,
                        ac_nir_gs_output_info *output_info);
 
 typedef struct {
-   /* Which load instructions to lower depending on whether the number of
-    * components being loaded is 1 or more than 1.
-    */
-   nir_variable_mode modes_1_comp;  /* lower 1-component loads for these */
-   nir_variable_mode modes_N_comps; /* lower multi-component loads for these */
-} ac_nir_lower_subdword_options;
-
-bool ac_nir_lower_subdword_loads(nir_shader *nir, ac_nir_lower_subdword_options options);
-
-typedef struct {
    enum radeon_family family;
    enum amd_gfx_level gfx_level;
 
@@ -272,9 +278,11 @@ typedef struct {
    /* OpenGL only */
    bool clamp_color;
    bool alpha_to_one;
-   bool kill_samplemask;
    enum compare_func alpha_func;
    unsigned broadcast_last_cbuf;
+   bool kill_z;
+   bool kill_stencil;
+   bool kill_samplemask;
 
    /* Vulkan only */
    unsigned enable_mrt_output_nan_fixup;
@@ -316,9 +324,6 @@ ac_nir_opt_pack_half(nir_shader *shader, enum amd_gfx_level gfx_level);
 
 unsigned
 ac_nir_varying_expression_max_cost(nir_shader *producer, nir_shader *consumer);
-
-unsigned
-ac_nir_varying_estimate_instr_cost(nir_instr *instr);
 
 bool
 ac_nir_opt_shared_append(nir_shader *shader);

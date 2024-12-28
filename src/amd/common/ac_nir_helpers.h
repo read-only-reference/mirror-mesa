@@ -52,6 +52,10 @@ typedef struct
    uint8_t stream;
    /* Bitmask of components used: 4 bits per slot, 1 bit per component. */
    uint8_t components_mask : 4;
+   /* Bitmask of components that are used as varying, 1 bit per component. */
+   uint8_t as_varying_mask : 4;
+   /* Bitmask of components that are used as sysval, 1 bit per component. */
+   uint8_t as_sysval_mask : 4;
 } ac_nir_prerast_per_output_info;
 
 typedef struct
@@ -99,7 +103,7 @@ ac_nir_export_position(nir_builder *b,
                        bool force_vrs,
                        bool done,
                        uint64_t outputs_written,
-                       nir_def *(*outputs)[4],
+                       ac_nir_prerast_out *out,
                        nir_def *row);
 
 void
@@ -107,9 +111,15 @@ ac_nir_export_parameters(nir_builder *b,
                          const uint8_t *param_offsets,
                          uint64_t outputs_written,
                          uint16_t outputs_written_16bit,
-                         nir_def *(*outputs)[4],
-                         nir_def *(*outputs_16bit_lo)[4],
-                         nir_def *(*outputs_16bit_hi)[4]);
+                         ac_nir_prerast_out *out);
+
+void
+ac_nir_store_parameters_to_attr_ring(nir_builder *b,
+                                     const uint8_t *param_offsets,
+                                     const uint64_t outputs_written,
+                                     const uint16_t outputs_written_16bit,
+                                     ac_nir_prerast_out *out,
+                                     nir_def *export_tid, nir_def *num_export_threads);
 
 nir_def *
 ac_nir_calc_io_off(nir_builder *b,

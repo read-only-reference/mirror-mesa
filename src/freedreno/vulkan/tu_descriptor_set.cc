@@ -72,13 +72,6 @@ descriptor_size(struct tu_device *dev,
    }
 }
 
-static bool
-is_dynamic(VkDescriptorType type)
-{
-   return type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC ||
-          type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-}
-
 static uint32_t
 mutable_descriptor_size(struct tu_device *dev,
                         const VkMutableDescriptorTypeListEXT *list)
@@ -260,7 +253,7 @@ tu_CreateDescriptorSetLayout(
 
       uint32_t size =
          ALIGN_POT(set_layout->binding[b].array_size * set_layout->binding[b].size, 4 * A6XX_TEX_CONST_DWORDS);
-      if (is_dynamic(binding->descriptorType)) {
+      if (vk_descriptor_type_is_dynamic(binding->descriptorType)) {
          dynamic_offset_size += size;
       } else {
          set_layout->size += size;
@@ -352,7 +345,7 @@ tu_GetDescriptorSetLayoutSupport(
 
       uint64_t descriptor_sz;
 
-      if (is_dynamic(binding->descriptorType)) {
+      if (vk_descriptor_type_is_dynamic(binding->descriptorType)) {
          descriptor_sz = 0;
       } else if (binding->descriptorType == VK_DESCRIPTOR_TYPE_MUTABLE_EXT) {
          const VkMutableDescriptorTypeListEXT *list =
@@ -1217,8 +1210,7 @@ tu_update_descriptor_sets(const struct tu_device *device,
       const struct tu_descriptor_set_binding_layout *binding_layout =
          set->layout->binding + writeset->dstBinding;
       uint32_t *ptr = set->mapped_ptr;
-      if (writeset->descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC ||
-          writeset->descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC) {
+      if (vk_descriptor_type_is_dynamic(writeset->descriptorType)) {
          ptr = set->dynamic_descriptors;
          ptr += binding_layout->dynamic_offset_offset / 4;
       } else {
@@ -1326,8 +1318,7 @@ tu_update_descriptor_sets(const struct tu_device *device,
          dst_set->layout->binding + copyset->dstBinding;
       uint32_t *src_ptr = src_set->mapped_ptr;
       uint32_t *dst_ptr = dst_set->mapped_ptr;
-      if (src_binding_layout->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC ||
-          src_binding_layout->type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC) {
+      if (vk_descriptor_type_is_dynamic(src_binding_layout->type)) {
          src_ptr = src_set->dynamic_descriptors;
          dst_ptr = dst_set->dynamic_descriptors;
          src_ptr += src_binding_layout->dynamic_offset_offset / 4;

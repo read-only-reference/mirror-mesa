@@ -1069,6 +1069,42 @@ copy_buffer(struct anv_device *device,
    blorp_buffer_copy(batch, src, dst, region->size);
 }
 
+void
+anv_cmd_copy_addr(struct anv_cmd_buffer *cmd_buffer,
+                  struct anv_address src_addr,
+                  struct anv_address dst_addr,
+                  uint64_t size)
+{
+   struct anv_device *device = cmd_buffer->device;
+
+   struct blorp_batch batch;
+   anv_blorp_batch_init(cmd_buffer, &batch,
+                        cmd_buffer->state.current_pipeline ==
+                        cmd_buffer->device->physical->gpgpu_pipeline_value ?
+                        BLORP_BATCH_USE_COMPUTE : 0);
+
+   struct blorp_address src = {
+      .buffer = src_addr.bo,
+      .offset = src_addr.offset,
+      .mocs = anv_mocs(device, src_addr.bo,
+                       blorp_batch_isl_copy_usage(&batch, false /* is_dest */,
+                                                  false)),
+   };
+
+   struct blorp_address dst = {
+      .buffer = dst_addr.bo,
+      .offset = dst_addr.offset,
+      .mocs = anv_mocs(device, dst_addr.bo,
+                       blorp_batch_isl_copy_usage(&batch, true /* is_dest */,
+                                                  false)),
+   };
+
+   blorp_buffer_copy(&batch, src, dst, size);
+
+   anv_add_buffer_write_pending_bits(cmd_buffer, "after copy buffer");
+   anv_blorp_batch_finish(&batch);
+}
+
 void anv_CmdCopyBuffer2(
     VkCommandBuffer                             commandBuffer,
     const VkCopyBufferInfo2*                    pCopyBufferInfo)
@@ -1093,17 +1129,15 @@ void anv_CmdCopyBuffer2(
    anv_blorp_batch_finish(&batch);
 }
 
-
-void anv_CmdUpdateBuffer(
-    VkCommandBuffer                             commandBuffer,
-    VkBuffer                                    dstBuffer,
+void
+anv_cmd_buffer_update_addr(
+    struct anv_cmd_buffer*                      cmd_buffer,
+    struct anv_address                          address,
     VkDeviceSize                                dstOffset,
     VkDeviceSize                                dataSize,
-    const void*                                 pData)
+    const void*                                 pData,
+    bool                                        is_protected)
 {
-   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   ANV_FROM_HANDLE(anv_buffer, dst_buffer, dstBuffer);
-
    struct blorp_batch batch;
    anv_blorp_batch_init(cmd_buffer, &batch,
                         cmd_buffer->state.current_pipeline ==
@@ -1144,13 +1178,13 @@ void anv_CmdUpdateBuffer(
                                                         false /* protected */)),
       };
       struct blorp_address dst = {
-         .buffer = dst_buffer->address.bo,
-         .offset = dst_buffer->address.offset + dstOffset,
-         .mocs = anv_mocs(cmd_buffer->device, dst_buffer->address.bo,
+         .buffer = address.bo,
+         .offset = address.offset + dstOffset,
+         .mocs = anv_mocs(cmd_buffer->device, address.bo,
                           get_usage_flag_for_cmd_buffer(
                              cmd_buffer,
                              true /* is_dest */,
-                             anv_buffer_is_protected(dst_buffer))),
+                             is_protected)),
       };
 
       blorp_buffer_copy(&batch, src, dst, copy_size);
@@ -1163,6 +1197,21 @@ void anv_CmdUpdateBuffer(
    anv_add_buffer_write_pending_bits(cmd_buffer, "update buffer");
 
    anv_blorp_batch_finish(&batch);
+}
+
+void anv_CmdUpdateBuffer(
+    VkCommandBuffer                             commandBuffer,
+    VkBuffer                                    dstBuffer,
+    VkDeviceSize                                dstOffset,
+    VkDeviceSize                                dataSize,
+    const void*                                 pData)
+{
+   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
+   ANV_FROM_HANDLE(anv_buffer, dst_buffer, dstBuffer);
+
+   anv_cmd_buffer_update_addr(cmd_buffer, dst_buffer->address,
+                              dstOffset, dataSize, pData,
+                              anv_buffer_is_protected(dst_buffer));
 }
 
 void
@@ -1249,6 +1298,20 @@ anv_cmd_buffer_fill_area(struct anv_cmd_buffer *cmd_buffer,
    }
 
    anv_blorp_batch_finish(&batch);
+}
+
+void
+anv_cmd_fill_buffer_addr(VkCommandBuffer commandBuffer,
+                         VkDeviceAddress dstAddr,
+                         VkDeviceSize    fillSize,
+                         uint32_t        data)
+{
+   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
+
+   anv_cmd_buffer_fill_area(cmd_buffer, anv_address_from_u64(dstAddr),
+                            fillSize, data, false);
+
+   anv_add_buffer_write_pending_bits(cmd_buffer, "after fill buffer");
 }
 
 void anv_CmdFillBuffer(

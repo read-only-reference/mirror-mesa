@@ -685,7 +685,8 @@ try_copy_propagate(const brw_compiler *compiler, fs_inst *inst,
     * temporaries which should match is_coalescing_payload().
     */
    if (entry->opcode == SHADER_OPCODE_LOAD_PAYLOAD &&
-       (is_coalescing_payload(alloc, inst) || is_multi_copy_payload(inst)))
+       (is_coalescing_payload(devinfo, alloc, inst) ||
+        is_multi_copy_payload(devinfo, inst)))
       return false;
 
    assert(entry->dst.file == VGRF);
@@ -695,7 +696,7 @@ try_copy_propagate(const brw_compiler *compiler, fs_inst *inst,
    /* Bail if inst is reading a range that isn't contained in the range
     * that entry is writing.
     */
-   if (!region_contained_in(inst->src[arg], inst->size_read(arg),
+   if (!region_contained_in(inst->src[arg], inst->size_read(devinfo, arg),
                             entry->dst, entry->size_written))
       return false;
 
@@ -718,7 +719,7 @@ try_copy_propagate(const brw_compiler *compiler, fs_inst *inst,
          int other_src = arg == 2 ? 3 : 2;
          unsigned other_size = inst->src[other_src].file == VGRF ?
                                alloc.sizes[inst->src[other_src].nr] :
-                               inst->size_read(other_src);
+                               inst->size_read(devinfo, other_src);
          unsigned prop_src_size = alloc.sizes[entry->src.nr];
          if (other_size + prop_src_size > 15)
             return false;
@@ -1070,30 +1071,6 @@ try_constant_propagate_value(brw_reg val, brw_reg_type dst_type,
       }
       break;
 
-   case BRW_OPCODE_ADD3:
-      /* add3 can have a single imm16 source. Proceed if the source type is
-       * already W or UW or the value can be coerced to one of those types.
-       */
-      if (val.type == BRW_TYPE_W || val.type == BRW_TYPE_UW)
-         ; /* Nothing to do. */
-      else if (val.ud <= 0xffff)
-         val = brw_imm_uw(val.ud);
-      else if (val.d >= -0x8000 && val.d <= 0x7fff)
-         val = brw_imm_w(val.d);
-      else
-         break;
-
-      if (arg == 2) {
-         inst->src[arg] = val;
-         progress = true;
-      } else if (inst->src[2].file != IMM) {
-         inst->src[arg] = inst->src[2];
-         inst->src[2] = val;
-         progress = true;
-      }
-
-      break;
-
    case BRW_OPCODE_CMP:
       if (arg == 1) {
          inst->src[arg] = val;
@@ -1178,6 +1155,7 @@ try_constant_propagate_value(brw_reg val, brw_reg_type dst_type,
 
    case SHADER_OPCODE_INT_QUOTIENT:
    case SHADER_OPCODE_INT_REMAINDER:
+   case BRW_OPCODE_ADD3:
    case BRW_OPCODE_AND:
    case BRW_OPCODE_ASR:
    case BRW_OPCODE_BFE:
@@ -1231,7 +1209,8 @@ try_constant_propagate_value(brw_reg val, brw_reg_type dst_type,
 
 
 static bool
-try_constant_propagate(fs_inst *inst, acp_entry *entry, int arg)
+try_constant_propagate(const struct intel_device_info *devinfo,
+                       fs_inst *inst, acp_entry *entry, int arg)
 {
    if (inst->src[arg].file != VGRF)
       return false;
@@ -1243,7 +1222,7 @@ try_constant_propagate(fs_inst *inst, acp_entry *entry, int arg)
    /* Bail if inst is reading a range that isn't contained in the range
     * that entry is writing.
     */
-   if (!region_contained_in(inst->src[arg], inst->size_read(arg),
+   if (!region_contained_in(inst->src[arg], inst->size_read(devinfo, arg),
                             entry->dst, entry->size_written))
       return false;
 
@@ -1259,13 +1238,13 @@ try_constant_propagate(fs_inst *inst, acp_entry *entry, int arg)
 }
 
 static bool
-can_propagate_from(fs_inst *inst)
+can_propagate_from(const struct intel_device_info *devinfo, fs_inst *inst)
 {
    return (inst->opcode == BRW_OPCODE_MOV &&
            inst->dst.file == VGRF &&
            ((inst->src[0].file == VGRF &&
              !grf_regions_overlap(inst->dst, inst->size_written,
-                                  inst->src[0], inst->size_read(0))) ||
+                                  inst->src[0], inst->size_read(devinfo, 0))) ||
             inst->src[0].file == ATTR ||
             inst->src[0].file == UNIFORM ||
             inst->src[0].file == IMM ||
@@ -1279,19 +1258,37 @@ can_propagate_from(fs_inst *inst)
             inst->is_raw_move()) &&
            /* Subset of !is_partial_write() conditions. */
            !inst->predicate && inst->dst.is_contiguous()) ||
-          is_identity_payload(FIXED_GRF, inst);
+          is_identity_payload(devinfo, FIXED_GRF, inst);
+}
+
+static void
+swap_srcs(fs_inst *inst, unsigned a, unsigned b)
+{
+   const auto tmp = inst->src[a];
+   inst->src[a] = inst->src[b];
+   inst->src[b] = tmp;
 }
 
 static void
 commute_immediates(fs_inst *inst)
 {
-   /* ADD3 can only have the immediate as src0. */
+   /* ADD3 can have the immediate as src0 or src2. Using one or the other
+    * consistently makes assembly dumps more readable, so we arbitrarily
+    * prefer src0.
+    */
    if (inst->opcode == BRW_OPCODE_ADD3) {
-      if (inst->src[2].file == IMM) {
-         const auto src0 = inst->src[0];
-         inst->src[0] = inst->src[2];
-         inst->src[2] = src0;
+      if (inst->src[1].file == IMM) {
+         if (inst->src[0].file != IMM)
+            swap_srcs(inst, 0, 1);
+         else if (inst->src[2].file != IMM)
+            swap_srcs(inst, 1, 2);
       }
+   }
+
+   /* MAD can only have mutliplicand immediate in src2. */
+   if (inst->opcode == BRW_OPCODE_MAD) {
+      if (inst->src[1].file == IMM && inst->src[2].file != IMM)
+         swap_srcs(inst, 1, 2);
    }
 
    /* If only one of the sources of a 2-source, commutative instruction (e.g.,
@@ -1315,6 +1312,7 @@ opt_copy_propagation_local(const brw_compiler *compiler, linear_ctx *lin_ctx,
                            const brw::simple_allocator &alloc,
                            uint8_t max_polygons)
 {
+   const struct intel_device_info *devinfo = compiler->devinfo;
    bool progress = false;
 
    foreach_inst_in_block(fs_inst, inst, block) {
@@ -1328,7 +1326,7 @@ opt_copy_propagation_local(const brw_compiler *compiler, linear_ctx *lin_ctx,
               iter != acp.end() && (*iter)->dst.nr == inst->src[i].nr;
               ++iter) {
             if ((*iter)->src.file == IMM) {
-               if (try_constant_propagate(inst, *iter, i)) {
+               if (try_constant_propagate(devinfo, inst, *iter, i)) {
                   constant_progress = true;
                   break;
                }
@@ -1373,13 +1371,13 @@ opt_copy_propagation_local(const brw_compiler *compiler, linear_ctx *lin_ctx,
       /* If this instruction's source could potentially be folded into the
        * operand of another instruction, add it to the ACP.
        */
-      if (can_propagate_from(inst)) {
+      if (can_propagate_from(devinfo, inst)) {
          acp_entry *entry = linear_zalloc(lin_ctx, acp_entry);
          entry->dst = inst->dst;
          entry->src = inst->src[0];
          entry->size_written = inst->size_written;
          for (unsigned i = 0; i < inst->sources; i++)
-            entry->size_read += inst->size_read(i);
+            entry->size_read += inst->size_read(devinfo, i);
          entry->opcode = inst->opcode;
          entry->is_partial_write = inst->is_partial_write();
          entry->force_writemask_all = inst->force_writemask_all;
@@ -1402,7 +1400,7 @@ opt_copy_propagation_local(const brw_compiler *compiler, linear_ctx *lin_ctx,
                   entry->dst = dst;
                   entry->src = retype(inst->src[i], t);
                   entry->size_written = size_written;
-                  entry->size_read = inst->size_read(i);
+                  entry->size_read = inst->size_read(devinfo, i);
                   entry->opcode = inst->opcode;
                   entry->force_writemask_all = inst->force_writemask_all;
                   acp.add(entry);
@@ -1549,7 +1547,7 @@ try_copy_propagate_def(const brw_compiler *compiler,
          int other_src = arg == 2 ? 3 : 2;
          unsigned other_size = inst->src[other_src].file == VGRF ?
                                alloc.sizes[inst->src[other_src].nr] :
-                               inst->size_read(other_src);
+                               inst->size_read(devinfo, other_src);
          unsigned prop_src_size = alloc.sizes[val.nr];
          if (other_size + prop_src_size > 15)
             return false;
@@ -1557,7 +1555,12 @@ try_copy_propagate_def(const brw_compiler *compiler,
    }
 
    /* Reject cases that would violate register regioning restrictions. */
-   if ((val.file == UNIFORM || !val.is_contiguous()) &&
+   if (inst->opcode == SHADER_OPCODE_BROADCAST) {
+      if (arg == 0)
+         return false;
+
+      assert(inst->src[arg].stride == 0);
+   } else if ((val.file == UNIFORM || !val.is_contiguous()) &&
        (inst->is_send_from_grf() || inst->uses_indirect_addressing())) {
       return false;
    }
@@ -1717,10 +1720,11 @@ try_copy_propagate_def(const brw_compiler *compiler,
 }
 
 static bool
-try_constant_propagate_def(fs_inst *def, brw_reg val, fs_inst *inst, int arg)
+try_constant_propagate_def(const struct intel_device_info *devinfo,
+                           fs_inst *def, brw_reg val, fs_inst *inst, int arg)
 {
    /* Bail if inst is reading more than a single vector component of entry */
-   if (inst->size_read(arg) > def->dst.component_size(inst->exec_size))
+   if (inst->size_read(devinfo, arg) > def->dst.component_size(inst->exec_size))
       return false;
 
    return try_constant_propagate_value(val, def->dst.type, inst, arg);
@@ -1774,11 +1778,19 @@ find_value_for_offset(fs_inst *def, const brw_reg &src, unsigned src_size)
    case SHADER_OPCODE_LOAD_PAYLOAD: {
       unsigned offset = 0;
       for (int i = def->header_size; i < def->sources; i++) {
-         const unsigned splat = def->src[i].stride == 0 ? def->exec_size : 1;
+         /* Ignore the source splat if the source is a scalar. In that case
+          * always use just the first component.
+          */
+         const unsigned splat =
+            (def->src[i].stride == 0 && !src.is_scalar) || def->src[i].file == IMM ? def->exec_size : 1;
+         const unsigned component_size =
+            def->src[i].component_size(def->exec_size);
+
          if (offset == src.offset) {
             if (def->dst.type == def->src[i].type &&
                 def->src[i].stride <= 1 &&
-                def->src[i].component_size(def->exec_size) * splat == src_size)
+                (component_size * splat == src_size ||
+                 (def->src[i].file == IMM && component_size == src_size)))
                val = def->src[i];
 
             break;
@@ -1815,9 +1827,9 @@ brw_fs_opt_copy_propagation_defs(fs_visitor &s)
          bool source_progress = false;
 
          if (def->opcode == SHADER_OPCODE_LOAD_PAYLOAD) {
-            if (inst->size_read(i) == def->size_written &&
+            if (inst->size_read(s.devinfo, i) == def->size_written &&
                 def->src[0].file != BAD_FILE && def->src[0].file != IMM &&
-                is_identity_payload(def->src[0].file, def)) {
+                is_identity_payload(s.devinfo, def->src[0].file, def)) {
                source_progress =
                   try_copy_propagate_def(s.compiler, s.alloc, def, def->src[0],
                                          inst, i, s.max_polygons);
@@ -1834,10 +1846,10 @@ brw_fs_opt_copy_propagation_defs(fs_visitor &s)
          }
 
          brw_reg val =
-            find_value_for_offset(def, inst->src[i], inst->size_read(i));
+            find_value_for_offset(def, inst->src[i], inst->size_read(s.devinfo, i));
 
          if (val.file == IMM) {
-            if (try_constant_propagate_def(def, val, inst, i)) {
+               if (try_constant_propagate_def(s.devinfo, def, val, inst, i)) {
                source_progress = true;
                constant_progress = true;
             }

@@ -957,7 +957,7 @@ lower_sampler_logical_send(const fs_builder &bld, fs_inst *inst,
    case SHADER_OPCODE_TXF_LOGICAL:
        /* On Gfx9 the parameters are intermixed they are u, v, lod, r. */
       sources[length] = retype(sources[length], payload_signed_type);
-      bld.MOV(sources[length++], coordinate);
+      bld.MOV(sources[length++], offset(coordinate, bld, 0));
 
       if (coord_components >= 2) {
          sources[length] = retype(sources[length], payload_signed_type);
@@ -1489,11 +1489,11 @@ lower_lsc_memory_logical_send(const fs_builder &bld, fs_inst *inst)
          assert(components < 8);
 
          for (unsigned i = 0; i < components; i++)
-            data[size++] = offset(data0, inst->exec_size, i);
+            data[size++] = offset(data0, bld, i);
 
          if (data1.file != BAD_FILE) {
             for (unsigned i = 0; i < components; i++)
-               data[size++] = offset(data1, inst->exec_size, i);
+               data[size++] = offset(data1, bld, i);
          }
 
          payload2 = bld.vgrf(data0.type, size);
@@ -1719,14 +1719,14 @@ lower_hdc_memory_logical_send(const fs_builder &bld, fs_inst *inst)
          data[num_sources++] = header;
 
       for (unsigned i = 0; i < coord_components; i++)
-         data[num_sources++] = offset(addr, inst->exec_size, i);
+         data[num_sources++] = offset(addr, bld, i);
 
       if (data0.file != BAD_FILE) {
          for (unsigned i = 0; i < components; i++)
-            data[num_sources++] = offset(data0, inst->exec_size, i);
+            data[num_sources++] = offset(data0, bld, i);
          if (data1.file != BAD_FILE) {
             for (unsigned i = 0; i < components; i++)
-               data[num_sources++] = offset(data1, inst->exec_size, i);
+               data[num_sources++] = offset(data1, bld, i);
          }
       }
 
@@ -2266,8 +2266,6 @@ lower_trace_ray_logical_send(const fs_builder &bld, fs_inst *inst)
     * so that the MOV operates on 2 components rather than twice the same
     * component.
     */
-   brw_reg globals_addr = retype(inst->src[RT_LOGICAL_SRC_GLOBALS], BRW_TYPE_UD);
-   globals_addr.stride = 1;
    const brw_reg bvh_level =
       inst->src[RT_LOGICAL_SRC_BVH_LEVEL].file == IMM ?
       inst->src[RT_LOGICAL_SRC_BVH_LEVEL] :
@@ -2287,7 +2285,27 @@ lower_trace_ray_logical_send(const fs_builder &bld, fs_inst *inst)
    const fs_builder ubld = bld.exec_all();
    brw_reg header = ubld.vgrf(BRW_TYPE_UD);
    ubld.MOV(header, brw_imm_ud(0));
-   ubld.group(2, 0).MOV(header, globals_addr);
+
+   const brw_reg globals_addr = inst->src[RT_LOGICAL_SRC_GLOBALS];
+   if (globals_addr.file != UNIFORM) {
+      brw_reg addr_ud = retype(globals_addr, BRW_TYPE_UD);
+      addr_ud.stride = 1;
+      ubld.group(2, 0).MOV(header, addr_ud);
+   } else {
+      /* If the globals address comes from a uniform, do not do the SIMD2
+       * optimization. This occurs in many Vulkan CTS tests.
+       *
+       * Many places in the late compiler, including but not limited to an
+       * assertion in fs_visitor::assign_curb_setup, assume that all uses of a
+       * UNIFORM will be uniform (i.e., <0,1,0>). The clever SIMD2
+       * optimization violates that assumption.
+       */
+      ubld.group(1, 0).MOV(byte_offset(header, 0),
+                           subscript(globals_addr, BRW_TYPE_UD, 0));
+      ubld.group(1, 0).MOV(byte_offset(header, 4),
+                           subscript(globals_addr, BRW_TYPE_UD, 1));
+   }
+
    if (synchronous)
       ubld.group(1, 0).MOV(byte_offset(header, 16), brw_imm_ud(synchronous));
 

@@ -528,6 +528,9 @@ get_features(const struct anv_physical_device *pdevice,
       .shaderIntegerDotProduct = true,
       .maintenance4 = true,
 
+      /* Vulkan 1.4 */
+      .pushDescriptor = true,
+
       /* VK_EXT_4444_formats */
       .formatA4R4G4B4 = true,
       .formatA4B4G4R4 = false,
@@ -1003,8 +1006,8 @@ get_properties_1_2(const struct anv_physical_device *pdevice,
 
    p->conformanceVersion = (VkConformanceVersion) {
       .major = 1,
-      .minor = 3,
-      .subminor = 6,
+      .minor = 4,
+      .subminor = 0,
       .patch = 0,
    };
 
@@ -1353,6 +1356,10 @@ get_properties(const struct anv_physical_device *pdevice,
 
       /* VK_KHR_cooperative_matrix */
       .cooperativeMatrixSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT,
+
+      /* Vulkan 1.4 */
+      .dynamicRenderingLocalReadDepthStencilAttachments = true,
+      .dynamicRenderingLocalReadMultisampledAttachments = true,
    };
 
    snprintf(props->deviceName, sizeof(props->deviceName),
@@ -2432,9 +2439,6 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
                          "Vulkan not yet supported on %s", devinfo.name);
       goto fail_fd;
    }
-
-   if (devinfo.ver == 20 && instance->disable_xe2_ccs)
-      intel_debug |= DEBUG_NO_CCS;
 
    /* Disable Wa_16013994831 on Gfx12.0 because we found other cases where we
     * need to always disable preemption :

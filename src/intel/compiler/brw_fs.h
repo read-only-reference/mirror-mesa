@@ -25,8 +25,7 @@
  *
  */
 
-#ifndef BRW_FS_H
-#define BRW_FS_H
+#pragma once
 
 #include "brw_cfg.h"
 #include "brw_compiler.h"
@@ -465,14 +464,11 @@ public:
                         int iteration, int pass_num) const;
 };
 
-void brw_print_instruction_to_file(const fs_visitor &s, const fs_inst *inst, FILE *file, const brw::def_analysis *defs);
-void brw_print_instructions_to_file(const fs_visitor &s, FILE *file);
+void brw_print_instructions(const fs_visitor &s, FILE *file = stderr);
 
-/* Convenience functions based on the above. */
-inline void brw_print_instruction(const fs_visitor &s, const fs_inst *inst, FILE *file = stderr, const brw::def_analysis *defs = nullptr) {
-   brw_print_instruction_to_file(s, inst, file, defs);
-}
-void brw_print_instructions(const fs_visitor &s, const char *name = nullptr);
+void brw_print_instruction(const fs_visitor &s, const fs_inst *inst,
+                           FILE *file = stderr,
+                           const brw::def_analysis *defs = nullptr);
 
 void brw_print_swsb(FILE *f, const struct intel_device_info *devinfo, const tgl_swsb swsb);
 
@@ -600,8 +596,6 @@ uint32_t brw_fb_write_msg_control(const fs_inst *inst,
 
 void brw_compute_urb_setup_index(struct brw_wm_prog_data *wm_prog_data);
 
-bool brw_nir_lower_simd(nir_shader *nir, unsigned dispatch_width);
-
 brw_reg brw_sample_mask_reg(const brw::fs_builder &bld);
 void brw_emit_predicate_on_sample_mask(const brw::fs_builder &bld, fs_inst *inst);
 
@@ -645,6 +639,7 @@ bool brw_fs_lower_logical_sends(fs_visitor &s);
 bool brw_fs_lower_pack(fs_visitor &s);
 bool brw_fs_lower_load_payload(fs_visitor &s);
 bool brw_fs_lower_regioning(fs_visitor &s);
+bool brw_lower_scalar_fp64_MAD(fs_visitor &s);
 bool brw_fs_lower_scoreboard(fs_visitor &s);
 bool brw_fs_lower_sends_overlapping_payload(fs_visitor &s);
 bool brw_fs_lower_simd_width(fs_visitor &s);
@@ -672,6 +667,7 @@ bool brw_fs_opt_saturate_propagation(fs_visitor &s);
 bool brw_fs_opt_split_sends(fs_visitor &s);
 bool brw_fs_opt_split_virtual_grfs(fs_visitor &s);
 bool brw_fs_opt_zero_samples(fs_visitor &s);
+bool brw_opt_combine_convergent_txf(fs_visitor &s);
 
 bool brw_fs_workaround_emit_dummy_mov_instruction(fs_visitor &s);
 bool brw_fs_workaround_memory_fence_before_eot(fs_visitor &s);
@@ -681,5 +677,3 @@ bool brw_fs_workaround_nomask_control_flow(fs_visitor &s);
 /* Helpers. */
 unsigned brw_fs_get_lowered_simd_width(const fs_visitor *shader,
                                        const fs_inst *inst);
-
-#endif /* BRW_FS_H */

@@ -48,6 +48,7 @@
 #include "util/u_inlines.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
+#include "util/u_prim.h"
 #include "util/u_transfer.h"
 #include "util/u_upload_mgr.h"
 #include "agx_bg_eot.h"
@@ -1563,7 +1564,7 @@ agx_compile_nir(struct agx_device *dev, nir_shader *nir,
       compiled->bo = agx_bo_create(dev, compiled->b.info.binary_size, 0,
                                    AGX_BO_EXEC | AGX_BO_LOW_VA, "Executable");
 
-      memcpy(compiled->bo->map, compiled->b.binary,
+      memcpy(agx_bo_map(compiled->bo), compiled->b.binary,
              compiled->b.info.binary_size);
    }
 
@@ -2854,7 +2855,7 @@ agx_sampler_heap_add(struct agx_device *dev, struct agx_sampler_heap *heap,
 
    /* Precondition: there is room in the heap */
    assert(heap->count < AGX_SAMPLER_HEAP_SIZE);
-   struct agx_sampler_packed *samplers = heap->bo->map;
+   struct agx_sampler_packed *samplers = agx_bo_map(heap->bo);
    memcpy(samplers + heap->count, sampler, sizeof(*sampler));
 
    return heap->count++;
@@ -3869,17 +3870,7 @@ agx_ensure_cmdbuf_has_space(struct agx_batch *batch, struct agx_encoder *enc,
    struct agx_ptr T = agx_pool_alloc_aligned(&batch->pool, size, 256);
 
    /* Jump from the old command buffer to the new command buffer */
-   if (vdm) {
-      agx_pack(enc->current, VDM_STREAM_LINK, cfg) {
-         cfg.target_lo = T.gpu & BITFIELD_MASK(32);
-         cfg.target_hi = T.gpu >> 32;
-      }
-   } else {
-      agx_pack(enc->current, CDM_STREAM_LINK, cfg) {
-         cfg.target_lo = T.gpu & BITFIELD_MASK(32);
-         cfg.target_hi = T.gpu >> 32;
-      }
-   }
+   agx_cs_jump((uint32_t *)enc->current, T.gpu, vdm);
 
    /* Swap out the command buffer */
    enc->current = T.cpu;
@@ -3900,19 +3891,41 @@ agx_ia_update(struct agx_batch *batch, const struct pipe_draw_info *info,
    uint64_t ia_vertices = agx_get_query_address(
       batch, ctx->pipeline_statistics[PIPE_STAT_QUERY_IA_VERTICES]);
 
+   uint64_t ia_primitives = agx_get_query_address(
+      batch, ctx->pipeline_statistics[PIPE_STAT_QUERY_IA_PRIMITIVES]);
+
    uint64_t vs_invocations = agx_get_query_address(
       batch, ctx->pipeline_statistics[PIPE_STAT_QUERY_VS_INVOCATIONS]);
+
+   uint64_t c_prims = agx_get_query_address(
+      batch, ctx->pipeline_statistics[PIPE_STAT_QUERY_C_PRIMITIVES]);
+
+   uint64_t c_invs = agx_get_query_address(
+      batch, ctx->pipeline_statistics[PIPE_STAT_QUERY_C_INVOCATIONS]);
+
+   /* With a geometry shader, clipper counters are written by the pre-GS kernel
+    * since they depend on the output on the geometry shader. Without a geometry
+    * shader, they are written along with IA.
+    *
+    * TODO: Broken tessellation interaction, but nobody cares.
+    */
+   if (ctx->stage[PIPE_SHADER_GEOMETRY].shader) {
+      c_prims = 0;
+      c_invs = 0;
+   }
 
    if (info->primitive_restart) {
       perf_debug(dev, "Input assembly counters with primitive restart");
 
-      libagx_increment_ia_restart(batch, agx_1d(1024), ia_vertices,
-                                  vs_invocations, draw, ib, ib_range_el,
-                                  info->restart_index, info->index_size);
+      libagx_increment_ia_restart(
+         batch, agx_1d(1024), ia_vertices, ia_primitives, vs_invocations,
+         c_prims, c_invs, draw, ib, ib_range_el, info->restart_index,
+         info->index_size, info->mode);
    } else {
       perf_debug(dev, "Input assembly counters");
 
-      libagx_increment_ia(batch, agx_1d(1), ia_vertices, vs_invocations, draw);
+      libagx_increment_ia(batch, agx_1d(1), ia_vertices, ia_primitives,
+                          vs_invocations, c_prims, c_invs, draw, info->mode);
    }
 }
 
@@ -4252,10 +4265,7 @@ agx_needs_passthrough_gs(struct agx_context *ctx,
    /* Rendering adjacency requires a GS, add a passthrough since we don't have
     * one.
     */
-   if (info->mode == MESA_PRIM_LINES_ADJACENCY ||
-       info->mode == MESA_PRIM_TRIANGLES_ADJACENCY ||
-       info->mode == MESA_PRIM_TRIANGLE_STRIP_ADJACENCY ||
-       info->mode == MESA_PRIM_LINE_STRIP_ADJACENCY) {
+   if (mesa_prim_has_adjacency(info->mode)) {
       perf_debug_ctx(ctx, "Using passthrough GS due to adjacency primitives");
       return true;
    }
@@ -4279,14 +4289,6 @@ agx_needs_passthrough_gs(struct agx_context *ctx,
    /* Edge flags are emulated with a geometry shader */
    if (has_edgeflags(ctx, info->mode)) {
       perf_debug_ctx(ctx, "Using passthrough GS due to edge flags");
-      return true;
-   }
-
-   /* Various pipeline statistics are implemented in the pre-GS shader. */
-   if (ctx->pipeline_statistics[PIPE_STAT_QUERY_IA_PRIMITIVES] ||
-       ctx->pipeline_statistics[PIPE_STAT_QUERY_C_PRIMITIVES] ||
-       ctx->pipeline_statistics[PIPE_STAT_QUERY_C_INVOCATIONS]) {
-      perf_debug_ctx(ctx, "Using passthrough GS due to pipeline statistics");
       return true;
    }
 
@@ -4351,7 +4353,7 @@ agx_get_passthrough_gs(struct agx_context *ctx,
 
    nir_shader *gs = nir_create_passthrough_gs(
       &agx_nir_options, prev, mode, rast_prim(mode, poly_mode), edgeflags,
-      false /* force line strip out */);
+      false /* force line strip out */, false);
 
    ralloc_free(prev);
 
@@ -4883,7 +4885,11 @@ agx_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
 
    if (ctx->active_queries && !ctx->active_draw_without_restart &&
        (ctx->pipeline_statistics[PIPE_STAT_QUERY_IA_VERTICES] ||
-        ctx->pipeline_statistics[PIPE_STAT_QUERY_VS_INVOCATIONS])) {
+        ctx->pipeline_statistics[PIPE_STAT_QUERY_IA_PRIMITIVES] ||
+        ctx->pipeline_statistics[PIPE_STAT_QUERY_VS_INVOCATIONS] ||
+        ((ctx->pipeline_statistics[PIPE_STAT_QUERY_C_PRIMITIVES] ||
+          ctx->pipeline_statistics[PIPE_STAT_QUERY_C_INVOCATIONS]) &&
+         !ctx->stage[PIPE_SHADER_GEOMETRY].shader))) {
 
       uint64_t ptr;
       if (indirect) {
@@ -5124,56 +5130,27 @@ agx_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
          cfg.value = info->restart_index;
    }
 
-   agx_push(out, INDEX_LIST, cfg) {
-      cfg.primitive = agx_primitive_for_pipe(info->mode);
-
-      if (indirect != NULL) {
-         cfg.indirect_buffer_present = true;
-      } else {
-         cfg.instance_count_present = true;
-         cfg.index_count_present = true;
-         cfg.start_present = true;
-      }
-
-      if (info->index_size) {
-         cfg.restart_enable = info->primitive_restart;
-         cfg.index_buffer_hi = (ib >> 32);
-         cfg.index_size = agx_translate_index_size(info->index_size);
-         cfg.index_buffer_present = true;
-         cfg.index_buffer_size_present = true;
-      }
-   }
-
+   struct agx_draw draw = {0};
    if (info->index_size) {
-      agx_push(out, INDEX_LIST_BUFFER_LO, cfg) {
-         cfg.buffer_lo = ib & BITFIELD_MASK(32);
-      }
+      draw.index_size = agx_translate_index_size(info->index_size);
+      draw.index_buffer = ib;
+      draw.index_buffer_range_B = ib_extent;
+      draw.restart = info->primitive_restart;
+      draw.indexed = true;
+   } else {
+      draw.start = draws->start;
    }
 
    if (indirect) {
-      uint64_t address = agx_indirect_buffer_ptr(batch, indirect);
-
-      agx_push(out, INDEX_LIST_INDIRECT_BUFFER, cfg) {
-         cfg.address_hi = address >> 32;
-         cfg.address_lo = address & BITFIELD_MASK(32);
-      }
+      draw.b = agx_grid_indirect(agx_indirect_buffer_ptr(batch, indirect));
    } else {
-      agx_push(out, INDEX_LIST_COUNT, cfg)
-         cfg.count = draws->count;
-
-      agx_push(out, INDEX_LIST_INSTANCES, cfg)
-         cfg.count = info->instance_count;
-
-      agx_push(out, INDEX_LIST_START, cfg) {
-         cfg.start = info->index_size ? draws->index_bias : draws->start;
-      }
+      draw.b = agx_3d(draws->count, info->instance_count, 1);
+      if (info->index_size)
+         draw.index_bias = draws->index_bias;
    }
 
-   if (info->index_size) {
-      agx_push(out, INDEX_LIST_BUFFER_SIZE, cfg) {
-         cfg.size = ib_extent;
-      }
-   }
+   out = (void *)agx_vdm_draw((uint32_t *)out, 0 /* ignored for now */, draw,
+                              agx_primitive_for_pipe(info->mode));
 
    batch->vdm.current = out;
    assert((batch->vdm.current + AGX_VDM_STREAM_LINK_LENGTH) <= batch->vdm.end &&
@@ -5316,10 +5293,9 @@ agx_launch_grid(struct pipe_context *pipe, const struct pipe_grid_info *info)
          libagx_increment_cs_invocations(batch, agx_1d(1), indirect, addr,
                                          agx_workgroup_threads(wg));
       } else {
-         agx_query_increment_cpu(
-            ctx, statistic,
-            libagx_cs_invocations(agx_workgroup_threads(wg), info->grid[0],
-                                  info->grid[1], info->grid[2]));
+         agx_query_increment_cpu(ctx, statistic,
+                                 agx_workgroup_threads(wg) * info->grid[0] *
+                                    info->grid[1] * info->grid[2]);
       }
    }
 

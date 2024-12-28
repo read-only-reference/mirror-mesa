@@ -25,20 +25,20 @@
 #include "ac_descriptors.h"
 
 enum radeon_ctx_priority
-radv_get_queue_global_priority(const VkDeviceQueueGlobalPriorityCreateInfoKHR *pObj)
+radv_get_queue_global_priority(const VkDeviceQueueGlobalPriorityCreateInfo *pObj)
 {
    /* Default to MEDIUM when a specific global priority isn't requested */
    if (!pObj)
       return RADEON_CTX_PRIORITY_MEDIUM;
 
    switch (pObj->globalPriority) {
-   case VK_QUEUE_GLOBAL_PRIORITY_REALTIME_KHR:
+   case VK_QUEUE_GLOBAL_PRIORITY_REALTIME:
       return RADEON_CTX_PRIORITY_REALTIME;
-   case VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR:
+   case VK_QUEUE_GLOBAL_PRIORITY_HIGH:
       return RADEON_CTX_PRIORITY_HIGH;
-   case VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR:
+   case VK_QUEUE_GLOBAL_PRIORITY_MEDIUM:
       return RADEON_CTX_PRIORITY_MEDIUM;
-   case VK_QUEUE_GLOBAL_PRIORITY_LOW_KHR:
+   case VK_QUEUE_GLOBAL_PRIORITY_LOW:
       return RADEON_CTX_PRIORITY_LOW;
    default:
       unreachable("Illegal global priority value");
@@ -886,6 +886,10 @@ radv_emit_graphics(struct radv_device *device, struct radeon_cmdbuf *cs)
 
    if (pdev->info.gfx_level >= GFX12) {
       radeon_set_context_reg(cs, R_028000_DB_RENDER_CONTROL, 0);
+      radeon_set_context_reg(cs, R_02800C_DB_RENDER_OVERRIDE,
+                             S_02800C_FORCE_STENCIL_READ(1) |
+                                /* TODO: this should be conditional based on stencil state */
+                                S_02800C_FORCE_STENCIL_VALID(1));
    }
 
    ac_pm4_finalize(pm4);
@@ -1951,7 +1955,7 @@ radv_queue_internal_submit(struct radv_queue *queue, struct radeon_cmdbuf *cs)
 int
 radv_queue_init(struct radv_device *device, struct radv_queue *queue, int idx,
                 const VkDeviceQueueCreateInfo *create_info,
-                const VkDeviceQueueGlobalPriorityCreateInfoKHR *global_priority)
+                const VkDeviceQueueGlobalPriorityCreateInfo *global_priority)
 {
    const struct radv_physical_device *pdev = radv_device_physical(device);
 

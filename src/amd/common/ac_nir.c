@@ -287,6 +287,11 @@ void ac_nir_gather_prerast_store_output_info(nir_builder *b, nir_intrinsic_instr
       info->stream |= stream << (c * 2);
       info->components_mask |= BITFIELD_BIT(c);
 
+      if (!io_sem.no_varying)
+         info->as_varying_mask |= BITFIELD_BIT(c);
+      if (!io_sem.no_sysval_output)
+         info->as_sysval_mask |= BITFIELD_BIT(c);
+
       nir_def *store_component = nir_channel(b, intrin->src[0].ssa, i);
 
       if (non_dedicated_16bit) {
@@ -367,7 +372,7 @@ ac_nir_export_position(nir_builder *b,
                        bool force_vrs,
                        bool done,
                        uint64_t outputs_written,
-                       nir_def *(*outputs)[4],
+                       ac_nir_prerast_out *out,
                        nir_def *row)
 {
    nir_intrinsic_instr *exp[4];
@@ -379,7 +384,7 @@ ac_nir_export_position(nir_builder *b,
       * Setting valid_mask=1 prevents it and has no other effect.
       */
       const unsigned pos_flags = gfx_level == GFX10 ? AC_EXP_FLAG_VALID_MASK : 0;
-      nir_def *pos = get_pos0_output(b, outputs[VARYING_SLOT_POS]);
+      nir_def *pos = get_pos0_output(b, out->outputs[VARYING_SLOT_POS]);
 
       exp[exp_num] = export(b, pos, row, V_008DFC_SQ_EXP_POS + exp_num, pos_flags, 0xf);
       exp_num++;
@@ -395,15 +400,15 @@ ac_nir_export_position(nir_builder *b,
       VARYING_BIT_PRIMITIVE_SHADING_RATE;
 
    /* clear output mask if no one written */
-   if (!outputs[VARYING_SLOT_PSIZ][0])
+   if (!out->outputs[VARYING_SLOT_PSIZ][0] || !out->infos[VARYING_SLOT_PSIZ].as_sysval_mask)
       outputs_written &= ~VARYING_BIT_PSIZ;
-   if (!outputs[VARYING_SLOT_EDGE][0])
+   if (!out->outputs[VARYING_SLOT_EDGE][0] || !out->infos[VARYING_SLOT_EDGE].as_sysval_mask)
       outputs_written &= ~VARYING_BIT_EDGE;
-   if (!outputs[VARYING_SLOT_PRIMITIVE_SHADING_RATE][0])
+   if (!out->outputs[VARYING_SLOT_PRIMITIVE_SHADING_RATE][0] || !out->infos[VARYING_SLOT_PRIMITIVE_SHADING_RATE].as_sysval_mask)
       outputs_written &= ~VARYING_BIT_PRIMITIVE_SHADING_RATE;
-   if (!outputs[VARYING_SLOT_LAYER][0])
+   if (!out->outputs[VARYING_SLOT_LAYER][0] || !out->infos[VARYING_SLOT_LAYER].as_sysval_mask)
       outputs_written &= ~VARYING_BIT_LAYER;
-   if (!outputs[VARYING_SLOT_VIEWPORT][0])
+   if (!out->outputs[VARYING_SLOT_VIEWPORT][0] || !out->infos[VARYING_SLOT_VIEWPORT].as_sysval_mask)
       outputs_written &= ~VARYING_BIT_VIEWPORT;
 
    if ((outputs_written & mask) || force_vrs) {
@@ -412,21 +417,21 @@ ac_nir_export_position(nir_builder *b,
       unsigned write_mask = 0;
 
       if (outputs_written & VARYING_BIT_PSIZ) {
-         vec[0] = outputs[VARYING_SLOT_PSIZ][0];
+         vec[0] = out->outputs[VARYING_SLOT_PSIZ][0];
          write_mask |= BITFIELD_BIT(0);
       }
 
       if (outputs_written & VARYING_BIT_EDGE) {
-         vec[1] = nir_umin(b, outputs[VARYING_SLOT_EDGE][0], nir_imm_int(b, 1));
+         vec[1] = nir_umin(b, out->outputs[VARYING_SLOT_EDGE][0], nir_imm_int(b, 1));
          write_mask |= BITFIELD_BIT(1);
       }
 
       nir_def *rates = NULL;
       if (outputs_written & VARYING_BIT_PRIMITIVE_SHADING_RATE) {
-         rates = outputs[VARYING_SLOT_PRIMITIVE_SHADING_RATE][0];
+         rates = out->outputs[VARYING_SLOT_PRIMITIVE_SHADING_RATE][0];
       } else if (force_vrs) {
          /* If Pos.W != 1 (typical for non-GUI elements), use coarse shading. */
-         nir_def *pos_w = outputs[VARYING_SLOT_POS][3];
+         nir_def *pos_w = out->outputs[VARYING_SLOT_POS][3];
          pos_w = pos_w ? nir_u2u32(b, pos_w) : nir_imm_float(b, 1.0);
          nir_def *cond = nir_fneu_imm(b, pos_w, 1);
          rates = nir_bcsel(b, cond, nir_load_force_vrs_rates_amd(b), nir_imm_int(b, 0));
@@ -438,18 +443,18 @@ ac_nir_export_position(nir_builder *b,
       }
 
       if (outputs_written & VARYING_BIT_LAYER) {
-         vec[2] = outputs[VARYING_SLOT_LAYER][0];
+         vec[2] = out->outputs[VARYING_SLOT_LAYER][0];
          write_mask |= BITFIELD_BIT(2);
       }
 
       if (outputs_written & VARYING_BIT_VIEWPORT) {
          if (gfx_level >= GFX9) {
             /* GFX9 has the layer in [10:0] and the viewport index in [19:16]. */
-            nir_def *v = nir_ishl_imm(b, outputs[VARYING_SLOT_VIEWPORT][0], 16);
+            nir_def *v = nir_ishl_imm(b, out->outputs[VARYING_SLOT_VIEWPORT][0], 16);
             vec[2] = nir_ior(b, vec[2], v);
             write_mask |= BITFIELD_BIT(2);
          } else {
-            vec[3] = outputs[VARYING_SLOT_VIEWPORT][0];
+            vec[3] = out->outputs[VARYING_SLOT_VIEWPORT][0];
             write_mask |= BITFIELD_BIT(3);
          }
       }
@@ -464,7 +469,7 @@ ac_nir_export_position(nir_builder *b,
       if ((outputs_written & (VARYING_BIT_CLIP_DIST0 << i)) &&
           (clip_cull_mask & BITFIELD_RANGE(i * 4, 4))) {
          exp[exp_num] = export(
-            b, get_export_output(b, outputs[VARYING_SLOT_CLIP_DIST0 + i]), row,
+            b, get_export_output(b, out->outputs[VARYING_SLOT_CLIP_DIST0 + i]), row,
             V_008DFC_SQ_EXP_POS + exp_num + exp_pos_offset, 0,
             (clip_cull_mask >> (i * 4)) & 0xf);
          exp_num++;
@@ -472,7 +477,7 @@ ac_nir_export_position(nir_builder *b,
    }
 
    if (outputs_written & VARYING_BIT_CLIP_VERTEX) {
-      nir_def *vtx = get_export_output(b, outputs[VARYING_SLOT_CLIP_VERTEX]);
+      nir_def *vtx = get_export_output(b, out->outputs[VARYING_SLOT_CLIP_VERTEX]);
 
       /* Clip distance for clip vertex to each user clip plane. */
       nir_def *clip_dist[8] = {0};
@@ -521,9 +526,7 @@ ac_nir_export_parameters(nir_builder *b,
                          const uint8_t *param_offsets,
                          uint64_t outputs_written,
                          uint16_t outputs_written_16bit,
-                         nir_def *(*outputs)[4],
-                         nir_def *(*outputs_16bit_lo)[4],
-                         nir_def *(*outputs_16bit_hi)[4])
+                         ac_nir_prerast_out *out)
 {
    uint32_t exported_params = 0;
 
@@ -534,8 +537,8 @@ ac_nir_export_parameters(nir_builder *b,
 
       uint32_t write_mask = 0;
       for (int i = 0; i < 4; i++) {
-         if (outputs[slot][i])
-            write_mask |= BITFIELD_BIT(i);
+         if (out->outputs[slot][i])
+            write_mask |= (out->infos[slot].as_varying_mask & BITFIELD_BIT(i));
       }
 
       /* no one set this output slot, we can skip the param export */
@@ -550,7 +553,7 @@ ac_nir_export_parameters(nir_builder *b,
          continue;
 
       nir_export_amd(
-         b, get_export_output(b, outputs[slot]),
+         b, get_export_output(b, out->outputs[slot]),
          .base = V_008DFC_SQ_EXP_PARAM + offset,
          .write_mask = write_mask);
       exported_params |= BITFIELD_BIT(offset);
@@ -563,7 +566,7 @@ ac_nir_export_parameters(nir_builder *b,
 
       uint32_t write_mask = 0;
       for (int i = 0; i < 4; i++) {
-         if (outputs_16bit_lo[slot][i] || outputs_16bit_hi[slot][i])
+         if (out->outputs_16bit_lo[slot][i] || out->outputs_16bit_hi[slot][i])
             write_mask |= BITFIELD_BIT(i);
       }
 
@@ -581,8 +584,8 @@ ac_nir_export_parameters(nir_builder *b,
       nir_def *vec[4];
       nir_def *undef = nir_undef(b, 1, 16);
       for (int i = 0; i < 4; i++) {
-         nir_def *lo = outputs_16bit_lo[slot][i] ? outputs_16bit_lo[slot][i] : undef;
-         nir_def *hi = outputs_16bit_hi[slot][i] ? outputs_16bit_hi[slot][i] : undef;
+         nir_def *lo = out->outputs_16bit_lo[slot][i] ? out->outputs_16bit_lo[slot][i] : undef;
+         nir_def *hi = out->outputs_16bit_hi[slot][i] ? out->outputs_16bit_hi[slot][i] : undef;
          vec[i] = nir_pack_32_2x16_split(b, lo, hi);
       }
 
@@ -592,6 +595,90 @@ ac_nir_export_parameters(nir_builder *b,
          .write_mask = write_mask);
       exported_params |= BITFIELD_BIT(offset);
    }
+}
+
+void
+ac_nir_store_parameters_to_attr_ring(nir_builder *b,
+                                     const uint8_t *param_offsets,
+                                     const uint64_t outputs_written,
+                                     const uint16_t outputs_written_16bit,
+                                     ac_nir_prerast_out *out,
+                                     nir_def *export_tid, nir_def *num_export_threads)
+{
+   nir_def *attr_rsrc = nir_load_ring_attr_amd(b);
+
+   /* We should always store full vec4s in groups of 8 lanes for the best performance even if
+    * some of them are garbage or have unused components, so align the number of export threads
+    * to 8.
+    */
+   num_export_threads = nir_iand_imm(b, nir_iadd_imm(b, num_export_threads, 7), ~7);
+
+   if (!export_tid)
+      nir_push_if(b, nir_is_subgroup_invocation_lt_amd(b, num_export_threads));
+   else
+      nir_push_if(b, nir_ult(b, export_tid, num_export_threads));
+
+   nir_def *attr_offset = nir_load_ring_attr_offset_amd(b);
+   nir_def *vindex = nir_load_local_invocation_index(b);
+   nir_def *voffset = nir_imm_int(b, 0);
+   nir_def *undef = nir_undef(b, 1, 32);
+
+   uint32_t exported_params = 0;
+
+   u_foreach_bit64 (slot, outputs_written) {
+      const unsigned offset = param_offsets[slot];
+
+      if (offset > AC_EXP_PARAM_OFFSET_31)
+         continue;
+
+      if (!out->infos[slot].as_varying_mask)
+         continue;
+
+      if (exported_params & BITFIELD_BIT(offset))
+         continue;
+
+      nir_def *comp[4];
+      for (unsigned j = 0; j < 4; j++) {
+         comp[j] = out->outputs[slot][j] ? out->outputs[slot][j] : undef;
+      }
+
+      nir_store_buffer_amd(b, nir_vec(b, comp, 4), attr_rsrc, voffset, attr_offset, vindex,
+                           .base = offset * 16,
+                           .memory_modes = nir_var_shader_out,
+                           .access = ACCESS_COHERENT | ACCESS_IS_SWIZZLED_AMD);
+
+      exported_params |= BITFIELD_BIT(offset);
+   }
+
+   u_foreach_bit (i, outputs_written_16bit) {
+      const unsigned offset = param_offsets[VARYING_SLOT_VAR0_16BIT + i];
+
+      if (offset > AC_EXP_PARAM_OFFSET_31)
+         continue;
+
+      if (!out->infos_16bit_lo[i].as_varying_mask &&
+          !out->infos_16bit_hi[i].as_varying_mask)
+         continue;
+
+      if (exported_params & BITFIELD_BIT(offset))
+         continue;
+
+      nir_def *comp[4];
+      for (unsigned j = 0; j < 4; j++) {
+         nir_def *lo = out->outputs_16bit_lo[i][j] ? out->outputs_16bit_lo[i][j] : undef;
+         nir_def *hi = out->outputs_16bit_hi[i][j] ? out->outputs_16bit_hi[i][j] : undef;
+         comp[j] = nir_pack_32_2x16_split(b, lo, hi);
+      }
+
+      nir_store_buffer_amd(b, nir_vec(b, comp, 4), attr_rsrc, voffset, attr_offset, vindex,
+                           .base = offset * 16,
+                           .memory_modes = nir_var_shader_out,
+                           .access = ACCESS_COHERENT | ACCESS_IS_SWIZZLED_AMD);
+
+      exported_params |= BITFIELD_BIT(offset);
+   }
+
+   nir_pop_if(b, NULL);
 }
 
 unsigned
@@ -825,7 +912,12 @@ ac_nir_create_gs_copy_shader(const nir_shader *gs_nir,
          memcpy(&out.types_16bit_hi, output_info->types_16bit_hi, sizeof(out.types_16bit_hi));
 
       u_foreach_bit64 (i, gs_nir->info.outputs_written) {
-         u_foreach_bit (j, output_info->usage_mask[i]) {
+         const uint8_t usage_mask = output_info->varying_mask[i] | output_info->sysval_mask[i];
+         out.infos[i].components_mask = usage_mask;
+         out.infos[i].as_varying_mask = output_info->varying_mask[i];
+         out.infos[i].as_sysval_mask = output_info->sysval_mask[i];
+
+         u_foreach_bit (j, usage_mask) {
             if (((output_info->streams[i] >> (j * 2)) & 0x3) != stream)
                continue;
 
@@ -847,10 +939,18 @@ ac_nir_create_gs_copy_shader(const nir_shader *gs_nir,
       }
 
       u_foreach_bit (i, gs_nir->info.outputs_written_16bit) {
+         out.infos_16bit_lo[i].components_mask = output_info->varying_mask_16bit_lo[i];
+         out.infos_16bit_lo[i].as_varying_mask = output_info->varying_mask_16bit_lo[i];
+         out.infos_16bit_hi[i].components_mask = output_info->varying_mask_16bit_hi[i];
+         out.infos_16bit_hi[i].as_varying_mask = output_info->varying_mask_16bit_hi[i];
+
          for (unsigned j = 0; j < 4; j++) {
-            bool has_lo_16bit = (output_info->usage_mask_16bit_lo[i] & (1 << j)) &&
+            out.infos[i].as_varying_mask = output_info->varying_mask[i];
+            out.infos[i].as_sysval_mask = output_info->sysval_mask[i];
+
+            bool has_lo_16bit = (output_info->varying_mask_16bit_lo[i] & (1 << j)) &&
                ((output_info->streams_16bit_lo[i] >> (j * 2)) & 0x3) == stream;
-            bool has_hi_16bit = (output_info->usage_mask_16bit_hi[i] & (1 << j)) &&
+            bool has_hi_16bit = (output_info->varying_mask_16bit_hi[i] & (1 << j)) &&
                ((output_info->streams_16bit_hi[i] >> (j * 2)) & 0x3) == stream;
             if (!has_lo_16bit && !has_hi_16bit)
                continue;
@@ -881,15 +981,13 @@ ac_nir_create_gs_copy_shader(const nir_shader *gs_nir,
             export_outputs &= ~VARYING_BIT_LAYER;
 
          ac_nir_export_position(&b, gfx_level, clip_cull_mask, !has_param_exports,
-                                force_vrs, true, export_outputs, out.outputs, NULL);
+                                force_vrs, true, export_outputs, &out, NULL);
 
          if (has_param_exports) {
             ac_nir_export_parameters(&b, param_offsets,
                                      b.shader->info.outputs_written,
                                      b.shader->info.outputs_written_16bit,
-                                     out.outputs,
-                                     out.outputs_16bit_lo,
-                                     out.outputs_16bit_hi);
+                                     &out);
          }
       }
 
@@ -953,6 +1051,7 @@ ac_nir_lower_legacy_vs(nir_shader *nir,
        * or MS).
        */
       out.outputs[VARYING_SLOT_PRIMITIVE_ID][0] = nir_load_primitive_id(&b);
+      out.infos[VARYING_SLOT_PRIMITIVE_ID].as_varying_mask = 0x1;
 
       /* Update outputs_written to reflect that the pass added a new output. */
       nir->info.outputs_written |= BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_ID);
@@ -970,15 +1069,13 @@ ac_nir_lower_legacy_vs(nir_shader *nir,
       export_outputs &= ~VARYING_BIT_LAYER;
 
    ac_nir_export_position(&b, gfx_level, clip_cull_mask, !has_param_exports,
-                          force_vrs, true, export_outputs, out.outputs, NULL);
+                          force_vrs, true, export_outputs, &out, NULL);
 
    if (has_param_exports) {
       ac_nir_export_parameters(&b, param_offsets,
                                nir->info.outputs_written,
                                nir->info.outputs_written_16bit,
-                               out.outputs,
-                               out.outputs_16bit_lo,
-                               out.outputs_16bit_hi);
+                               &out);
    }
 
    nir_metadata_preserve(impl, preserved);
@@ -1183,7 +1280,9 @@ lower_legacy_gs_emit_vertex_with_counter(nir_builder *b, nir_intrinsic_instr *in
          /* Next vertex emit need a new value, reset all outputs. */
          s->outputs[i][j] = NULL;
 
-         if (!(s->info->usage_mask[i] & (1 << j)) ||
+         const uint8_t usage_mask = s->info->varying_mask[i] | s->info->sysval_mask[i];
+
+         if (!(usage_mask & (1 << j)) ||
              ((s->info->streams[i] >> (j * 2)) & 0x3) != stream)
             continue;
 
@@ -1216,9 +1315,9 @@ lower_legacy_gs_emit_vertex_with_counter(nir_builder *b, nir_intrinsic_instr *in
          s->outputs_16bit_lo[i][j] = NULL;
          s->outputs_16bit_hi[i][j] = NULL;
 
-         bool has_lo_16bit = (s->info->usage_mask_16bit_lo[i] & (1 << j)) &&
+         bool has_lo_16bit = (s->info->varying_mask_16bit_lo[i] & (1 << j)) &&
             ((s->info->streams_16bit_lo[i] >> (j * 2)) & 0x3) == stream;
-         bool has_hi_16bit = (s->info->usage_mask_16bit_hi[i] & (1 << j)) &&
+         bool has_hi_16bit = (s->info->varying_mask_16bit_hi[i] & (1 << j)) &&
             ((s->info->streams_16bit_hi[i] >> (j * 2)) & 0x3) == stream;
          if (!has_lo_16bit && !has_hi_16bit)
             continue;
@@ -1601,109 +1700,10 @@ ac_nir_varying_expression_max_cost(nir_shader *producer, nir_shader *consumer)
       /* TCS->TES and VS->TES (OpenGL only) */
    case MESA_SHADER_FRAGMENT:
       /* Up to 3 uniforms and 5 ALUs. */
-      return 14;
+      return 12;
 
    default:
       unreachable("unexpected shader stage");
-   }
-}
-
-unsigned
-ac_nir_varying_estimate_instr_cost(nir_instr *instr)
-{
-   unsigned dst_bit_size, src_bit_size, num_dst_dwords;
-   nir_op alu_op;
-
-   /* This is a very loose approximation based on gfx10. */
-   switch (instr->type) {
-   case nir_instr_type_alu:
-      dst_bit_size = nir_instr_as_alu(instr)->def.bit_size;
-      src_bit_size = nir_instr_as_alu(instr)->src[0].src.ssa->bit_size;
-      alu_op = nir_instr_as_alu(instr)->op;
-      num_dst_dwords = DIV_ROUND_UP(dst_bit_size, 32);
-
-      switch (alu_op) {
-      case nir_op_mov:
-      case nir_op_vec2:
-      case nir_op_vec3:
-      case nir_op_vec4:
-      case nir_op_vec5:
-      case nir_op_vec8:
-      case nir_op_vec16:
-      case nir_op_fabs:
-      case nir_op_fneg:
-      case nir_op_fsat:
-         return 0;
-
-      case nir_op_imul:
-      case nir_op_umul_low:
-         return dst_bit_size <= 16 ? 1 : 4 * num_dst_dwords;
-
-      case nir_op_imul_high:
-      case nir_op_umul_high:
-      case nir_op_imul_2x32_64:
-      case nir_op_umul_2x32_64:
-         return 4;
-
-      case nir_op_fexp2:
-      case nir_op_flog2:
-      case nir_op_frcp:
-      case nir_op_frsq:
-      case nir_op_fsqrt:
-      case nir_op_fsin:
-      case nir_op_fcos:
-      case nir_op_fsin_amd:
-      case nir_op_fcos_amd:
-         return 4; /* FP16 & FP32. */
-
-      case nir_op_fpow:
-         return 4 + 1 + 4; /* log2 + mul + exp2 */
-
-      case nir_op_fsign:
-         return dst_bit_size == 64 ? 4 : 3; /* See ac_build_fsign. */
-
-      case nir_op_idiv:
-      case nir_op_udiv:
-      case nir_op_imod:
-      case nir_op_umod:
-      case nir_op_irem:
-         return dst_bit_size == 64 ? 80 : 40;
-
-      case nir_op_fdiv:
-         return dst_bit_size == 64 ? 80 : 5; /* FP16 & FP32: rcp + mul */
-
-      case nir_op_fmod:
-      case nir_op_frem:
-         return dst_bit_size == 64 ? 80 : 8;
-
-      default:
-         /* Double opcodes. Comparisons have always full performance. */
-         if ((dst_bit_size == 64 &&
-              nir_op_infos[alu_op].output_type & nir_type_float) ||
-             (dst_bit_size >= 8 && src_bit_size == 64 &&
-              nir_op_infos[alu_op].input_types[0] & nir_type_float))
-            return 16;
-
-         return DIV_ROUND_UP(MAX2(dst_bit_size, src_bit_size), 32);
-      }
-
-   case nir_instr_type_intrinsic:
-      dst_bit_size = nir_instr_as_intrinsic(instr)->def.bit_size;
-      num_dst_dwords = DIV_ROUND_UP(dst_bit_size, 32);
-
-      switch (nir_instr_as_intrinsic(instr)->intrinsic) {
-      case nir_intrinsic_load_deref:
-         /* Uniform or UBO load.
-          * Set a low cost to balance the number of scalar loads and ALUs.
-          */
-         return 3 * num_dst_dwords;
-
-      default:
-         unreachable("unexpected intrinsic");
-      }
-
-   default:
-      unreachable("unexpected instr type");
    }
 }
 
@@ -1752,6 +1752,7 @@ lower_mem_access_cb(nir_intrinsic_op intrin, uint8_t bytes, uint8_t bit_size, ui
 {
    const mem_access_cb_data *cb_data = (mem_access_cb_data *)cb_data_;
    const bool is_load = nir_intrinsic_infos[intrin].has_dest;
+   const bool is_smem = intrin == nir_intrinsic_load_push_constant || (access & ACCESS_SMEM_AMD);
    const uint32_t combined_align = nir_combined_align(align_mul, align_offset);
 
    /* Make 8-bit accesses 16-bit if possible */
@@ -1762,6 +1763,8 @@ lower_mem_access_cb(nir_intrinsic_op intrin, uint8_t bytes, uint8_t bit_size, ui
    if (cb_data->use_llvm && access & (ACCESS_COHERENT | ACCESS_VOLATILE) &&
        (intrin == nir_intrinsic_load_global || intrin == nir_intrinsic_store_global))
       max_components = 1;
+   else if (is_smem)
+      max_components = MIN2(512 / bit_size, 16);
 
    nir_mem_access_size_align res;
    res.num_components = MIN2(bytes / (bit_size / 8), max_components);
@@ -1774,7 +1777,6 @@ lower_mem_access_cb(nir_intrinsic_op intrin, uint8_t bytes, uint8_t bit_size, ui
 
    /* Lower 8/16-bit loads to 32-bit, unless it's a VMEM scalar load. */
 
-   const bool is_smem = intrin == nir_intrinsic_load_push_constant || (access & ACCESS_SMEM_AMD);
    const bool support_subdword = res.num_components == 1 && !is_smem &&
                                  (!cb_data->use_llvm || intrin != nir_intrinsic_load_ubo);
 
@@ -1824,7 +1826,9 @@ ac_nir_lower_mem_access_bit_sizes(nir_shader *shader, enum amd_gfx_level gfx_lev
    };
    nir_lower_mem_access_bit_sizes_options lower_mem_access_options = {
       .callback = &lower_mem_access_cb,
-      .modes = nir_var_mem_ubo | nir_var_mem_push_const | nir_var_mem_ssbo | nir_var_mem_global | nir_var_mem_constant,
+      .modes = nir_var_mem_ubo | nir_var_mem_push_const | nir_var_mem_ssbo |
+               nir_var_mem_global | nir_var_mem_constant | nir_var_mem_shared |
+               nir_var_shader_temp,
       .may_lower_unaligned_stores_to_atomics = false,
       .cb_data = &cb_data,
    };
