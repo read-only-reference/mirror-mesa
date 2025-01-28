@@ -31,7 +31,7 @@ brw_print_instructions(const fs_visitor &s, FILE *file)
          }
          fprintf(file, "\n");
 
-         foreach_inst_in_block(fs_inst, inst, block) {
+         foreach_inst_in_block(brw_inst, inst, block) {
             if (inst->is_control_flow_end())
                cf_count -= 1;
 
@@ -60,11 +60,11 @@ brw_print_instructions(const fs_visitor &s, FILE *file)
       if (rp)
          fprintf(file, "Maximum %3d registers live at once.\n", max_pressure);
    } else if (s.cfg && exec_list_is_empty(&s.instructions)) {
-      foreach_block_and_inst(block, fs_inst, inst, s.cfg) {
+      foreach_block_and_inst(block, brw_inst, inst, s.cfg) {
          brw_print_instruction(s, inst, file);
       }
    } else {
-      foreach_in_list(fs_inst, inst, &s.instructions) {
+      foreach_in_list(brw_inst, inst, &s.instructions) {
          brw_print_instruction(s, inst, file);
       }
    }
@@ -120,6 +120,8 @@ brw_instruction_name(const struct brw_isa_info *isa, enum opcode op)
 
    case SHADER_OPCODE_SEND:
       return "send";
+   case SHADER_OPCODE_SEND_GATHER:
+      return "send_gather";
 
    case SHADER_OPCODE_UNDEF:
       return "undef";
@@ -306,7 +308,7 @@ brw_instruction_name(const struct brw_isa_info *isa, enum opcode op)
  * we only printed a label, and the actual source value still needs printing.
  */
 static bool
-print_memory_logical_source(FILE *file, const fs_inst *inst, unsigned i)
+print_memory_logical_source(FILE *file, const brw_inst *inst, unsigned i)
 {
    if (inst->is_control_source(i)) {
       assert(inst->src[i].file == IMM && inst->src[i].type == BRW_TYPE_UD);
@@ -324,6 +326,7 @@ print_memory_logical_source(FILE *file, const fs_inst *inst, unsigned i)
          [MEMORY_MODE_UNTYPED]      = "untyped",
          [MEMORY_MODE_SHARED_LOCAL] = "shared",
          [MEMORY_MODE_SCRATCH]      = "scratch",
+         [MEMORY_MODE_CONSTANT]     = "const",
       };
       assert(inst->src[i].ud < ARRAY_SIZE(modes));
       fprintf(file, " %s", modes[inst->src[i].ud]);
@@ -371,7 +374,7 @@ print_memory_logical_source(FILE *file, const fs_inst *inst, unsigned i)
 }
 
 void
-brw_print_instruction(const fs_visitor &s, const fs_inst *inst, FILE *file, const brw::def_analysis *defs)
+brw_print_instruction(const fs_visitor &s, const brw_inst *inst, FILE *file, const brw::def_analysis *defs)
 {
    if (inst->predicate) {
       fprintf(file, "(%cf%d.%d) ",
@@ -432,23 +435,28 @@ brw_print_instruction(const fs_visitor &s, const fs_inst *inst, FILE *file, cons
    case ATTR:
       fprintf(file, "***attr%d***", inst->dst.nr);
       break;
+   case ADDRESS:
+      if (inst->dst.nr == 0)
+         fprintf(file, "a0.%d", inst->dst.subnr);
+      else
+         fprintf(file, "va%u.%d", inst->dst.nr, inst->dst.subnr);
+      break;
    case ARF:
       switch (inst->dst.nr & 0xF0) {
       case BRW_ARF_NULL:
          fprintf(file, "null");
-         break;
-      case BRW_ARF_ADDRESS:
-         fprintf(file, "a0.%d", inst->dst.subnr);
          break;
       case BRW_ARF_ACCUMULATOR:
          if (inst->dst.subnr == 0)
             fprintf(file, "acc%d", inst->dst.nr & 0x0F);
          else
             fprintf(file, "acc%d.%d", inst->dst.nr & 0x0F, inst->dst.subnr);
-
          break;
       case BRW_ARF_FLAG:
          fprintf(file, "f%d.%d", inst->dst.nr & 0xf, inst->dst.subnr);
+         break;
+      case BRW_ARF_SCALAR:
+         fprintf(file, "s0.%d", inst->dst.subnr);
          break;
       default:
          fprintf(file, "arf%d.%d", inst->dst.nr & 0xf, inst->dst.subnr);
@@ -496,6 +504,12 @@ brw_print_instruction(const fs_visitor &s, const fs_inst *inst, FILE *file, cons
          break;
       case FIXED_GRF:
          fprintf(file, "g%d", inst->src[i].nr);
+         break;
+      case ADDRESS:
+         if (inst->src[i].nr == 0)
+            fprintf(file, "a0.%d", inst->src[i].subnr);
+         else
+            fprintf(file, "va%u.%d", inst->src[i].nr, inst->src[i].subnr);
          break;
       case ATTR:
          fprintf(file, "attr%d", inst->src[i].nr);
@@ -557,9 +571,6 @@ brw_print_instruction(const fs_visitor &s, const fs_inst *inst, FILE *file, cons
          case BRW_ARF_NULL:
             fprintf(file, "null");
             break;
-         case BRW_ARF_ADDRESS:
-            fprintf(file, "a0.%d", inst->src[i].subnr);
-            break;
          case BRW_ARF_ACCUMULATOR:
             if (inst->src[i].subnr == 0)
                fprintf(file, "acc%d", inst->src[i].nr & 0x0F);
@@ -569,6 +580,9 @@ brw_print_instruction(const fs_visitor &s, const fs_inst *inst, FILE *file, cons
             break;
          case BRW_ARF_FLAG:
             fprintf(file, "f%d.%d", inst->src[i].nr & 0xf, inst->src[i].subnr);
+            break;
+         case BRW_ARF_SCALAR:
+            fprintf(file, "s0.%d", inst->src[i].subnr);
             break;
          default:
             fprintf(file, "arf%d.%d", inst->src[i].nr & 0xf, inst->src[i].subnr);
@@ -669,4 +683,3 @@ brw_print_swsb(FILE *f, const struct intel_device_info *devinfo, const tgl_swsb 
                swsb.mode & TGL_SBID_DST ? ".dst" : ".src"));
    }
 }
-

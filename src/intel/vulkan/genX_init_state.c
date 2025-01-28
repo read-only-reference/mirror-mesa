@@ -617,8 +617,8 @@ init_render_queue_state(struct anv_queue *queue, bool is_companion_rcs_batch)
     * the dynamic state base address we need to emit this instruction after
     * STATE_BASE_ADDRESS in init_common_queue_state().
     */
-#if GFX_VER == 11
-   anv_batch_emit(batch, GENX(3DSTATE_CPS), cps);
+#if GFX_VER >= 30
+   anv_batch_emit(batch, GENX(3DSTATE_COARSE_PIXEL), cps);
 #elif GFX_VER >= 12
    anv_batch_emit(batch, GENX(3DSTATE_CPS_POINTERS), cps) {
       assert(device->cps_states.alloc_size != 0);
@@ -626,10 +626,15 @@ init_render_queue_state(struct anv_queue *queue, bool is_companion_rcs_batch)
       cps.CoarsePixelShadingStateArrayPointer =
          device->cps_states.offset;
    }
+#elif GFX_VER == 11
+   anv_batch_emit(batch, GENX(3DSTATE_CPS), cps);
 #endif
 
 #if GFX_VERx10 >= 125
    anv_batch_emit(batch, GENX(STATE_COMPUTE_MODE), cm) {
+#if GFX_VER >= 30
+      cm.EnableVariableRegisterSizeAllocation = true;
+#endif
       cm.Mask1 = 0xffff;
 #if GFX_VERx10 >= 200
       cm.Mask2 = 0xffff;
@@ -764,6 +769,10 @@ init_compute_queue_state(struct anv_queue *queue)
    }
 
    anv_batch_emit(batch, GENX(STATE_COMPUTE_MODE), cm) {
+#if GFX_VER >= 30
+      cm.EnableVariableRegisterSizeAllocationMask = 1;
+      cm.EnableVariableRegisterSizeAllocation = true;
+#endif
 #if GFX_VER >= 20
       cm.AsyncComputeThreadLimit = ACTL_Max8;
       cm.ZPassAsyncComputeThreadLimit = ZPACTL_Max60;
@@ -977,7 +986,7 @@ genX(init_device_state)(struct anv_device *device)
 void
 genX(init_cps_device_state)(struct anv_device *device)
 {
-#if GFX_VER >= 12
+#if GFX_VER >= 12 && GFX_VER < 30
    void *cps_state_ptr = device->cps_states.map;
 
    /* Disabled CPS mode */
@@ -1032,7 +1041,7 @@ genX(init_cps_device_state)(struct anv_device *device)
          }
       }
    }
-#endif /* GFX_VER >= 12 */
+#endif /* GFX_VER >= 12 && GFX_VER < 30 */
 }
 
 void
@@ -1293,7 +1302,7 @@ VkResult genX(CreateSampler)(
 
       const struct anv_format *format_desc =
          sampler->vk.format != VK_FORMAT_UNDEFINED ?
-         anv_get_format(sampler->vk.format) : NULL;
+         anv_get_format(device->physical, sampler->vk.format) : NULL;
 
       if (format_desc && format_desc->n_planes == 1 &&
           !isl_swizzle_is_identity(format_desc->planes[0].swizzle)) {
@@ -1331,7 +1340,7 @@ VkResult genX(CreateSampler)(
        *   "Mip Mode Filter must be set to MIPFILTER_NONE for Planar YUV surfaces."
        */
       enum isl_format plane0_isl_format = sampler->vk.ycbcr_conversion ?
-         anv_get_format(sampler->vk.format)->planes[0].isl_format :
+         anv_get_format(device->physical, sampler->vk.format)->planes[0].isl_format :
          ISL_FORMAT_UNSUPPORTED;
       const bool isl_format_is_planar_yuv =
          plane0_isl_format != ISL_FORMAT_UNSUPPORTED &&
@@ -1489,9 +1498,15 @@ genX(apply_task_urb_workaround)(struct anv_cmd_buffer *cmd_buffer)
       return;
 
    for (int i = 0; i <= MESA_SHADER_GEOMETRY; i++) {
+#if GFX_VER >= 12
+      anv_batch_emit(&cmd_buffer->batch, GENX(3DSTATE_URB_ALLOC_VS), urb) {
+         urb._3DCommandSubOpcode += i;
+      }
+#else
       anv_batch_emit(&cmd_buffer->batch, GENX(3DSTATE_URB_VS), urb) {
          urb._3DCommandSubOpcode += i;
       }
+#endif
    }
 
    anv_batch_emit(&cmd_buffer->batch, GENX(3DSTATE_URB_ALLOC_MESH), zero);

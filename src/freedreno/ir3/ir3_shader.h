@@ -185,31 +185,94 @@ struct ir3_driver_ubo {
    uint32_t size;
 };
 
+enum ir3_const_alloc_type {
+   /* Vulkan, push consts. */
+   IR3_CONST_ALLOC_PUSH_CONSTS = 0,
+   /* Vulkan, offsets required to calculate offsets of descriptors with dynamic
+    * offsets.
+    */
+   IR3_CONST_ALLOC_DYN_DESCRIPTOR_OFFSET = 1,
+   /* Vulkan, addresses of inline uniform buffers, to which we fallback when
+    * their size is unknown.
+    */
+   IR3_CONST_ALLOC_INLINE_UNIFORM_ADDRS = 2,
+   /* Common, stage-specific params uploaded by the driver/HW. */
+   IR3_CONST_ALLOC_DRIVER_PARAMS = 3,
+   /* Common, UBOs lowered to consts. */
+   IR3_CONST_ALLOC_UBO_RANGES = 4,
+   /* Common, consts produced by a preamble to be used in a main shader. */
+   IR3_CONST_ALLOC_PREAMBLE = 5,
+   /* Vulkan, inline uniforms loaded into consts in the preamble.*/
+   IR3_CONST_ALLOC_GLOBAL = 6,
+   /* OpenGL, pre-a6xx; pointers to UBOs */
+   IR3_CONST_ALLOC_UBO_PTRS = 7,
+   /* OpenGL, a5xx only; needed to calculate pixel offset, but only
+    * for images that have image_{load,store,size,atomic*} intrinsics.
+    */
+   IR3_CONST_ALLOC_IMAGE_DIMS = 8,
+   /* OpenCL */
+   IR3_CONST_ALLOC_KERNEL_PARAMS = 9,
+   /* OpenGL, TFBO addresses only for vs on a3xx/a4xx */
+   IR3_CONST_ALLOC_TFBO = 10,
+   /* Common, stage-dependent primitive params:
+    *  vs, gs: uvec4(primitive_stride, vertex_stride, 0, 0)
+    *  hs, ds: uvec4(primitive_stride, vertex_stride,
+    *                patch_stride, patch_vertices_in)
+    *          uvec4(tess_param_base, tess_factor_base)
+    */
+   IR3_CONST_ALLOC_PRIMITIVE_PARAM = 11,
+   /* Common, mapping from varying location to offset. */
+   IR3_CONST_ALLOC_PRIMITIVE_MAP = 12,
+   IR3_CONST_ALLOC_MAX = 13,
+};
+
+struct ir3_const_allocation {
+   uint32_t offset_vec4;
+   uint32_t size_vec4;
+
+   uint32_t reserved_size_vec4;
+   uint32_t reserved_align_vec4;
+};
+
+struct ir3_const_allocations {
+   struct ir3_const_allocation consts[IR3_CONST_ALLOC_MAX];
+   uint32_t max_const_offset_vec4;
+   uint32_t reserved_vec4;
+};
+
+static inline bool
+ir3_const_can_upload(const struct ir3_const_allocations *const_alloc,
+                     enum ir3_const_alloc_type type,
+                     uint32_t shader_const_size_vec4)
+{
+   return const_alloc->consts[type].size_vec4 > 0 &&
+          const_alloc->consts[type].offset_vec4 < shader_const_size_vec4;
+}
+
+struct ir3_const_image_dims {
+   uint32_t mask;  /* bitmask of images that have image_store */
+   uint32_t count; /* number of consts allocated */
+   /* three const allocated per image which has image_store:
+      *  + cpp         (bytes per pixel)
+      *  + pitch       (y pitch)
+      *  + array_pitch (z pitch)
+      */
+   uint32_t off[IR3_MAX_SHADER_IMAGES];
+};
+
 /**
- * Describes the layout of shader consts in the const register file.
+ * Describes the layout of shader consts in the const register file
+ * and additional info about individual allocations.
  *
- * Layout of constant registers, each section aligned to vec4.  Note
- * that pointer size (ubo, etc) changes depending on generation.
+ * Each consts section is aligned to vec4. Note that pointer
+ * size (ubo, etc) changes depending on generation.
  *
- *   + user consts: only used for turnip push consts
- *   + lowered UBO ranges
- *   + preamble consts
- *   + UBO addresses: turnip is bindless and these are wasted
- *   + image dimensions: a5xx only; needed to calculate pixel offset, but only
- *     for images that have image_{load,store,size,atomic*} intrinsics
- *   + kernel params: cl only
- *   + driver params: these are stage-dependent; see ir3_driver_param
- *   + TFBO addresses: only for vs on a3xx/a4xx
- *   + primitive params: these are stage-dependent
- *       vs, gs: uvec4(primitive_stride, vertex_stride, 0, 0)
- *       hs, ds: uvec4(primitive_stride, vertex_stride,
- *                     patch_stride, patch_vertices_in)
- *               uvec4(tess_param_base, tess_factor_base)
- *   + primitive map
- *   + lowered immediates
- *
- * Immediates go last mostly because they are inserted in the CP pass
- * after the nir -> ir3 frontend.
+ * The consts allocation flow is as follows:
+ * 1) Turnip/Freedreno allocates consts required by corresponding API,
+ *    e.g. push const, inline uniforms, etc. Then passes ir3_const_allocations
+ *    into IR3.
+ * 2) ir3_setup_const_state allocates consts with non-negotiable size.
+ * 3) IR3 lowerings afterwards allocate from the free space left.
  *
  * Note UBO size in bytes should be aligned to vec4
  */
@@ -222,43 +285,13 @@ struct ir3_const_state {
    struct ir3_driver_ubo driver_params_ubo;
    struct ir3_driver_ubo primitive_map_ubo, primitive_param_ubo;
 
-   /* Optional const allocations (preamble, UBO, etc.) may shift the required
-    * consts more than they expect. The free space for optional allocations
-    * should respect required_consts_aligment_vec4.
-    */
-   uint32_t required_consts_aligment_vec4;
+   struct ir3_const_allocations allocs;
 
-   int32_t constant_data_dynamic_offsets;
-
-   struct {
-      /* user const start at zero */
-      unsigned ubo;
-      unsigned image_dims;
-      unsigned kernel_params;
-      unsigned driver_param;
-      unsigned tfbo;
-      unsigned primitive_param;
-      unsigned primitive_map;
-      unsigned immediate;
-   } offsets;
-
-   struct {
-      uint32_t mask;  /* bitmask of images that have image_store */
-      uint32_t count; /* number of consts allocated */
-      /* three const allocated per image which has image_store:
-       *  + cpp         (bytes per pixel)
-       *  + pitch       (y pitch)
-       *  + array_pitch (z pitch)
-       */
-      uint32_t off[IR3_MAX_SHADER_IMAGES];
-   } image_dims;
+   struct ir3_const_image_dims image_dims;
 
    unsigned immediates_count;
    unsigned immediates_size;
    uint32_t *immediates;
-
-   unsigned preamble_size;
-   unsigned global_size;
 
    /* State of ubo access lowered to push consts: */
    struct ir3_ubo_analysis_state ubo_state;
@@ -555,7 +588,6 @@ struct ir3_shader_nir_options {
 };
 
 struct ir3_shader_options {
-   unsigned num_reserved_user_consts;
    /* What API-visible wavesizes are allowed. Even if only double wavesize is
     * allowed, we may still use the smaller wavesize "under the hood" and the
     * application simply sees the upper half as always disabled.
@@ -570,7 +602,24 @@ struct ir3_shader_options {
    uint32_t push_consts_base;
    uint32_t push_consts_dwords;
 
+   /* Some const allocations are required at API level. */
+   struct ir3_const_allocations const_allocs;
+
    struct ir3_shader_nir_options nir_options;
+
+   /* Whether FRAG_RESULT_DATAi slots may be dynamically remapped by the driver.
+    * If true, ir3 will assume it cannot statically use the value of such slots
+    * anywhere (e.g., as the target of alias.rt).
+    */
+   bool fragdata_dynamic_remap;
+};
+
+struct ir3_shader_output {
+   uint8_t slot;
+   uint8_t regid;
+   uint8_t view;
+   uint8_t aliased_components : 4;
+   bool half : 1;
 };
 
 /**
@@ -696,12 +745,7 @@ struct ir3_shader_variant {
 
    /* varyings/outputs: */
    unsigned outputs_count;
-   struct {
-      uint8_t slot;
-      uint8_t regid;
-      uint8_t view;
-      bool half : 1;
-   } outputs[32 + 2]; /* +POSITION +PSIZE */
+   struct ir3_shader_output outputs[32 + 2]; /* +POSITION +PSIZE */
    bool writes_pos, writes_smask, writes_psize, writes_viewport, writes_stencilref;
    bool writes_shading_rate;
 
@@ -1042,6 +1086,16 @@ ir3_max_const(const struct ir3_shader_variant *v)
 uint16_t ir3_const_find_imm(struct ir3_shader_variant *v, uint32_t imm);
 uint16_t ir3_const_add_imm(struct ir3_shader_variant *v, uint32_t imm);
 
+static inline unsigned
+ir3_const_reg(const struct ir3_const_state *const_state,
+              enum ir3_const_alloc_type type,
+              unsigned offset)
+{
+   unsigned n = const_state->allocs.consts[type].offset_vec4;
+   assert(const_state->allocs.consts[type].size_vec4 != 0);
+   return regid(n + offset / 4, offset % 4);
+}
+
 /* Return true if a variant may need to be recompiled due to exceeding the
  * maximum "safe" constlen.
  */
@@ -1273,16 +1327,21 @@ ir3_link_shaders(struct ir3_shader_linkage *l,
 }
 
 static inline uint32_t
+ir3_get_output_regid(const struct ir3_shader_output *output)
+{
+   return output->regid | (output->half ? HALF_REG_ID : 0);
+}
+
+static inline uint32_t
 ir3_find_output_regid(const struct ir3_shader_variant *so, unsigned slot)
 {
-   for (unsigned j = 0; j < so->outputs_count; j++)
-      if (so->outputs[j].slot == slot) {
-         uint32_t regid = so->outputs[j].regid;
-         if (so->outputs[j].half)
-            regid |= HALF_REG_ID;
-         return regid;
-      }
-   return regid(63, 0);
+   int output_idx = ir3_find_output(so, (gl_varying_slot)slot);
+
+   if (output_idx < 0) {
+      return INVALID_REG;
+   }
+
+   return ir3_get_output_regid(&so->outputs[output_idx]);
 }
 
 void print_raw(FILE *out, const BITSET_WORD *data, size_t size);

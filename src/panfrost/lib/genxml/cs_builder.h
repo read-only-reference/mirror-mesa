@@ -495,14 +495,14 @@ cs_reserve_instrs(struct cs_builder *b, uint32_t num_instrs)
 
       uint64_t *ptr = b->cur_chunk.buffer.cpu + (b->cur_chunk.pos++);
 
-      pan_pack(ptr, CS_MOVE, I) {
+      pan_cast_and_pack(ptr, CS_MOVE, I) {
          I.destination = cs_overflow_address_reg(b);
          I.immediate = newbuf.gpu;
       }
 
       ptr = b->cur_chunk.buffer.cpu + (b->cur_chunk.pos++);
 
-      pan_pack(ptr, CS_MOVE32, I) {
+      pan_cast_and_pack(ptr, CS_MOVE32, I) {
          I.destination = cs_overflow_length_reg(b);
       }
 
@@ -511,7 +511,7 @@ cs_reserve_instrs(struct cs_builder *b, uint32_t num_instrs)
 
       ptr = b->cur_chunk.buffer.cpu + (b->cur_chunk.pos++);
 
-      pan_pack(ptr, CS_JUMP, I) {
+      pan_cast_and_pack(ptr, CS_JUMP, I) {
          I.length = cs_overflow_length_reg(b);
          I.address = cs_overflow_address_reg(b);
       }
@@ -680,7 +680,7 @@ cs_finish(struct cs_builder *b)
  * to be separated out being pan_pack can evaluate its argument multiple times,
  * yet cs_alloc has side effects.
  */
-#define cs_emit(b, T, cfg) pan_pack(cs_alloc_ins(b), CS_##T, cfg)
+#define cs_emit(b, T, cfg) pan_cast_and_pack(cs_alloc_ins(b), CS_##T, cfg)
 
 /* Asynchronous operations take a mask of scoreboard slots to wait on
  * before executing the instruction, and signal a scoreboard slot when
@@ -872,7 +872,7 @@ cs_branch_label(struct cs_builder *b, struct cs_label *label,
       cs_emit(b, BRANCH, I) {
          I.offset = offset;
          I.condition = cond;
-         I.value = cs_src32(b, val);
+         I.value = cond != MALI_CS_CONDITION_ALWAYS ? cs_src32(b, val) : 0;
       }
    }
 }
@@ -1402,7 +1402,7 @@ enum cs_res_id {
 };
 
 static inline void
-cs_req_res(struct cs_builder *b, u32 res_mask)
+cs_req_res(struct cs_builder *b, uint32_t res_mask)
 {
    cs_emit(b, REQ_RESOURCE, I) {
       I.compute = res_mask & CS_COMPUTE_RES;
@@ -1983,7 +1983,7 @@ cs_trace_run_idvs(struct cs_builder *b, const struct cs_tracing_ctx *ctx,
       cs_store32(b, draw_id, tracebuf_addr,
                  cs_trace_field_offset(run_idvs, draw_id));
 
-   for (unsigned i = 0; i < 48; i++)
+   for (unsigned i = 0; i < 48; i += 16)
       cs_store(b, cs_reg_tuple(b, i, 16), tracebuf_addr, BITFIELD_MASK(16),
                cs_trace_field_offset(run_idvs, sr[i]));
    cs_store(b, cs_reg_tuple(b, 48, 13), tracebuf_addr, BITFIELD_MASK(13),
@@ -2019,7 +2019,7 @@ cs_trace_run_compute(struct cs_builder *b, const struct cs_tracing_ctx *ctx,
    cs_run_compute(b, task_increment, task_axis, progress_inc, res_sel);
    cs_store64(b, data, tracebuf_addr, cs_trace_field_offset(run_compute, ip));
 
-   for (unsigned i = 0; i < 32; i++)
+   for (unsigned i = 0; i < 32; i += 16)
       cs_store(b, cs_reg_tuple(b, i, 16), tracebuf_addr, BITFIELD_MASK(16),
                cs_trace_field_offset(run_compute, sr[i]));
    cs_store(b, cs_reg_tuple(b, 32, 8), tracebuf_addr, BITFIELD_MASK(8),
@@ -2051,7 +2051,7 @@ cs_trace_run_compute_indirect(struct cs_builder *b,
    cs_run_compute_indirect(b, wg_per_task, progress_inc, res_sel);
    cs_store64(b, data, tracebuf_addr, cs_trace_field_offset(run_compute, ip));
 
-   for (unsigned i = 0; i < 32; i++)
+   for (unsigned i = 0; i < 32; i += 16)
       cs_store(b, cs_reg_tuple(b, i, 16), tracebuf_addr, BITFIELD_MASK(16),
                cs_trace_field_offset(run_compute, sr[i]));
    cs_store(b, cs_reg_tuple(b, 32, 8), tracebuf_addr, BITFIELD_MASK(8),

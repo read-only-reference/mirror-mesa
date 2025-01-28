@@ -3884,15 +3884,7 @@ compile_module(struct zink_screen *screen, struct zink_shader *zs, nir_shader *n
    struct zink_shader_info *sinfo = &zs->sinfo;
    prune_io(nir);
 
-   switch (nir->info.stage) {
-   case MESA_SHADER_VERTEX:
-   case MESA_SHADER_TESS_EVAL:
-   case MESA_SHADER_GEOMETRY:
-      NIR_PASS_V(nir, nir_divergence_analysis);
-      break;
-   default: break;
-   }
-   NIR_PASS_V(nir, nir_convert_from_ssa, true);
+   NIR_PASS_V(nir, nir_convert_from_ssa, true, false);
 
    if (zink_debug & (ZINK_DEBUG_NIR | ZINK_DEBUG_SPIRV))
       nir_index_ssa_defs(nir_shader_get_entrypoint(nir));
@@ -4029,7 +4021,7 @@ zink_shader_compile(struct zink_screen *screen, bool can_shobj, struct zink_shad
                NIR_PASS_V(nir, lower_line_stipple_fs);
 
          if (zink_fs_key(key)->lower_point_smooth) {
-            NIR_PASS_V(nir, nir_lower_point_smooth);
+            NIR_PASS_V(nir, nir_lower_point_smooth, false);
             NIR_PASS_V(nir, nir_lower_discard_if, nir_lower_discard_if_to_cf);
             nir->info.fs.uses_discard = true;
             need_optimize = true;
@@ -6134,6 +6126,7 @@ zink_shader_create(struct zink_screen *screen, struct nir_shader *nir)
 
    zs->sinfo.have_vulkan_memory_model = screen->info.have_KHR_vulkan_memory_model;
    zs->sinfo.have_workgroup_memory_explicit_layout = screen->info.have_KHR_workgroup_memory_explicit_layout;
+   zs->sinfo.broken_arbitary_type_const = screen->driver_compiler_workarounds.broken_const;
    if (screen->info.have_KHR_shader_float_controls) {
       if (screen->info.props12.shaderDenormFlushToZeroFloat16)
          zs->sinfo.float_controls.flush_denorms |= 0x1;
@@ -6628,7 +6621,7 @@ zink_shader_tcs_init(struct zink_screen *screen, struct zink_shader *zs, nir_sha
 
    optimize_nir(nir, NULL, true);
    NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_function_temp, NULL);
-   NIR_PASS_V(nir, nir_convert_from_ssa, true);
+   NIR_PASS_V(nir, nir_convert_from_ssa, true, false);
 
    *nir_ret = nir;
    zink_shader_serialize_blob(nir, &zs->blob);

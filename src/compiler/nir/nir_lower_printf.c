@@ -26,6 +26,7 @@
 #include "nir_builder_opcodes.h"
 
 #include "util/u_math.h"
+#include "util/u_printf.h"
 
 static bool
 lower_printf_intrin(nir_builder *b, nir_intrinsic_instr *prntf, void *_options)
@@ -40,12 +41,7 @@ lower_printf_intrin(nir_builder *b, nir_intrinsic_instr *prntf, void *_options)
    const unsigned ptr_bit_size =
       options->ptr_bit_size != 0 ? options->ptr_bit_size : nir_get_ptr_bitsize(b->shader);
 
-   nir_def *buffer_addr;
-   if (options->buffer_address != 0) {
-      buffer_addr = nir_imm_intN_t(b, options->buffer_address, ptr_bit_size);
-   } else {
-      buffer_addr = nir_load_printf_buffer_address(b, ptr_bit_size);
-   }
+   nir_def *buffer_addr = nir_load_printf_buffer_address(b, ptr_bit_size);
 
    /* For aborts, just write a nonzero value to the aborted? flag. The printf
     * buffer layout looks like:
@@ -73,10 +69,20 @@ lower_printf_intrin(nir_builder *b, nir_intrinsic_instr *prntf, void *_options)
    }
 
    nir_def *fmt_str_id = prntf->src[0].ssa;
-   if (options && options->use_printf_base_identifier) {
+   if (options->use_printf_base_identifier) {
       fmt_str_id = nir_iadd(b,
                             nir_load_printf_base_identifier(b),
                             fmt_str_id);
+   } else if (options->hash_format_strings) {
+      /* Rather than store the index of the format string, instead store the
+       * hash of the format string itself. This is invariant across shaders
+       * which may be more convenient.
+       */
+      unsigned idx = nir_src_as_uint(prntf->src[0]) - 1;
+      assert(idx < b->shader->printf_info_count && "must be in-bounds");
+
+      uint32_t hash = u_printf_hash(&b->shader->printf_info[idx]);
+      fmt_str_id = nir_imm_int(b, hash);
    }
 
    nir_deref_instr *args = nir_src_as_deref(prntf->src[1]);
@@ -108,13 +114,15 @@ lower_printf_intrin(nir_builder *b, nir_intrinsic_instr *prntf, void *_options)
                        .atomic_op = nir_atomic_op_iadd);
 
    /* Check if we're still in-bounds */
-   const unsigned default_buffer_size = 1024 * 1024;
-   unsigned buffer_size = (options && options->max_buffer_size) ? options->max_buffer_size : default_buffer_size;
-   int max_valid_offset =
-      buffer_size - args_size - fmt_str_id_size - counter_size;
-   assert(max_valid_offset >= 0 && "printf buffer must be sufficiently large");
+   nir_def *buffer_size;
+   if (options->max_buffer_size) {
+      buffer_size = nir_imm_int(b, options->max_buffer_size);
+   } else {
+      buffer_size = nir_load_printf_buffer_size(b);
+   }
 
-   nir_push_if(b, nir_ult_imm(b, offset, max_valid_offset));
+   unsigned this_printf_size = args_size + fmt_str_id_size + counter_size;
+   nir_push_if(b, nir_ult(b, offset, nir_iadd_imm(b, buffer_size, -this_printf_size)));
 
    nir_def *printf_succ_val = nir_imm_int(b, 0);
 
@@ -162,6 +170,39 @@ nir_lower_printf(nir_shader *nir, const nir_lower_printf_options *options)
    return nir_shader_intrinsics_pass(nir, lower_printf_intrin,
                                      nir_metadata_none,
                                      (void *)options);
+}
+
+struct buffer_opts {
+   uint64_t address;
+   uint32_t size;
+};
+
+static bool
+lower_printf_buffer(nir_builder *b, nir_intrinsic_instr *intr, void *_options)
+{
+   const struct buffer_opts *options = _options;
+
+   uint64_t value = 0;
+   if (intr->intrinsic == nir_intrinsic_load_printf_buffer_address)
+      value = options->address;
+   else if (intr->intrinsic == nir_intrinsic_load_printf_buffer_size)
+      value = options->size;
+
+   if (value == 0)
+      return false;
+
+   b->cursor = nir_before_instr(&intr->instr);
+   nir_def_replace(&intr->def, nir_imm_intN_t(b, value, intr->def.bit_size));
+   return true;
+}
+
+bool
+nir_lower_printf_buffer(nir_shader *nir, uint64_t address, uint32_t size)
+{
+   struct buffer_opts opts = { .address = address, .size = size };
+
+   return nir_shader_intrinsics_pass(nir, lower_printf_buffer,
+                                     nir_metadata_control_flow, &opts);
 }
 
 void
@@ -230,28 +271,37 @@ nir_printf_fmt(nir_builder *b,
                         nir_imm_int(b, args_size + sizeof(uint32_t)),
                         .atomic_op = nir_atomic_op_iadd);
 
-   /* Identifier */
-   nir_def *identifier =
-      use_printf_base_identifier ?
-      nir_iadd_imm(b,
-                   nir_load_printf_base_identifier(b),
-                   b->shader->printf_info_count) :
-      nir_imm_int(b, b->shader->printf_info_count);
+   uint32_t total_size = sizeof(uint32_t); /* identifier */
+   for (unsigned a = 0; a < info->num_args; a++)
+      total_size += info->arg_sizes[a];
 
-   nir_def *store_addr =
-      nir_iadd(b, buffer_addr, nir_u2uN(b, buffer_offset, buffer_addr->bit_size));
-   nir_store_global(b, store_addr, 4, identifier, 0x1);
+   nir_push_if(b, nir_ilt(b, nir_iadd_imm(b, buffer_offset, total_size),
+                             nir_load_printf_buffer_size(b)));
+   {
+      /* Identifier */
+      nir_def *identifier =
+         use_printf_base_identifier ?
+         nir_iadd_imm(b,
+                      nir_load_printf_base_identifier(b),
+                      b->shader->printf_info_count) :
+         nir_imm_int(b, b->shader->printf_info_count);
 
-   /* Arguments */
-   va_start(ap, fmt);
-   unsigned store_offset = sizeof(uint32_t);
-   for (unsigned a = 0; a < info->num_args; a++) {
-      nir_def *def = va_arg(ap, nir_def*);
+      nir_def *store_addr =
+         nir_iadd(b, buffer_addr, nir_u2uN(b, buffer_offset, buffer_addr->bit_size));
+      nir_store_global(b, store_addr, 4, identifier, 0x1);
 
-      nir_store_global(b, nir_iadd_imm(b, store_addr, store_offset),
-                       4, def, 0x1);
+      /* Arguments */
+      va_start(ap, fmt);
+      unsigned store_offset = sizeof(uint32_t);
+      for (unsigned a = 0; a < info->num_args; a++) {
+         nir_def *def = va_arg(ap, nir_def*);
 
-      store_offset += info->arg_sizes[a];
+         nir_store_global(b, nir_iadd_imm(b, store_addr, store_offset),
+                          4, def, 0x1);
+
+         store_offset += info->arg_sizes[a];
+      }
+      va_end(ap);
    }
-   va_end(ap);
+   nir_pop_if(b, NULL);
 }

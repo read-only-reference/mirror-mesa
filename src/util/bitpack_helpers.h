@@ -50,7 +50,7 @@
 ALWAYS_INLINE static uint64_t
 util_bitpack_ones(uint32_t start, uint32_t end)
 {
-   return (~0ull >> (64 - (end - start + 1))) << start;
+   return (UINT64_MAX >> (64 - (end - start + 1))) << start;
 }
 
 ALWAYS_INLINE static uint64_t
@@ -119,7 +119,6 @@ util_bitpack_float_nonzero(float v)
    return util_bitpack_float(v);
 }
 
-#ifndef __OPENCL_VERSION__
 ALWAYS_INLINE static uint64_t
 util_bitpack_sfixed(float v, uint32_t start, uint32_t end,
                     uint32_t fract_bits)
@@ -136,7 +135,7 @@ util_bitpack_sfixed(float v, uint32_t start, uint32_t end,
 #endif
 
    const int64_t int_val = llroundf(v * factor);
-   const uint64_t mask = ~0ull >> (64 - (end - start + 1));
+   const uint64_t mask = UINT64_MAX >> (64 - (end - start + 1));
 
    return (int_val & mask) << start;
 }
@@ -154,7 +153,7 @@ util_bitpack_sfixed_clamp(float v, uint32_t start, uint32_t end,
    const float max = u_intN_max(total_bits) / factor;
 
    const int64_t int_val = llroundf(CLAMP(v, min, max) * factor);
-   const uint64_t mask = ~0ull >> (64 - (end - start + 1));
+   const uint64_t mask = UINT64_MAX >> (64 - (end - start + 1));
 
    return (int_val & mask) << start;
 }
@@ -211,6 +210,5 @@ util_bitpack_ufixed_nonzero(float v, uint32_t start, uint32_t end,
    assert(v != 0.0f);
    return util_bitpack_ufixed(v, start, end, fract_bits);
 }
-#endif
 
 #endif /* UTIL_BITPACK_HELPERS_H */

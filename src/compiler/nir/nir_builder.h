@@ -141,6 +141,43 @@ nir_shader_instructions_pass(nir_shader *shader,
 }
 
 /**
+ * Iterates over all the intrinsics in a NIR function and calls the given pass
+ * on them.
+ *
+ * The pass should return true if it modified the shader.  In that case, only
+ * the preserved metadata flags will be preserved in the function impl.
+ *
+ * The builder will be initialized to point at the function impl, but its
+ * cursor is unset.
+ */
+static inline bool
+nir_function_intrinsics_pass(nir_function_impl *impl,
+                             nir_intrinsic_pass_cb pass,
+                             nir_metadata preserved,
+                             void *cb_data)
+{
+   bool progress = false;
+   nir_builder b = nir_builder_create(impl);
+
+   nir_foreach_block_safe(block, impl) {
+      nir_foreach_instr_safe(instr, block) {
+         if (instr->type == nir_instr_type_intrinsic) {
+            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+            progress |= pass(&b, intr, cb_data);
+         }
+      }
+   }
+
+   if (progress) {
+      nir_metadata_preserve(impl, preserved);
+   } else {
+      nir_metadata_preserve(impl, nir_metadata_all);
+   }
+
+   return progress;
+}
+
+/**
  * Iterates over all the intrinsics in a NIR shader and calls the given pass on
  * them.
  *
@@ -159,24 +196,7 @@ nir_shader_intrinsics_pass(nir_shader *shader,
    bool progress = false;
 
    nir_foreach_function_impl(impl, shader) {
-      bool func_progress = false;
-      nir_builder b = nir_builder_create(impl);
-
-      nir_foreach_block_safe(block, impl) {
-         nir_foreach_instr_safe(instr, block) {
-            if (instr->type == nir_instr_type_intrinsic) {
-               nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-               func_progress |= pass(&b, intr, cb_data);
-            }
-         }
-      }
-
-      if (func_progress) {
-         nir_metadata_preserve(impl, preserved);
-         progress = true;
-      } else {
-         nir_metadata_preserve(impl, nir_metadata_all);
-      }
+      progress |= nir_function_intrinsics_pass(impl, pass, preserved, cb_data);
    }
 
    return progress;
@@ -667,7 +687,7 @@ nir_swizzle(nir_builder *build, nir_def *src, const unsigned *swiz,
    for (unsigned i = 0; i < num_components && i < NIR_MAX_VEC_COMPONENTS; i++) {
       if (swiz[i] != i)
          is_identity_swizzle = false;
-      alu_src.swizzle[i] = swiz[i];
+      alu_src.swizzle[i] = (uint8_t)swiz[i];
    }
 
    if (num_components == src->num_components && is_identity_swizzle)
@@ -819,7 +839,7 @@ nir_vector_extract(nir_builder *b, nir_def *vec, nir_def *c)
    if (nir_src_is_const(c_src)) {
       uint64_t c_const = nir_src_as_uint(c_src);
       if (c_const < vec->num_components)
-         return nir_channel(b, vec, c_const);
+         return nir_channel(b, vec, (unsigned)c_const);
       else
          return nir_undef(b, 1, vec->bit_size);
    } else {
@@ -847,7 +867,7 @@ nir_vector_insert_imm(nir_builder *b, nir_def *vec,
          vec_instr->src[i].swizzle[0] = 0;
       } else {
          vec_instr->src[i].src = nir_src_for_ssa(vec);
-         vec_instr->src[i].swizzle[0] = i;
+         vec_instr->src[i].swizzle[0] = (uint8_t)i;
       }
    }
 
@@ -866,7 +886,7 @@ nir_vector_insert(nir_builder *b, nir_def *vec, nir_def *scalar,
    if (nir_src_is_const(c_src)) {
       uint64_t c_const = nir_src_as_uint(c_src);
       if (c_const < vec->num_components)
-         return nir_vector_insert_imm(b, vec, scalar, c_const);
+         return nir_vector_insert_imm(b, vec, scalar, (unsigned )c_const);
       else
          return vec;
    } else {
@@ -1220,7 +1240,7 @@ nir_a_minus_bc(nir_builder *build, nir_def *src0, nir_def *src1,
 static inline nir_def *
 nir_pack_bits(nir_builder *b, nir_def *src, unsigned dest_bit_size)
 {
-   assert(src->num_components * src->bit_size == dest_bit_size);
+   assert((unsigned)(src->num_components * src->bit_size) == dest_bit_size);
 
    switch (dest_bit_size) {
    case 64:
@@ -1908,7 +1928,7 @@ nir_load_global(nir_builder *build, nir_def *addr, unsigned align,
 {
    nir_intrinsic_instr *load =
       nir_intrinsic_instr_create(build->shader, nir_intrinsic_load_global);
-   load->num_components = num_components;
+   load->num_components = (uint8_t)num_components;
    load->src[0] = nir_src_for_ssa(addr);
    nir_intrinsic_set_align(load, align, 0);
    nir_def_init(&load->instr, &load->def, num_components, bit_size);
@@ -1939,7 +1959,7 @@ nir_load_global_constant(nir_builder *build, nir_def *addr, unsigned align,
 {
    nir_intrinsic_instr *load =
       nir_intrinsic_instr_create(build->shader, nir_intrinsic_load_global_constant);
-   load->num_components = num_components;
+   load->num_components = (uint8_t)num_components;
    load->src[0] = nir_src_for_ssa(addr);
    nir_intrinsic_set_align(load, align, 0);
    nir_def_init(&load->instr, &load->def, num_components, bit_size);
@@ -2244,6 +2264,22 @@ nir_build_call(nir_builder *build, nir_function *func, size_t count,
 }
 
 static inline void
+nir_build_indirect_call(nir_builder *build, nir_function *func, nir_def *callee,
+                        size_t count, nir_def **args)
+{
+   assert(count == func->num_params && "parameter count must match");
+   assert(!func->impl && "cannot call directly defined functions indirectly");
+   nir_call_instr *call = nir_call_instr_create(build->shader, func);
+
+   for (unsigned i = 0; i < func->num_params; ++i) {
+      call->params[i] = nir_src_for_ssa(args[i]);
+   }
+   call->indirect_callee = nir_src_for_ssa(callee);
+
+   nir_builder_instr_insert(build, &call->instr);
+}
+
+static inline void
 nir_discard(nir_builder *build)
 {
    if (build->shader->options->discard_is_demote)
@@ -2276,6 +2312,12 @@ nir_build_string(nir_builder *build, const char *value);
       nir_build_call(build, func, ARRAY_SIZE(args), args); \
    } while (0)
 
+#define nir_call_indirect(build, func, callee, ...)                           \
+   do {                                                                       \
+      nir_def *_args[] = { __VA_ARGS__ };                                     \
+      nir_build_indirect_call(build, func, callee, ARRAY_SIZE(_args), _args); \
+   } while (0)
+
 nir_def *
 nir_compare_func(nir_builder *b, enum compare_func func,
                  nir_def *src0, nir_def *src1);
@@ -2299,6 +2341,12 @@ void nir_printf_fmt(nir_builder *b,
                     bool use_printf_base_identifier,
                     unsigned ptr_bit_size,
                     const char *fmt, ...);
+
+/* Call a serialized function. This is used internally by vtn_bindgen, it is not
+ * intended for end-users of NIR.
+ */
+nir_def *nir_call_serialized(nir_builder *build, const uint32_t *serialized,
+                             size_t serialized_size_B, nir_def **args);
 
 #ifdef __cplusplus
 } /* extern "C" */

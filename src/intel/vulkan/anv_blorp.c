@@ -170,14 +170,23 @@ anv_blorp_batch_finish(struct blorp_batch *batch)
 
 static isl_surf_usage_flags_t
 get_usage_flag_for_cmd_buffer(const struct anv_cmd_buffer *cmd_buffer,
-                              bool is_dest, bool protected)
+                              bool is_dest, bool is_depth, bool protected)
 {
    isl_surf_usage_flags_t usage;
 
    switch (cmd_buffer->queue_family->engine_class) {
    case INTEL_ENGINE_CLASS_RENDER:
-      usage = is_dest ? ISL_SURF_USAGE_RENDER_TARGET_BIT :
-                        ISL_SURF_USAGE_TEXTURE_BIT;
+      if (is_dest) {
+         /* Make the blorp operation match the MOCS used in
+          * cmd_buffer_emit_depth_stencil()
+          */
+         if (is_depth)
+            usage = ISL_SURF_USAGE_DEPTH_BIT;
+         else
+            usage = ISL_SURF_USAGE_RENDER_TARGET_BIT;
+      } else {
+         usage = ISL_SURF_USAGE_TEXTURE_BIT;
+      }
       break;
    case INTEL_ENGINE_CLASS_COMPUTE:
       usage = is_dest ? ISL_SURF_USAGE_STORAGE_BIT :
@@ -208,7 +217,7 @@ get_blorp_surf_for_anv_address(struct anv_cmd_buffer *cmd_buffer,
 {
    bool ok UNUSED;
    isl_surf_usage_flags_t usage =
-      get_usage_flag_for_cmd_buffer(cmd_buffer, is_dest, protected);
+      get_usage_flag_for_cmd_buffer(cmd_buffer, is_dest, false, protected);
 
    *blorp_surf = (struct blorp_surf) {
       .surf = isl_surf,
@@ -287,6 +296,7 @@ get_blorp_surf_for_anv_image(const struct anv_cmd_buffer *cmd_buffer,
    const bool is_dest = usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT;
    isl_surf_usage_flags_t isl_usage =
       get_usage_flag_for_cmd_buffer(cmd_buffer, is_dest,
+                                    aspect & VK_IMAGE_ASPECT_DEPTH_BIT,
                                     anv_image_is_protected(image));
    const struct anv_surface *surface = &image->planes[plane].primary_surface;
    const struct anv_address address =
@@ -502,7 +512,7 @@ anv_blorp_blitter_execute_on_companion(struct anv_cmd_buffer *cmd_buffer,
       }
 
       enum isl_format linear_format =
-         anv_get_isl_format(cmd_buffer->device->info, image->vk.format,
+         anv_get_isl_format(cmd_buffer->device->physical, image->vk.format,
                             aspect_mask, VK_IMAGE_TILING_LINEAR);
       const struct isl_format_layout *linear_fmtl =
          isl_format_get_layout(linear_format);
@@ -680,7 +690,7 @@ copy_buffer_to_image(struct anv_cmd_buffer *cmd_buffer,
    }
 
    const enum isl_format linear_format =
-      anv_get_isl_format(cmd_buffer->device->info, anv_image->vk.format,
+      anv_get_isl_format(cmd_buffer->device->physical, anv_image->vk.format,
                          aspect, VK_IMAGE_TILING_LINEAR);
 
    const struct vk_image_buffer_layout buffer_layout =
@@ -903,10 +913,10 @@ blit_image(struct anv_cmd_buffer *cmd_buffer,
          src_image->emu_plane_format : src_image->vk.format;
 
       struct anv_format_plane src_format =
-         anv_get_format_aspect(cmd_buffer->device->info, src_vk_format,
+         anv_get_format_aspect(cmd_buffer->device->physical, src_vk_format,
                                1U << aspect_bit, src_image->vk.tiling);
       struct anv_format_plane dst_format =
-         anv_get_format_aspect(cmd_buffer->device->info, dst_image->vk.format,
+         anv_get_format_aspect(cmd_buffer->device->physical, dst_image->vk.format,
                                1U << aspect_bit, dst_image->vk.tiling);
 
       get_blorp_surf_for_anv_image(cmd_buffer,
@@ -1175,6 +1185,7 @@ anv_cmd_buffer_update_addr(
          .mocs = anv_mocs(cmd_buffer->device, NULL,
                           get_usage_flag_for_cmd_buffer(cmd_buffer,
                                                         false /* is_dest */,
+                                                        false /* is_depth */,
                                                         false /* protected */)),
       };
       struct blorp_address dst = {
@@ -1184,6 +1195,7 @@ anv_cmd_buffer_update_addr(
                           get_usage_flag_for_cmd_buffer(
                              cmd_buffer,
                              true /* is_dest */,
+                             false /* is_depth */,
                              is_protected)),
       };
 
@@ -1484,7 +1496,7 @@ void anv_CmdClearColorImage(
    anv_blorp_batch_init(cmd_buffer, &batch, 0);
 
    struct anv_format_plane src_format =
-      anv_get_format_aspect(cmd_buffer->device->info, image->vk.format,
+      anv_get_format_aspect(cmd_buffer->device->physical, image->vk.format,
                             VK_IMAGE_ASPECT_COLOR_BIT, image->vk.tiling);
    struct blorp_surf surf;
    get_blorp_surf_for_anv_image(cmd_buffer, image,
@@ -2026,7 +2038,7 @@ clear_depth_stencil_attachment(struct anv_cmd_buffer *cmd_buffer,
 
    enum isl_format depth_format = ISL_FORMAT_UNSUPPORTED;
    if (d_att->vk_format != VK_FORMAT_UNDEFINED) {
-      depth_format = anv_get_isl_format(cmd_buffer->device->info,
+      depth_format = anv_get_isl_format(cmd_buffer->device->physical,
                                         d_att->vk_format,
                                         VK_IMAGE_ASPECT_DEPTH_BIT,
                                         VK_IMAGE_TILING_OPTIMAL);

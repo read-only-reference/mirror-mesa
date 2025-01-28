@@ -391,14 +391,14 @@ d3d12_video_encoder_update_current_frame_pic_params_info_h264(struct d3d12_video
          h264_max_delta_qp,
          pD3D12Enc->m_currentEncodeConfig.m_encoderRateControlDesc[h264Pic->pic_ctrl.temporal_id].m_pRateControlQPMap8Bit);
       picParams.pH264PicData->pRateControlQPMap = pD3D12Enc->m_currentEncodeConfig.m_encoderRateControlDesc[h264Pic->pic_ctrl.temporal_id].m_pRateControlQPMap8Bit.data();
-      picParams.pH264PicData->QPMapValuesCount = pD3D12Enc->m_currentEncodeConfig.m_encoderRateControlDesc[h264Pic->pic_ctrl.temporal_id].m_pRateControlQPMap8Bit.size();
+      picParams.pH264PicData->QPMapValuesCount = static_cast<UINT>(pD3D12Enc->m_currentEncodeConfig.m_encoderRateControlDesc[h264Pic->pic_ctrl.temporal_id].m_pRateControlQPMap8Bit.size());
    }
 
    pD3D12Enc->m_upDPBManager->begin_frame(picParams, bUsedAsReference, picture);
    pD3D12Enc->m_upDPBManager->get_current_frame_picture_control_data(picParams);
 
    // Save state snapshot from record time to resolve headers at get_feedback time
-   uint64_t current_metadata_slot = (pD3D12Enc->m_fenceValue % D3D12_VIDEO_ENC_METADATA_BUFFERS_COUNT);
+   size_t current_metadata_slot = static_cast<size_t>(pD3D12Enc->m_fenceValue % D3D12_VIDEO_ENC_METADATA_BUFFERS_COUNT);
    pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].m_associatedEncodeCapabilities =
       pD3D12Enc->m_currentEncodeCapabilities;
    pD3D12Enc->m_spEncodedFrameMetadata[current_metadata_slot].m_associatedEncodeConfig =
@@ -734,7 +734,6 @@ d3d12_video_encoder_update_h264_gop_configuration(struct d3d12_video_encoder *pD
                                                   pipe_h264_enc_picture_desc *picture)
 {
    // Only update GOP when it begins
-   // Only update GOP when it begins
    // This triggers DPB/encoder/heap re-creation, so only check on IDR when a GOP might change
    if ((picture->picture_type == PIPE_H2645_ENC_PICTURE_TYPE_IDR)
       || (picture->picture_type == PIPE_H2645_ENC_PICTURE_TYPE_I)) {
@@ -746,18 +745,6 @@ d3d12_video_encoder_update_h264_gop_configuration(struct d3d12_video_encoder *pD
                          "only supports pic_order_cnt_type = 0 or pic_order_cnt_type = 2\n",
                          picture->seq.pic_order_cnt_type);
          return false;
-      }
-
-      // Workaround: D3D12 needs to use the POC in the DPB to track reference frames
-      // even when there's no frame reordering (picture->seq.pic_order_cnt_type == 2)
-      // So in that case, derive an artificial log2_max_pic_order_cnt_lsb_minus4
-      // to avoid unexpected wrapping
-      if (picture->seq.pic_order_cnt_type == 2u) {
-         if (GOPLength == 0) // Use max frame num to wrap on infinite GOPs
-            GOPLength = 1 << (picture->seq.log2_max_frame_num_minus4 + 4);
-         const uint32_t max_pic_order_cnt_lsb = 2 * GOPLength;
-         picture->seq.log2_max_pic_order_cnt_lsb_minus4 = std::max(0.0, std::ceil(std::log2(max_pic_order_cnt_lsb)) - 4);
-         assert(picture->seq.log2_max_pic_order_cnt_lsb_minus4 < UCHAR_MAX);
       }
 
       assert(picture->seq.pic_order_cnt_type < UCHAR_MAX);
@@ -1272,9 +1259,9 @@ d3d12_video_encoder_build_codec_headers_h264(struct d3d12_video_encoder *pD3D12E
       pD3D12Enc->m_BitstreamHeadersBuffer.resize(writtenAUDBytesCount + writtenSEIBytesCount + writtenSPSBytesCount + writtenPPSBytesCount);
    }
 
-   assert(std::accumulate(pWrittenCodecUnitsSizes.begin(), pWrittenCodecUnitsSizes.end(), 0u) ==
-      static_cast<uint64_t>(pD3D12Enc->m_BitstreamHeadersBuffer.size()));
-   return pD3D12Enc->m_BitstreamHeadersBuffer.size();
+   assert(std::accumulate(pWrittenCodecUnitsSizes.begin(), pWrittenCodecUnitsSizes.end(), 0ull) ==
+      pD3D12Enc->m_BitstreamHeadersBuffer.size());
+   return static_cast<uint32_t>(pD3D12Enc->m_BitstreamHeadersBuffer.size());
 }
 
 uint32_t
@@ -1307,5 +1294,5 @@ d3d12_video_encoder_build_slice_svc_prefix_nalu_h264(struct d3d12_video_encoder 
       headerBitstream.resize(writtenSVCPrefixNalBytes);
    }
 
-   return headerBitstream.size();
+   return static_cast<uint32_t>(headerBitstream.size());
 }

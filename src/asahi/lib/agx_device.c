@@ -30,6 +30,7 @@
 #include "util/os_mman.h"
 #include "util/os_time.h"
 #include "util/simple_mtx.h"
+#include "util/u_printf.h"
 #include "git_sha1.h"
 #include "nir_serialize.h"
 #include "unstable_asahi_drm.h"
@@ -661,9 +662,6 @@ agx_open_device(void *memctx, struct agx_device *dev)
    agx_get_global_ids(dev);
 
    glsl_type_singleton_init_or_ref();
-   struct blob_reader blob;
-   blob_reader_init(&blob, (void *)libagx_0_nir, sizeof(libagx_0_nir));
-   dev->libagx = nir_deserialize(memctx, &agx_nir_options, &blob);
 
    if (agx_gather_device_key(dev).needs_g13x_coherency == U_TRISTATE_YES) {
       dev->libagx_programs = libagx_g13x;
@@ -694,7 +692,6 @@ agx_open_device(void *memctx, struct agx_device *dev)
    }
 
    u_printf_init(&dev->printf, bo, agx_bo_map(bo));
-
    return true;
 }
 
@@ -703,7 +700,6 @@ agx_close_device(struct agx_device *dev)
 {
    agx_bo_unreference(dev, dev->printf.bo);
    u_printf_destroy(&dev->printf);
-   ralloc_free((void *)dev->libagx);
    agx_bo_cache_evict_all(dev);
    util_sparse_array_finish(&dev->bo_map);
    agxdecode_destroy_context(dev->agxdecode);

@@ -1,11 +1,10 @@
 # piglit failures
 glx@glx-multithread-texture,Fail
-glx@glx-visuals-depth -pixmap,Crash
-glx@glx-visuals-stencil -pixmap,Crash
+glx@glx-visuals-depth -pixmap,Fail
+glx@glx-visuals-stencil -pixmap,Fail
 glx@glx-make-current,Fail
 glx@glx-multi-window-single-context,Fail
 glx@glx-swap-event_interval,Fail
-glx@glx_arb_create_context_es2_profile@invalid opengl es version,Fail
 glx@glx_arb_create_context_no_error@no error,Fail
 glx@glx_ext_no_config_context@no fbconfig,Fail
 spec@!opengl 1.0@gl-1.0-user-clip-all-planes,Fail
@@ -17,7 +16,6 @@ spec@arb_shader_texture_lod@execution@arb_shader_texture_lod-texgradcube,Fail
 spec@arb_shading_language_packing@execution@built-in-functions@fs-packhalf2x16,Fail
 spec@arb_shading_language_packing@execution@built-in-functions@vs-packhalf2x16,Fail
 spec@arb_texture_multisample@sample-position@8,Fail
-spec@ext_framebuffer_blit@fbo-blit-check-limits,Fail
 spec@glsl-1.20@compiler@invalid-vec4-array-to-vec3-array-conversion.vert,Fail
 spec@glsl-es-3.00@execution@built-in-functions@fs-packhalf2x16,Fail
 spec@glsl-es-3.00@execution@built-in-functions@vs-packhalf2x16,Fail
@@ -31,8 +29,6 @@ spec@oes_shader_io_blocks@compiler@layout-location-aliasing.vert,Fail
 spec@arb_bindless_texture@compiler@samplers@arith-bound-sampler-texture2d.frag,Crash
 
 # glcts failures
-GTF-GL46.gtf30.GL3Tests.fragment_coord_conventions.fragment_coord_conventions_multisample,Fail
-GTF-GL46.gtf32.GL3Tests.fragment_coord_conventions.fragment_coord_conventions_32_multisample,Fail
 KHR-GL46.shader_image_load_store.basic-allTargets-atomic,Fail
 ## Fail because GFX10+ removed MS texture support (see si_get_sparse_texture_virtual_page_size)
 KHR-GL46.sparse_texture2_tests.SparseTexture2Allocation,Fail
@@ -693,12 +689,10 @@ KHR-GL46.sparse_texture_clamp_tests.SparseTextureClampLookupResidency_texture_2d
 KHR-GL46.sparse_texture_clamp_tests.SparseTextureClampLookupResidency_texture_2d_depth_component16,Fail
 KHR-GL46.sparse_texture_clamp_tests.SparseTextureClampLookupResidency_texture_cube_map_array_depth_component16,Fail
 KHR-GL46.sparse_texture_clamp_tests.SparseTextureClampLookupResidency_texture_cube_map_depth_component16,Fail
-KHR-Single-GL46.subgroups.builtin_var.compute.subgroupsize_compute,Fail
 KHR-Single-GL46.subgroups.builtin_var.framebuffer.subgroupsize_geometry,Fail
 KHR-Single-GL46.subgroups.builtin_var.framebuffer.subgroupsize_tess_control,Fail
 KHR-Single-GL46.subgroups.builtin_var.framebuffer.subgroupsize_tess_eval,Fail
 KHR-Single-GL46.subgroups.builtin_var.framebuffer.subgroupsize_vertex,Fail
-KHR-Single-GL46.subgroups.builtin_var.graphics.subgroupsize,Fail
 
 # escts failures
 KHR-GLES31.core.shader_image_load_store.basic-allFormats-store-fs,Fail

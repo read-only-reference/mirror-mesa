@@ -20,7 +20,9 @@ spec@egl_khr_gl_colorspace@linear
 asan-dEQP-VK.image.swapchain_mutable.*
 asan-dEQP-VK.wsi.*
 
-# Leaky in Turnip
-asan-dEQP-VK.dynamic_rendering.*_cmd_buff.fragment_density_map.*
-asan-dEQP-VK.image.texel_view_compatible.graphic.basic.*d_image.texture_read.*
-asan-dEQP-VK.image.texel_view_compatible.graphic.extended.*d_image.texture_read.*
+# Timeout
+spec@glsl-4.00@execution@built-in-functions@fs-op-div-dmat3-dmat3
+spec@glsl-4.00@execution@built-in-functions@fs-op-div-double-dmat3
+
+# Leaky in VKCTS 1.4.1.1
+asan-dEQP-VK.video.*

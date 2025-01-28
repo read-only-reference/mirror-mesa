@@ -111,7 +111,6 @@ nir_options = {
    .lower_extract_byte = true,
    .lower_insert_word = true,
    .lower_insert_byte = true,
-   .lower_all_io_to_elements = true,
    .lower_hadd = true,
    .lower_uadd_sat = true,
    .lower_usub_sat = true,
@@ -157,12 +156,11 @@ nir_options = {
    .max_unroll_iterations = 32, /* arbitrary */
    .force_indirect_unrolling = (nir_var_shader_in | nir_var_shader_out),
    .lower_device_index_to_zero = true,
-   .linker_ignore_precision = true,
    .support_16bit_alu = true,
    .preserve_mediump = true,
    .discard_is_demote = true,
    .scalarize_ddx = true,
-   .io_options = nir_io_dont_use_pos_for_non_fs_varyings,
+   .io_options = nir_io_dont_use_pos_for_non_fs_varyings | nir_io_mediump_is_32bit,
 };
 
 const nir_shader_compiler_options*
@@ -6232,11 +6230,11 @@ vectorize_filter(
    unsigned align_offset,
    unsigned bit_size,
    unsigned num_components,
-   unsigned hole_size,
+   int64_t hole_size,
    nir_intrinsic_instr *low, nir_intrinsic_instr *high,
    void *data)
 {
-   return !hole_size && util_is_power_of_two_nonzero(num_components);
+   return hole_size <= 0 && util_is_power_of_two_nonzero(num_components);
 }
 
 struct lower_mem_bit_sizes_data {

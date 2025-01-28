@@ -1014,6 +1014,8 @@ struct iris_context {
       struct pipe_stencil_ref stencil_ref;
       struct pipe_framebuffer_state framebuffer;
       struct pipe_clip_state clip_planes;
+      /* width and height treated like x2 and y2 */
+      struct pipe_box render_area;
 
       float default_outer_level[4];
       float default_inner_level[2];
@@ -1511,9 +1513,11 @@ iris_execute_indirect_draw_supported(const struct iris_context *ice,
 #ifdef genX
 #  include "iris_genx_protos.h"
 #else
-#  define genX(x) gfx8_##x
-#  include "iris_genx_protos.h"
-#  undef genX
+#  ifdef INTEL_USE_ELK
+#    define genX(x) gfx8_##x
+#    include "iris_genx_protos.h"
+#    undef genX
+#  endif
 #  define genX(x) gfx9_##x
 #  include "iris_genx_protos.h"
 #  undef genX

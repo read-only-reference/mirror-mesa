@@ -329,7 +329,7 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
       .modes = nir_var_mem_ssbo | nir_var_mem_ubo | nir_var_mem_push_const | nir_var_mem_shared | nir_var_mem_global |
                nir_var_shader_temp,
       .callback = ac_nir_mem_vectorize_callback,
-      .cb_data = &gfx_level,
+      .cb_data = &(struct ac_nir_config){gfx_level, !use_llvm},
       .robust_modes = 0,
       /* On GFX6, read2/write2 is out-of-bounds if the offset register is negative, even if
        * the final offset is not.
@@ -413,6 +413,7 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
    if (constant_fold_for_push_const && stage->args.ac.inline_push_const_mask)
       NIR_PASS(_, stage->nir, nir_opt_constant_folding);
 
+   /* TODO: vectorize loads after this to vectorize loading adjacent descriptors */
    NIR_PASS_V(stage->nir, radv_nir_apply_pipeline_layout, device, stage);
 
    if (!stage->key.optimisations_disabled) {
@@ -461,42 +462,42 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
          NIR_PASS_V(stage->nir, ac_nir_lower_legacy_gs, false, false, &gs_out_info);
       }
    } else if (stage->stage == MESA_SHADER_FRAGMENT) {
-      ac_nir_lower_ps_options options = {
+      ac_nir_lower_ps_late_options late_options = {
          .gfx_level = gfx_level,
          .family = pdev->info.family,
          .use_aco = !radv_use_llvm_for_stage(pdev, stage->stage),
-         .uses_discard = true,
-         .alpha_func = COMPARE_FUNC_ALWAYS,
-         .no_color_export = stage->info.ps.has_epilog,
-         .no_depth_export = stage->info.ps.exports_mrtz_via_epilog,
-
          .bc_optimize_for_persp = G_0286CC_PERSP_CENTER_ENA(stage->info.ps.spi_ps_input_ena) &&
                                   G_0286CC_PERSP_CENTROID_ENA(stage->info.ps.spi_ps_input_ena),
          .bc_optimize_for_linear = G_0286CC_LINEAR_CENTER_ENA(stage->info.ps.spi_ps_input_ena) &&
                                    G_0286CC_LINEAR_CENTROID_ENA(stage->info.ps.spi_ps_input_ena),
+         .uses_discard = true,
+         .no_color_export = stage->info.ps.has_epilog,
+         .no_depth_export = stage->info.ps.exports_mrtz_via_epilog,
+
       };
 
-      if (!options.no_color_export) {
-         options.dual_src_blend_swizzle = gfx_state->ps.epilog.mrt0_is_dual_src && gfx_level >= GFX11;
-         options.color_is_int8 = gfx_state->ps.epilog.color_is_int8;
-         options.color_is_int10 = gfx_state->ps.epilog.color_is_int10;
-         options.enable_mrt_output_nan_fixup =
+      if (!late_options.no_color_export) {
+         late_options.dual_src_blend_swizzle = gfx_state->ps.epilog.mrt0_is_dual_src && gfx_level >= GFX11;
+         late_options.color_is_int8 = gfx_state->ps.epilog.color_is_int8;
+         late_options.color_is_int10 = gfx_state->ps.epilog.color_is_int10;
+         late_options.enable_mrt_output_nan_fixup =
             gfx_state->ps.epilog.enable_mrt_output_nan_fixup && !stage->nir->info.internal;
          /* Need to filter out unwritten color slots. */
-         options.spi_shader_col_format = gfx_state->ps.epilog.spi_shader_col_format & stage->info.ps.colors_written;
-         options.alpha_to_one = gfx_state->ps.epilog.alpha_to_one;
+         late_options.spi_shader_col_format =
+            gfx_state->ps.epilog.spi_shader_col_format & stage->info.ps.colors_written;
+         late_options.alpha_to_one = gfx_state->ps.epilog.alpha_to_one;
       }
 
-      if (!options.no_depth_export) {
+      if (!late_options.no_depth_export) {
          /* Compared to gfx_state.ps.alpha_to_coverage_via_mrtz,
           * radv_shader_info.ps.writes_mrt0_alpha need any depth/stencil/sample_mask exist.
           * ac_nir_lower_ps() require this field to reflect whether alpha via mrtz is really
           * present.
           */
-         options.alpha_to_coverage_via_mrtz = stage->info.ps.writes_mrt0_alpha;
+         late_options.alpha_to_coverage_via_mrtz = stage->info.ps.writes_mrt0_alpha;
       }
 
-      NIR_PASS_V(stage->nir, ac_nir_lower_ps, &options);
+      NIR_PASS(_, stage->nir, ac_nir_lower_ps_late, &late_options);
    }
 
    if (radv_shader_should_clear_lds(device, stage->nir)) {
@@ -504,6 +505,12 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
       const unsigned shared_size = ALIGN(stage->nir->info.shared_size, chunk_size);
       NIR_PASS(_, stage->nir, nir_clear_shared_memory, shared_size, chunk_size);
    }
+
+   /* This must be after lowering resources to descriptor loads and before lowering intrinsics
+    * to args and lowering int64.
+    */
+   if (!radv_use_llvm_for_stage(pdev, stage->stage))
+      ac_nir_optimize_uniform_atomics(stage->nir);
 
    NIR_PASS(_, stage->nir, nir_lower_int64);
 
@@ -515,7 +522,9 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
             });
 
    NIR_PASS(_, stage->nir, ac_nir_lower_global_access);
-   NIR_PASS_V(stage->nir, ac_nir_lower_intrinsics_to_args, gfx_level, radv_select_hw_stage(&stage->info, gfx_level),
+   NIR_PASS_V(stage->nir, ac_nir_lower_intrinsics_to_args, gfx_level,
+              pdev->info.has_ls_vgpr_init_bug && gfx_state && !gfx_state->vs.has_prolog,
+              radv_select_hw_stage(&stage->info, gfx_level), stage->info.wave_size, stage->info.workgroup_size,
               &stage->args.ac);
    NIR_PASS_V(stage->nir, radv_nir_lower_abi, gfx_level, stage, gfx_state, pdev->info.address32_hi);
    radv_optimize_nir_algebraic(

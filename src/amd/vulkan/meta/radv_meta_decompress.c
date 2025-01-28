@@ -57,12 +57,11 @@ get_pipeline_gfx(struct radv_device *device, struct radv_image *image, VkPipelin
    char key_data[64];
    VkResult result;
 
-   snprintf(key_data, sizeof(key_data), "radv-htile-expand-gfx-%d", samples);
-
-   result = vk_meta_get_pipeline_layout(&device->vk, &device->meta_state.device, NULL, NULL, key_data,
-                                        strlen(key_data), layout_out);
+   result = radv_meta_get_noop_pipeline_layout(device, layout_out);
    if (result != VK_SUCCESS)
       return result;
+
+   snprintf(key_data, sizeof(key_data), "radv-htile-expand-gfx-%d", samples);
 
    VkPipeline pipeline_from_cache = vk_meta_lookup_pipeline(&device->meta_state.device, key_data, strlen(key_data));
    if (pipeline_from_cache != VK_NULL_HANDLE) {
@@ -474,7 +473,7 @@ radv_expand_depth_stencil_compute(struct radv_cmd_buffer *cmd_buffer, struct rad
 
    cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_CS_PARTIAL_FLUSH | RADV_CMD_FLAG_INV_VCACHE |
                                    radv_src_access_flush(cmd_buffer, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                                         VK_ACCESS_2_SHADER_WRITE_BIT, image, subresourceRange);
+                                                         VK_ACCESS_2_SHADER_WRITE_BIT, 0, image, subresourceRange);
 
    /* Initialize the HTILE metadata as "fully expanded". */
    uint32_t htile_value = radv_get_htile_initial_value(device, image);

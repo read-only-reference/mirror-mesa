@@ -2687,7 +2687,6 @@ visit_tex(struct lp_build_nir_context *bld_base, nir_tex_instr *instr)
    params.texel = texel;
    params.lod = explicit_lod;
    params.ms_index = ms_index;
-   params.aniso_filter_table = bld_base->aniso_filter_table;
    params.texture_resource = texture_resource;
    params.sampler_resource = sampler_resource;
    bld_base->tex(bld_base, &params);
@@ -2956,7 +2955,7 @@ void
 lp_build_nir_prepasses(struct nir_shader *nir)
 {
    NIR_PASS_V(nir, nir_convert_to_lcssa, true, true);
-   NIR_PASS_V(nir, nir_convert_from_ssa, true);
+   NIR_PASS_V(nir, nir_convert_from_ssa, true, false);
    NIR_PASS_V(nir, nir_lower_locals_to_regs, 32);
    NIR_PASS_V(nir, nir_remove_dead_derefs);
    NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_function_temp, NULL);

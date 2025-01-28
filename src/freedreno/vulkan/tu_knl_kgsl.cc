@@ -13,6 +13,7 @@
 #include <sys/mman.h>
 #include <linux/dma-heap.h>
 
+#define __user
 #include "msm_kgsl.h"
 #include "ion/ion.h"
 #include "ion/ion_4.19.h"
@@ -1084,6 +1085,10 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
    struct tu_kgsl_queue_submit *submit =
       (struct tu_kgsl_queue_submit *)_submit;
 
+#if HAVE_PERFETTO
+   uint64_t start_ts = tu_perfetto_begin_submit();
+#endif
+
    if (submit->commands.size == 0) {
       const struct kgsl_syncobj *wait_semaphores[wait_count + 1];
       for (uint32_t i = 0; i < wait_count; i++) {
@@ -1257,7 +1262,8 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
          .gpu_ts_offset = gpu_offset,
       };
 
-      clocks = tu_perfetto_submit(queue->device, queue->device->submit_count, &clocks);
+      clocks = tu_perfetto_end_submit(queue, queue->device->submit_count,
+                                      start_ts, &clocks);
       gpu_offset = clocks.gpu_ts_offset;
    }
 #endif
@@ -1376,6 +1382,17 @@ static const struct tu_knl kgsl_knl_funcs = {
       .queue_wait_fence = kgsl_queue_wait_fence,
 };
 
+static bool
+tu_kgsl_get_raytracing(int fd)
+{
+   uint32_t value;
+   int ret = get_kgsl_prop(fd, KGSL_PROP_IS_RAYTRACING_ENABLED, &value, sizeof(value));
+   if (ret)
+      return false;
+
+   return value;
+}
+
 VkResult
 tu_knl_kgsl_load(struct tu_instance *instance, int fd)
 {
@@ -1451,6 +1468,8 @@ tu_knl_kgsl_load(struct tu_instance *instance, int fd)
    device->dev_id.chip_id = info.chip_id;
    device->gmem_size = debug_get_num_option("TU_GMEM", info.gmem_sizebytes);
    device->gmem_base = gmem_iova;
+
+   device->has_raytracing = tu_kgsl_get_raytracing(fd);
 
    device->submitqueue_priority_count = 1;
    

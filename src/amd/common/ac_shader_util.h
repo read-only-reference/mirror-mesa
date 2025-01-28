@@ -9,7 +9,6 @@
 
 #include "ac_binary.h"
 #include "amd_family.h"
-#include "compiler/nir/nir.h"
 #include "compiler/shader_enums.h"
 #include "util/format/u_format.h"
 
@@ -30,6 +29,9 @@ extern "C" {
 #define AC_SENDMSG_GS_OP_CUT      (1 << 4)
 #define AC_SENDMSG_GS_OP_EMIT     (2 << 4)
 #define AC_SENDMSG_GS_OP_EMIT_CUT (3 << 4)
+
+/* Reserve this size at the beginning of LDS for the tf0/1 shader message group vote. */
+#define AC_HS_MSG_VOTE_LDS_BYTES 16
 
 /* An extension of gl_access_qualifier describing other aspects of memory operations
  * for code generation.
@@ -241,13 +243,6 @@ enum ac_descriptor_type
    AC_DESC_PLANE_2,
 };
 
-void ac_set_nir_options(struct radeon_info *info, bool use_llvm,
-                        nir_shader_compiler_options *options);
-
-bool ac_nir_mem_vectorize_callback(unsigned align_mul, unsigned align_offset, unsigned bit_size,
-                                   unsigned num_components, unsigned hole_size,
-                                   nir_intrinsic_instr *low, nir_intrinsic_instr *high, void *data);
-
 unsigned ac_get_spi_shader_z_format(bool writes_z, bool writes_stencil, bool writes_samplemask,
                                     bool writes_mrt0_alpha);
 
@@ -274,8 +269,7 @@ enum ac_image_dim ac_get_sampler_dim(enum amd_gfx_level gfx_level, enum glsl_sam
 enum ac_image_dim ac_get_image_dim(enum amd_gfx_level gfx_level, enum glsl_sampler_dim sdim,
                                    bool is_array);
 
-unsigned ac_get_fs_input_vgpr_cnt(const struct ac_shader_config *config,
-                                  uint8_t *num_fragcoord_components);
+unsigned ac_get_fs_input_vgpr_cnt(const struct ac_shader_config *config);
 
 uint16_t ac_get_ps_iter_mask(unsigned ps_iter_samples);
 
@@ -329,16 +323,12 @@ ac_ngg_get_scratch_lds_size(gl_shader_stage stage,
                             bool can_cull,
                             bool compact_primitives);
 
-enum gl_access_qualifier ac_get_mem_access_flags(const nir_intrinsic_instr *instr);
-
 union ac_hw_cache_flags ac_get_hw_cache_flags(enum amd_gfx_level gfx_level,
                                               enum gl_access_qualifier access);
 
 unsigned ac_get_all_edge_flag_bits(enum amd_gfx_level gfx_level);
 
 unsigned ac_shader_io_get_unique_index_patch(unsigned semantic);
-
-unsigned ac_nir_lower_bit_size_callback(const nir_instr *instr, void *data);
 
 #ifdef __cplusplus
 }

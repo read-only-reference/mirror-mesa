@@ -235,12 +235,11 @@ static rvcn_dec_message_avc_t get_h264_msg(struct radeon_decoder *dec,
                     || dec->h264_valid_poc_num[k] == result.field_order_cnt_list[i][1]))
                break;
          }
-      }
-      if (result.ref_frame_list[i] != 0xff && (j == ARRAY_SIZE(dec->h264_valid_ref_num))
-                                           && (k == ARRAY_SIZE(dec->h264_valid_poc_num))) {
-         result.non_existing_frame_flags |= 1 << i;
-         result.curr_pic_ref_frame_num--;
-         result.ref_frame_list[i] = 0xff;
+         if ((j == ARRAY_SIZE(dec->h264_valid_ref_num)) && (k == ARRAY_SIZE(dec->h264_valid_poc_num))) {
+            result.non_existing_frame_flags |= 1 << i;
+            result.curr_pic_ref_frame_num--;
+            result.ref_frame_list[i] = 0xff;
+         }
       }
    }
 
@@ -2341,6 +2340,11 @@ static void radeon_dec_destroy(struct pipe_video_codec *decoder)
       dec->bs_ptr = NULL;
    }
 
+   if (dec->msg) {
+      dec->ws->buffer_unmap(dec->ws, dec->msg_fb_it_probs_buffers[dec->cur_buffer].res->buf);
+      dec->msg = NULL;
+   }
+
    if (dec->stream_type != RDECODE_CODEC_JPEG) {
       struct pipe_fence_handle *fence = NULL;
       map_msg_fb_it_probs_buf(dec);
@@ -2400,6 +2404,9 @@ static void radeon_dec_begin_frame(struct pipe_video_codec *decoder,
    uintptr_t frame;
 
    assert(decoder);
+
+   if (dec->error)
+      return;
 
    switch (dec->stream_type) {
    case RDECODE_CODEC_VP9: {
@@ -2512,7 +2519,7 @@ static void radeon_dec_decode_bitstream(struct pipe_video_codec *decoder,
 /**
  * send cmd for vcn dec
  */
-void send_cmd_dec(struct radeon_decoder *dec, struct pipe_video_buffer *target,
+bool send_cmd_dec(struct radeon_decoder *dec, struct pipe_video_buffer *target,
                   struct pipe_picture_desc *picture)
 {
    struct pb_buffer_lean *dt;
@@ -2527,6 +2534,8 @@ void send_cmd_dec(struct radeon_decoder *dec, struct pipe_video_buffer *target,
 
    map_msg_fb_it_probs_buf(dec);
    dt = rvcn_dec_message_decode(dec, target, picture);
+   if (!dt)
+      return false;
    rvcn_dec_message_feedback(dec);
    send_msg_buf(dec);
 
@@ -2550,6 +2559,8 @@ void send_cmd_dec(struct radeon_decoder *dec, struct pipe_video_buffer *target,
 
    if (dec->vcn_dec_sw_ring == false)
       set_reg(dec, dec->reg.cntl, 1);
+
+   return true;
 }
 
 /**
@@ -2565,7 +2576,9 @@ static int radeon_dec_end_frame(struct pipe_video_codec *decoder, struct pipe_vi
    if (dec->error)
       return 1;
 
-   dec->send_cmd(dec, target, picture);
+   if (!dec->send_cmd(dec, target, picture))
+      return 1;
+
    flush(dec, picture->flush_flags, picture->fence);
 
    next_buffer(dec);
@@ -2724,7 +2737,7 @@ struct pipe_video_codec *radeon_create_decoder(struct pipe_context *context,
       return NULL;
 
    if (sctx->vcn_has_ctx) {
-      dec->ectx = pipe_create_multimedia_context(context->screen);
+      dec->ectx = context->screen->context_create(context->screen, NULL, PIPE_CONTEXT_COMPUTE_ONLY);
       if (!dec->ectx)
          sctx->vcn_has_ctx = false;
    }
@@ -2939,6 +2952,11 @@ struct pipe_video_codec *radeon_create_decoder(struct pipe_context *context,
    case VCN_5_0_0:
       dec->jpg_reg.version = RDECODE_JPEG_REG_VER_V3;
       dec->addr_gfx_mode = RDECODE_ARRAY_MODE_ADDRLIB_SEL_GFX11;
+      dec->av1_version = RDECODE_AV1_VER_1;
+      break;
+   case VCN_5_0_1:
+      dec->jpg_reg.version = RDECODE_JPEG_REG_VER_V3;
+      dec->addr_gfx_mode = RDECODE_ARRAY_MODE_ADDRLIB_SEL_GFX9;
       dec->av1_version = RDECODE_AV1_VER_1;
       break;
    default:

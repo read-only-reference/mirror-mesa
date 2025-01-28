@@ -55,7 +55,7 @@ get_nir_options_for_stage(struct radv_physical_device *pdev, gl_shader_stage sta
    bool split_fma =
       (stage <= MESA_SHADER_GEOMETRY || stage == MESA_SHADER_MESH) && instance->debug_flags & RADV_DEBUG_SPLIT_FMA;
 
-   ac_set_nir_options(&pdev->info, pdev->use_llvm, options);
+   ac_nir_set_options(&pdev->info, pdev->use_llvm, options);
 
    options->lower_ffma16 = split_fma || pdev->info.gfx_level < GFX9;
    options->lower_ffma32 = split_fma || pdev->info.gfx_level < GFX10_3;
@@ -218,6 +218,7 @@ radv_optimize_nir_algebraic(nir_shader *nir, bool opt_offsets, bool opt_mqsad)
       NIR_PASS(_, nir, nir_opt_dce);
       NIR_PASS(_, nir, nir_opt_constant_folding);
       NIR_PASS(_, nir, nir_opt_cse);
+      NIR_PASS(_, nir, nir_opt_peephole_select, 3, true, true);
       NIR_PASS(more_algebraic, nir, nir_opt_algebraic);
       NIR_PASS(_, nir, nir_opt_generate_bfi);
       NIR_PASS(_, nir, nir_opt_remove_phis);
@@ -374,6 +375,7 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_shader_st
          .force_ssbo_non_uniform = pdev->cache_key.ssbo_non_uniform,
          .lower_terminate_to_discard = pdev->cache_key.lower_terminate_to_discard,
          .emit_debug_break = !!device->trap_handler_shader,
+         .debug_info = !!(instance->debug_flags & RADV_DEBUG_NIR_DEBUG_INFO),
       };
       nir = spirv_to_nir(spirv, stage->spirv.size / 4, spec_entries, num_spec_entries, stage->stage, stage->entrypoint,
                          &spirv_options, &pdev->nir_options[stage->stage]);
@@ -431,7 +433,7 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_shader_st
          NIR_PASS(_, nir, nir_lower_input_attachments,
                   &(nir_input_attachment_options){
                      .use_fragcoord_sysval = true,
-                     .use_layer_id_sysval = false,
+                     .use_layer_id_sysval = true,
                   });
 
       nir_remove_dead_variables_options dead_vars_opts = {
@@ -759,8 +761,7 @@ radv_lower_ngg(struct radv_device *device, struct radv_shader_stage *ngg_stage,
       nir->info.shared_size = info->ngg_info.lds_size;
 
    ac_nir_lower_ngg_options options = {0};
-   options.family = pdev->info.family;
-   options.gfx_level = pdev->info.gfx_level;
+   options.hw_info = &pdev->info;
    options.max_workgroup_size = info->workgroup_size;
    options.wave_size = info->wave_size;
    options.clip_cull_dist_mask = info->outinfo.clip_dist_mask | info->outinfo.cull_dist_mask;
@@ -802,7 +803,7 @@ radv_lower_ngg(struct radv_device *device, struct radv_shader_stage *ngg_stage,
       unsigned hw_workgroup_size = ALIGN(info->workgroup_size, info->wave_size);
 
       bool scratch_ring = false;
-      NIR_PASS_V(nir, ac_nir_lower_ngg_ms, options.gfx_level, options.clip_cull_dist_mask,
+      NIR_PASS_V(nir, ac_nir_lower_ngg_mesh, &pdev->info, options.clip_cull_dist_mask,
                  options.vs_output_param_offset, options.has_param_exports, &scratch_ring, info->wave_size,
                  hw_workgroup_size, gfx_state->has_multiview_view_index, info->ms.has_query, pdev->mesh_fast_launch_2);
       ngg_stage->info.ms.needs_ms_scratch_ring = scratch_ring;
@@ -1534,19 +1535,7 @@ radv_precompute_registers_hw_ngg(struct radv_device *device, const struct ac_sha
    const unsigned num_prim_params = info->outinfo.prim_param_exports;
 
    if (pdev->info.gfx_level >= GFX12) {
-      unsigned num_params = info->outinfo.param_exports;
-
-      /* Since there is no alloc/dealloc mechanism for the 12-bit ordered IDs, they can wrap
-       * around if there are more than 2^12 workgroups, causing 2 workgroups to get the same
-       * ordered ID, which would break the streamout algorithm.
-       * The recommended solution is to use the alloc/dealloc mechanism of the attribute ring,
-       * which is enough to limit the range of ordered IDs that can be in flight.
-       */
-      if (info->so.num_outputs) {
-         num_params = MAX2(num_params, 8);
-      } else {
-         num_params = MAX2(num_params, 1);
-      }
+      const unsigned num_params = MAX2(info->outinfo.param_exports, 1);
 
       info->regs.spi_vs_out_config = S_00B0C4_VS_EXPORT_COUNT(num_params - 1) |
                                      S_00B0C4_PRIM_EXPORT_COUNT(num_prim_params) | S_00B0C4_NO_PC_EXPORT(no_pc_export);
@@ -1944,7 +1933,7 @@ radv_postprocess_binary_config(struct radv_device *device, struct radv_shader_bi
    unsigned num_input_vgprs = args->ac.num_vgprs_used;
 
    if (stage == MESA_SHADER_FRAGMENT) {
-      num_input_vgprs = ac_get_fs_input_vgpr_cnt(config, NULL);
+      num_input_vgprs = ac_get_fs_input_vgpr_cnt(config);
    }
 
    unsigned num_vgprs = MAX2(config->num_vgprs, num_input_vgprs);
@@ -3520,7 +3509,8 @@ radv_compute_spi_ps_input(const struct radv_physical_device *pdev, const struct 
       }
    }
 
-   if (info->ps.reads_sample_id || info->ps.reads_frag_shading_rate || info->ps.reads_sample_mask_in) {
+   if (info->ps.reads_sample_id || info->ps.reads_frag_shading_rate || info->ps.reads_sample_mask_in ||
+       info->ps.reads_layer) {
       spi_ps_input |= S_0286CC_ANCILLARY_ENA(1);
    }
 

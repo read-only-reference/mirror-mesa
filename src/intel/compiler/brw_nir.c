@@ -1465,7 +1465,7 @@ bool
 brw_nir_should_vectorize_mem(unsigned align_mul, unsigned align_offset,
                              unsigned bit_size,
                              unsigned num_components,
-                             unsigned hole_size,
+                             int64_t hole_size,
                              nir_intrinsic_instr *low,
                              nir_intrinsic_instr *high,
                              void *data)
@@ -1488,7 +1488,7 @@ brw_nir_should_vectorize_mem(unsigned align_mul, unsigned align_offset,
          if (num_components > 32)
             return false;
 
-         if (hole_size > 4 * (8 - low->num_components))
+         if (hole_size >= 8 * 4)
             return false;
       }
    } else {
@@ -1665,8 +1665,25 @@ brw_vectorize_lower_mem_access(nir_shader *nir,
     *   - reduced register pressure
     */
    nir_divergence_analysis(nir);
-   if (OPT(intel_nir_blockify_uniform_loads, compiler->devinfo))
+   if (OPT(intel_nir_blockify_uniform_loads, compiler->devinfo)) {
       OPT(nir_opt_load_store_vectorize, &options);
+
+      OPT(nir_opt_constant_folding);
+      OPT(nir_copy_prop);
+
+      if (OPT(brw_nir_rebase_const_offset_ubo_loads)) {
+         OPT(nir_opt_cse);
+         OPT(nir_copy_prop);
+
+         nir_load_store_vectorize_options ubo_options = {
+            .modes = nir_var_mem_ubo,
+            .callback = brw_nir_should_vectorize_mem,
+            .robust_modes = options.robust_modes & nir_var_mem_ubo,
+         };
+
+         OPT(nir_opt_load_store_vectorize, &ubo_options);
+      }
+   }
 
    nir_lower_mem_access_bit_sizes_options mem_access_options = {
       .modes = nir_var_mem_ssbo |
@@ -1917,7 +1934,7 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
    NIR_PASS(_, nir, nir_convert_to_lcssa, true, true);
    NIR_PASS_V(nir, nir_divergence_analysis);
 
-   OPT(nir_convert_from_ssa, true);
+   OPT(nir_convert_from_ssa, true, true);
 
    OPT(nir_opt_dce);
 
@@ -1982,8 +1999,6 @@ get_subgroup_size(const struct shader_info *info, unsigned max_subgroup_size)
    case SUBGROUP_SIZE_REQUIRE_8:
    case SUBGROUP_SIZE_REQUIRE_16:
    case SUBGROUP_SIZE_REQUIRE_32:
-      assert(gl_shader_stage_uses_workgroup(info->stage) ||
-             (info->stage >= MESA_SHADER_RAYGEN && info->stage <= MESA_SHADER_CALLABLE));
       /* These enum values are expressly chosen to be equal to the subgroup
        * size that they require.
        */

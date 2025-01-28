@@ -53,10 +53,10 @@ struct pan_csf_tiler_oom_ctx {
    uint32_t bbox_max;
 
    /* Tiler descriptor address */
-   mali_ptr tiler_desc;
+   uint64_t tiler_desc;
 
    /* Address of the region reserved for saving registers. */
-   mali_ptr dump_addr;
+   uint64_t dump_addr;
 } PACKED;
 
 struct panfrost_csf_batch {
@@ -78,7 +78,7 @@ struct panfrost_csf_batch {
 
    struct panfrost_ptr tiler_oom_ctx;
 
-   void *pending_tiler_desc;
+   struct mali_tiler_context_packed *pending_tiler_desc;
 };
 
 struct panfrost_csf_context {

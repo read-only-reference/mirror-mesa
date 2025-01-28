@@ -168,7 +168,7 @@ hk_preprocess_nir_internal(struct vk_physical_device *vk_pdev, nir_shader *nir)
    NIR_PASS(_, nir, nir_split_struct_vars, nir_var_function_temp);
 
    /* Optimize but allow copies because we haven't lowered them yet */
-   agx_preprocess_nir(nir, NULL);
+   agx_preprocess_nir(nir);
 
    NIR_PASS(_, nir, nir_lower_load_const_to_scalar);
    NIR_PASS(_, nir, nir_lower_var_copies);
@@ -578,6 +578,17 @@ lower_subpass_dim(nir_builder *b, nir_instr *instr, UNUSED void *_data)
    return true;
 }
 
+static bool
+should_lower_robust(const nir_intrinsic_instr *intr, const void *_)
+{
+   /* The hardware is robust, but our software image atomics are not. Unlike the
+    * GL driver, we don't use the common buffer image lowering, using the
+    * agx_nir_lower_texture lowering for robustImageAccess2 semantics.
+    */
+   return intr->intrinsic == nir_intrinsic_image_deref_atomic ||
+          intr->intrinsic == nir_intrinsic_image_deref_atomic_swap;
+}
+
 void
 hk_lower_nir(struct hk_device *dev, nir_shader *nir,
              const struct vk_pipeline_robustness_state *rs, bool is_multiview,
@@ -633,16 +644,7 @@ hk_lower_nir(struct hk_device *dev, nir_shader *nir,
    /* Turn cache flushes into image coherency bits while we still have derefs */
    NIR_PASS(_, nir, nir_lower_memory_model);
 
-   /* Images accessed through the texture or PBE hardware are robust, so we
-    * don't set lower_image. (There are some sticky details around txf but
-    * they're handled by agx_nir_lower_texture). However, image atomics are
-    * software so require robustness lowering.
-    */
-   nir_lower_robust_access_options robustness = {
-      .lower_image_atomic = true,
-   };
-
-   NIR_PASS(_, nir, nir_lower_robust_access, &robustness);
+   NIR_PASS(_, nir, nir_lower_robust_access, should_lower_robust, NULL);
 
    /* We must do early lowering before hk_nir_lower_descriptors, since this will
     * create lod_bias_agx instructions.
@@ -729,7 +731,7 @@ hk_lower_nir(struct hk_device *dev, nir_shader *nir,
    NIR_PASS(_, nir, agx_nir_lower_texture);
    NIR_PASS(_, nir, agx_nir_lower_multisampled_image_store);
 
-   agx_preprocess_nir(nir, dev->dev.libagx);
+   agx_preprocess_nir(nir);
    NIR_PASS(_, nir, nir_opt_conditional_discard);
    NIR_PASS(_, nir, nir_opt_if,
             nir_opt_if_optimize_phi_true_false | nir_opt_if_avoid_64bit_phis);
@@ -847,7 +849,7 @@ hk_compile_nir(struct hk_device *dev, const VkAllocationCallbacks *pAllocator,
          shader->info.tess.tcs_output_stride = agx_tcs_output_stride(nir);
       } else {
          /* This destroys info so it needs to happen after the gather */
-         NIR_PASS(_, nir, agx_nir_lower_tes, dev->dev.libagx, hw);
+         NIR_PASS(_, nir, agx_nir_lower_tes, hw);
       }
    }
 
@@ -874,7 +876,6 @@ hk_compile_nir(struct hk_device *dev, const VkAllocationCallbacks *pAllocator,
    struct agx_shader_key backend_key = {
       .dev = agx_gather_device_key(&dev->dev),
       .reserved_preamble = 128 /* TODO */,
-      .libagx = dev->dev.libagx,
       .no_stop = nir->info.stage == MESA_SHADER_FRAGMENT,
       .has_scratch = !nir->info.internal,
       .promote_constants = true,
@@ -1057,7 +1058,7 @@ hk_compile_shader(struct hk_device *dev, struct vk_shader_compile_info *info,
 
       NIR_PASS(_, nir, agx_nir_lower_sample_intrinsics, false);
    } else if (sw_stage == MESA_SHADER_TESS_CTRL) {
-      NIR_PASS_V(nir, agx_nir_lower_tcs, dev->dev.libagx);
+      NIR_PASS_V(nir, agx_nir_lower_tcs);
    }
 
    /* Compile all variants up front */
@@ -1074,9 +1075,8 @@ hk_compile_shader(struct hk_device *dev, struct vk_shader_compile_info *info,
          enum mesa_prim out_prim = MESA_PRIM_MAX;
          nir_shader *count = NULL, *rast = NULL, *pre_gs = NULL;
 
-         NIR_PASS(_, clone, agx_nir_lower_gs, dev->dev.libagx, rast_disc,
-                  &count, &rast, &pre_gs, &out_prim,
-                  &count_variant->info.gs.count_words);
+         NIR_PASS(_, clone, agx_nir_lower_gs, rast_disc, &count, &rast, &pre_gs,
+                  &out_prim, &count_variant->info.gs.count_words);
 
          if (!rast_disc) {
             struct hk_shader *shader = &obj->variants[HK_GS_VARIANT_RAST];
@@ -1179,7 +1179,7 @@ hk_compile_shader(struct hk_device *dev, struct vk_shader_compile_info *info,
          if (hw) {
             hk_lower_hw_vs(clone, shader);
          } else {
-            NIR_PASS(_, clone, agx_nir_lower_vs_before_gs, dev->dev.libagx);
+            NIR_PASS(_, clone, agx_nir_lower_vs_before_gs);
          }
 
          /* hk_compile_nir takes ownership of the clone */

@@ -108,10 +108,19 @@ radv_filter_minmax_enabled(const struct radv_physical_device *pdev)
    return !(pdev->info.family == CHIP_TAHITI || pdev->info.family == CHIP_VERDE);
 }
 
+static bool
+radv_cooperative_matrix_enabled(const struct radv_physical_device *pdev)
+{
+   if (pdev->info.gfx_level == GFX12)
+      return false; /* TODO */
+
+   return pdev->info.gfx_level >= GFX11 && !pdev->use_llvm;
+}
+
 bool
 radv_enable_rt(const struct radv_physical_device *pdev)
 {
-   if (pdev->info.gfx_level < GFX10_3 && !radv_emulate_rt(pdev))
+   if (!pdev->info.has_image_bvh_intersect_ray && !radv_emulate_rt(pdev))
       return false;
 
    if (pdev->use_llvm)
@@ -183,14 +192,6 @@ radv_get_conformance_version(const struct radv_physical_device *pdev)
    }
 
    return conformance_version;
-}
-
-static bool
-radv_is_conformant(const struct radv_physical_device *pdev)
-{
-   VkConformanceVersion conformance_version = radv_get_conformance_version(pdev);
-
-   return conformance_version.major != 0;
 }
 
 static void
@@ -544,13 +545,14 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .KHR_acceleration_structure = radv_enable_rt(pdev),
       .KHR_calibrated_timestamps = radv_calibrated_timestamps_enabled(pdev),
       .KHR_compute_shader_derivatives = true,
-      .KHR_cooperative_matrix = pdev->info.gfx_level >= GFX11 && !pdev->use_llvm,
+      .KHR_cooperative_matrix = radv_cooperative_matrix_enabled(pdev),
       .KHR_bind_memory2 = true,
       .KHR_buffer_device_address = true,
       .KHR_copy_commands2 = true,
       .KHR_create_renderpass2 = true,
       .KHR_dedicated_allocation = true,
       .KHR_deferred_host_operations = true,
+      .KHR_depth_clamp_zero_one = true,
       .KHR_depth_stencil_resolve = true,
       .KHR_descriptor_update_template = true,
       .KHR_device_group = true,
@@ -584,6 +586,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .KHR_maintenance5 = true,
       .KHR_maintenance6 = true,
       .KHR_maintenance7 = true,
+      .KHR_maintenance8 = true,
       .KHR_map_memory2 = true,
       .KHR_multiview = true,
       .KHR_performance_query = radv_perf_query_supported(pdev),
@@ -771,7 +774,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .GOOGLE_hlsl_functionality1 = true,
       .GOOGLE_user_type = true,
       .INTEL_shader_integer_functions2 = true,
-      .MESA_image_alignment_control = pdev->info.gfx_level >= GFX9 && pdev->info.gfx_level <= GFX11_5,
+      .MESA_image_alignment_control = pdev->info.gfx_level >= GFX9,
       .NV_compute_shader_derivatives = true,
       .VALVE_mutable_descriptor_type = true,
    };
@@ -1249,8 +1252,8 @@ radv_physical_device_get_features(const struct radv_physical_device *pdev, struc
       .maintenance5 = true,
 
       /* VK_KHR_cooperative_matrix */
-      .cooperativeMatrix = pdev->info.gfx_level >= GFX11 && !pdev->use_llvm,
-      .cooperativeMatrixRobustBufferAccess = pdev->info.gfx_level >= GFX11 && !pdev->use_llvm,
+      .cooperativeMatrix = radv_cooperative_matrix_enabled(pdev),
+      .cooperativeMatrixRobustBufferAccess = radv_cooperative_matrix_enabled(pdev),
 
       /* VK_EXT_image_compression_control */
       .imageCompressionControl = true,
@@ -1259,7 +1262,7 @@ radv_physical_device_get_features(const struct radv_physical_device *pdev, struc
       .deviceFault = true,
       .deviceFaultVendorBinary = instance->debug_flags & RADV_DEBUG_HANG,
 
-      /* VK_EXT_depth_clamp_zero_one */
+      /* VK_KHR_depth_clamp_zero_one */
       .depthClampZeroOne = true,
 
       /* VK_KHR_maintenance6 */
@@ -1322,6 +1325,9 @@ radv_physical_device_get_features(const struct radv_physical_device *pdev, struc
       /* VK_EXT_device_generated_commands */
       .deviceGeneratedCommands = true,
       .dynamicGeneratedPipelineLayout = true,
+
+      /* VK_KHR_maintenance8 */
+      .maintenance8 = true,
    };
 }
 
@@ -1405,6 +1411,7 @@ radv_get_physical_device_properties(struct radv_physical_device *pdev)
    bool gfx11plus = pdev->info.gfx_level >= GFX11;
 
    VkExtent2D vrs_texel_extent = radv_vrs_attachment_enabled(pdev) ? (VkExtent2D){8, 8} : (VkExtent2D){0, 0};
+   const int32_t max_viewport_size = pdev->info.gfx_level >= GFX12 ? 32768 : 16384;
 
    uint64_t os_page_size = 4096;
    os_get_page_size(&os_page_size);
@@ -1461,7 +1468,7 @@ radv_get_physical_device_properties(struct radv_physical_device *pdev)
       .maxTessellationControlTotalOutputComponents = 4096,
       .maxTessellationEvaluationInputComponents = 128,
       .maxTessellationEvaluationOutputComponents = 128,
-      .maxGeometryShaderInvocations = 127,
+      .maxGeometryShaderInvocations = 32,
       .maxGeometryInputComponents = 64,
       .maxGeometryOutputComponents = 128,
       .maxGeometryOutputVertices = 256,
@@ -1482,8 +1489,8 @@ radv_get_physical_device_properties(struct radv_physical_device *pdev)
       .maxSamplerLodBias = 16,
       .maxSamplerAnisotropy = 16,
       .maxViewports = MAX_VIEWPORTS,
-      .maxViewportDimensions = {(1 << 14), (1 << 14)},
-      .viewportBoundsRange = {INT16_MIN, INT16_MAX},
+      .maxViewportDimensions = {max_viewport_size, max_viewport_size},
+      .viewportBoundsRange = {-2 * max_viewport_size, 2 * max_viewport_size - 1},
       .viewportSubPixelBits = 8,
       .minMemoryMapAlignment = 4096, /* A page */
       .minTexelBufferOffsetAlignment = 4,
@@ -1775,8 +1782,9 @@ radv_get_physical_device_properties(struct radv_physical_device *pdev)
       .fragmentShadingRateNonTrivialCombinerOps = true,
       .maxFragmentSize = (VkExtent2D){2, 2},
       .maxFragmentSizeAspectRatio = 2,
-      .maxFragmentShadingRateCoverageSamples = 32,
-      .maxFragmentShadingRateRasterizationSamples = VK_SAMPLE_COUNT_8_BIT,
+      .maxFragmentShadingRateCoverageSamples = pdev->info.gfx_level >= GFX12 ? 16 : 32,
+      .maxFragmentShadingRateRasterizationSamples =
+         pdev->info.gfx_level >= GFX12 ? VK_SAMPLE_COUNT_4_BIT : VK_SAMPLE_COUNT_8_BIT,
       .fragmentShadingRateWithShaderDepthStencilWrites = !pdev->info.has_vrs_ds_export_bug,
       .fragmentShadingRateWithSampleMask = true,
       .fragmentShadingRateWithShaderSampleMask = false,
@@ -2007,6 +2015,7 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
 #ifdef _WIN32
    assert(drm_device == NULL);
 #else
+   bool is_virtio = false;
    if (drm_device) {
       const char *path = drm_device->nodes[DRM_NODE_RENDER];
       drmVersionPtr version;
@@ -2024,7 +2033,15 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
                           "Could not get the kernel driver version for device %s: %m", path);
       }
 
-      if (strcmp(version->name, "amdgpu")) {
+      if (!strcmp(version->name, "amdgpu")) {
+         /* nothing to do. */
+      } else
+#ifdef HAVE_AMDGPU_VIRTIO
+         if (!strcmp(version->name, "virtio_gpu")) {
+         is_virtio = true;
+      } else
+#endif
+      {
          drmFreeVersion(version);
          close(fd);
 
@@ -2060,7 +2077,8 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
    if (drm_device) {
       bool reserve_vmid = instance->vk.trace_mode & RADV_TRACE_MODE_RGP;
 
-      pdev->ws = radv_amdgpu_winsys_create(fd, instance->debug_flags, instance->perftest_flags, reserve_vmid);
+      pdev->ws =
+         radv_amdgpu_winsys_create(fd, instance->debug_flags, instance->perftest_flags, reserve_vmid, is_virtio);
    } else {
       pdev->ws = radv_null_winsys_create();
    }
@@ -2127,7 +2145,7 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
    snprintf(pdev->marketing_name, sizeof(pdev->name), "%s (RADV %s%s)", marketing_name ? marketing_name : "AMD Unknown",
             pdev->info.name, radv_get_compiler_string(pdev));
 
-   if (!radv_is_conformant(pdev))
+   if (pdev->info.gfx_level >= GFX12)
       vk_warn_non_conformant_implementation("radv");
 
    radv_get_driver_uuid(&pdev->driver_uuid);
@@ -2314,8 +2332,18 @@ VkResult
 create_drm_physical_device(struct vk_instance *vk_instance, struct _drmDevice *device, struct vk_physical_device **out)
 {
 #ifndef _WIN32
-   if (!(device->available_nodes & (1 << DRM_NODE_RENDER)) || device->bustype != DRM_BUS_PCI ||
-       device->deviceinfo.pci->vendor_id != ATI_VENDOR_ID)
+   bool supported_device = false;
+
+   if (!(device->available_nodes & (1 << DRM_NODE_RENDER)) || device->bustype != DRM_BUS_PCI)
+      return VK_ERROR_INCOMPATIBLE_DRIVER;
+
+#ifdef HAVE_AMDGPU_VIRTIO
+   supported_device |= device->deviceinfo.pci->vendor_id == VIRTGPU_PCI_VENDOR_ID;
+#endif
+
+   supported_device |= device->deviceinfo.pci->vendor_id == ATI_VENDOR_ID;
+
+   if (!supported_device)
       return VK_ERROR_INCOMPATIBLE_DRIVER;
 
    return radv_physical_device_try_create((struct radv_instance *)vk_instance, device,
@@ -2680,31 +2708,6 @@ radv_GetPhysicalDeviceMemoryProperties2(VkPhysicalDevice physicalDevice,
       radv_get_memory_budget_properties(physicalDevice, memory_budget);
 }
 
-static const VkTimeDomainKHR radv_time_domains[] = {
-   VK_TIME_DOMAIN_DEVICE_KHR,
-   VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR,
-#ifdef CLOCK_MONOTONIC_RAW
-   VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR,
-#endif
-};
-
-VKAPI_ATTR VkResult VKAPI_CALL
-radv_GetPhysicalDeviceCalibrateableTimeDomainsKHR(VkPhysicalDevice physicalDevice, uint32_t *pTimeDomainCount,
-                                                  VkTimeDomainKHR *pTimeDomains)
-{
-   int d;
-   VK_OUTARRAY_MAKE_TYPED(VkTimeDomainKHR, out, pTimeDomains, pTimeDomainCount);
-
-   for (d = 0; d < ARRAY_SIZE(radv_time_domains); d++) {
-      vk_outarray_append_typed(VkTimeDomainKHR, &out, i)
-      {
-         *i = radv_time_domains[d];
-      }
-   }
-
-   return vk_outarray_status(&out);
-}
-
 VKAPI_ATTR void VKAPI_CALL
 radv_GetPhysicalDeviceMultisamplePropertiesEXT(VkPhysicalDevice physicalDevice, VkSampleCountFlagBits samples,
                                                VkMultisamplePropertiesEXT *pMultisampleProperties)
@@ -2722,6 +2725,7 @@ VKAPI_ATTR VkResult VKAPI_CALL
 radv_GetPhysicalDeviceFragmentShadingRatesKHR(VkPhysicalDevice physicalDevice, uint32_t *pFragmentShadingRateCount,
                                               VkPhysicalDeviceFragmentShadingRateKHR *pFragmentShadingRates)
 {
+   VK_FROM_HANDLE(radv_physical_device, pdev, physicalDevice);
    VK_OUTARRAY_MAKE_TYPED(VkPhysicalDeviceFragmentShadingRateKHR, out, pFragmentShadingRates,
                           pFragmentShadingRateCount);
 
@@ -2742,7 +2746,13 @@ radv_GetPhysicalDeviceFragmentShadingRatesKHR(VkPhysicalDevice physicalDevice, u
          if (x == 1 && y == 1) {
             samples = ~0;
          } else {
-            samples = VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT | VK_SAMPLE_COUNT_8_BIT;
+            samples = VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT;
+
+            /* VRS coarse shading with 8x MSAA isn't supported on GFX12 and the
+             * hw automatically clamps to 1x1.
+             */
+            if (pdev->info.gfx_level < GFX12)
+               samples |= VK_SAMPLE_COUNT_8_BIT;
          }
 
          append_rate(x, y, samples);

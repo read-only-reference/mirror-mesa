@@ -219,7 +219,7 @@ unsafe impl CLInfo<cl_mem_info> for cl_mem {
         let mem = MemBase::ref_from_raw(*self)?;
         match *q {
             CL_MEM_ASSOCIATED_MEMOBJECT => {
-                let ptr = match mem.parent.as_ref() {
+                let ptr = match mem.parent() {
                     // Note we use as_ptr here which doesn't increase the reference count.
                     Some(Mem::Buffer(buffer)) => cl_mem::from_ptr(Arc::as_ptr(buffer)),
                     Some(Mem::Image(image)) => cl_mem::from_ptr(Arc::as_ptr(image)),
@@ -237,7 +237,7 @@ unsafe impl CLInfo<cl_mem_info> for cl_mem {
             CL_MEM_MAP_COUNT => v.write::<cl_uint>(0),
             CL_MEM_HOST_PTR => v.write::<*mut c_void>(mem.host_ptr()),
             CL_MEM_OFFSET => v.write::<usize>(if mem.is_buffer() {
-                Buffer::ref_from_raw(*self)?.offset
+                Buffer::ref_from_raw(*self)?.offset()
             } else {
                 0
             }),
@@ -329,7 +329,7 @@ fn create_sub_buffer(
     let b = Buffer::arc_from_raw(buffer)?;
 
     // CL_INVALID_MEM_OBJECT if buffer ... is a sub-buffer object.
-    if b.parent.is_some() {
+    if b.parent().is_some() {
         return Err(CL_INVALID_MEM_OBJECT);
     }
 
@@ -811,18 +811,7 @@ fn create_image_with_properties(
         return Err(CL_INVALID_PROPERTY);
     }
 
-    Ok(MemBase::new_image(
-        c,
-        parent,
-        desc.image_type,
-        flags,
-        format,
-        desc,
-        elem_size,
-        host_ptr,
-        props,
-    )?
-    .into_cl())
+    Ok(MemBase::new_image(c, parent, flags, format, desc, elem_size, host_ptr, props)?.into_cl())
 }
 
 #[cl_entrypoint(clCreateImage)]
@@ -1087,7 +1076,7 @@ fn enqueue_read_buffer(
         evs,
         event,
         block,
-        Box::new(move |q, ctx| b.read(q, ctx, offset, ptr, cb)),
+        Box::new(move |_, ctx| b.read(ctx, offset, ptr, cb)),
     )
 
     // TODO
@@ -1136,7 +1125,7 @@ fn enqueue_write_buffer(
         evs,
         event,
         block,
-        Box::new(move |q, ctx| b.write(q, ctx, offset, ptr, cb)),
+        Box::new(move |_, ctx| b.write(ctx, offset, ptr, cb)),
     )
 
     // TODO
@@ -1176,9 +1165,9 @@ fn enqueue_copy_buffer(
     // and the source and destination regions overlap or if src_buffer and dst_buffer are different
     // sub-buffers of the same associated buffer object and they overlap. The regions overlap if
     // src_offset ≤ dst_offset ≤ src_offset + size - 1 or if dst_offset ≤ src_offset ≤ dst_offset + size - 1.
-    if src.has_same_parent(&dst) {
-        let src_offset = src_offset + src.offset;
-        let dst_offset = dst_offset + dst.offset;
+    if src.backing_memory_eq(&dst) {
+        let src_offset = src_offset + src.offset();
+        let dst_offset = dst_offset + dst.offset();
 
         if (src_offset <= dst_offset && dst_offset < src_offset + size)
             || (dst_offset <= src_offset && src_offset < dst_offset + size)
@@ -1193,7 +1182,7 @@ fn enqueue_copy_buffer(
         evs,
         event,
         false,
-        Box::new(move |q, ctx| src.copy_to_buffer(q, ctx, &dst, src_offset, dst_offset, size)),
+        Box::new(move |_, ctx| src.copy_to_buffer(ctx, &dst, src_offset, dst_offset, size)),
     )
 
     // TODO
@@ -1301,10 +1290,9 @@ fn enqueue_read_buffer_rect(
         evs,
         event,
         block,
-        Box::new(move |q, ctx| {
+        Box::new(move |_, ctx| {
             buf.read_rect(
                 ptr,
-                q,
                 ctx,
                 &r,
                 &buf_ori,
@@ -1420,10 +1408,9 @@ fn enqueue_write_buffer_rect(
         evs,
         event,
         block,
-        Box::new(move |q, ctx| {
+        Box::new(move |_, ctx| {
             buf.write_rect(
                 ptr,
-                q,
                 ctx,
                 &r,
                 &host_ori,
@@ -1533,12 +1520,12 @@ fn enqueue_copy_buffer_rect(
     // CL_MEM_COPY_OVERLAP if src_buffer and dst_buffer are the same buffer or sub-buffer object and
     // the source and destination regions overlap or if src_buffer and dst_buffer are different
     // sub-buffers of the same associated buffer object and they overlap.
-    if src.has_same_parent(&dst)
+    if src.backing_memory_eq(&dst)
         && check_copy_overlap(
             &src_ori,
-            src.offset,
+            src.offset(),
             &dst_ori,
-            dst.offset,
+            dst.offset(),
             &r,
             src_row_pitch,
             src_slice_pitch,
@@ -1559,10 +1546,9 @@ fn enqueue_copy_buffer_rect(
         evs,
         event,
         false,
-        Box::new(move |q, ctx| {
+        Box::new(move |_, ctx| {
             src.copy_rect(
                 &dst,
-                q,
                 ctx,
                 &r,
                 &src_ori,
@@ -1625,7 +1611,7 @@ fn enqueue_fill_buffer(
         evs,
         event,
         false,
-        Box::new(move |q, ctx| b.fill(q, ctx, &pattern, offset, size)),
+        Box::new(move |_, ctx| b.fill(ctx, &pattern, offset, size)),
     )
 
     // TODO
@@ -1670,9 +1656,9 @@ fn enqueue_map_buffer(
         evs,
         event,
         block,
-        Box::new(move |q, ctx| {
+        Box::new(move |_, ctx| {
             if map_flags != CL_MAP_WRITE_INVALIDATE_REGION.into() {
-                b.sync_map(q, ctx, ptr)
+                b.sync_map(ctx, ptr)
             } else {
                 Ok(())
             }
@@ -1763,7 +1749,7 @@ fn enqueue_read_image(
         evs,
         event,
         block,
-        Box::new(move |q, ctx| i.read(ptr, q, ctx, &r, &o, row_pitch, slice_pitch)),
+        Box::new(move |_, ctx| i.read(ptr, ctx, &r, &o, row_pitch, slice_pitch)),
     )
 
     //• CL_INVALID_IMAGE_SIZE if image dimensions (image width, height, specified or compute row and/or slice pitch) for image are not supported by device associated with queue.
@@ -1847,7 +1833,7 @@ fn enqueue_write_image(
         evs,
         event,
         block,
-        Box::new(move |q, ctx| i.write(ptr, q, ctx, &r, row_pitch, slice_pitch, &o)),
+        Box::new(move |_, ctx| i.write(ptr, ctx, &r, row_pitch, slice_pitch, &o)),
     )
 
     //• CL_INVALID_IMAGE_SIZE if image dimensions (image width, height, specified or compute row and/or slice pitch) for image are not supported by device associated with queue.
@@ -1914,8 +1900,8 @@ fn enqueue_copy_image(
         evs,
         event,
         false,
-        Box::new(move |q, ctx| {
-            src_image.copy_to_image(q, ctx, &dst_image, src_origin, dst_origin, &region)
+        Box::new(move |_, ctx| {
+            src_image.copy_to_image(ctx, &dst_image, src_origin, dst_origin, &region)
         }),
     )
 
@@ -1930,8 +1916,8 @@ fn enqueue_fill_image(
     command_queue: cl_command_queue,
     image: cl_mem,
     fill_color: *const ::std::os::raw::c_void,
-    origin: *const [usize; 3],
-    region: *const [usize; 3],
+    origin: *const usize,
+    region: *const usize,
     num_events_in_wait_list: cl_uint,
     event_wait_list: *const cl_event,
     event: *mut cl_event,
@@ -1983,7 +1969,7 @@ fn enqueue_fill_image(
         evs,
         event,
         false,
-        Box::new(move |q, ctx| i.fill(q, ctx, fill_color, &origin, &region)),
+        Box::new(move |_, ctx| i.fill(ctx, fill_color, &origin, &region)),
     )
 
     //• CL_INVALID_IMAGE_SIZE if image dimensions (image width, height, specified or compute row and/or slice pitch) for image are not supported by device associated with queue.
@@ -2039,7 +2025,7 @@ fn enqueue_copy_buffer_to_image(
         evs,
         event,
         false,
-        Box::new(move |q, ctx| src.copy_to_image(q, ctx, &dst, src_offset, dst_origin, &region)),
+        Box::new(move |_, ctx| src.copy_to_image(ctx, &dst, src_offset, dst_origin, &region)),
     )
 
     //• CL_INVALID_MEM_OBJECT if src_buffer is not a valid buffer object or dst_image is not a valid image object or if dst_image is a 1D image buffer object created from src_buffer.
@@ -2100,7 +2086,7 @@ fn enqueue_copy_image_to_buffer(
         evs,
         event,
         false,
-        Box::new(move |q, ctx| src.copy_to_buffer(q, ctx, &dst, src_origin, dst_offset, &region)),
+        Box::new(move |_, ctx| src.copy_to_buffer(ctx, &dst, src_origin, dst_offset, &region)),
     )
 
     //• CL_INVALID_MEM_OBJECT if src_image is not a valid image object or dst_buffer is not a valid buffer object or if src_image is a 1D image buffer object created from dst_buffer.
@@ -2184,9 +2170,9 @@ fn enqueue_map_image(
         evs,
         event,
         block,
-        Box::new(move |q, ctx| {
+        Box::new(move |_, ctx| {
             if map_flags != CL_MAP_WRITE_INVALIDATE_REGION.into() {
-                i.sync_map(q, ctx, ptr)
+                i.sync_map(ctx, ptr)
             } else {
                 Ok(())
             }
@@ -2255,9 +2241,9 @@ fn enqueue_unmap_mem_object(
         evs,
         event,
         false,
-        Box::new(move |q, ctx| {
+        Box::new(move |_, ctx| {
             if needs_sync {
-                m.sync_unmap(q, ctx, mapped_ptr)
+                m.sync_unmap(ctx, mapped_ptr)
             } else {
                 Ok(())
             }
@@ -3189,7 +3175,7 @@ fn enqueue_acquire_gl_objects(
         evs,
         event,
         false,
-        Box::new(move |q, ctx| copy_cube_to_slice(q, ctx, &objs)),
+        Box::new(move |_, ctx| copy_cube_to_slice(ctx, &objs)),
     )
 }
 
@@ -3223,6 +3209,6 @@ fn enqueue_release_gl_objects(
         evs,
         event,
         false,
-        Box::new(move |q, ctx| copy_slice_to_cube(q, ctx, &objs)),
+        Box::new(move |_, ctx| copy_slice_to_cube(ctx, &objs)),
     )
 }

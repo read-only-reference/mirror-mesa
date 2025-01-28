@@ -331,16 +331,13 @@ num_cache_entries(VkPipelineCache cache)
    return s->entries;
 }
 
-static bool
+static void
 radv_load_meta_pipeline(struct radv_device *device)
 {
-#ifdef _WIN32
-   return false;
-#else
+#ifndef _WIN32
    char path[PATH_MAX + 1];
    struct stat st;
    void *data = NULL;
-   bool ret = false;
    int fd = -1;
    struct vk_pipeline_cache *cache = NULL;
 
@@ -376,13 +373,11 @@ fail:
    if (cache) {
       device->meta_state.cache = vk_pipeline_cache_to_handle(cache);
       device->meta_state.initial_cache_entries = num_cache_entries(device->meta_state.cache);
-      ret = device->meta_state.initial_cache_entries > 0;
    }
 
    free(data);
    if (fd >= 0)
       close(fd);
-   return ret;
 #endif
 }
 
@@ -443,6 +438,8 @@ radv_device_init_meta(struct radv_device *device)
       .pfnReallocation = meta_realloc,
       .pfnFree = meta_free,
    };
+
+   radv_load_meta_pipeline(device);
 
    result = vk_meta_device_init(&device->vk, &device->meta_state.device);
    if (result != VK_SUCCESS)
@@ -610,4 +607,13 @@ radv_break_on_count(nir_builder *b, nir_variable *var, nir_def *count)
 
    counter = nir_iadd_imm(b, counter, 1);
    nir_store_var(b, var, counter, 0x1);
+}
+
+VkResult
+radv_meta_get_noop_pipeline_layout(struct radv_device *device, VkPipelineLayout *layout_out)
+{
+   const char *key_data = "radv-noop";
+
+   return vk_meta_get_pipeline_layout(&device->vk, &device->meta_state.device, NULL, NULL, key_data, strlen(key_data),
+                                      layout_out);
 }

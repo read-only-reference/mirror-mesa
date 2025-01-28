@@ -148,7 +148,7 @@ finish_cs(struct panvk_cmd_buffer *cmdbuf, uint32_t subqueue)
                    offsetof(struct panvk_cs_sync32, error));
       cs_wait_slots(b, SB_ALL_MASK, false);
       if (cmdbuf->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY)
-         cs_sync32_add(b, true, MALI_CS_SYNC_SCOPE_SYSTEM, one,
+         cs_sync32_add(b, true, MALI_CS_SYNC_SCOPE_CSG, one,
                        debug_sync_addr, cs_now());
       cs_match(b, error, cmp_scratch) {
          cs_case(b, 0) {
@@ -171,7 +171,7 @@ finish_cs(struct panvk_cmd_buffer *cmdbuf, uint32_t subqueue)
     * simple with this all-or-nothing approach. */
    if ((instance->debug_flags & PANVK_DEBUG_CS) &&
        cmdbuf->vk.level != VK_COMMAND_BUFFER_LEVEL_SECONDARY &&
-       !(cmdbuf->state.gfx.render.flags & VK_RENDERING_SUSPENDING_BIT)) {
+       !cmdbuf->state.gfx.render.suspended) {
       cs_update_cmdbuf_regs(b) {
          /* Poison all cmdbuf registers to make sure we don't inherit state from
           * a previously executed cmdbuf. */
@@ -326,7 +326,8 @@ add_memory_dependency(struct panvk_cache_flush_info *cache_flush,
    const VkAccessFlags2 ro_l1_access =
       VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
       VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-      VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+      VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
+      VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT;
 
    /* visibility op */
    if (dst_access & ro_l1_access)
@@ -403,7 +404,7 @@ collect_cs_deps(struct panvk_cmd_buffer *cmdbuf,
    add_execution_dependency(wait_masks, src_stages, dst_stages);
 
    /* within a render pass */
-   if (cmdbuf->state.gfx.render.tiler) {
+   if (cmdbuf->state.gfx.render.tiler || inherits_render_ctx(cmdbuf)) {
       if (should_split_render_pass(wait_masks, src_access, dst_access)) {
          deps->needs_draw_flush = true;
       } else {
@@ -933,8 +934,8 @@ panvk_per_arch(CmdExecuteCommands)(VkCommandBuffer commandBuffer,
       /* We need to propagate the suspending state of the secondary command
        * buffer if we want to avoid poisoning the reg file when the secondary
        * command buffer suspended the render pass. */
-      if (secondary->state.gfx.render.flags & VK_RENDERING_SUSPENDING_BIT)
-         primary->state.gfx.render.flags = secondary->state.gfx.render.flags;
+      primary->state.gfx.render.suspended =
+         secondary->state.gfx.render.suspended;
 
       /* If the render context we passed to the secondary command buffer got
        * invalidated, reset the FB/tiler descs and treat things as if we

@@ -265,6 +265,19 @@ enum opcode {
    SHADER_OPCODE_SEND,
 
    /**
+    * A variant of SEND that collects its sources to form an input.
+    *
+    * Source 0:    Message descriptor ("desc").
+    * Source 1:    Message extended descriptor ("ex_desc").
+    * Source 2:    Before register allocation must be BAD_FILE,
+    *              after that, the ARF scalar register containing
+    *              the (physical) numbers of the payload sources.
+    * Source 3..n: Payload sources.  For this opcode, they must each
+    *              have the size of a physical GRF.
+    */
+   SHADER_OPCODE_SEND_GATHER,
+
+   /**
     * An "undefined" write which does nothing but indicates to liveness that
     * we don't care about any values in the register which predate this
     * instruction.  Used to prevent partial writes from causing issues with
@@ -643,6 +656,7 @@ enum memory_logical_mode {
    MEMORY_MODE_UNTYPED,
    MEMORY_MODE_SHARED_LOCAL,
    MEMORY_MODE_SCRATCH,
+   MEMORY_MODE_CONSTANT,
 };
 
 enum memory_logical_srcs {
@@ -782,6 +796,7 @@ enum ENUM_PACKED brw_reg_file {
    FIXED_GRF,
    IMM,
 
+   ADDRESS,
    VGRF,
    ATTR,
    UNIFORM, /* prog_data->params[reg] */
@@ -813,6 +828,13 @@ enum ENUM_PACKED gfx10_align1_3src_exec_type {
 #define BRW_THREAD_NORMAL     0
 #define BRW_THREAD_ATOMIC     1
 #define BRW_THREAD_SWITCH     2
+
+/* Subregister of the address register used for particular purposes */
+enum brw_address_subreg {
+   BRW_ADDRESS_SUBREG_INDIRECT_DESC = 0,
+   BRW_ADDRESS_SUBREG_INDIRECT_EX_DESC = 2,
+   BRW_ADDRESS_SUBREG_INDIRECT_SPILL_DESC = 4,
+};
 
 enum ENUM_PACKED brw_vertical_stride {
    BRW_VERTICAL_STRIDE_0               = 0,

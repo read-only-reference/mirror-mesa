@@ -67,7 +67,7 @@ struct brw_compiler {
        * block sizes used, indexed by register size.
        */
       struct ra_class *classes[REG_CLASS_COUNT];
-   } fs_reg_set;
+   } reg_set;
 
    void (*shader_debug_log)(void *, unsigned *id, const char *str, ...) PRINTFLIKE(3, 4);
    void (*shader_perf_log)(void *, unsigned *id, const char *str, ...) PRINTFLIKE(3, 4);
@@ -462,6 +462,7 @@ enum brw_shader_reloc_id {
    BRW_SHADER_RELOC_PRINTF_BUFFER_ADDR_LOW,
    BRW_SHADER_RELOC_PRINTF_BUFFER_ADDR_HIGH,
    BRW_SHADER_RELOC_PRINTF_BASE_IDENTIFIER,
+   BRW_SHADER_RELOC_PRINTF_BUFFER_SIZE,
 };
 
 enum brw_shader_reloc_type {
@@ -547,6 +548,9 @@ struct brw_stage_prog_data {
     */
    unsigned dispatch_grf_start_reg;
 
+   /** Number of GRF registers used. */
+   unsigned grf_used;
+
    bool use_alt_mode; /**< Use ALT floating point mode?  Otherwise, IEEE. */
 
    /* 32-bit identifiers for all push/pull parameters.  These can be anything
@@ -564,6 +568,17 @@ struct brw_stage_prog_data {
    uint32_t printf_info_count;
    u_printf_info *printf_info;
 };
+
+/**
+ * Convert a number of GRF registers used (grf_used in prog_data) into
+ * a number of GRF register blocks supported by the hardware on PTL+.
+ */
+static inline unsigned
+ptl_register_blocks(unsigned grf_used)
+{
+   const unsigned n = DIV_ROUND_UP(grf_used, 32) - 1;
+   return (n < 6 ? n : 7);
+}
 
 static inline uint32_t *
 brw_stage_prog_data_add_params(struct brw_stage_prog_data *prog_data,

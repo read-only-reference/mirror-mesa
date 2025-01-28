@@ -462,8 +462,10 @@ vk_accel_struct_cmd_begin_debug_marker(VkCommandBuffer commandBuffer,
    va_start(ap, format);
 
    char *name;
-   if (vasprintf(&name, format, ap) == -1)
+   if (vasprintf(&name, format, ap) == -1) {
+      va_end(ap);
       return;
+   }
 
    va_end(ap);
 
@@ -545,6 +547,9 @@ build_leaves(VkCommandBuffer commandBuffer,
             pInfos[i].pGeometries ? &pInfos[i].pGeometries[j] : pInfos[i].ppGeometries[j];
 
          const VkAccelerationStructureBuildRangeInfoKHR *build_range_info = &ppBuildRangeInfos[i][j];
+
+         if (build_range_info->primitiveCount == 0)
+            continue;
 
          leaf_consts.geom_data = vk_fill_geometry_data(pInfos[i].type, bvh_states[i].leaf_node_count, j, geom, build_range_info);
 
@@ -1165,7 +1170,7 @@ vk_cmd_build_acceleration_structures(VkCommandBuffer commandBuffer,
          progress = false;
 
          bool update;
-         uint32_t encode_key;
+         uint32_t encode_key = 0;
          for (uint32_t i = 0; i < infoCount; ++i) {
             if (bvh_states[i].last_encode_pass == pass + 1)
                continue;
@@ -1276,3 +1281,72 @@ vk_acceleration_struct_vtx_format_supported(VkFormat format)
       return false;
    }
 }
+
+/* Stubs of optional functions for drivers that don't implment them. */
+
+VKAPI_ATTR void VKAPI_CALL
+vk_common_CmdBuildAccelerationStructuresIndirectKHR(VkCommandBuffer commandBuffer,
+                                                    uint32_t infoCount,
+                                                    const VkAccelerationStructureBuildGeometryInfoKHR *pInfos,
+                                                    const VkDeviceAddress *pIndirectDeviceAddresses,
+                                                    const uint32_t *pIndirectStrides,
+                                                    const uint32_t *const *ppMaxPrimitiveCounts)
+{
+   unreachable("Unimplemented");
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+vk_common_WriteAccelerationStructuresPropertiesKHR(VkDevice _device, uint32_t accelerationStructureCount,
+                                                   const VkAccelerationStructureKHR *pAccelerationStructures,
+                                                   VkQueryType queryType,
+                                                   size_t dataSize,
+                                                   void *pData,
+                                                   size_t stride)
+{
+   VK_FROM_HANDLE(vk_device, device, _device);
+   unreachable("Unimplemented");
+   return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+vk_common_BuildAccelerationStructuresKHR(VkDevice _device,
+                                         VkDeferredOperationKHR deferredOperation,
+                                         uint32_t infoCount,
+                                         const VkAccelerationStructureBuildGeometryInfoKHR *pInfos,
+                                         const VkAccelerationStructureBuildRangeInfoKHR *const *ppBuildRangeInfos)
+{
+   VK_FROM_HANDLE(vk_device, device, _device);
+   unreachable("Unimplemented");
+   return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+vk_common_CopyAccelerationStructureKHR(VkDevice _device,
+                                       VkDeferredOperationKHR deferredOperation,
+                                       const VkCopyAccelerationStructureInfoKHR *pInfo)
+{
+   VK_FROM_HANDLE(vk_device, device, _device);
+   unreachable("Unimplemented");
+   return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+vk_common_CopyMemoryToAccelerationStructureKHR(VkDevice _device,
+                                               VkDeferredOperationKHR deferredOperation,
+                                               const VkCopyMemoryToAccelerationStructureInfoKHR *pInfo)
+{
+   VK_FROM_HANDLE(vk_device, device, _device);
+   unreachable("Unimplemented");
+   return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+vk_common_CopyAccelerationStructureToMemoryKHR(VkDevice _device,
+                                               VkDeferredOperationKHR deferredOperation,
+                                               const VkCopyAccelerationStructureToMemoryInfoKHR *pInfo)
+{
+   VK_FROM_HANDLE(vk_device, device, _device);
+   unreachable("Unimplemented");
+   return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
+}
+

@@ -367,6 +367,9 @@ get_interface_descriptor_data(struct anv_cmd_buffer *cmd_buffer,
                                                       dispatch->group_size,
                                                       dispatch->simd_size),
       .NumberOfBarriers = prog_data->uses_barrier,
+#if GFX_VER >= 30
+      .RegistersPerThread = ptl_register_blocks(prog_data->base.grf_used),
+#endif
    };
 }
 
@@ -624,7 +627,8 @@ void genX(CmdDispatchBase)(
 
    if (cmd_buffer->state.rt.debug_marker_count == 0) {
       trace_intel_end_compute(&cmd_buffer->trace,
-                              groupCountX, groupCountY, groupCountZ);
+                              groupCountX, groupCountY, groupCountZ,
+                              pipeline->source_hash);
    }
 }
 
@@ -684,7 +688,8 @@ emit_unaligned_cs_walker(
 
    if (cmd_buffer->state.rt.debug_marker_count == 0) {
       trace_intel_end_compute(&cmd_buffer->trace,
-                              groupCountX, groupCountY, groupCountZ);
+                              groupCountX, groupCountY, groupCountZ,
+                              pipeline->source_hash);
    }
 }
 
@@ -789,7 +794,8 @@ genX(cmd_buffer_dispatch_indirect)(struct anv_cmd_buffer *cmd_buffer,
 
    if (cmd_buffer->state.rt.debug_marker_count == 0) {
       trace_intel_end_compute_indirect(&cmd_buffer->trace,
-                                       anv_address_utrace(indirect_addr));
+                                       anv_address_utrace(indirect_addr),
+                                       pipeline->source_hash);
    }
 }
 
@@ -1366,6 +1372,9 @@ cmd_buffer_trace_rays(struct anv_cmd_buffer *cmd_buffer,
          .BTDMode = true,
 #if INTEL_NEEDS_WA_14017794102 || INTEL_NEEDS_WA_14023061436
          .ThreadPreemption = false,
+#endif
+#if GFX_VER >= 30
+         .RegistersPerThread = ptl_register_blocks(cs_prog_data->base.grf_used),
 #endif
       },
    };

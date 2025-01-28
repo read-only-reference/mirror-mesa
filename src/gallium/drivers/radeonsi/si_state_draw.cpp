@@ -213,9 +213,6 @@ static bool si_update_shaders(struct si_context *sctx)
          } else {
             ge_cntl = si_get_vs_inline(sctx, HAS_TESS, HAS_GS)->current->ge_cntl;
          }
-
-         if (GFX_VERSION >= GFX12)
-            ge_cntl |= S_03096C_DIS_PG_SIZE_ADJUST_FOR_STRIP(1);
       } else {
          unsigned primgroup_size;
          unsigned vertgroup_size;
@@ -1370,14 +1367,10 @@ static void si_emit_draw_packets(struct si_context *sctx, const struct pipe_draw
    unsigned sh_base_reg = si_get_user_data_base(GFX_VERSION, HAS_TESS, HAS_GS, NGG,
                                                 PIPE_SHADER_VERTEX);
    bool render_cond_bit = sctx->render_cond_enabled;
-   unsigned tracked_base_vertex_reg;
-
-   if (HAS_TESS)
-      tracked_base_vertex_reg = SI_TRACKED_SPI_SHADER_USER_DATA_LS__BASE_VERTEX;
-   else if (HAS_GS || NGG)
-      tracked_base_vertex_reg = SI_TRACKED_SPI_SHADER_USER_DATA_ES__BASE_VERTEX;
-   else
-      tracked_base_vertex_reg = SI_TRACKED_SPI_SHADER_USER_DATA_VS__BASE_VERTEX;
+   const unsigned tracked_base_vertex_reg =
+      HAS_TESS ? SI_TRACKED_SPI_SHADER_USER_DATA_LS__BASE_VERTEX :
+      HAS_GS || NGG ? SI_TRACKED_SPI_SHADER_USER_DATA_ES__BASE_VERTEX :
+      SI_TRACKED_SPI_SHADER_USER_DATA_VS__BASE_VERTEX;
 
    if (!IS_DRAW_VERTEX_STATE && indirect) {
       assert(num_draws == 1);
@@ -2078,7 +2071,7 @@ static void si_draw(struct pipe_context *ctx,
    else if (GFX_VERSION < GFX12)
       gfx11_decompress_textures(sctx, u_bit_consecutive(0, SI_NUM_GRAPHICS_SHADERS));
 
-   si_need_gfx_cs_space(sctx, num_draws);
+   si_need_gfx_cs_space(sctx, num_draws, ALT_HIZ_LOGIC ? 8 : 0);
 
    if (u_trace_perfetto_active(&sctx->ds.trace_context))
       trace_si_begin_draw(&sctx->trace);
@@ -2472,6 +2465,14 @@ static void si_draw_rectangle(struct blitter_context *blitter, void *vertex_elem
    struct si_context *sctx = (struct si_context *)pipe;
    uint32_t attribute_ring_address_lo =
       sctx->gfx_level >= GFX11 ? sctx->screen->attribute_pos_prim_ring->gpu_address : 0;
+
+   if (MAX2(abs(x1), abs(x2)) > INT16_MAX || MAX2(abs(y1), abs(y2)) > INT16_MAX) {
+      /* Fallback when coordinates can't fit in int16. */
+      util_blitter_save_vertex_elements(sctx->blitter, sctx->vertex_elements);
+      util_blitter_draw_rectangle(blitter, vertex_elements_cso, get_vs, x1, y1, x2, y2,
+                                  depth, num_instances, type, attrib);
+      return;
+   }
 
    /* Pack position coordinates as signed int16. */
    sctx->vs_blit_sh_data[0] = (uint32_t)(x1 & 0xffff) | ((uint32_t)(y1 & 0xffff) << 16);

@@ -19,6 +19,7 @@
 #include "radv_pipeline_rt.h"
 #include "radv_rmv.h"
 #include "radv_shader.h"
+#include "ac_nir.h"
 
 struct rt_handle_hash_entry {
    uint32_t key;
@@ -400,7 +401,7 @@ radv_rt_nir_to_asm(struct radv_device *device, struct vk_pipeline_cache *cache,
          .stack_alignment = 16,
          .localized_loads = true,
          .vectorizer_callback = ac_nir_mem_vectorize_callback,
-         .vectorizer_data = &pdev->info.gfx_level,
+         .vectorizer_data = &(struct ac_nir_config){pdev->info.gfx_level, !radv_use_llvm_for_stage(pdev, stage->stage)},
       };
       nir_lower_shader_calls(stage->nir, &opts, &resume_shaders, &num_resume_shaders, stage->nir);
    }

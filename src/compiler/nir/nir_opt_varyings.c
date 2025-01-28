@@ -1087,14 +1087,6 @@ can_remove_varying(struct linkage_info *linkage, gl_varying_slot location)
           location == VARYING_SLOT_FOGC)
          return true;
 
-      /* Workaround for mesh shader multiview in RADV.
-       * A layer output is inserted by ac_nir_lower_ngg which is called later.
-       * Prevent removing the layer input from FS when producer is MS.
-       */
-      if (linkage->producer_stage == MESA_SHADER_MESH &&
-          location == VARYING_SLOT_LAYER)
-         return false;
-
       /* These can be removed as varyings, which means they will be demoted to
        * sysval-only outputs keeping their culling/rasterization functions
        * while not passing the values to FS. Drivers should handle
@@ -2607,8 +2599,10 @@ get_input_qualifier(struct linkage_info *linkage, unsigned i)
    }
 
    assert(load->intrinsic == nir_intrinsic_load_interpolated_input);
-   nir_intrinsic_instr *baryc =
-      nir_instr_as_intrinsic(load->src[0].ssa->parent_instr);
+
+   nir_instr *baryc_instr = load->src[0].ssa->parent_instr;
+   nir_intrinsic_instr *baryc = baryc_instr->type == nir_instr_type_intrinsic ?
+                                   nir_instr_as_intrinsic(baryc_instr) : NULL;
 
    if (linkage->has_flexible_interp) {
       if (is_color) {
@@ -2618,6 +2612,12 @@ get_input_qualifier(struct linkage_info *linkage, unsigned i)
          return QUAL_VAR_INTERP_ANY;
       }
    }
+
+   /* This is either lowered barycentric_at_offset/at_sample or user
+    * barycentrics. Treat it like barycentric_at_offset.
+    */
+   if (!baryc)
+      return QUAL_SKIP;
 
    /* If interpolateAt{Centroid,Offset,Sample} is used, see if there is
     * another load that doesn't use those, so that we get the real qualifier.
@@ -3911,8 +3911,15 @@ backward_inter_shader_code_motion(struct linkage_info *linkage,
          switch (load->intrinsic) {
          case nir_intrinsic_load_interpolated_input: {
             assert(linkage->consumer_stage == MESA_SHADER_FRAGMENT);
-            nir_intrinsic_instr *baryc =
-               nir_instr_as_intrinsic(load->src[0].ssa->parent_instr);
+            nir_instr *baryc_instr = load->src[0].ssa->parent_instr;
+
+            /* This is either lowered barycentric_at_offset/at_sample or user
+             * barycentrics. Treat it like barycentric_at_offset.
+             */
+            if (baryc_instr->type != nir_instr_type_intrinsic)
+               continue;
+
+            nir_intrinsic_instr *baryc = nir_instr_as_intrinsic(baryc_instr);
             nir_intrinsic_op op = baryc->intrinsic;
             enum glsl_interp_mode interp = nir_intrinsic_interp_mode(baryc);
             bool linear = interp == INTERP_MODE_NOPERSPECTIVE;
@@ -5313,15 +5320,6 @@ nir_opt_varyings(nir_shader *producer, nir_shader *consumer, bool spirv,
       nir_validate_shader(producer, "nir_opt_varyings");
    if (progress & nir_progress_consumer)
       nir_validate_shader(consumer, "nir_opt_varyings");
-
-   if (consumer->info.stage == MESA_SHADER_FRAGMENT) {
-      /* We have called nir_vertex_divergence_analysis on the producer here.
-       * We need to reset the divergent field to true, otherwise it will be
-       * garbage after some other passes are run, and then we end up failing
-       * assertions in some passes because src is divergent and dst isn't.
-       */
-      nir_clear_divergence_info(producer);
-   }
 
    return progress;
 }

@@ -8,6 +8,12 @@
 #include "si_query.h"
 #include "si_shader_internal.h"
 
+static bool gfx10_ngg_writes_user_edgeflags(struct si_shader *shader)
+{
+   return gfx10_has_variable_edgeflags(shader) &&
+          shader->selector->info.writes_edgeflag;
+}
+
 bool gfx10_ngg_export_prim_early(struct si_shader *shader)
 {
    struct si_shader_selector *sel = shader->selector;
@@ -15,7 +21,8 @@ bool gfx10_ngg_export_prim_early(struct si_shader *shader)
    assert(shader->key.ge.as_ngg && !shader->key.ge.as_es);
 
    return sel->stage != MESA_SHADER_GEOMETRY &&
-          !gfx10_ngg_writes_user_edgeflags(shader);
+          !gfx10_ngg_writes_user_edgeflags(shader) &&
+          sel->screen->info.gfx_level < GFX11;
 }
 
 static void clamp_gsprims_to_esverts(unsigned *max_gsprims, unsigned max_esverts,

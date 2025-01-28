@@ -282,9 +282,16 @@ static VkResult
 hk_check_status(struct vk_device *device)
 {
    struct hk_device *dev = container_of(device, struct hk_device, vk);
-   return vk_check_printf_status(&dev->vk, &dev->dev.printf,
-                                 dev->dev.libagx->printf_info,
-                                 dev->dev.libagx->printf_info_count);
+   return vk_check_printf_status(&dev->vk, &dev->dev.printf);
+}
+
+static VkResult
+hk_get_timestamp(struct vk_device *device, uint64_t *timestamp)
+{
+   struct hk_device *dev = container_of(device, struct hk_device, vk);
+   unreachable("todo");
+   // *timestamp = agx_get_gpu_timestamp(dev);
+   return VK_SUCCESS;
 }
 
 /*
@@ -399,6 +406,7 @@ hk_CreateDevice(VkPhysicalDevice physicalDevice,
    vk_device_set_drm_fd(&dev->vk, dev->dev.fd);
    dev->vk.command_buffer_ops = &hk_cmd_buffer_ops;
    dev->vk.check_status = hk_check_status;
+   dev->vk.get_timestamp = hk_get_timestamp;
 
    result = hk_descriptor_table_init(dev, &dev->images, AGX_TEXTURE_LENGTH,
                                      1024, 1024 * 1024);
@@ -530,57 +538,4 @@ hk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    agx_bg_eot_cleanup(&dev->bg_eot);
    agx_close_device(&dev->dev);
    vk_free(&dev->vk.alloc, dev);
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL
-hk_GetCalibratedTimestampsKHR(
-   VkDevice _device, uint32_t timestampCount,
-   const VkCalibratedTimestampInfoKHR *pTimestampInfos, uint64_t *pTimestamps,
-   uint64_t *pMaxDeviation)
-{
-   // VK_FROM_HANDLE(hk_device, dev, _device);
-   // struct hk_physical_device *pdev = hk_device_physical(dev);
-   uint64_t max_clock_period = 0;
-   uint64_t begin, end;
-   int d;
-
-#ifdef CLOCK_MONOTONIC_RAW
-   begin = vk_clock_gettime(CLOCK_MONOTONIC_RAW);
-#else
-   begin = vk_clock_gettime(CLOCK_MONOTONIC);
-#endif
-
-   for (d = 0; d < timestampCount; d++) {
-      switch (pTimestampInfos[d].timeDomain) {
-      case VK_TIME_DOMAIN_DEVICE_KHR:
-         unreachable("todo");
-         // pTimestamps[d] = agx_get_gpu_timestamp(&pdev->dev);
-         max_clock_period = MAX2(
-            max_clock_period, 1); /* FIXME: Is timestamp period actually 1? */
-         break;
-      case VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR:
-         pTimestamps[d] = vk_clock_gettime(CLOCK_MONOTONIC);
-         max_clock_period = MAX2(max_clock_period, 1);
-         break;
-
-#ifdef CLOCK_MONOTONIC_RAW
-      case VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR:
-         pTimestamps[d] = begin;
-         break;
-#endif
-      default:
-         pTimestamps[d] = 0;
-         break;
-      }
-   }
-
-#ifdef CLOCK_MONOTONIC_RAW
-   end = vk_clock_gettime(CLOCK_MONOTONIC_RAW);
-#else
-   end = vk_clock_gettime(CLOCK_MONOTONIC);
-#endif
-
-   *pMaxDeviation = vk_time_max_deviation(begin, end, max_clock_period);
-
-   return VK_SUCCESS;
 }

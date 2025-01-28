@@ -539,6 +539,162 @@ panvk_per_arch(cmd_preload_render_area_border)(
       panvk_per_arch(cmd_force_fb_preload)(cmdbuf, render_info);
 }
 
+/* This value has been selected to get
+ * dEQP-VK.draw.renderpass.inverted_depth_ranges.nodepthclamp_deltazero passing.
+ */
+#define MIN_DEPTH_CLIP_RANGE 37.7E-06f
+
+void
+panvk_per_arch(cmd_prepare_draw_sysvals)(struct panvk_cmd_buffer *cmdbuf,
+                                         const struct panvk_draw_info *info)
+{
+   struct vk_color_blend_state *cb = &cmdbuf->vk.dynamic_graphics_state.cb;
+   const struct panvk_shader *fs = get_fs(cmdbuf);
+   uint32_t noperspective_varyings = fs ? fs->info.varyings.noperspective : 0;
+   BITSET_DECLARE(dirty_sysvals, MAX_SYSVAL_FAUS) = {0};
+
+   set_gfx_sysval(cmdbuf, dirty_sysvals, vs.noperspective_varyings,
+                  noperspective_varyings);
+   set_gfx_sysval(cmdbuf, dirty_sysvals, vs.first_vertex, info->vertex.base);
+   set_gfx_sysval(cmdbuf, dirty_sysvals, vs.base_instance, info->instance.base);
+
+#if PAN_ARCH <= 7
+   set_gfx_sysval(cmdbuf, dirty_sysvals, vs.raw_vertex_offset,
+                  info->vertex.raw_offset);
+   set_gfx_sysval(cmdbuf, dirty_sysvals, layer_id, info->layer_id);
+#endif
+
+   if (dyn_gfx_state_dirty(cmdbuf, CB_BLEND_CONSTANTS)) {
+      for (unsigned i = 0; i < ARRAY_SIZE(cb->blend_constants); i++) {
+         set_gfx_sysval(cmdbuf, dirty_sysvals, blend.constants[i],
+                        CLAMP(cb->blend_constants[i], 0.0f, 1.0f));
+      }
+   }
+
+   if (dyn_gfx_state_dirty(cmdbuf, VP_VIEWPORTS) ||
+       dyn_gfx_state_dirty(cmdbuf, RS_DEPTH_CLIP_ENABLE) ||
+       dyn_gfx_state_dirty(cmdbuf, RS_DEPTH_CLAMP_ENABLE)) {
+      VkViewport *viewport = &cmdbuf->vk.dynamic_graphics_state.vp.viewports[0];
+
+      /* Upload the viewport scale. Defined as (px/2, py/2, pz) at the start of
+       * section 24.5 ("Controlling the Viewport") of the Vulkan spec. At the
+       * end of the section, the spec defines:
+       *
+       * px = width
+       * py = height
+       * pz = maxDepth - minDepth
+       */
+      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.scale.x,
+                     0.5f * viewport->width);
+      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.scale.y,
+                     0.5f * viewport->height);
+      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.scale.z,
+                     (viewport->maxDepth - viewport->minDepth));
+
+      /* Upload the viewport offset. Defined as (ox, oy, oz) at the start of
+       * section 24.5 ("Controlling the Viewport") of the Vulkan spec. At the
+       * end of the section, the spec defines:
+       *
+       * ox = x + width/2
+       * oy = y + height/2
+       * oz = minDepth
+       */
+      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.offset.x,
+                     (0.5f * viewport->width) + viewport->x);
+      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.offset.y,
+                     (0.5f * viewport->height) + viewport->y);
+      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.offset.z,
+                     viewport->minDepth);
+
+      /* Doing the viewport transform in the vertex shader and then depth
+       * clipping with the viewport depth range gets a similar result to
+       * clipping in clip-space, but loses precision when the viewport depth
+       * range is very small. When minDepth == maxDepth, this completely
+       * flattens the clip-space depth and results in never clipping.
+       *
+       * To work around this, set a lower limit on depth range when clipping is
+       * enabled. This results in slightly incorrect fragment depth values, and
+       * doesn't help with the precision loss, but at least clipping isn't
+       * completely broken.
+       */
+      const struct panvk_graphics_sysvals *sysvals = &cmdbuf->state.gfx.sysvals;
+      const struct vk_rasterization_state *rs =
+         &cmdbuf->vk.dynamic_graphics_state.rs;
+
+      if (vk_rasterization_state_depth_clip_enable(rs) &&
+          fabsf(sysvals->viewport.scale.z) < MIN_DEPTH_CLIP_RANGE) {
+         float z_min = viewport->minDepth;
+         float z_max = viewport->maxDepth;
+         float z_sign = z_min <= z_max ? 1.0f : -1.0f;
+
+         set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.scale.z,
+                        z_sign * MIN_DEPTH_CLIP_RANGE);
+
+         /* Middle of the user range is
+         *    z_range_center = z_min + (z_max - z_min) * 0.5f,
+         * and we want to set the offset to
+         *    z_offset = z_range_center - viewport.scale.z * 0.5f
+         * which, when expanding, gives us
+         *    z_offset = (z_max + z_min - viewport.scale.z) * 0.5f
+         */
+         float z_offset = (z_max + z_min - sysvals->viewport.scale.z) * 0.5f;
+         /* Bump offset off-center if necessary, to not go out of range */
+         set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.offset.z,
+                        CLAMP(z_offset, 0.0f, 1.0f));
+      }
+   }
+
+   const struct panvk_shader *vs = cmdbuf->state.gfx.vs.shader;
+
+#if PAN_ARCH <= 7
+   struct panvk_descriptor_state *desc_state = &cmdbuf->state.gfx.desc_state;
+   struct panvk_shader_desc_state *vs_desc_state = &cmdbuf->state.gfx.vs.desc;
+   struct panvk_shader_desc_state *fs_desc_state = &cmdbuf->state.gfx.fs.desc;
+
+   if (gfx_state_dirty(cmdbuf, DESC_STATE) || gfx_state_dirty(cmdbuf, VS)) {
+      set_gfx_sysval(cmdbuf, dirty_sysvals,
+                     desc.sets[PANVK_DESC_TABLE_VS_DYN_SSBOS],
+                     vs_desc_state->dyn_ssbos);
+   }
+
+   if (gfx_state_dirty(cmdbuf, DESC_STATE) || gfx_state_dirty(cmdbuf, FS)) {
+      set_gfx_sysval(cmdbuf, dirty_sysvals,
+                     desc.sets[PANVK_DESC_TABLE_FS_DYN_SSBOS],
+                     fs_desc_state->dyn_ssbos);
+   }
+
+   for (uint32_t i = 0; i < MAX_SETS; i++) {
+      uint32_t used_set_mask =
+         vs->desc_info.used_set_mask | (fs ? fs->desc_info.used_set_mask : 0);
+
+      if (used_set_mask & BITFIELD_BIT(i)) {
+         set_gfx_sysval(cmdbuf, dirty_sysvals, desc.sets[i],
+                        desc_state->sets[i]->descs.dev);
+      }
+   }
+#endif
+
+   /* We mask the dirty sysvals by the shader usage, and only flag
+    * the push uniforms dirty if those intersect. */
+   BITSET_DECLARE(dirty_shader_sysvals, MAX_SYSVAL_FAUS);
+   BITSET_AND(dirty_shader_sysvals, dirty_sysvals, vs->fau.used_sysvals);
+   if (!BITSET_IS_EMPTY(dirty_shader_sysvals))
+      gfx_state_set_dirty(cmdbuf, VS_PUSH_UNIFORMS);
+
+   if (fs) {
+      BITSET_AND(dirty_shader_sysvals, dirty_sysvals, fs->fau.used_sysvals);
+
+      /* If blend constants are not read by the blend shader, we can consider
+       * they are not read at all, so clear the dirty bits to avoid re-emitting
+       * FAUs when we can. */
+      if (!cmdbuf->state.gfx.cb.info.shader_loads_blend_const)
+         BITSET_CLEAR_RANGE(dirty_shader_sysvals, 0, 3);
+
+      if (!BITSET_IS_EMPTY(dirty_shader_sysvals))
+         gfx_state_set_dirty(cmdbuf, FS_PUSH_UNIFORMS);
+   }
+}
+
 VKAPI_ATTR void VKAPI_CALL
 panvk_per_arch(CmdBindVertexBuffers)(VkCommandBuffer commandBuffer,
                                      uint32_t firstBinding,

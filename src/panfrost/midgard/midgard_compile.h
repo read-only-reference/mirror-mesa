@@ -96,9 +96,7 @@ static const nir_shader_compiler_options midgard_nir_options = {
    .lower_uniforms_to_ubo = true,
    .has_fsub = true,
    .has_isub = true,
-   .vectorize_io = true,
 
-   .vertex_id_zero_based = true,
    .has_cs_global_id = true,
    .lower_cs_local_index_to_id = true,
    .max_unroll_iterations = 32,

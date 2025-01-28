@@ -264,6 +264,19 @@ brw_reg::is_accumulator() const
 }
 
 bool
+brw_reg::is_address() const
+{
+   return file == ADDRESS;
+}
+
+unsigned
+brw_reg::address_slot(unsigned byte_offset) const
+{
+   assert(is_address());
+   return (reg_offset(*this) + byte_offset) / 2;
+}
+
+bool
 brw_reg::equals(const brw_reg &r) const
 {
    return brw_regs_equal(this, &r);
@@ -279,6 +292,7 @@ bool
 brw_reg::is_contiguous() const
 {
    switch (file) {
+   case ADDRESS:
    case ARF:
    case FIXED_GRF:
       return hstride == BRW_HORIZONTAL_STRIDE_1 &&
@@ -298,7 +312,7 @@ brw_reg::is_contiguous() const
 unsigned
 brw_reg::component_size(unsigned width) const
 {
-   if (file == ARF || file == FIXED_GRF) {
+   if (file == ADDRESS || file == ARF || file == FIXED_GRF) {
       const unsigned w = MIN2(width, 1u << this->width);
       const unsigned h = width >> this->width;
       const unsigned vs = vstride ? 1 << (vstride - 1) : 0;
@@ -312,4 +326,3 @@ brw_reg::component_size(unsigned width) const
       return MAX2(width * stride, 1) * brw_type_size_bytes(type);
    }
 }
-

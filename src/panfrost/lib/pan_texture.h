@@ -44,7 +44,10 @@
 extern "C" {
 #endif
 
-#define PAN_MODIFIER_COUNT 14
+#define MAX_MIP_LEVELS   17
+#define MAX_IMAGE_PLANES 3
+
+#define PAN_MODIFIER_COUNT 15
 extern uint64_t pan_best_modifiers[PAN_MODIFIER_COUNT];
 
 struct pan_image_slice_layout {
@@ -116,7 +119,7 @@ struct pan_image_layout {
 };
 
 struct pan_image_mem {
-   mali_ptr base;
+   uint64_t base;
    unsigned offset;
 };
 
@@ -412,7 +415,8 @@ void GENX(panfrost_texture_swizzle_replicate_x)(struct pan_image_view *iview);
 void GENX(panfrost_texture_afbc_reswizzle)(struct pan_image_view *iview);
 #endif
 
-void GENX(panfrost_new_texture)(const struct pan_image_view *iview, void *out,
+void GENX(panfrost_new_texture)(const struct pan_image_view *iview,
+                                struct mali_texture_packed *out,
                                 const struct panfrost_ptr *payload);
 #endif
 
@@ -423,6 +427,8 @@ unsigned panfrost_texture_offset(const struct pan_image_layout *layout,
                                  unsigned level, unsigned array_idx,
                                  unsigned surface_idx);
 
+bool panfrost_format_supports_mtk_tiled(enum pipe_format format);
+
 /* DRM modifier helper */
 
 #define drm_is_afbc(mod)                                                       \
@@ -432,6 +438,10 @@ unsigned panfrost_texture_offset(const struct pan_image_layout *layout,
 #define drm_is_afrc(mod)                                                       \
    ((mod >> 52) ==                                                             \
     (DRM_FORMAT_MOD_ARM_TYPE_AFRC | (DRM_FORMAT_MOD_VENDOR_ARM << 4)))
+
+#define drm_is_mtk_tiled(format, mod)                                               \
+    ((mod >> 52) ==                                                             \
+     (0 | (DRM_FORMAT_MOD_VENDOR_MTK << 4)))
 
 struct pan_image_explicit_layout {
    unsigned offset;
@@ -451,10 +461,10 @@ unsigned panfrost_from_legacy_stride(unsigned legacy_stride,
 
 struct pan_surface {
    union {
-      mali_ptr data;
+      uint64_t data;
       struct {
-         mali_ptr header;
-         mali_ptr body;
+         uint64_t header;
+         uint64_t body;
       } afbc;
    };
 };

@@ -1311,6 +1311,7 @@ struct anv_instance {
     bool                                        compression_control_enabled;
     bool                                        anv_fake_nonlocal_memory;
     bool                                        anv_upper_bound_descriptor_pool_sampler;
+    bool                                        custom_border_colors_without_format;
 
     /* HW workarounds */
     bool                                        no_16bit;
@@ -1339,6 +1340,8 @@ struct anv_queue {
       uint32_t                               context_id; /* i915 */
       uint32_t                               exec_queue_id; /* Xe */
    };
+
+   uint32_t                                  bind_queue_id; /* Xe */
 
    /** Context/Engine id which executes companion RCS command buffer */
    uint32_t                                  companion_rcs_id;
@@ -1457,6 +1460,7 @@ enum anv_gfx_state_bits {
    ANV_GFX_STATE_CLIP,
    ANV_GFX_STATE_CC_STATE,
    ANV_GFX_STATE_CC_STATE_PTR,
+   ANV_GFX_STATE_COARSE_PIXEL,
    ANV_GFX_STATE_CPS,
    ANV_GFX_STATE_DEPTH_BOUNDS,
    ANV_GFX_STATE_INDEX_BUFFER,
@@ -1553,6 +1557,15 @@ struct anv_gfx_dynamic_state {
       uint32_t LineStripListProvokingVertexSelect;
       uint32_t TriangleFanProvokingVertexSelect;
    } clip;
+
+   /* 3DSTATE_COARSE_PIXEL */
+   struct {
+      uint32_t    CPSizeX;
+      uint32_t    CPSizeY;
+      uint32_t    CPSizeCombiner0Opcode;
+      uint32_t    CPSizeCombiner1Opcode;
+      bool        DisableCPSPointers;
+   } coarse_pixel;
 
    /* 3DSTATE_CPS/3DSTATE_CPS_POINTERS */
    struct {
@@ -2141,6 +2154,12 @@ struct anv_device {
 
    struct vk_meta_device meta_device;
 };
+
+static inline uint32_t
+anv_printf_buffer_size(void)
+{
+   return debug_get_num_option("ANV_PRINTF_BUFFER_SIZE", 1024 * 1024);
+}
 
 static inline uint32_t
 anv_get_first_render_queue_index(struct anv_physical_device *pdevice)
@@ -3892,6 +3911,9 @@ struct anv_cmd_pipeline_state {
 
    struct anv_push_constants push_constants;
 
+   /** Amount of data written to anv_push_constants::client_data */
+   uint16_t push_constants_client_size;
+
    /** Tracks whether the push constant data has changed and need to be reemitted */
    bool                                         push_constants_data_dirty;
 
@@ -4235,6 +4257,10 @@ struct anv_cmd_buffer {
    struct anv_query_pool                       *perf_query_pool;
 
    struct anv_cmd_state                         state;
+
+   /* Fast-clear statistics. */
+   uint64_t                                     num_dependent_clears;
+   uint64_t                                     num_independent_clears;
 
    struct anv_address                           return_addr;
 
@@ -5182,12 +5208,20 @@ struct anv_format_plane {
    VkImageAspectFlags aspect;
 };
 
+enum anv_format_flag {
+   /* Format supports YCbCr */
+   ANV_FORMAT_FLAG_CAN_YCBCR = BITFIELD_BIT(0),
+   /* Format supports video API */
+   ANV_FORMAT_FLAG_CAN_VIDEO = BITFIELD_BIT(1),
+   /* Format works if custom border colors without format is disabled */
+   ANV_FORMAT_FLAG_NO_CBCWF  = BITFIELD_BIT(2),
+};
+
 struct anv_format {
    struct anv_format_plane planes[3];
    VkFormat vk_format;
    uint8_t n_planes;
-   bool can_ycbcr;
-   bool can_video;
+   enum anv_format_flag flags:8;
 };
 
 static inline void
@@ -5237,37 +5271,38 @@ anv_aspect_to_plane(VkImageAspectFlags all_aspects,
    u_foreach_bit(b, vk_image_expand_aspect_mask(&(image)->vk, aspects))
 
 const struct anv_format *
-anv_get_format(VkFormat format);
+anv_get_format(const struct anv_physical_device *device, VkFormat format);
 
 static inline uint32_t
-anv_get_format_planes(VkFormat vk_format)
+anv_get_format_planes(const struct anv_physical_device *device,
+                      VkFormat vk_format)
 {
-   const struct anv_format *format = anv_get_format(vk_format);
+   const struct anv_format *format = anv_get_format(device, vk_format);
 
    return format != NULL ? format->n_planes : 0;
 }
 
 struct anv_format_plane
-anv_get_format_plane(const struct intel_device_info *devinfo,
+anv_get_format_plane(const struct anv_physical_device *device,
                      VkFormat vk_format, uint32_t plane,
                      VkImageTiling tiling);
 
 struct anv_format_plane
-anv_get_format_aspect(const struct intel_device_info *devinfo,
+anv_get_format_aspect(const struct anv_physical_device *device,
                       VkFormat vk_format,
                       VkImageAspectFlagBits aspect, VkImageTiling tiling);
 
 static inline enum isl_format
-anv_get_isl_format(const struct intel_device_info *devinfo, VkFormat vk_format,
+anv_get_isl_format(const struct anv_physical_device *device, VkFormat vk_format,
                    VkImageAspectFlags aspect, VkImageTiling tiling)
 {
-   return anv_get_format_aspect(devinfo, vk_format, aspect, tiling).isl_format;
+   return anv_get_format_aspect(device, vk_format, aspect, tiling).isl_format;
 }
 
-bool anv_format_supports_ccs_e(const struct intel_device_info *devinfo,
+bool anv_format_supports_ccs_e(const struct anv_physical_device *device,
                                const enum isl_format format);
 
-bool anv_formats_ccs_e_compatible(const struct intel_device_info *devinfo,
+bool anv_formats_ccs_e_compatible(const struct anv_physical_device *device,
                                   VkImageCreateFlags create_flags,
                                   VkFormat vk_format, VkImageTiling vk_tiling,
                                   VkImageUsageFlags vk_usage,
@@ -5398,6 +5433,12 @@ struct anv_image {
    bool from_wsi;
 
    /**
+    * Image is a WSI blit src image, it will never be scanout directly to
+    * display but will be copied to a dma-buf that can be scanout.
+    */
+   bool wsi_blit_src;
+
+   /**
     * Image was imported from an struct AHardwareBuffer.  We have to delay
     * final image creation until bind time.
     */
@@ -5480,22 +5521,6 @@ struct anv_image {
       /** Location of the fast clear state.  */
       struct anv_image_memory_range fast_clear_memory_range;
 
-      /**
-       * Whether this image can be fast cleared with non-zero clear colors.
-       * This can happen with mutable images when formats of different bit
-       * sizes per components are used.
-       *
-       * On Gfx9+, because the clear colors are stored as a 4 components 32bit
-       * values, we can clear in R16G16_UNORM (store 2 16bit values in the
-       * components 0 & 1 of the clear color) and then draw in R32_UINT which
-       * would interpret the clear color as a single component value, using
-       * only the first 16bit component of the previous written clear color.
-       *
-       * On Gfx7/7.5/8, only CC_ZERO/CC_ONE clear colors are supported, this
-       * boolean will prevent the usage of CC_ONE.
-       */
-      bool can_non_zero_fast_clear;
-
       struct {
          /** Whether the image has CCS data mapped through AUX-TT. */
          bool mapped;
@@ -5512,6 +5537,7 @@ struct anv_image {
 
    /* Link in the anv_device.image_private_objects list */
    struct list_head link;
+   struct anv_image_memory_range av1_cdf_table;
 };
 
 static inline bool
@@ -6273,6 +6299,7 @@ struct anv_vid_mem {
 
 #define ANV_MB_WIDTH 16
 #define ANV_MB_HEIGHT 16
+#define ANV_VIDEO_H264_MAX_DPB_SLOTS 17
 #define ANV_VIDEO_H264_MAX_NUM_REF_FRAME 16
 #define ANV_VIDEO_H265_MAX_NUM_REF_FRAME 16
 #define ANV_VIDEO_H265_HCP_NUM_REF_FRAME 8
@@ -6301,17 +6328,71 @@ enum anv_vid_mem_h265_types {
    ANV_VID_MEM_H265_ENC_MAX,
 };
 
+enum anv_vid_mem_av1_types {
+   ANV_VID_MEM_AV1_BITSTREAM_LINE_ROWSTORE,
+   ANV_VID_MEM_AV1_BITSTREAM_TILE_LINE_ROWSTORE,
+   ANV_VID_MEM_AV1_INTRA_PREDICTION_LINE_ROWSTORE,
+   ANV_VID_MEM_AV1_INTRA_PREDICTION_TILE_LINE_ROWSTORE,
+   ANV_VID_MEM_AV1_SPATIAL_MOTION_VECTOR_LINE,
+   ANV_VID_MEM_AV1_SPATIAL_MOTION_VECTOR_TILE_LINE,
+   ANV_VID_MEM_AV1_LOOP_RESTORATION_META_TILE_COLUMN,
+   ANV_VID_MEM_AV1_LOOP_RESTORATION_FILTER_TILE_LINE_Y,
+   ANV_VID_MEM_AV1_LOOP_RESTORATION_FILTER_TILE_LINE_U,
+   ANV_VID_MEM_AV1_LOOP_RESTORATION_FILTER_TILE_LINE_V,
+   ANV_VID_MEM_AV1_DEBLOCKER_FILTER_LINE_Y,
+   ANV_VID_MEM_AV1_DEBLOCKER_FILTER_LINE_U,
+   ANV_VID_MEM_AV1_DEBLOCKER_FILTER_LINE_V,
+   ANV_VID_MEM_AV1_DEBLOCKER_FILTER_TILE_LINE_Y,
+   ANV_VID_MEM_AV1_DEBLOCKER_FILTER_TILE_LINE_U,
+   ANV_VID_MEM_AV1_DEBLOCKER_FILTER_TILE_LINE_V,
+   ANV_VID_MEM_AV1_DEBLOCKER_FILTER_TILE_COLUMN_Y,
+   ANV_VID_MEM_AV1_DEBLOCKER_FILTER_TILE_COLUMN_U,
+   ANV_VID_MEM_AV1_DEBLOCKER_FILTER_TILE_COLUMN_V,
+   ANV_VID_MEM_AV1_CDEF_FILTER_LINE,
+   ANV_VID_MEM_AV1_CDEF_FILTER_TILE_LINE,
+   ANV_VID_MEM_AV1_CDEF_FILTER_TILE_COLUMN,
+   ANV_VID_MEM_AV1_CDEF_FILTER_META_TILE_LINE,
+   ANV_VID_MEM_AV1_CDEF_FILTER_META_TILE_COLUMN,
+   ANV_VID_MEM_AV1_CDEF_FILTER_TOP_LEFT_CORNER,
+   ANV_VID_MEM_AV1_SUPER_RES_TILE_COLUMN_Y,
+   ANV_VID_MEM_AV1_SUPER_RES_TILE_COLUMN_U,
+   ANV_VID_MEM_AV1_SUPER_RES_TILE_COLUMN_V,
+   ANV_VID_MEM_AV1_LOOP_RESTORATION_FILTER_TILE_COLUMN_Y,
+   ANV_VID_MEM_AV1_LOOP_RESTORATION_FILTER_TILE_COLUMN_U,
+   ANV_VID_MEM_AV1_LOOP_RESTORATION_FILTER_TILE_COLUMN_V,
+   ANV_VID_MEM_AV1_CDF_DEFAULTS_0,
+   ANV_VID_MEM_AV1_CDF_DEFAULTS_1,
+   ANV_VID_MEM_AV1_CDF_DEFAULTS_2,
+   ANV_VID_MEM_AV1_CDF_DEFAULTS_3,
+   ANV_VID_MEM_AV1_DBD_BUFFER,
+   ANV_VID_MEM_AV1_MAX,
+};
+
+struct anv_av1_video_refs_info {
+   const struct anv_image *img;
+   uint8_t default_cdf_index;
+};
+
 struct anv_video_session {
    struct vk_video_session vk;
 
+   bool cdf_initialized;
    /* the decoder needs some private memory allocations */
-   struct anv_vid_mem vid_mem[ANV_VID_MEM_H265_ENC_MAX];
+   struct anv_vid_mem vid_mem[ANV_VID_MEM_AV1_MAX];
+   struct anv_av1_video_refs_info prev_refs[STD_VIDEO_AV1_NUM_REF_FRAMES];
 };
 
 struct anv_video_session_params {
    struct vk_video_session_parameters vk;
    VkVideoEncodeRateControlModeFlagBitsKHR rc_mode;
 };
+
+void anv_init_av1_cdf_tables(struct anv_cmd_buffer *cmd,
+                             struct anv_video_session *vid);
+
+uint32_t anv_video_get_image_mv_size(struct anv_device *device,
+                                     struct anv_image *image,
+                                     const struct VkVideoProfileListInfoKHR *profile_list);
 
 void
 anv_dump_pipe_bits(enum anv_pipe_bits bits, FILE *f);

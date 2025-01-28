@@ -83,7 +83,12 @@ get_fbd_size(bool has_zs_ext, uint32_t rt_count)
    offsetof(struct panvk_cs_subqueue_context, tiler_oom_ctx._name)
 #define TILER_OOM_CTX_FBDPTR_OFFSET(_pass)                                     \
    (TILER_OOM_CTX_FIELD_OFFSET(fbds) +                                         \
-    (PANVK_IR_##_pass##_PASS * sizeof(mali_ptr)))
+    (PANVK_IR_##_pass##_PASS * sizeof(uint64_t)))
+
+struct panvk_cs_occlusion_query {
+   uint64_t next;
+   uint64_t syncobj;
+};
 
 struct panvk_cs_subqueue_context {
    uint64_t syncobjs;
@@ -93,13 +98,14 @@ struct panvk_cs_subqueue_context {
       struct panvk_cs_desc_ringbuf desc_ringbuf;
       uint64_t tiler_heap;
       uint64_t geom_buf;
+      uint64_t oq_chain;
    } render;
    struct {
       uint32_t counter;
-      mali_ptr fbds[PANVK_IR_PASS_COUNT];
+      uint64_t fbds[PANVK_IR_PASS_COUNT];
       uint32_t td_count;
       uint32_t layer_count;
-      mali_ptr reg_dump_addr;
+      uint64_t reg_dump_addr;
    } tiler_oom_ctx;
    struct {
       uint64_t syncobjs;
@@ -394,6 +400,15 @@ struct panvk_cmd_buffer {
 VK_DEFINE_HANDLE_CASTS(panvk_cmd_buffer, vk.base, VkCommandBuffer,
                        VK_OBJECT_TYPE_COMMAND_BUFFER)
 
+static bool
+inherits_render_ctx(struct panvk_cmd_buffer *cmdbuf)
+{
+   return (cmdbuf->vk.level == VK_COMMAND_BUFFER_LEVEL_SECONDARY &&
+           (cmdbuf->flags &
+            VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT)) ||
+          (cmdbuf->state.gfx.render.flags & VK_RENDERING_RESUMING_BIT);
+}
+
 static inline struct cs_builder *
 panvk_get_cs_builder(struct panvk_cmd_buffer *cmdbuf, uint32_t subqueue)
 {
@@ -428,9 +443,8 @@ void panvk_per_arch(get_cs_deps)(struct panvk_cmd_buffer *cmdbuf,
                                  const VkDependencyInfo *in,
                                  struct panvk_cs_deps *out);
 
-void panvk_per_arch(cmd_prepare_exec_cmd_for_draws)(
-   struct panvk_cmd_buffer *primary,
-   struct panvk_cmd_buffer *secondary);
+VkResult panvk_per_arch(cmd_prepare_exec_cmd_for_draws)(
+   struct panvk_cmd_buffer *primary, struct panvk_cmd_buffer *secondary);
 
 void panvk_per_arch(cmd_inherit_render_state)(
    struct panvk_cmd_buffer *cmdbuf,

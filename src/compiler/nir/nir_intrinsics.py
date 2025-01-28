@@ -340,6 +340,10 @@ intrinsic("convert_alu_types", dest_comp=0, src_comp=[0],
 
 intrinsic("load_param", dest_comp=0, indices=[PARAM_IDX], flags=[CAN_ELIMINATE])
 
+# Store a scalar value to be used as a return value. Usually store_deref is used
+# for this, but vtn_bindgen needs to lower derefs.
+intrinsic("bindgen_return", src_comp=[0])
+
 intrinsic("load_deref", dest_comp=0, src_comp=[-1],
           indices=[ACCESS], flags=[CAN_ELIMINATE])
 intrinsic("store_deref", src_comp=[-1, 0], indices=[WRITE_MASK, ACCESS])
@@ -1278,8 +1282,9 @@ system_value("fully_covered", dest_comp=1, bit_sizes=[1])
 intrinsic("printf", src_comp=[1, 1], dest_comp=1, bit_sizes=[32])
 # Since most drivers will want to lower to just dumping args
 # in a buffer, nir_lower_printf will do that, but requires
-# the driver to at least provide a base location
+# the driver to at least provide a base location and size
 system_value("printf_buffer_address", 1, bit_sizes=[32,64])
+system_value("printf_buffer_size", 1, bit_sizes=[32])
 # If driver wants to have all printfs from various shaders merged into a
 # single output buffer, it needs each shader to have its own base identifier
 # from which each printf is indexed.
@@ -1353,6 +1358,20 @@ intrinsic("ssbo_atomic_ir3",       src_comp=[1, 1, 1, 1],    dest_comp=1,
           indices=[ACCESS, ATOMIC_OP])
 intrinsic("ssbo_atomic_swap_ir3",  src_comp=[1, 1, 1, 1, 1], dest_comp=1,
           indices=[ACCESS, ATOMIC_OP])
+
+# IR3-specific intrinsic for UAVs, which are like SSBOs but with a source
+# for which "record" to access as well as the offset within the record, instead
+# of just an offset. The record stride is part of the descriptor.
+# Currently this is just used for the ray-tracing TLAS descriptor, where a
+# normal SSBO wouldn't have enough range.
+load("uav_ir3", [1, 2],
+     indices=[ACCESS, ALIGN_MUL, ALIGN_OFFSET], flags=[CAN_ELIMINATE])
+
+# IR3 intrinsic for "ray_intersection" instruction.
+# The input and output arguments are the same as the instruction.
+# See https://gitlab.freedesktop.org/freedreno/freedreno/-/wikis/a7xx-ray-tracing
+intrinsic("ray_intersection_ir3", src_comp=[2, 1, 8, 1], dest_comp=5,
+          flags=[CAN_REORDER, CAN_ELIMINATE])
 
 # System values for freedreno geometry shaders.
 system_value("vs_primitive_stride_ir3", 1)
@@ -1483,6 +1502,15 @@ intrinsic("prefetch_ubo_ir3", [1], flags=[CAN_REORDER])
 # src[] = { vertex_id, instance_id, offset }
 load("attribute_pan", [1, 1, 1], [BASE, COMPONENT, DEST_TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
 
+# Panfrost-specific intrinsics for accessing the raw vertex ID and the
+# associated offset such that
+#   vertex_id = raw_vertex_id_pan + raw_vertex_offset_pan
+# The raw vertex ID differs from the zero-based vertex ID in that, in an index
+# draw, it is offset by the minimum vertex ID in the index buffer range
+# covered by the draw
+system_value("raw_vertex_id_pan", 1)
+system_value("raw_vertex_offset_pan", 1)
+
 # Intrinsics used by the Midgard/Bifrost blend pipeline. These are defined
 # within a blend shader to read/write the raw value from the tile buffer,
 # without applying any format conversion in the process. If the shader needs
@@ -1504,6 +1532,11 @@ store("raw_output_pan", [], [IO_SEMANTICS, BASE])
 store("combined_output_pan", [1, 1, 1, 4], [IO_SEMANTICS, COMPONENT, SRC_TYPE, DEST_TYPE])
 load("raw_output_pan", [1], [IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
 
+# Like the frag_coord_zw intrinsic, but takes a barycentric. This is needed for
+# noperspective lowering.
+# src[] = { barycoord }
+intrinsic("load_frag_coord_zw_pan", [2], dest_comp=1, indices=[COMPONENT], flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
+
 # Loads the sampler paramaters <min_lod, max_lod, lod_bias>
 # src[] = { sampler_index }
 load("sampler_lod_parameters_pan", [1], flags=[CAN_ELIMINATE, CAN_REORDER])
@@ -1521,6 +1554,11 @@ system_value("sample_positions_pan", 1, bit_sizes=[64])
 
 # In a fragment shader, is the framebuffer single-sampled? 0/~0 bool
 system_value("multisampled_pan", 1, bit_sizes=[32])
+
+# In a vertex shader, a bitfield of varying slots that use noperspective
+# interpolation in the linked fragment shader. Since special slots cannot be
+# noperspective, this is 32 bits and starts from VARYING_SLOT_VAR0.
+system_value("noperspective_varyings_pan", 1, bit_sizes=[32])
 
 # R600 specific instrincs
 #
@@ -1748,7 +1786,7 @@ intrinsic("load_scalar_arg_amd", dest_comp=0, bit_sizes=[32],
           indices=[BASE, ARG_UPPER_BOUND_U32_AMD],
           flags=[CAN_ELIMINATE, CAN_REORDER])
 intrinsic("load_vector_arg_amd", dest_comp=0, bit_sizes=[32],
-          indices=[BASE, ARG_UPPER_BOUND_U32_AMD, FLAGS],
+          indices=[BASE, ARG_UPPER_BOUND_U32_AMD],
           flags=[CAN_ELIMINATE, CAN_REORDER])
 store("scalar_arg_amd", [], [BASE])
 store("vector_arg_amd", [], [BASE])
@@ -1786,6 +1824,9 @@ system_value("num_vertices_per_primitive_amd", 1)
 # Load streamout buffer desc
 # BASE = buffer index
 intrinsic("load_streamout_buffer_amd", dest_comp=4, indices=[BASE], bit_sizes=[32], flags=[CAN_ELIMINATE, CAN_REORDER])
+
+# Polygon stipple buffer descriptor
+system_value("polygon_stipple_buffer_amd", 4)
 
 # An ID for each workgroup ordered by primitve sequence
 system_value("ordered_id_amd", 1)
@@ -1880,6 +1921,11 @@ intrinsic("sleep_amd", indices=[BASE])
 
 # s_nop BASE (sleep for BASE+1 cycles, BASE must be in [0, 15]).
 intrinsic("nop_amd", indices=[BASE])
+
+# Return the FMASK descriptor of color buffer 0.
+system_value("fbfetch_image_fmask_desc_amd", 8)
+# Return the image descriptor of color buffer 0.
+system_value("fbfetch_image_desc_amd", 8)
 
 system_value("ray_tracing_stack_base_lvp", 1)
 
@@ -2379,7 +2425,9 @@ system_value("sm_id_nv", 1, bit_sizes=[32])
 # flipped in hardware based on a state bit.  This version of gl_PointCoord
 # is defined to be whatever thing the hardware can easily give you, so long as
 # it's in normalized coordinates in the range [0, 1] across the point.
-intrinsic("load_point_coord_maybe_flipped", dest_comp=2, bit_sizes=[32])
+#
+# src0 contains barycentrics for interpolation.
+intrinsic("load_point_coord_maybe_flipped", dest_comp=2, bit_sizes=[32], src_comp=[2])
 
 
 # Load texture size values:

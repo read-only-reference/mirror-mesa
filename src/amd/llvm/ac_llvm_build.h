@@ -448,7 +448,8 @@ LLVMValueRef ac_build_reduce(struct ac_llvm_context *ctx, LLVMValueRef src, nir_
                              unsigned cluster_size);
 
 LLVMValueRef ac_build_quad_swizzle(struct ac_llvm_context *ctx, LLVMValueRef src, unsigned lane0,
-                                   unsigned lane1, unsigned lane2, unsigned lane3);
+                                   unsigned lane1, unsigned lane2, unsigned lane3,
+                                   bool use_wqm);
 
 LLVMValueRef ac_build_shuffle(struct ac_llvm_context *ctx, LLVMValueRef src, LLVMValueRef index);
 
@@ -458,8 +459,6 @@ LLVMValueRef ac_build_frexp_mant(struct ac_llvm_context *ctx, LLVMValueRef src0,
 
 LLVMValueRef ac_build_canonicalize(struct ac_llvm_context *ctx, LLVMValueRef src0,
                                    unsigned bitsize);
-
-LLVMValueRef ac_build_ddxy_interp(struct ac_llvm_context *ctx, LLVMValueRef interp_ij);
 
 LLVMValueRef ac_build_load_helper_invocation(struct ac_llvm_context *ctx);
 

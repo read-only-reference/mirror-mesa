@@ -349,7 +349,7 @@ class IOStream;
 // required extensions, but the approach will be to
 // implement them completely on the guest side.
 #undef VK_KHR_android_surface
-#if defined(LINUX_GUEST_BUILD) || defined(__Fuchsia__)
+#if defined(LINUX_GUEST_BUILD) || DETECT_OS_FUCHSIA || DETECT_OS_WINDOWS
 #undef VK_ANDROID_native_buffer
 #endif
 """
@@ -485,16 +485,19 @@ using DlSymFunc = void* (void*, const char*);
 
         decoderSnapshotHeaderIncludes = f"""
 #include <memory>
+
+#include "VkSnapshotApiCall.h"
 #include "{self.utilsHeaderDirPrefix}/GfxApiLogger.h"
 #include "{self.baseLibDirPrefix}/HealthMonitor.h"
 #include "goldfish_vk_private_defs.h"
 """
         decoderSnapshotImplIncludes = f"""
+#include <mutex>
+
 #include "VulkanHandleMapping.h"
 #include "VkDecoderGlobalState.h"
 #include "VkReconstruction.h"
-
-#include "{self.baseLibDirPrefix}/synchronization/Lock.h"
+#include "{self.baseLibDirPrefix}/ThreadAnnotations.h"
 """
 
         decoderHeaderIncludes = f"""

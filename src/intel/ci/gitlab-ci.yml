@@ -8,6 +8,8 @@ anv-jsl:
   variables:
     DEQP_SUITE: anv-jsl
     VK_DRIVER: intel
+    # force fixed kernel, since too many flakes and unexpected results seen with 6.13-rc4 and 6.11-rc7
+    EXTERNAL_KERNEL_TAG: "v6.6.21-mesa-f8ea"
   parallel: 5
 
 anv-jsl-full:
@@ -83,7 +85,6 @@ anv-jsl-angle:
   variables:
     DEQP_SUITE: anv-jsl-angle
     GPU_VERSION: angle-anv-jsl
-  parallel: 2
 
 anv-jsl-angle-full:
   extends:
@@ -119,6 +120,7 @@ anv-tgl-angle:
   variables:
     DEQP_SUITE: anv-tgl-angle
     GPU_VERSION: angle-anv-tgl
+  parallel: 2
 
 anv-tgl-angle-full:
   extends:
@@ -126,6 +128,7 @@ anv-tgl-angle-full:
     - .intel-manual-rules
   variables:
     DEQP_SUITE: anv-tgl-angle-full
+  parallel: null
 
 iris-apl-deqp:
   extends:
@@ -149,7 +152,6 @@ iris-glk-deqp:
     - .iris-glk-test
   variables:
     DEQP_SUITE: iris-glk
-  parallel: 2
 
 iris-glk-egl:
   extends:

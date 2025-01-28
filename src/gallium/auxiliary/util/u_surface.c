@@ -42,6 +42,7 @@
 #include "util/u_surface.h"
 #include "util/u_pack_color.h"
 #include "util/u_memset.h"
+#include "util/log.h"
 
 /**
  * Initialize a pipe_surface object.  'view' is considered to have
@@ -294,8 +295,8 @@ util_resource_copy_region(struct pipe_context *pipe,
                                    src_level,
                                    PIPE_MAP_READ,
                                    &src_box, &src_trans);
-      assert(src_map);
       if (!src_map) {
+         mesa_loge("util_resource_copy_region: mapping src-buffer failed");
          goto no_src_map_buf;
       }
 
@@ -305,8 +306,8 @@ util_resource_copy_region(struct pipe_context *pipe,
                                    PIPE_MAP_WRITE |
                                    PIPE_MAP_DISCARD_RANGE, &dst_box,
                                    &dst_trans);
-      assert(dst_map);
       if (!dst_map) {
+         mesa_loge("util_resource_copy_region: mapping dst-buffer failed");
          goto no_dst_map_buf;
       }
 
@@ -325,8 +326,8 @@ util_resource_copy_region(struct pipe_context *pipe,
                                    src_level,
                                    PIPE_MAP_READ,
                                    &src_box, &src_trans);
-      assert(src_map);
       if (!src_map) {
+         mesa_loge("util_resource_copy_region: mapping src-texture failed");
          goto no_src_map;
       }
 
@@ -336,8 +337,8 @@ util_resource_copy_region(struct pipe_context *pipe,
                                    PIPE_MAP_WRITE |
                                    PIPE_MAP_DISCARD_RANGE, &dst_box,
                                    &dst_trans);
-      assert(dst_map);
       if (!dst_map) {
+         mesa_loge("util_resource_copy_region: mapping dst-texture failed");
          goto no_dst_map;
       }
 
@@ -700,8 +701,8 @@ u_default_clear_texture(struct pipe_context *pipe,
    bool cleared = false;
    assert(data != NULL);
 
-   bool has_layers = screen->get_param(screen, PIPE_CAP_VS_INSTANCEID) &&
-                     screen->get_param(screen, PIPE_CAP_VS_LAYER_VIEWPORT);
+   bool has_layers = screen->caps.vs_instanceid &&
+                     screen->caps.vs_layer_viewport;
 
    if (has_layers) {
       cleared = util_clear_texture_as_surface(pipe, tex, level,

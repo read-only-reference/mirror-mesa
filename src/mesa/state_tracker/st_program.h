@@ -232,7 +232,7 @@ struct st_fp_variant_key
 
    struct st_external_sampler_key external;
 
-   /* bitmask of sampler units; PIPE_CAP_GL_CLAMP */
+   /* bitmask of sampler units; pipe_caps.gl_clamp */
    uint32_t gl_clamp[3];
 
    /* bitmask of shadow samplers with depth textures in them for ARB programs; */
@@ -295,7 +295,7 @@ struct st_common_variant_key
     */
    bool is_draw_shader;
 
-   /* bitmask of sampler units; PIPE_CAP_GL_CLAMP */
+   /* bitmask of sampler units; pipe_caps.gl_clamp */
    uint32_t gl_clamp[3];
 };
 
@@ -358,9 +358,6 @@ st_release_program(struct st_context *st, struct gl_program **p);
 
 extern void
 st_destroy_program_variants(struct st_context *st);
-
-extern void
-st_finalize_nir_before_variants(struct nir_shader *nir);
 
 extern void
 st_prepare_vertex_program(struct gl_program *stvp);

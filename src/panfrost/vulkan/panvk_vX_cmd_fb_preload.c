@@ -83,8 +83,7 @@ static nir_def *
 get_layer_id(nir_builder *b)
 {
 #if PAN_ARCH <= 7
-   return nir_load_push_constant(b, 1, 32, nir_imm_int(b, 0), .base = 0,
-                                 .range = 4);
+   return nir_load_push_constant(b, 1, 32, nir_imm_int(b, 0));
 #else
    return nir_load_layer_id(b);
 #endif
@@ -192,7 +191,8 @@ get_preload_shader(struct panvk_device *dev,
       return panvk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
    }
 
-   pan_pack(panvk_priv_mem_host_addr(shader->spd), SHADER_PROGRAM, cfg) {
+   pan_cast_and_pack(panvk_priv_mem_host_addr(shader->spd), SHADER_PROGRAM,
+                     cfg) {
       cfg.stage = MALI_SHADER_STAGE_FRAGMENT;
       cfg.fragment_coverage_bitmask_type = MALI_COVERAGE_BITMASK_TYPE_GL;
       cfg.register_allocation = MALI_SHADER_REGISTER_ALLOCATION_32_PER_THREAD;
@@ -347,7 +347,7 @@ cmd_emit_dcd(struct panvk_cmd_buffer *cmdbuf, struct pan_fb_info *fbinfo,
    if (!rsd.cpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
-   pan_pack(rsd.cpu, RENDERER_STATE, cfg) {
+   pan_cast_and_pack(rsd.cpu, RENDERER_STATE, cfg) {
       pan_shader_prepare_rsd(&shader->info,
                              panvk_priv_mem_dev_addr(shader->code_mem), &cfg);
 
@@ -376,7 +376,7 @@ cmd_emit_dcd(struct panvk_cmd_buffer *cmdbuf, struct pan_fb_info *fbinfo,
 
       if (key->aspects == VK_IMAGE_ASPECT_COLOR_BIT) {
          /* Skipping ATEST requires forcing Z/S */
-         cfg.properties.zs_update_operation = MALI_PIXEL_KILL_STRONG_EARLY;
+         cfg.properties.zs_update_operation = MALI_PIXEL_KILL_FORCE_EARLY;
          cfg.properties.pixel_kill_operation = MALI_PIXEL_KILL_FORCE_EARLY;
       } else {
          /* Writing Z/S requires late updates */
@@ -410,7 +410,7 @@ cmd_emit_dcd(struct panvk_cmd_buffer *cmdbuf, struct pan_fb_info *fbinfo,
    if (!vpd.cpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
-   pan_pack(vpd.cpu, VIEWPORT, cfg) {
+   pan_cast_and_pack(vpd.cpu, VIEWPORT, cfg) {
       cfg.scissor_minimum_x = minx;
       cfg.scissor_minimum_y = miny;
       cfg.scissor_maximum_x = maxx;
@@ -421,7 +421,7 @@ cmd_emit_dcd(struct panvk_cmd_buffer *cmdbuf, struct pan_fb_info *fbinfo,
    if (!sampler.cpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
-   pan_pack(sampler.cpu, SAMPLER, cfg) {
+   pan_cast_and_pack(sampler.cpu, SAMPLER, cfg) {
       cfg.seamless_cube_map = false;
       cfg.normalized_coordinates = false;
       cfg.clamp_integer_array_indices = false;
@@ -569,7 +569,7 @@ cmd_emit_dcd(struct panvk_cmd_buffer *cmdbuf, struct pan_fb_info *fbinfo,
    if (!res_table.cpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
-   pan_pack(res_table.cpu, RESOURCE, cfg) {
+   pan_cast_and_pack(res_table.cpu, RESOURCE, cfg) {
       cfg.address = descs.gpu;
       cfg.size = desc_count * PANVK_DESCRIPTOR_SIZE;
    }
@@ -583,7 +583,7 @@ cmd_emit_dcd(struct panvk_cmd_buffer *cmdbuf, struct pan_fb_info *fbinfo,
    bool preload_s =
       key->aspects != VK_IMAGE_ASPECT_COLOR_BIT && fbinfo->zs.preload.s;
 
-   pan_pack(zsd.cpu, DEPTH_STENCIL, cfg) {
+   pan_cast_and_pack(zsd.cpu, DEPTH_STENCIL, cfg) {
       cfg.depth_function = MALI_FUNC_ALWAYS;
       cfg.depth_write_enable = preload_z;
 
@@ -620,7 +620,7 @@ cmd_emit_dcd(struct panvk_cmd_buffer *cmdbuf, struct pan_fb_info *fbinfo,
    pan_pack(&dcds[dcd_idx], DRAW, cfg) {
       if (key->aspects == VK_IMAGE_ASPECT_COLOR_BIT) {
          /* Skipping ATEST requires forcing Z/S */
-         cfg.zs_update_operation = MALI_PIXEL_KILL_STRONG_EARLY;
+         cfg.zs_update_operation = MALI_PIXEL_KILL_FORCE_EARLY;
          cfg.pixel_kill_operation = MALI_PIXEL_KILL_FORCE_EARLY;
 
          cfg.blend = bds.gpu;

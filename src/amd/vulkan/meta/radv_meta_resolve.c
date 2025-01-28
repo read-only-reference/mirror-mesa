@@ -37,8 +37,7 @@ get_pipeline(struct radv_device *device, unsigned fs_key, VkPipeline *pipeline_o
 
    snprintf(key_data, sizeof(key_data), "radv-resolve-hw-%d", fs_key);
 
-   result = vk_meta_get_pipeline_layout(&device->vk, &device->meta_state.device, NULL, NULL, key_data,
-                                        strlen(key_data), layout_out);
+   result = radv_meta_get_noop_pipeline_layout(device, layout_out);
    if (result != VK_SUCCESS)
       return result;
 
@@ -165,15 +164,15 @@ emit_resolve(struct radv_cmd_buffer *cmd_buffer, const struct radv_image *src_im
    }
 
    cmd_buffer->state.flush_bits |= radv_src_access_flush(cmd_buffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                                                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, src_image, NULL) |
+                                                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, 0, src_image, NULL) |
                                    radv_dst_access_flush(cmd_buffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                                                         VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT, src_image, NULL);
+                                                         VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT, 0, src_image, NULL);
 
    radv_CmdBindPipeline(cmd_buffer_h, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
    radv_CmdDraw(cmd_buffer_h, 3, 1, 0, 0);
    cmd_buffer->state.flush_bits |= radv_src_access_flush(cmd_buffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                                                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, dst_image, NULL);
+                                                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, 0, dst_image, NULL);
 }
 
 enum radv_resolve_method {

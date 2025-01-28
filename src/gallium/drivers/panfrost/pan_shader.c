@@ -80,6 +80,33 @@ lower_load_poly_line_smooth_enabled(nir_builder *b, nir_intrinsic_instr *intrin,
    return true;
 }
 
+/* From the OpenGL 4.6 spec 14.3.1:
+ *
+ *    If MULTISAMPLE is disabled, multisample rasterization of all primitives
+ *    is equivalent to single-sample (fragment-center) rasterization, except
+ *    that the fragment coverage value is set to full coverage.
+ *
+ * So always use the original sample mask when multisample is disabled */
+static bool
+lower_sample_mask_writes(nir_builder *b, nir_intrinsic_instr *intrin,
+                         void *data)
+{
+   if (intrin->intrinsic != nir_intrinsic_store_output)
+      return false;
+
+   if (nir_intrinsic_io_semantics(intrin).location != FRAG_RESULT_SAMPLE_MASK)
+      return false;
+
+   b->cursor = nir_before_instr(&intrin->instr);
+
+   nir_def *orig = nir_load_sample_mask(b);
+   nir_def *new = nir_b32csel(b, nir_load_multisampled_pan(b),
+                               intrin->src[0].ssa, orig);
+   nir_src_rewrite(&intrin->src[0], new);
+
+   return true;
+}
+
 static void
 panfrost_shader_compile(struct panfrost_screen *screen, const nir_shader *ir,
                         struct util_debug_callback *dbg,
@@ -104,6 +131,10 @@ panfrost_shader_compile(struct panfrost_screen *screen, const nir_shader *ir,
       .debug = dbg,
       .gpu_id = panfrost_device_gpu_id(dev),
    };
+
+   if (dev->arch >= 9)
+      /* Use LD_VAR_BUF for varying lookups. */
+      inputs.valhall.use_ld_var_buf = true;
 
    /* Lower this early so the backends don't have to worry about it */
    if (s->info.stage == MESA_SHADER_FRAGMENT) {
@@ -148,6 +179,9 @@ panfrost_shader_compile(struct panfrost_screen *screen, const nir_shader *ir,
                   nir_metadata_control_flow, key);
          NIR_PASS(_, s, nir_lower_alu);
       }
+
+      NIR_PASS(_, s, nir_shader_intrinsics_pass,
+               lower_sample_mask_writes, nir_metadata_control_flow, NULL);
    }
 
    if (dev->arch <= 5 && s->info.stage == MESA_SHADER_FRAGMENT) {
@@ -155,6 +189,10 @@ panfrost_shader_compile(struct panfrost_screen *screen, const nir_shader *ir,
                pan_raw_format_mask_midgard(key->fs.rt_formats), 0,
                panfrost_device_gpu_id(dev) < 0x700);
    }
+
+   if (s->info.stage == MESA_SHADER_VERTEX)
+      NIR_PASS(_, s, pan_nir_lower_static_noperspective,
+               key->vs.noperspective_varyings);
 
    NIR_PASS(_, s, panfrost_nir_lower_sysvals, dev->arch, &out->sysvals);
 
@@ -223,15 +261,22 @@ panfrost_shader_get(struct pipe_screen *pscreen,
 }
 
 static void
-panfrost_build_key(struct panfrost_context *ctx,
-                   struct panfrost_shader_key *key,
-                   struct panfrost_uncompiled_shader *uncompiled)
+panfrost_build_vs_key(struct panfrost_context *ctx,
+                      struct panfrost_vs_key *key,
+                      struct panfrost_uncompiled_shader *uncompiled)
+{
+   struct panfrost_uncompiled_shader *fs = ctx->uncompiled[MESA_SHADER_FRAGMENT];
+
+   assert(fs != NULL && "too early");
+   key->noperspective_varyings = fs->noperspective_varyings;
+}
+
+static void
+panfrost_build_fs_key(struct panfrost_context *ctx,
+                      struct panfrost_fs_key *key,
+                      struct panfrost_uncompiled_shader *uncompiled)
 {
    const nir_shader *nir = uncompiled->nir;
-
-   /* We don't currently have vertex shader variants */
-   if (nir->info.stage != MESA_SHADER_FRAGMENT)
-      return;
 
    struct panfrost_device *dev = pan_device(ctx->base.screen);
    struct pipe_framebuffer_state *fb = &ctx->pipe_framebuffer;
@@ -240,20 +285,20 @@ panfrost_build_key(struct panfrost_context *ctx,
 
    /* gl_FragColor lowering needs the number of colour buffers */
    if (uncompiled->fragcolor_lowered) {
-      key->fs.nr_cbufs_for_fragcolor = fb->nr_cbufs;
+      key->nr_cbufs_for_fragcolor = fb->nr_cbufs;
    }
 
    /* Point sprite lowering needed on Bifrost and newer */
    if (dev->arch >= 6 && rast && ctx->active_prim == MESA_PRIM_POINTS) {
-      key->fs.sprite_coord_enable = rast->sprite_coord_enable;
+      key->sprite_coord_enable = rast->sprite_coord_enable;
    }
 
    /* User clip plane lowering needed everywhere */
    if (rast) {
-      key->fs.clip_plane_enable = rast->clip_plane_enable;
+      key->clip_plane_enable = rast->clip_plane_enable;
 
       if (u_reduced_prim(ctx->active_prim) == MESA_PRIM_LINES)
-         key->fs.line_smooth = rast->line_smooth;
+         key->line_smooth = rast->line_smooth;
    }
 
    if (dev->arch <= 5) {
@@ -266,14 +311,33 @@ panfrost_build_key(struct panfrost_context *ctx,
          if (panfrost_blendable_formats_v6[fmt].internal)
             fmt = PIPE_FORMAT_NONE;
 
-         key->fs.rt_formats[i] = fmt;
+         key->rt_formats[i] = fmt;
       }
    }
 
    /* Funny desktop GL varying lowering on Valhall */
    if (dev->arch >= 9) {
       assert(vs != NULL && "too early");
-      key->fs.fixed_varying_mask = vs->fixed_varying_mask;
+      key->fixed_varying_mask = vs->fixed_varying_mask;
+   }
+}
+
+static void
+panfrost_build_key(struct panfrost_context *ctx,
+                   struct panfrost_shader_key *key,
+                   struct panfrost_uncompiled_shader *uncompiled)
+{
+   const nir_shader *nir = uncompiled->nir;
+
+   switch (nir->info.stage) {
+   case MESA_SHADER_VERTEX:
+      panfrost_build_vs_key(ctx, &key->vs, uncompiled);
+      break;
+   case MESA_SHADER_FRAGMENT:
+      panfrost_build_fs_key(ctx, &key->fs, uncompiled);
+      break;
+   default:
+      break;
    }
 }
 
@@ -321,7 +385,8 @@ panfrost_update_shader_variant(struct panfrost_context *ctx,
       return;
 
    /* We need linking information, defer this */
-   if (type == PIPE_SHADER_FRAGMENT && !ctx->uncompiled[PIPE_SHADER_VERTEX])
+   if ((type == PIPE_SHADER_FRAGMENT && !ctx->uncompiled[PIPE_SHADER_VERTEX]) ||
+       (type == PIPE_SHADER_VERTEX && !ctx->uncompiled[PIPE_SHADER_FRAGMENT]))
       return;
 
    /* Also defer, happens with GALLIUM_HUD */
@@ -367,6 +432,10 @@ static void
 panfrost_bind_fs_state(struct pipe_context *pctx, void *hwcso)
 {
    panfrost_bind_shader_state(pctx, hwcso, PIPE_SHADER_FRAGMENT);
+
+   /* Vertex shaders are linked with fragment shaders */
+   struct panfrost_context *ctx = pan_context(pctx);
+   panfrost_update_shader_variant(ctx, PIPE_SHADER_VERTEX);
 }
 
 static void *
@@ -407,6 +476,10 @@ panfrost_create_shader_state(struct pipe_context *pctx,
    struct panfrost_device *dev = pan_device(pctx->screen);
    pan_shader_preprocess(nir, panfrost_device_gpu_id(dev));
 
+   if (nir->info.stage == MESA_SHADER_FRAGMENT)
+      so->noperspective_varyings =
+         pan_nir_collect_noperspective_varyings_fs(nir);
+
    /* Vertex shaders get passed images through the vertex attribute descriptor
     * array. We need to add an offset to all image intrinsics so they point
     * to the right attribute.
@@ -423,7 +496,7 @@ panfrost_create_shader_state(struct pipe_context *pctx,
 
    if (so->nir->xfb_info) {
       so->xfb = calloc(1, sizeof(struct panfrost_compiled_shader));
-      so->xfb->key.vs_is_xfb = true;
+      so->xfb->key.vs.is_xfb = true;
 
       panfrost_shader_get(ctx->base.screen, &ctx->shaders, &ctx->descs, so,
                           &ctx->base.debug, so->xfb, 0);
