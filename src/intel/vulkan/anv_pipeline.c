@@ -332,6 +332,9 @@ populate_vs_prog_key(struct anv_pipeline_stage *stage,
    memset(&stage->key, 0, sizeof(stage->key));
 
    populate_base_prog_key(stage, device);
+
+   stage->key.vs.vf_component_packing =
+      device->physical->instance->vf_component_packing;
 }
 
 static void
@@ -424,6 +427,8 @@ populate_task_prog_key(struct anv_pipeline_stage *stage,
    memset(&stage->key, 0, sizeof(stage->key));
 
    populate_base_prog_key(stage, device);
+
+   stage->key.base.uses_inline_push_addr = true;
 }
 
 static void
@@ -436,6 +441,7 @@ populate_mesh_prog_key(struct anv_pipeline_stage *stage,
    populate_base_prog_key(stage, device);
 
    stage->key.mesh.compact_mue = compact_mue;
+   stage->key.base.uses_inline_push_addr = true;
 }
 
 static uint32_t
@@ -561,6 +567,8 @@ populate_cs_prog_key(struct anv_pipeline_stage *stage,
    memset(&stage->key, 0, sizeof(stage->key));
 
    populate_base_prog_key(stage, device);
+
+   stage->key.base.uses_inline_push_addr = device->info->verx10 >= 125;
 }
 
 static void
@@ -892,7 +900,7 @@ print_ubo_load(nir_builder *b,
       return false;
 
    b->cursor = nir_after_instr(&intrin->instr);
-   nir_printf_fmt(b, true, 64,
+   nir_printf_fmt(b, 64,
                   "uniform<= pos=%02.2fx%02.2f offset=0x%08x val=0x%08x\n",
                   nir_channel(b, nir_load_frag_coord(b), 0),
                   nir_channel(b, nir_load_frag_coord(b), 1),
@@ -901,6 +909,16 @@ print_ubo_load(nir_builder *b,
    return true;
 }
 #endif
+
+static bool
+accept_64bit_atomic_cb(const nir_intrinsic_instr *intrin, const void *data)
+{
+   return (intrin->intrinsic == nir_intrinsic_image_atomic ||
+           intrin->intrinsic == nir_intrinsic_image_atomic_swap ||
+           intrin->intrinsic == nir_intrinsic_image_deref_atomic ||
+           intrin->intrinsic == nir_intrinsic_image_deref_atomic_swap) &&
+          intrin->def.bit_size == 64;
+}
 
 static void
 anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
@@ -959,15 +977,30 @@ anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
 
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
+   /* Ensure robustness, do this before brw_nir_lower_storage_image so that
+    * added image size intrinsics for bounds checkings are properly lowered
+    * for cube images.
+    */
+   NIR_PASS(_, nir, nir_lower_robust_access,
+            accept_64bit_atomic_cb, NULL);
+
    NIR_PASS(_, nir, brw_nir_lower_storage_image,
             &(struct brw_nir_lower_storage_image_opts) {
                /* Anv only supports Gfx9+ which has better defined typed read
-                * behavior. It allows us to only have to care about lowering
-                * loads.
+                * behavior.
                 */
                .devinfo = compiler->devinfo,
                .lower_loads = true,
+               .lower_stores_64bit = true,
             });
+
+   /* Switch from image to global */
+   NIR_PASS(_, nir, nir_lower_image_atomics_to_global,
+            accept_64bit_atomic_cb, NULL);
+
+   /* Detile for global */
+   NIR_PASS(_, nir, brw_nir_lower_texel_address, compiler->devinfo,
+            pdevice->isl_dev.shader_tiling);
 
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_global,
             nir_address_format_64bit_global);
@@ -1004,9 +1037,6 @@ anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
       NIR_PASS(progress, nir, nir_opt_constant_folding);
       NIR_PASS(progress, nir, nir_opt_dce);
    } while (progress);
-
-   /* Needed for anv_nir_lower_ubo_loads. */
-   nir_divergence_analysis(nir);
 
    NIR_PASS(_, nir, anv_nir_lower_ubo_loads);
 
@@ -1866,7 +1896,6 @@ anv_graphics_pipeline_load_cached_shaders(struct anv_graphics_base_pipeline *pip
 
          stages[s].bin = stages[s].imported.bin;
          pipeline->shaders[s] = anv_shader_bin_ref(stages[s].imported.bin);
-         pipeline->source_hashes[s] = stages[s].source_hash;
          imported++;
       }
    }
@@ -1887,7 +1916,6 @@ anv_graphics_pipeline_load_cached_shaders(struct anv_graphics_base_pipeline *pip
           */
          if (stages[s].imported.bin == NULL || link_optimize)
             anv_pipeline_add_executables(&pipeline->base, &stages[s]);
-         pipeline->source_hashes[s] = stages[s].source_hash;
       }
       return true;
    } else if (found > 0) {
@@ -2441,7 +2469,6 @@ anv_graphics_pipeline_compile(struct anv_graphics_base_pipeline *pipeline,
       }
 
       anv_pipeline_add_executables(&pipeline->base, stage);
-      pipeline->source_hashes[s] = stage->source_hash;
       pipeline->shaders[s] = stage->bin;
 
       ralloc_free(stage_ctx);
@@ -2466,7 +2493,6 @@ anv_graphics_pipeline_compile(struct anv_graphics_base_pipeline *pipeline,
 
       struct anv_pipeline_stage *stage = &stages[s];
 
-      pipeline->source_hashes[s] = stage->source_hash;
       pipeline->shaders[s] = anv_shader_bin_ref(stage->imported.bin);
    }
 
@@ -2633,7 +2659,6 @@ anv_pipeline_compile_cs(struct anv_compute_pipeline *pipeline,
 
    anv_pipeline_account_shader(&pipeline->base, stage.bin);
    anv_pipeline_add_executables(&pipeline->base, &stage);
-   pipeline->source_hash = stage.source_hash;
 
    ralloc_free(mem_ctx);
 
@@ -2790,6 +2815,7 @@ anv_graphics_pipeline_emit(struct anv_graphics_pipeline *pipeline,
 
    if (anv_pipeline_is_primitive(pipeline)) {
       const struct brw_vs_prog_data *vs_prog_data = get_vs_prog_data(pipeline);
+      const struct brw_wm_prog_data *wm_prog_data = get_wm_prog_data(pipeline);
 
       /* The total number of vertex elements we need to program. We might need
        * a couple more to implement some of the draw parameters.
@@ -2818,6 +2844,9 @@ anv_graphics_pipeline_emit(struct anv_graphics_pipeline *pipeline,
       pipeline->instance_multiplier = 1;
       if (pipeline->view_mask && !uses_primitive_replication)
          pipeline->instance_multiplier = util_bitcount(pipeline->view_mask);
+
+      pipeline->vs_source_hash = vs_prog_data->base.base.source_hash;
+      pipeline->fs_source_hash = wm_prog_data ? wm_prog_data->base.source_hash : 0;
    } else {
       assert(anv_pipeline_is_mesh(pipeline));
       /* TODO(mesh): Mesh vs. Multiview with Instancing. */
@@ -2946,7 +2975,7 @@ anv_graphics_pipeline_import_lib(struct anv_graphics_base_pipeline *pipeline,
       /* Always import the shader sha1, this will be used for cache lookup. */
       memcpy(stages[s].shader_sha1, lib->retained_shaders[s].shader_sha1,
              sizeof(stages[s].shader_sha1));
-      stages[s].source_hash = lib->base.source_hashes[s];
+      stages[s].source_hash = lib->base.shaders[s]->prog_data->source_hash;
 
       stages[s].subgroup_size_type = lib->retained_shaders[s].subgroup_size_type;
       stages[s].imported.nir = lib->retained_shaders[s].nir;
@@ -3309,12 +3338,12 @@ compile_upload_rt_shader(struct anv_ray_tracing_pipeline *pipeline,
       NIR_PASS(_, nir, nir_lower_shader_calls, &opts,
                &resume_shaders, &num_resume_shaders, mem_ctx);
       NIR_PASS(_, nir, brw_nir_lower_shader_calls, &stage->key.bs);
-      NIR_PASS_V(nir, brw_nir_lower_rt_intrinsics, devinfo);
+      NIR_PASS_V(nir, brw_nir_lower_rt_intrinsics, &stage->key.base, devinfo);
    }
 
    for (unsigned i = 0; i < num_resume_shaders; i++) {
       NIR_PASS(_,resume_shaders[i], brw_nir_lower_shader_calls, &stage->key.bs);
-      NIR_PASS_V(resume_shaders[i], brw_nir_lower_rt_intrinsics, devinfo);
+      NIR_PASS_V(resume_shaders[i], brw_nir_lower_rt_intrinsics, &stage->key.base, devinfo);
    }
 
    struct brw_compile_bs_params params = {
@@ -3853,7 +3882,8 @@ anv_device_init_rt_shaders(struct anv_device *device)
       nir_shader *trivial_return_nir =
          brw_nir_create_trivial_return_shader(device->physical->compiler, tmp_ctx);
 
-      NIR_PASS_V(trivial_return_nir, brw_nir_lower_rt_intrinsics, device->info);
+      NIR_PASS_V(trivial_return_nir, brw_nir_lower_rt_intrinsics,
+                 &return_key.key.base, device->info);
 
       struct brw_bs_prog_data return_prog_data = { 0, };
       struct brw_compile_bs_params params = {
@@ -4309,6 +4339,16 @@ VkResult anv_GetPipelineExecutableStatisticsKHR(
       stat->value.u64 = prog_data->total_scratch;
    }
 
+   if (pipeline->device->info->ver >= 30) {
+      vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
+         WRITE_STR(stat->name, "GRF registers");
+         WRITE_STR(stat->description,
+                   "Number of GRF registers required by the shader.");
+         stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
+         stat->value.u64 = prog_data->grf_used;
+      }
+   }
+
    vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
       WRITE_STR(stat->name, "Max dispatch width");
       WRITE_STR(stat->description,
@@ -4343,10 +4383,11 @@ VkResult anv_GetPipelineExecutableStatisticsKHR(
 
    vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
       uint32_t hash = pipeline->type == ANV_PIPELINE_COMPUTE ?
-                      anv_pipeline_to_compute(pipeline)->source_hash :
+                      anv_pipeline_to_compute(pipeline)->cs->prog_data->source_hash :
                       (pipeline->type == ANV_PIPELINE_GRAPHICS_LIB ||
                        pipeline->type == ANV_PIPELINE_GRAPHICS) ?
-                      anv_pipeline_to_graphics_base(pipeline)->source_hashes[exe->stage] :
+                      anv_pipeline_to_graphics_base(pipeline)->shaders[
+                         exe->stage]->prog_data->source_hash:
                       0 /* No source hash for ray tracing */;
       WRITE_STR(stat->name, "Source hash");
       WRITE_STR(stat->description,

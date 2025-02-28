@@ -10,6 +10,7 @@
 #include "nir.h"
 #include "nir_builder.h"
 #include "nir_serialize.h"
+#include "nir_tcs_info.h"
 #include "nir_xfb_info.h"
 #include "si_pipe.h"
 #include "si_shader_internal.h"
@@ -20,14 +21,7 @@
 #include "util/ralloc.h"
 #include "util/u_upload_mgr.h"
 
-#if LLVM_AVAILABLE
-#include <llvm/Config/llvm-config.h> /* for LLVM_VERSION_MAJOR */
-#else
-#define LLVM_VERSION_MAJOR 0
-#endif
-
 static const char scratch_rsrc_dword0_symbol[] = "SCRATCH_RSRC_DWORD0";
-
 static const char scratch_rsrc_dword1_symbol[] = "SCRATCH_RSRC_DWORD1";
 
 static void si_dump_shader_key(const struct si_shader *shader, FILE *f);
@@ -1660,8 +1654,7 @@ static bool si_nir_kill_outputs(nir_shader *nir, const union si_shader_key *key)
        !key->ge.opt.kill_layer &&
        !key->ge.opt.kill_clip_distances &&
        !(nir->info.outputs_written & BITFIELD64_BIT(VARYING_SLOT_LAYER))) {
-      nir_metadata_preserve(impl, nir_metadata_all);
-      return false;
+      return nir_no_progress(impl);
    }
 
    bool progress = false;
@@ -1725,13 +1718,7 @@ static bool si_nir_kill_outputs(nir_shader *nir, const union si_shader_key *key)
       }
    }
 
-   if (progress) {
-      nir_metadata_preserve(impl, nir_metadata_control_flow);
-   } else {
-      nir_metadata_preserve(impl, nir_metadata_all);
-   }
-
-   return progress;
+   return nir_progress(progress, impl, nir_metadata_control_flow);
 }
 
 static unsigned si_map_io_driver_location(unsigned semantic)
@@ -2128,8 +2115,7 @@ static bool si_nir_emit_polygon_stipple(nir_shader *nir)
    nir_def *pass = nir_i2b(b, bit);
    nir_discard_if(b, nir_inot(b, pass));
 
-   nir_metadata_preserve(impl, nir_metadata_control_flow);
-   return true;
+   return nir_progress(true, impl, nir_metadata_control_flow);
 }
 
 bool si_should_clear_lds(struct si_screen *sscreen, const struct nir_shader *shader)
@@ -2138,16 +2124,13 @@ bool si_should_clear_lds(struct si_screen *sscreen, const struct nir_shader *sha
       shader->info.shared_size > 0 && sscreen->options.clear_lds;
 }
 
-static bool clamp_shadow_comparison_value(nir_builder *b, nir_instr *instr, void *state)
+static bool clamp_shadow_comparison_value(nir_builder *b, nir_tex_instr *tex,
+                                          void *state)
 {
-   if (instr->type != nir_instr_type_tex)
-      return false;
-
-   nir_tex_instr *tex = nir_instr_as_tex(instr);
    if (!tex->is_shadow)
       return false;
 
-   b->cursor = nir_before_instr(instr);
+   b->cursor = nir_before_instr(&tex->instr);
 
    int samp_index = nir_tex_instr_src_index(tex, nir_tex_src_sampler_handle);
    int comp_index = nir_tex_instr_src_index(tex, nir_tex_src_comparator);
@@ -2182,9 +2165,8 @@ static bool si_nir_clamp_shadow_comparison_value(nir_shader *nir)
     * Z24 anymore. Do it manually here for GFX8-9; GFX10 has
     * an explicitly clamped 32-bit float format.
     */
-   return nir_shader_instructions_pass(nir, clamp_shadow_comparison_value,
-                                       nir_metadata_control_flow,
-                                       NULL);
+   return nir_shader_tex_pass(nir, clamp_shadow_comparison_value,
+                              nir_metadata_control_flow, NULL);
 }
 
 static void
@@ -2507,7 +2489,6 @@ static void run_late_optimization_and_lowering_passes(struct si_nir_shader_ctx *
                .lower_quad_broadcast_dynamic_to_const = sel->screen->info.gfx_level <= GFX7,
                .lower_shuffle_to_swizzle_amd = true,
                .lower_ballot_bit_count_to_mbcnt_amd = true,
-               .lower_inverse_ballot = !nir->info.use_aco_amd && LLVM_VERSION_MAJOR < 17,
                .lower_boolean_reduce = nir->info.use_aco_amd,
                .lower_boolean_shuffle = true,
             });

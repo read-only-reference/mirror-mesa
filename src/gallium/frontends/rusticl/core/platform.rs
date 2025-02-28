@@ -4,6 +4,7 @@ use crate::core::device::*;
 use crate::core::version::*;
 
 use mesa_rust_gen::*;
+use mesa_rust_util::string::char_arr_to_cstr;
 use rusticl_opencl_gen::*;
 
 use std::env;
@@ -19,6 +20,8 @@ pub const MAX_PIXEL_SIZE_BYTES: u64 = 4 * 4;
 pub struct Platform {
     dispatch: &'static cl_icd_dispatch,
     pub devs: Vec<Device>,
+    pub extension_string: String,
+    pub extensions: Vec<cl_name_version>,
 }
 
 pub enum PerfDebugLevel {
@@ -30,7 +33,7 @@ pub enum PerfDebugLevel {
 pub struct PlatformDebug {
     pub allow_invalid_spirv: bool,
     pub clc: bool,
-    pub max_grid_size: u64,
+    pub max_grid_size: u32,
     pub nir: bool,
     pub no_variants: bool,
     pub perf: PerfDebugLevel,
@@ -48,34 +51,11 @@ pub struct PlatformFeatures {
 static PLATFORM_ENV_ONCE: Once = Once::new();
 static PLATFORM_ONCE: Once = Once::new();
 
-macro_rules! gen_cl_exts {
-    (@COUNT $e:expr) => { 1 };
-    (@COUNT $e:expr, $($es:expr),+) => { 1 + gen_cl_exts!(@COUNT $($es),*) };
-
-    (@CONCAT $e:tt) => { $e };
-    (@CONCAT $e:tt, $($es:tt),+) => { concat!($e, ' ', gen_cl_exts!(@CONCAT $($es),*)) };
-
-    ([$(($major:expr, $minor:expr, $patch:expr, $ext:tt)$(,)?)+]) => {
-        pub static PLATFORM_EXTENSION_STR: &str = concat!(gen_cl_exts!(@CONCAT $($ext),*));
-        pub static PLATFORM_EXTENSIONS: [cl_name_version; gen_cl_exts!(@COUNT $($ext),*)] = [
-            $(mk_cl_version_ext($major, $minor, $patch, $ext)),+
-        ];
-    }
-}
-gen_cl_exts!([
-    (1, 0, 0, "cl_khr_byte_addressable_store"),
-    (1, 0, 0, "cl_khr_create_command_queue"),
-    (1, 0, 0, "cl_khr_expect_assume"),
-    (1, 0, 0, "cl_khr_extended_versioning"),
-    (1, 0, 0, "cl_khr_icd"),
-    (1, 0, 0, "cl_khr_il_program"),
-    (1, 0, 0, "cl_khr_spirv_no_integer_wrap_decoration"),
-    (1, 0, 0, "cl_khr_suggested_local_work_size"),
-]);
-
 static mut PLATFORM: Platform = Platform {
     dispatch: &DISPATCH,
     devs: Vec::new(),
+    extension_string: String::new(),
+    extensions: Vec::new(),
 };
 static mut PLATFORM_DBG: PlatformDebug = PlatformDebug {
     allow_invalid_spirv: false,
@@ -119,7 +99,7 @@ fn load_env() {
     debug.max_grid_size = env::var("RUSTICL_MAX_WORK_GROUPS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(u64::MAX);
+        .unwrap_or(u32::MAX);
 
     // SAFETY: no other references exist at this point
     let features = unsafe { &mut *addr_of_mut!(PLATFORM_FEATURES) };
@@ -162,6 +142,38 @@ impl Platform {
         }
 
         self.devs = Device::all();
+
+        let mut exts_str: Vec<&str> = Vec::new();
+        let mut add_ext = |major, minor, patch, ext: &'static str| {
+            self.extensions
+                .push(mk_cl_version_ext(major, minor, patch, ext));
+            exts_str.push(ext);
+        };
+
+        // Add all platform extensions we don't expect devices to advertise.
+        add_ext(1, 0, 0, "cl_khr_icd");
+
+        let mut exts;
+        if let Some((first, rest)) = self.devs.split_first() {
+            exts = first.extensions.clone();
+
+            for dev in rest {
+                // This isn't fast, but the lists are small, so it doesn't really matter.
+                exts.retain(|ext| dev.extensions.contains(ext));
+            }
+
+            // Now that we found all extensions supported by all devices, we push them to the
+            // platform.
+            for ext in &exts {
+                exts_str.push(
+                    // SAFETY: ext.name contains a nul terminated string.
+                    unsafe { char_arr_to_cstr(&ext.name) }.to_str().unwrap(),
+                );
+                self.extensions.push(*ext);
+            }
+        }
+
+        self.extension_string = exts_str.join(" ");
     }
 
     pub fn init_once() {

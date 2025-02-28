@@ -146,6 +146,13 @@ struct intel_perf_query_result;
 #define CLOCK_MONOTONIC_RAW CLOCK_MONOTONIC_FAST
 #endif
 
+#define ANV_RT_STAGE_BITS (VK_SHADER_STAGE_RAYGEN_BIT_KHR |             \
+                           VK_SHADER_STAGE_ANY_HIT_BIT_KHR |            \
+                           VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |        \
+                           VK_SHADER_STAGE_MISS_BIT_KHR |               \
+                           VK_SHADER_STAGE_INTERSECTION_BIT_KHR |       \
+                           VK_SHADER_STAGE_CALLABLE_BIT_KHR)
+
 #define NSEC_PER_SEC 1000000000ull
 
 #define BINDING_TABLE_POOL_BLOCK_SIZE (65536)
@@ -223,6 +230,9 @@ struct intel_perf_query_result;
 
 #define ANV_GRAPHICS_SHADER_STAGE_COUNT (MESA_SHADER_MESH + 1)
 
+/* Defines where various values are defined in the inline parameter register.
+ */
+#define ANV_INLINE_PARAM_PUSH_ADDRESS_OFFSET (0)
 #define ANV_INLINE_PARAM_NUM_WORKGROUPS_OFFSET (8)
 
 /* RENDER_SURFACE_STATE is a bit smaller (48b) but since it is aligned to 64
@@ -1000,6 +1010,7 @@ enum anv_timestamp_capture_type {
     ANV_TIMESTAMP_CAPTURE_AT_CS_STALL,
     ANV_TIMESTAMP_REWRITE_COMPUTE_WALKER,
     ANV_TIMESTAMP_REWRITE_INDIRECT_DISPATCH,
+    ANV_TIMESTAMP_REPEAT_LAST,
 };
 
 struct anv_physical_device {
@@ -1146,6 +1157,10 @@ struct anv_physical_device {
 
     struct {
        /**
+        * Unused
+        */
+       struct anv_va_range                      first_2mb;
+       /**
         * General state pool
         */
        struct anv_va_range                      general_state_pool;
@@ -1287,6 +1302,8 @@ struct anv_instance {
 
     int                                         mesh_conv_prim_attrs_to_vert_attrs;
     bool                                        enable_tbimr;
+    bool                                        enable_vf_distribution;
+    bool                                        enable_te_distribution;
     bool                                        external_memory_implicit_sync;
     bool                                        force_guc_low_latency;
 
@@ -1312,6 +1329,7 @@ struct anv_instance {
     bool                                        anv_fake_nonlocal_memory;
     bool                                        anv_upper_bound_descriptor_pool_sampler;
     bool                                        custom_border_colors_without_format;
+    bool                                        vf_component_packing;
 
     /* HW workarounds */
     bool                                        no_16bit;
@@ -1437,6 +1455,7 @@ enum anv_gfx_state_bits {
    ANV_GFX_STATE_VF_SGVS_2,
    ANV_GFX_STATE_VF_SGVS_VI, /* 3DSTATE_VERTEX_ELEMENTS for sgvs elements */
    ANV_GFX_STATE_VF_SGVS_INSTANCING, /* 3DSTATE_VF_INSTANCING for sgvs elements */
+   ANV_GFX_STATE_VF_COMPONENT_PACKING,
    ANV_GFX_STATE_PRIMITIVE_REPLICATION,
    ANV_GFX_STATE_SBE,
    ANV_GFX_STATE_SBE_SWIZ,
@@ -1525,6 +1544,7 @@ struct anv_gfx_dynamic_state {
 
          bool     ColorBufferBlendEnable;
          uint32_t ColorClampRange;
+         bool     SimpleFloatBlendEnable;
          bool     PreBlendColorClampEnable;
          bool     PostBlendColorClampEnable;
          uint32_t SourceBlendFactor;
@@ -1624,6 +1644,7 @@ struct anv_gfx_dynamic_state {
       uint32_t Kernel0SIMDWidth;
       uint32_t Kernel1SIMDWidth;
       uint32_t Kernel0PolyPackingPolicy;
+      uint32_t Kernel0MaximumPolysperThread;
    } ps;
 
    /* 3DSTATE_PS_EXTRA */
@@ -2131,20 +2152,7 @@ struct anv_device {
        struct hash_table                        *map;
     }                                            embedded_samplers;
 
-    struct {
-       /**
-        * Mutex for the printfs array
-        */
-       simple_mtx_t                              mutex;
-       /**
-        * Buffer in which the shader printfs are stored
-        */
-       struct anv_bo                            *bo;
-       /**
-        * Array of pointers to u_printf_info
-        */
-       struct util_dynarray                      prints;
-    } printf;
+    struct u_printf_ctx printf;
 
     struct {
        simple_mtx_t  mutex;
@@ -2314,7 +2322,6 @@ VkResult anv_device_wait(struct anv_device *device, struct anv_bo *bo,
 
 VkResult anv_device_print_init(struct anv_device *device);
 void anv_device_print_fini(struct anv_device *device);
-void anv_device_print_shader_prints(struct anv_device *device);
 
 void anv_dump_bvh_to_files(struct anv_device *device);
 
@@ -2342,9 +2349,6 @@ anv_queue_post_submit(struct anv_queue *queue, VkResult submit_result)
       if (result != VK_SUCCESS)
          result = vk_queue_set_lost(&queue->vk, "sync wait failed");
    }
-
-   if (INTEL_DEBUG(DEBUG_SHADER_PRINT))
-      anv_device_print_shader_prints(queue->device);
 
 #if ANV_SUPPORT_RT && !ANV_SUPPORT_RT_GRL
    /* The recorded bvh is dumped to files upon command buffer completion */
@@ -2776,6 +2780,21 @@ struct anv_storage_image_descriptor {
     * RESINFO result.
     */
    uint32_t image_depth;
+
+   /** Image address */
+   uint64_t image_address;
+
+   /** Image tiling mode
+    *
+    * 0 for linear, ~0 otherwise.
+    */
+   uint32_t tile_mode;
+
+   /** Image row pitch in bytes */
+   uint32_t row_pitch_B;
+
+   /** Image Q pitch (rows between array slices) */
+   uint32_t qpitch;
 };
 
 /** Struct representing a address/range descriptor
@@ -3710,9 +3729,6 @@ struct anv_push_constants {
     */
    uint32_t surfaces_base_offset;
 
-   /* Robust access pushed registers. */
-   uint64_t push_reg_mask[MESA_SHADER_STAGES];
-
    /** Ray query globals (RT_DISPATCH_GLOBALS) */
    uint64_t ray_query_globals;
 
@@ -3723,6 +3739,9 @@ struct anv_push_constants {
 
          /** Dynamic TCS input vertices */
          uint32_t tcs_input_vertices;
+
+         /** Robust access pushed registers. */
+         uint64_t push_reg_mask[MESA_SHADER_STAGES];
       } gfx;
 
       struct {
@@ -4499,6 +4518,14 @@ anv_cmd_buffer_temporary_state_address(struct anv_cmd_buffer *cmd_buffer,
       &cmd_buffer->device->dynamic_state_pool, state);
 }
 
+static inline struct anv_address
+anv_cmd_buffer_gfx_push_constants_state_address(struct anv_cmd_buffer *cmd_buffer,
+                                                struct anv_state state)
+{
+   return anv_state_pool_state_address(
+      &cmd_buffer->device->dynamic_state_pool, state);
+}
+
 void
 anv_cmd_buffer_chain_command_buffers(struct anv_cmd_buffer **cmd_buffers,
                                      uint32_t num_cmd_buffers);
@@ -4811,11 +4838,6 @@ struct anv_graphics_base_pipeline {
    /* Shaders */
    struct anv_shader_bin *                      shaders[ANV_GRAPHICS_SHADER_STAGE_COUNT];
 
-   /* A small hash based of shader_info::source_sha1 for identifying
-    * shaders in renderdoc/shader-db.
-    */
-   uint32_t                                     source_hashes[ANV_GRAPHICS_SHADER_STAGE_COUNT];
-
    /* Feedback index in
     * VkPipelineCreationFeedbackCreateInfo::pPipelineStageCreationFeedbacks
     *
@@ -4883,6 +4905,9 @@ struct anv_gfx_state_ptr {
 struct anv_graphics_pipeline {
    struct anv_graphics_base_pipeline            base;
 
+   uint32_t                                     vs_source_hash;
+   uint32_t                                     fs_source_hash;
+
    struct vk_vertex_input_state                 vertex_input;
    struct vk_sample_locations_state             sample_locations;
    struct vk_dynamic_graphics_state             dynamic_state;
@@ -4946,6 +4971,7 @@ struct anv_graphics_pipeline {
       struct anv_gfx_state_ptr                  vf_sgvs_2;
       struct anv_gfx_state_ptr                  vf_sgvs_instancing;
       struct anv_gfx_state_ptr                  vf_instancing;
+      struct anv_gfx_state_ptr                  vf_component_packing;
       struct anv_gfx_state_ptr                  primitive_replication;
       struct anv_gfx_state_ptr                  sbe;
       struct anv_gfx_state_ptr                  sbe_swiz;
@@ -5020,12 +5046,16 @@ struct anv_compute_pipeline {
 
    struct anv_shader_bin *                      cs;
    uint32_t                                     batch_data[9];
-   uint32_t                                     interface_descriptor_data[8];
 
-   /* A small hash based of shader_info::source_sha1 for identifying shaders
-    * in renderdoc/shader-db.
-    */
-   uint32_t                                     source_hash;
+   union {
+      struct {
+         uint32_t                               interface_descriptor_data[8];
+         uint32_t                               gpgpu_walker[15];
+      } gfx9;
+      struct {
+         uint32_t                               compute_walker[40];
+      } gfx125;
+   };
 };
 
 struct anv_rt_shader_group {
@@ -5201,11 +5231,15 @@ struct anv_kernel {
 };
 
 struct anv_format_plane {
+   /* Main format */
    enum isl_format isl_format:16;
-   struct isl_swizzle swizzle;
+   /* Vertex buffer format */
+   enum isl_format vbo_format:16;
 
    /* What aspect is associated to this plane */
-   VkImageAspectFlags aspect;
+   VkImageAspectFlags aspect:16;
+
+   struct isl_swizzle swizzle;
 };
 
 enum anv_format_flag {
@@ -5299,6 +5333,13 @@ anv_get_isl_format(const struct anv_physical_device *device, VkFormat vk_format,
    return anv_get_format_aspect(device, vk_format, aspect, tiling).isl_format;
 }
 
+static inline enum isl_format
+anv_get_vbo_format(const struct anv_physical_device *device, VkFormat vk_format,
+                   VkImageAspectFlags aspect, VkImageTiling tiling)
+{
+   return anv_get_format_aspect(device, vk_format, aspect, tiling).vbo_format;
+}
+
 bool anv_format_supports_ccs_e(const struct anv_physical_device *device,
                                const enum isl_format format);
 
@@ -5312,7 +5353,8 @@ extern VkFormat
 vk_format_from_android(unsigned android_format, unsigned android_usage);
 
 static inline VkFormat
-anv_get_emulation_format(const struct anv_physical_device *pdevice, VkFormat format)
+anv_get_compressed_format_emulation(const struct anv_physical_device *pdevice,
+                                    VkFormat format)
 {
    if (pdevice->flush_astc_ldr_void_extent_denorms) {
       const struct util_format_description *desc =
@@ -5329,9 +5371,18 @@ anv_get_emulation_format(const struct anv_physical_device *pdevice, VkFormat for
 }
 
 static inline bool
-anv_is_format_emulated(const struct anv_physical_device *pdevice, VkFormat format)
+anv_is_compressed_format_emulated(const struct anv_physical_device *pdevice,
+                                  VkFormat format)
 {
-   return anv_get_emulation_format(pdevice, format) != VK_FORMAT_UNDEFINED;
+   return anv_get_compressed_format_emulation(pdevice,
+                                              format) != VK_FORMAT_UNDEFINED;
+}
+
+static inline bool
+anv_is_storage_format_emulated(VkFormat format)
+{
+   return format == VK_FORMAT_R64_SINT ||
+          format == VK_FORMAT_R64_UINT;
 }
 
 static inline struct isl_swizzle
@@ -5956,6 +6007,7 @@ anv_image_ccs_op(struct anv_cmd_buffer *cmd_buffer,
 
 isl_surf_usage_flags_t
 anv_image_choose_isl_surf_usage(struct anv_physical_device *device,
+                                VkFormat vk_format,
                                 VkImageCreateFlags vk_create_flags,
                                 VkImageUsageFlags vk_usage,
                                 isl_surf_usage_flags_t isl_extra_usage,
@@ -6210,6 +6262,7 @@ anv_get_image_format_features2(const struct anv_physical_device *physical_device
                                VkFormat vk_format,
                                const struct anv_format *anv_format,
                                VkImageTiling vk_tiling,
+                               bool is_sparse,
                                const struct isl_drm_modifier_info *isl_mod_info);
 
 void anv_fill_buffer_surface_state(struct anv_device *device,
@@ -6483,9 +6536,12 @@ struct anv_utrace_submit {
    struct anv_state_stream general_state_stream;
 
    /* Last fully read 64bit timestamp (used to rebuild the upper bits of 32bit
-    * timestamps)
+    * timestamps), the timestamp is not scaled to the CPU time domain.
     */
    uint64_t last_full_timestamp;
+
+   /* Last timestamp, not scaled to the CPU time domain */
+   uint64_t last_timestamp;
 
    /* Memcpy state tracking (only used for timestamp copies on render engine) */
    struct anv_memcpy_state memcpy_state;

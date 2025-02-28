@@ -64,6 +64,7 @@ build_leaf_is_procedural(nir_builder *b, struct brw_nir_rt_mem_hit_defs *hit)
 
 static void
 lower_rt_intrinsics_impl(nir_function_impl *impl,
+                         const struct brw_base_prog_key *key,
                          const struct intel_device_info *devinfo)
 {
    bool progress = false;
@@ -153,8 +154,14 @@ lower_rt_intrinsics_impl(nir_function_impl *impl,
             break;
 
          case nir_intrinsic_load_uniform: {
-            /* We don't want to lower this in the launch trampoline. */
-            if (stage == MESA_SHADER_COMPUTE)
+            /* We don't want to lower this in the launch trampoline.
+             *
+             * Also if the driver chooses to use an inline push address, we
+             * can do all the loading of the push constant in
+             * assign_curb_setup() (more efficient as we can do NoMask
+             * instructions for address calculations).
+             */
+            if (stage == MESA_SHADER_COMPUTE || key->uses_inline_push_addr)
                break;
 
             sysval = brw_nir_load_global_const(b, intrin,
@@ -379,10 +386,8 @@ lower_rt_intrinsics_impl(nir_function_impl *impl,
       }
    }
 
-   nir_metadata_preserve(impl,
-                         progress ?
-                         nir_metadata_none :
-                         (nir_metadata_control_flow));
+   nir_progress(true, impl,
+                progress ? nir_metadata_none : (nir_metadata_control_flow));
 }
 
 /** Lower ray-tracing system values and intrinsics
@@ -409,9 +414,10 @@ lower_rt_intrinsics_impl(nir_function_impl *impl,
  */
 void
 brw_nir_lower_rt_intrinsics(nir_shader *nir,
+                            const struct brw_base_prog_key *key,
                             const struct intel_device_info *devinfo)
 {
    nir_foreach_function_impl(impl, nir) {
-      lower_rt_intrinsics_impl(impl, devinfo);
+      lower_rt_intrinsics_impl(impl, key, devinfo);
    }
 }

@@ -21,8 +21,14 @@ use std::ops::Index;
 
 fn init_info_from_nir(nak: &nak_compiler, nir: &nir_shader) -> ShaderInfo {
     ShaderInfo {
+        max_warps_per_sm: 0,
         num_gprs: 0,
         num_instrs: 0,
+        num_static_cycles: 0,
+        num_spills_to_mem: 0,
+        num_fills_from_mem: 0,
+        num_spills_to_reg: 0,
+        num_fills_from_reg: 0,
         num_control_barriers: 0,
         slm_size: nir.scratch_size,
         max_crs_depth: 0,
@@ -1478,6 +1484,16 @@ impl<'a> ShaderFromNir<'a> {
                     b.shr(srcs[0], srcs[1], true)
                 }
             }
+            nir_op_lea_nv => {
+                let src_a = srcs[1];
+                let src_b = srcs[0];
+                let shift = nir_srcs[2].comp_as_uint(0).unwrap() as u8;
+                match alu.def.bit_size {
+                    32 => b.lea(src_a, src_b, shift),
+                    64 => b.lea64(src_a, src_b, shift),
+                    x => panic!("unsupported bit size for nir_op_lea_nv: {x}"),
+                }
+            }
             nir_op_isub => match alu.def.bit_size {
                 32 => b.iadd(srcs[0], srcs[1].ineg(), 0.into()),
                 64 => b.iadd64(srcs[0], srcs[1].ineg(), 0.into()),
@@ -1745,10 +1761,29 @@ impl<'a> ShaderFromNir<'a> {
         let flags: nak_nir_tex_flags =
             unsafe { std::mem::transmute_copy(&tex.backend_flags) };
 
+        let tex_ref = match flags.ref_type() {
+            NAK_NIR_TEX_REF_TYPE_BOUND => {
+                TexRef::Bound(tex.texture_index.try_into().unwrap())
+            }
+            NAK_NIR_TEX_REF_TYPE_CBUF => TexRef::CBuf(TexCBufRef {
+                idx: (tex.texture_index >> 16).try_into().unwrap(),
+                offset: tex.texture_index as u16,
+            }),
+            NAK_NIR_TEX_REF_TYPE_BINDLESS => TexRef::Bindless,
+            _ => panic!("Invalid tex ref type"),
+        };
+
         let mask = tex.def.components_read();
         let mut mask = u8::try_from(mask).unwrap();
         if flags.is_sparse() {
             mask &= !(1 << (tex.def.num_components - 1));
+            if mask == 0 {
+                // This can happen if only the sparse predicate is used.  In
+                // that case, we need at least one result register.
+                mask = 1;
+            }
+        } else {
+            debug_assert!(mask != 0);
         }
 
         let dst_comps = u8::try_from(mask.count_ones()).unwrap();
@@ -1774,6 +1809,7 @@ impl<'a> ShaderFromNir<'a> {
             assert!(fault.is_none());
             b.push_op(OpTxq {
                 dsts: dsts,
+                tex: tex_ref,
                 src: src,
                 query: TexQuery::Dimension,
                 mask: mask,
@@ -1783,6 +1819,7 @@ impl<'a> ShaderFromNir<'a> {
             assert!(fault.is_none());
             b.push_op(OpTxq {
                 dsts: dsts,
+                tex: tex_ref,
                 src: src,
                 query: TexQuery::TextureType,
                 mask: mask,
@@ -1805,7 +1842,13 @@ impl<'a> ShaderFromNir<'a> {
                 _ => panic!("Invalid offset mode"),
             };
 
-            let srcs = [self.get_src(&srcs[0].src), self.get_src(&srcs[1].src)];
+            let src0 = self.get_src(&srcs[0].src);
+            let src1 = if srcs.len() > 1 {
+                self.get_src(&srcs[1].src)
+            } else {
+                SrcRef::Zero.into()
+            };
+            let srcs = [src0, src1];
 
             if tex.op == nir_texop_txd {
                 assert!(lod_mode == TexLodMode::Auto);
@@ -1814,15 +1857,18 @@ impl<'a> ShaderFromNir<'a> {
                 b.push_op(OpTxd {
                     dsts: dsts,
                     fault,
+                    tex: tex_ref,
                     srcs: srcs,
                     dim: dim,
                     offset: offset_mode == Tld4OffsetMode::AddOffI,
+                    mem_eviction_priority: MemEvictionPriority::Normal,
                     mask: mask,
                 });
             } else if tex.op == nir_texop_lod {
                 assert!(offset_mode == Tld4OffsetMode::None);
                 b.push_op(OpTmml {
                     dsts: dsts,
+                    tex: tex_ref,
                     srcs: srcs,
                     dim: dim,
                     mask: mask,
@@ -1832,22 +1878,26 @@ impl<'a> ShaderFromNir<'a> {
                 b.push_op(OpTld {
                     dsts: dsts,
                     fault,
+                    tex: tex_ref,
                     srcs: srcs,
                     dim: dim,
                     lod_mode: lod_mode,
                     is_ms: tex.op == nir_texop_txf_ms,
                     offset: offset_mode == Tld4OffsetMode::AddOffI,
+                    mem_eviction_priority: MemEvictionPriority::Normal,
                     mask: mask,
                 });
             } else if tex.op == nir_texop_tg4 {
                 b.push_op(OpTld4 {
                     dsts: dsts,
                     fault,
+                    tex: tex_ref,
                     srcs: srcs,
                     dim: dim,
                     comp: tex.component().try_into().unwrap(),
                     offset_mode: offset_mode,
                     z_cmpr: flags.has_z_cmpr(),
+                    mem_eviction_priority: MemEvictionPriority::Normal,
                     mask: mask,
                 });
             } else {
@@ -1855,11 +1905,13 @@ impl<'a> ShaderFromNir<'a> {
                 b.push_op(OpTex {
                     dsts: dsts,
                     fault,
+                    tex: tex_ref,
                     srcs: srcs,
                     dim: dim,
                     lod_mode: lod_mode,
                     z_cmpr: flags.has_z_cmpr(),
                     offset: offset_mode == Tld4OffsetMode::AddOffI,
+                    mem_eviction_priority: MemEvictionPriority::Normal,
                     mask: mask,
                 });
             }
@@ -2286,7 +2338,7 @@ impl<'a> ShaderFromNir<'a> {
                     atom_op: atom_op,
                     atom_type: atom_type,
                     image_dim: dim,
-                    mem_order: MemOrder::Strong(MemScope::System),
+                    mem_order: MemOrder::Strong(MemScope::GPU),
                     mem_eviction_priority: self
                         .get_eviction_priority(intrin.access()),
                 });
@@ -2298,6 +2350,16 @@ impl<'a> ShaderFromNir<'a> {
                 let coord = self.get_image_coord(intrin, dim);
                 // let sample = self.get_src(&srcs[2]);
 
+                let mem_order = if (intrin.access() & ACCESS_CAN_REORDER) != 0 {
+                    if self.sm.sm() >= 80 {
+                        MemOrder::Constant
+                    } else {
+                        MemOrder::Weak
+                    }
+                } else {
+                    MemOrder::Strong(MemScope::GPU)
+                };
+
                 let comps = intrin.num_components;
                 assert!(intrin.def.bit_size() == 32);
                 assert!(comps == 1 || comps == 2 || comps == 4);
@@ -2308,7 +2370,7 @@ impl<'a> ShaderFromNir<'a> {
                     dst: dst.into(),
                     fault: Dst::None,
                     image_dim: dim,
-                    mem_order: MemOrder::Strong(MemScope::System),
+                    mem_order,
                     mem_eviction_priority: self
                         .get_eviction_priority(intrin.access()),
                     mask: (1 << comps) - 1,
@@ -2323,6 +2385,16 @@ impl<'a> ShaderFromNir<'a> {
                 let coord = self.get_image_coord(intrin, dim);
                 // let sample = self.get_src(&srcs[2]);
 
+                let mem_order = if (intrin.access() & ACCESS_CAN_REORDER) != 0 {
+                    if self.sm.sm() >= 80 {
+                        MemOrder::Constant
+                    } else {
+                        MemOrder::Weak
+                    }
+                } else {
+                    MemOrder::Strong(MemScope::GPU)
+                };
+
                 let comps = intrin.num_components;
                 assert!(intrin.def.bit_size() == 32);
                 assert!(comps == 5);
@@ -2334,7 +2406,7 @@ impl<'a> ShaderFromNir<'a> {
                     dst: dst.into(),
                     fault: fault.into(),
                     image_dim: dim,
-                    mem_order: MemOrder::Strong(MemScope::System),
+                    mem_order,
                     mem_eviction_priority: self
                         .get_eviction_priority(intrin.access()),
                     mask: (1 << (comps - 1)) - 1,
@@ -2363,7 +2435,7 @@ impl<'a> ShaderFromNir<'a> {
 
                 b.push_op(OpSuSt {
                     image_dim: dim,
-                    mem_order: MemOrder::Strong(MemScope::System),
+                    mem_order: MemOrder::Strong(MemScope::GPU),
                     mem_eviction_priority: self
                         .get_eviction_priority(intrin.access()),
                     mask: (1 << comps) - 1,
@@ -2458,7 +2530,7 @@ impl<'a> ShaderFromNir<'a> {
                     atom_type: atom_type,
                     addr_offset: offset,
                     mem_space: MemSpace::Global(MemAddrType::A64),
-                    mem_order: MemOrder::Strong(MemScope::System),
+                    mem_order: MemOrder::Strong(MemScope::GPU),
                     mem_eviction_priority: MemEvictionPriority::Normal, // Note: no intrinic access
                 });
                 self.set_dst(&intrin.def, dst);
@@ -2483,7 +2555,7 @@ impl<'a> ShaderFromNir<'a> {
                     atom_type: atom_type,
                     addr_offset: offset,
                     mem_space: MemSpace::Global(MemAddrType::A64),
-                    mem_order: MemOrder::Strong(MemScope::System),
+                    mem_order: MemOrder::Strong(MemScope::GPU),
                     mem_eviction_priority: MemEvictionPriority::Normal, // Note: no intrinic access
                 });
                 self.set_dst(&intrin.def, dst);
@@ -2568,7 +2640,7 @@ impl<'a> ShaderFromNir<'a> {
                 {
                     MemOrder::Constant
                 } else {
-                    MemOrder::Strong(MemScope::System)
+                    MemOrder::Strong(MemScope::GPU)
                 };
                 let access = MemAccess {
                     mem_type: MemType::from_size(size_B, false),
@@ -3012,7 +3084,7 @@ impl<'a> ShaderFromNir<'a> {
                 let access = MemAccess {
                     mem_type: MemType::from_size(size_B, false),
                     space: MemSpace::Global(MemAddrType::A64),
-                    order: MemOrder::Strong(MemScope::System),
+                    order: MemOrder::Strong(MemScope::GPU),
                     eviction_priority: self
                         .get_eviction_priority(intrin.access()),
                 };

@@ -313,8 +313,6 @@ panvk_draw_prepare_fs_rsd(struct panvk_cmd_buffer *cmdbuf,
       cfg.stencil_mask_misc.alpha_test_compare_function = MALI_FUNC_ALWAYS;
       cfg.stencil_mask_misc.front_facing_depth_bias = rs->depth_bias.enable;
       cfg.stencil_mask_misc.back_facing_depth_bias = rs->depth_bias.enable;
-      cfg.stencil_mask_misc.single_sampled_lines =
-         dyns->ms.rasterization_samples <= 1;
 
       cfg.depth_units = rs->depth_bias.constant_factor;
       cfg.depth_factor = rs->depth_bias.slope_factor;
@@ -865,7 +863,7 @@ panvk_emit_tiler_primitive_size(struct panvk_cmd_buffer *cmdbuf,
       if (writes_point_size) {
          cfg.size_array = draw->psiz;
       } else {
-         cfg.constant = draw->line_width;
+         cfg.fixed_sized = draw->line_width;
       }
    }
 }

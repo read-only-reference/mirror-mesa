@@ -1051,6 +1051,14 @@ v3d_nir_lower_vs_early(struct v3d_compile *c)
         NIR_PASS(_, c->s, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
                  type_size_vec4,
                  (nir_lower_io_options)0);
+
+        /* For geometry stages using the same segment for inputs and outputs
+         * we need to read all inputs before writing any output. If we switch
+         * to separate segments in the future this may not longer be strictly
+         * required.
+         */
+        NIR_PASS(_, c->s, nir_move_output_stores_to_end);
+
         /* clean up nir_lower_io's deref_var remains and do a constant folding pass
          * on the code it generated.
          */
@@ -1568,8 +1576,7 @@ v3d_nir_sort_constant_ubo_loads(nir_shader *s, struct v3d_compile *c)
                         c->sorted_any_ubo_loads |=
                                 v3d_nir_sort_constant_ubo_loads_block(c, block);
                 }
-                nir_metadata_preserve(impl,
-                                      nir_metadata_control_flow);
+                nir_progress(true, impl, nir_metadata_control_flow);
         }
         return c->sorted_any_ubo_loads;
 }
@@ -1664,8 +1671,7 @@ v3d_nir_lower_subgroup_intrinsics(nir_shader *s, struct v3d_compile *c)
                 nir_foreach_block(block, impl)
                         progress |= lower_subgroup_intrinsics(c, block, &b);
 
-                nir_metadata_preserve(impl,
-                                      nir_metadata_control_flow);
+                nir_progress(true, impl, nir_metadata_control_flow);
         }
         return progress;
 }

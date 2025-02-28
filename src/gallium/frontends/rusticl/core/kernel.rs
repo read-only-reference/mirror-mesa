@@ -588,7 +588,13 @@ fn opt_nir(nir: &mut NirShader, dev: &Device, has_explicit_types: bool) {
         progress |= nir_pass!(nir, nir_opt_dead_cf);
         progress |= nir_pass!(nir, nir_opt_remove_phis);
         // we don't want to be too aggressive here, but it kills a bit of CFG
-        progress |= nir_pass!(nir, nir_opt_peephole_select, 8, true, true);
+        let peephole_select_options = nir_opt_peephole_select_options {
+            limit: 8,
+            indirect_load_ok: true,
+            expensive_alu_ok: true,
+            discard_ok: false,
+        };
+        progress |= nir_pass!(nir, nir_opt_peephole_select, &peephole_select_options);
         progress |= nir_pass!(
             nir,
             nir_lower_vec3_to_vec4,
@@ -639,6 +645,12 @@ fn compile_nir_to_args(
     nir_pass!(nir, nir_scale_fdiv);
     nir.set_workgroup_size_variable_if_zero();
     nir.structurize();
+    nir_pass!(
+        nir,
+        nir_lower_variable_initializers,
+        nir_variable_mode::nir_var_function_temp
+    );
+
     while {
         let mut progress = false;
         nir_pass!(nir, nir_split_var_copies);
@@ -663,7 +675,6 @@ fn compile_nir_to_args(
 
     let printf_opts = nir_lower_printf_options {
         ptr_bit_size: 0,
-        use_printf_base_identifier: false,
         hash_format_strings: false,
         max_buffer_size: dev.printf_buffer_size() as u32,
     };
@@ -1318,14 +1329,7 @@ impl Kernel {
         self.optimize_local_size(q.device, &mut grid, &mut block);
 
         Ok(Box::new(move |q, ctx| {
-            let hw_max_grid: Vec<usize> = q
-                .device
-                .max_grid_size()
-                .into_iter()
-                .map(|val| val.try_into().unwrap_or(usize::MAX))
-                // clamped as pipe_launch_grid::grid is only u32
-                .map(|val| cmp::min(val, u32::MAX as usize))
-                .collect();
+            let hw_max_grid: Vec<usize> = q.device.max_grid_size();
 
             let variant = if offsets == [0; 3]
                 && grid[0] <= hw_max_grid[0]
