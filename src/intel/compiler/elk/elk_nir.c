@@ -781,8 +781,7 @@ lower_bit_size_callback(const nir_instr *instr, UNUSED void *data)
       case nir_op_fcos:
          return 32;
       case nir_op_isign:
-         assert(!"Should have been lowered by nir_opt_algebraic.");
-         return 0;
+         unreachable("Should have been lowered by nir_opt_algebraic.");
       default:
          if (nir_op_infos[alu->op].num_inputs >= 2 &&
              alu->def.bit_size == 8)
@@ -1665,9 +1664,6 @@ elk_nir_apply_key(nir_shader *nir,
    bool progress = false;
 
    OPT(elk_nir_apply_sampler_key, compiler, &key->tex);
-
-   const struct intel_nir_lower_texture_opts tex_opts = {0};
-   OPT(intel_nir_lower_texture, &tex_opts);
 
    const nir_lower_subgroups_options subgroups_options = {
       .subgroup_size = get_subgroup_size(&nir->info, max_subgroup_size),

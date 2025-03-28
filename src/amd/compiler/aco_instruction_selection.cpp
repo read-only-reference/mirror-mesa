@@ -967,13 +967,21 @@ emit_bcsel(isel_context* ctx, nir_alu_instr* instr, Temp dst)
    }
 
    if (!nir_src_is_divergent(&instr->src[0].src)) { /* uniform condition and values in sgpr */
-      if (dst.regClass() == s1 || dst.regClass() == s2) {
+      cond = bool_to_scalar_condition(ctx, cond);
+
+      bool els_zero =
+         nir_src_is_const(instr->src[2].src) && nir_src_as_uint(instr->src[2].src) == 0;
+
+      if (dst.regClass() == s1 && els_zero) {
+         /* Use s_mul_i32 because it doesn't require scc. */
+         bld.sop2(aco_opcode::s_mul_i32, Definition(dst), then, cond);
+      } else if (dst.regClass() == s1 || dst.regClass() == s2) {
          assert((then.regClass() == s1 || then.regClass() == s2) &&
                 els.regClass() == then.regClass());
          assert(dst.size() == then.size());
          aco_opcode op =
             dst.regClass() == s1 ? aco_opcode::s_cselect_b32 : aco_opcode::s_cselect_b64;
-         bld.sop2(op, Definition(dst), then, els, bld.scc(bool_to_scalar_condition(ctx, cond)));
+         bld.sop2(op, Definition(dst), then, els, bld.scc(cond));
       } else {
          isel_err(&instr->instr, "Unimplemented uniform bcsel bit size");
       }
@@ -2145,6 +2153,31 @@ visit_alu_instr(isel_context* ctx, nir_alu_instr* instr)
          }
       } else if (dst.regClass() == s1) {
          emit_sop2_instruction(ctx, instr, aco_opcode::s_mul_i32, dst, false);
+      } else {
+         isel_err(&instr->instr, "Unimplemented NIR instr bit size");
+      }
+      break;
+   }
+   case nir_op_imul24_relaxed: {
+      if (dst.regClass() == s1) {
+         emit_sop2_instruction(ctx, instr, aco_opcode::s_mul_i32, dst, false);
+      } else if (dst.regClass() == v1) {
+         emit_vop2_instruction(ctx, instr, aco_opcode::v_mul_i32_i24, dst, true);
+      } else {
+         isel_err(&instr->instr, "Unimplemented NIR instr bit size");
+      }
+      break;
+   }
+   case nir_op_umul24_relaxed: {
+      if (dst.regClass() == s1) {
+         Operand op1(get_alu_src(ctx, instr->src[0]));
+         Operand op2(get_alu_src(ctx, instr->src[1]));
+         op1.set24bit(true);
+         op2.set24bit(true);
+         bld.sop2(aco_opcode::s_mul_i32, Definition(dst), op1, op2);
+      } else if (dst.regClass() == v1) {
+         emit_vop2_instruction(ctx, instr, aco_opcode::v_mul_u32_u24, dst, true /* commutative */,
+                               false, false, false, 0x3);
       } else {
          isel_err(&instr->instr, "Unimplemented NIR instr bit size");
       }
@@ -5910,7 +5943,7 @@ visit_bvh64_intersect_ray_amd(isel_context* ctx, nir_intrinsic_instr* instr)
       node, tmax, origin, dir, inv_dir,
    };
 
-   if (bld.program->gfx_level == GFX10_3) {
+   if (bld.program->gfx_level == GFX10_3 || bld.program->family == CHIP_GFX1013) {
       std::vector<Temp> scalar_args;
       for (Temp tmp : args) {
          for (unsigned i = 0; i < tmp.size(); i++)
@@ -8072,24 +8105,8 @@ visit_intrinsic(isel_context* ctx, nir_intrinsic_instr* instr)
          aco_opcode subrev =
             instr->def.bit_size == 16 ? aco_opcode::v_subrev_f16 : aco_opcode::v_subrev_f32;
 
-         /* v_interp with constant sources only works on GFX11/11.5,
-          * and it's only faster on GFX11.5.
-          */
-         bool use_interp = dpp_ctrl1 == dpp_quad_perm(0, 0, 0, 0) && instr->def.bit_size == 32 &&
-                           ctx->program->gfx_level == GFX11_5;
          if (!nir_src_is_divergent(&instr->src[0])) {
             bld.vop2(subrev, Definition(dst), src, src);
-         } else if (use_interp && dpp_ctrl2 == dpp_quad_perm(1, 1, 1, 1)) {
-            bld.vinterp_inreg(aco_opcode::v_interp_p10_f32_inreg, Definition(dst), src,
-                              Operand::c32(0x3f800000), src)
-               ->valu()
-               .neg[2] = true;
-         } else if (use_interp && dpp_ctrl2 == dpp_quad_perm(2, 2, 2, 2)) {
-            Builder::Result tmp = bld.vinterp_inreg(aco_opcode::v_interp_p10_f32_inreg, bld.def(v1),
-                                                    Operand::c32(0), Operand::c32(0), src);
-            tmp->valu().neg = 0x6;
-            bld.vinterp_inreg(aco_opcode::v_interp_p2_f32_inreg, Definition(dst), src,
-                              Operand::c32(0x3f800000), tmp);
          } else if (ctx->program->gfx_level >= GFX8 && dpp_ctrl2 == dpp_quad_perm(0, 1, 2, 3)) {
             bld.vop2_dpp(subrev, Definition(dst), src, src, dpp_ctrl1);
          } else if (ctx->program->gfx_level >= GFX8) {
@@ -8639,11 +8656,11 @@ visit_intrinsic(isel_context* ctx, nir_intrinsic_instr* instr)
 
       bld.pseudo(aco_opcode::p_demote_to_helper, cond);
 
-      /* Perform the demote in WQM so that it doesn't make exec empty. WQM should last until at
-       * least the next top-level block.
+      /* Perform the demote in WQM so that it doesn't make exec empty.
+       * WQM should last until at least the next top-level block.
        */
       if (ctx->cf_info.in_divergent_cf)
-         set_wqm(ctx);
+         set_wqm(ctx, true);
 
       ctx->block->kind |= block_kind_uses_discard;
       ctx->program->needs_exact = true;

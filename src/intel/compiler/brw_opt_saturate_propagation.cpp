@@ -86,10 +86,14 @@ propagate_sat(brw_inst *inst, brw_inst *scan_inst)
 }
 
 static bool
-opt_saturate_propagation_local(brw_shader &s, bblock_t *block)
+opt_saturate_propagation_local(brw_shader &s,
+                               const brw_ip_ranges &ips,
+                               bblock_t *block)
 {
    bool progress = false;
-   int ip = block->end_ip + 1;
+   int ip = ips.end(block) + 1;
+
+   /* Walk backwards so IPs don't become invalid. */
 
    foreach_inst_in_block_reverse(brw_inst, inst, block) {
       ip--;
@@ -129,7 +133,7 @@ opt_saturate_propagation_local(brw_shader &s, bblock_t *block)
          /* If the def is in a different block the liveness based pass will
           * not be able to make progress, so skip it.
           */
-         if (block != defs.get_block(inst->src[0]))
+         if (block != def->block)
             continue;
       }
 
@@ -192,11 +196,14 @@ brw_opt_saturate_propagation(brw_shader &s)
 {
    bool progress = false;
 
+   const brw_ip_ranges &ips = s.ip_ranges_analysis.require();
+
    foreach_block (block, s.cfg) {
-      progress = opt_saturate_propagation_local(s, block) || progress;
+      progress = opt_saturate_propagation_local(s, ips, block) || progress;
    }
 
-   /* Live intervals are still valid. */
+   if (progress)
+      s.invalidate_analysis(BRW_DEPENDENCY_INSTRUCTION_DETAIL);
 
    return progress;
 }

@@ -1771,7 +1771,7 @@ ASSERTED static bool is_dcc_supported_by_L2(const struct radeon_info *info,
       return single_indep && valid_64b;
    }
 
-   if (info->family == CHIP_NAVI10) {
+   if (info->family == CHIP_NAVI10 || info->family == CHIP_GFX1013) {
       /* Only independent 128B blocks are supported. */
       return single_indep && valid_128b;
    }
@@ -3315,6 +3315,8 @@ static bool gfx12_compute_surface(struct ac_addrlib *addrlib, const struct radeo
                  /* Don't change the DCC settings for imported buffers - they might differ. */
                  !(surf->flags & RADEON_SURF_IMPORTED)) {
          surf->u.gfx9.color.dcc.max_compressed_block_size = V_028C78_MAX_BLOCK_SIZE_256B;
+         if ((info->drm_minor < 63) && (surf->flags & RADEON_SURF_SCANOUT))
+            surf->u.gfx9.color.dcc.max_compressed_block_size = V_028C78_MAX_BLOCK_SIZE_128B;
       }
    }
 

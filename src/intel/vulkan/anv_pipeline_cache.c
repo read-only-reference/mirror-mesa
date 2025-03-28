@@ -165,6 +165,7 @@ anv_shader_bin_destroy(struct vk_device *_device,
    for (uint32_t i = 0; i < shader->bind_map.embedded_sampler_count; i++)
       anv_embedded_sampler_unref(device, shader->embedded_samplers[i]);
 
+   ANV_DMR_SP_FREE(&device->vk.base, &device->instruction_state_pool, shader->kernel);
    anv_state_pool_free(&device->instruction_state_pool, shader->kernel);
    vk_pipeline_cache_object_finish(&shader->base);
    vk_free(&device->vk.alloc, shader);
@@ -252,12 +253,14 @@ anv_shader_bin_create(struct anv_device *device,
 
    shader->kernel =
       anv_state_pool_alloc(&device->instruction_state_pool, kernel_size, 64);
+   ANV_DMR_SP_ALLOC(&device->vk.base, &device->instruction_state_pool, shader->kernel);
    memcpy(shader->kernel.map, kernel_data, kernel_size);
    shader->kernel_size = kernel_size;
 
    if (bind_map->embedded_sampler_count > 0) {
       shader->embedded_samplers = embedded_samplers;
       if (anv_shader_bin_get_embedded_samplers(device, shader, bind_map) != VK_SUCCESS) {
+         ANV_DMR_SP_FREE(&device->vk.base, &device->instruction_state_pool, shader->kernel);
          anv_state_pool_free(&device->instruction_state_pool, shader->kernel);
          vk_free(&device->vk.alloc, shader);
          return NULL;
@@ -686,22 +689,6 @@ anv_load_fp64_shader(struct anv_device *device)
    NIR_PASS_V(nir, nir_lower_variable_initializers, nir_var_function_temp);
    NIR_PASS_V(nir, nir_lower_returns);
    NIR_PASS_V(nir, nir_inline_functions);
-   NIR_PASS_V(nir, nir_opt_deref);
-
-   NIR_PASS_V(nir, nir_lower_vars_to_ssa);
-   NIR_PASS_V(nir, nir_copy_prop);
-   NIR_PASS_V(nir, nir_opt_dce);
-   NIR_PASS_V(nir, nir_opt_cse);
-   NIR_PASS_V(nir, nir_opt_gcm, true);
-
-   nir_opt_peephole_select_options peephole_select_options = {
-      .limit = 1,
-   };
-   NIR_PASS_V(nir, nir_opt_peephole_select, &peephole_select_options);
-   NIR_PASS_V(nir, nir_opt_dce);
-
-   NIR_PASS_V(nir, nir_lower_explicit_io, nir_var_function_temp,
-              nir_address_format_62bit_generic);
 
    anv_device_upload_nir(device, device->internal_cache,
                          nir, sha1);

@@ -281,6 +281,7 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_load_ring_attr_offset_amd:
    case nir_intrinsic_load_provoking_vtx_amd:
    case nir_intrinsic_load_sample_positions_pan:
+   case nir_intrinsic_load_shader_output_pan:
    case nir_intrinsic_load_workgroup_num_input_vertices_amd:
    case nir_intrinsic_load_workgroup_num_input_primitives_amd:
    case nir_intrinsic_load_pipeline_stat_query_enabled_amd:
@@ -957,11 +958,21 @@ visit_tex(nir_tex_instr *instr, struct divergence_state *state)
          is_divergent |= src_divergent(instr->src[i].src, state) &&
                          instr->texture_non_uniform;
          break;
+      case nir_tex_src_offset:
+         instr->offset_non_uniform = src_divergent(instr->src[i].src, state);
+         is_divergent |= instr->offset_non_uniform;
+         break;
       default:
          is_divergent |= src_divergent(instr->src[i].src, state);
          break;
       }
    }
+
+   /* If the texture instruction skips helpers, that may add divergence even
+    * if none of the sources of the texture op diverge.
+    */
+   if (instr->skip_helpers)
+      is_divergent = true;
 
    instr->def.divergent = is_divergent;
    return is_divergent;

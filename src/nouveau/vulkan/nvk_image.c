@@ -21,7 +21,7 @@
 
 #include "clb097.h"
 #include "clb197.h"
-#include "clc097.h"
+#include "clc197.h"
 #include "clc597.h"
 
 static VkFormatFeatureFlags2
@@ -291,7 +291,12 @@ nvk_image_max_dimension(const struct nv_device_info *info,
    switch (image_type) {
    case VK_IMAGE_TYPE_1D:
    case VK_IMAGE_TYPE_2D:
-      return info->cls_eng3d >= PASCAL_A ? 0x8000 : 0x4000;
+      /* The render and texture units can support up to 16K all the way back
+       * to Kepler but the copy engine can't.  We can work around this by
+       * doing offset shenanigans in the copy code but that not currently
+       * implemented.
+       */
+      return info->cls_eng3d >= PASCAL_B ? 0x8000 : 0x4000;
    case VK_IMAGE_TYPE_3D:
       return 0x4000;
    default:
@@ -861,8 +866,12 @@ nvk_image_init(struct nvk_device *dev,
             .samples = image->vk.samples,
             .usage = usage & ~NIL_IMAGE_USAGE_LINEAR_BIT,
          };
-         image->linear_tiled_shadow.nil =
-            nil_image_new(&pdev->info, &tiled_shadow_nil_info);
+         bool ok = nil_image_init(&pdev->info,
+                                  &image->linear_tiled_shadow.nil,
+                                  &tiled_shadow_nil_info);
+         if (!ok)
+            return vk_errorf(dev, VK_ERROR_UNKNOWN,
+                             "Invalid image creation parameters");
       }
    }
 
@@ -903,13 +912,22 @@ nvk_image_init(struct nvk_device *dev,
    if (usage & NIL_IMAGE_USAGE_VIDEO_BIT) {
       assert(!image->disjoint);
       for (uint8_t plane = 0; plane < image->plane_count; plane++) {
-         image->planes[plane].nil =
-            nil_image_new_planar(&pdev->info, nil_info, plane, image->plane_count);
+         bool ok = nil_image_init_planar(&pdev->info,
+                                         &image->planes[plane].nil,
+                                         nil_info, plane,
+                                         image->plane_count);
+         if (!ok)
+            return vk_errorf(dev, VK_ERROR_UNKNOWN,
+                             "Invalid image creation parameters");
       }
    } else {
       for (uint8_t plane = 0; plane < image->plane_count; plane++) {
-         image->planes[plane].nil =
-            nil_image_new(&pdev->info, &nil_info[plane]);
+         bool ok = nil_image_init(&pdev->info,
+                                  &image->planes[plane].nil,
+                                  &nil_info[plane]);
+         if (!ok)
+            return vk_errorf(dev, VK_ERROR_UNKNOWN,
+                             "Invalid image creation parameters");
       }
    }
 
@@ -929,8 +947,12 @@ nvk_image_init(struct nvk_device *dev,
          .usage = usage,
       };
 
-      image->stencil_copy_temp.nil =
-         nil_image_new(&pdev->info, &stencil_nil_info);
+      bool ok = nil_image_init(&pdev->info,
+                               &image->stencil_copy_temp.nil,
+                               &stencil_nil_info);
+      if (!ok)
+         return vk_errorf(dev, VK_ERROR_UNKNOWN,
+                          "Invalid image creation parameters");
    }
 
    return VK_SUCCESS;

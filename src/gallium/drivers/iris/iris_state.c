@@ -2801,6 +2801,7 @@ fill_buffer_surface_state(struct isl_device *isl_dev,
                          .format = format,
                          .swizzle = swizzle,
                          .stride_B = cpp,
+                         .usage = usage,
                          .mocs = iris_mocs(res->bo, isl_dev, usage));
 }
 
@@ -3273,8 +3274,6 @@ iris_create_surface(struct pipe_context *ctx,
    pipe_resource_reference(&psurf->texture, tex);
    psurf->context = ctx;
    psurf->format = tmpl->format;
-   psurf->width = isl_surf.logical_level0_px.width;
-   psurf->height = isl_surf.logical_level0_px.height;
    psurf->texture = tex;
    psurf->u.tex.first_layer = tmpl->u.tex.first_layer;
    psurf->u.tex.last_layer = tmpl->u.tex.last_layer;
@@ -3501,7 +3500,6 @@ iris_set_sampler_views(struct pipe_context *ctx,
                        enum pipe_shader_type p_stage,
                        unsigned start, unsigned count,
                        unsigned unbind_num_trailing_slots,
-                       bool take_ownership,
                        struct pipe_sampler_view **views)
 {
    struct iris_context *ice = (struct iris_context *) ctx;
@@ -3529,14 +3527,8 @@ iris_set_sampler_views(struct pipe_context *ctx,
       }
 #endif
 
-      if (take_ownership) {
-         pipe_sampler_view_reference((struct pipe_sampler_view **)
-                                     &shs->textures[start + i], NULL);
-         shs->textures[start + i] = (struct iris_sampler_view *)pview;
-      } else {
-         pipe_sampler_view_reference((struct pipe_sampler_view **)
-                                     &shs->textures[start + i], pview);
-      }
+      pipe_sampler_view_reference((struct pipe_sampler_view **)
+                                    &shs->textures[start + i], pview);
       if (view) {
          view->res->bind_history |= PIPE_BIND_SAMPLER_VIEW;
          view->res->bind_stages |= 1 << stage;
@@ -5251,7 +5243,10 @@ iris_store_tes_state(const struct intel_device_info *devinfo,
       STATIC_ASSERT(TEDMODE_OFF == 0);
 
    #if GFX_VER >= 20
-      te.TessellationDistributionLevel = TEDLEVEL_REGION;
+      if (intel_needs_workaround(devinfo, 16025857284))
+         te.TessellationDistributionLevel = TEDLEVEL_PATCH;
+      else
+         te.TessellationDistributionLevel = TEDLEVEL_REGION;
    #else
       te.TessellationDistributionLevel = TEDLEVEL_PATCH;
    #endif
@@ -7531,7 +7526,6 @@ iris_upload_dirty_render_state(struct iris_context *ice,
                MERGE_SCRATCH_ADDR(3DSTATE_DS);
                break;
             }
-            case MESA_SHADER_GEOMETRY:  MERGE_SCRATCH_ADDR(3DSTATE_GS); break;
             }
          } else {
             iris_batch_emit(batch, shader->derived_data,
@@ -10548,6 +10542,7 @@ genX(init_state)(struct iris_context *ice)
    ctx->set_vertex_buffers = iris_set_vertex_buffers;
    ctx->set_viewport_states = iris_set_viewport_states;
    ctx->sampler_view_destroy = iris_sampler_view_destroy;
+   ctx->sampler_view_release = u_default_sampler_view_release;
    ctx->surface_destroy = iris_surface_destroy;
    ctx->draw_vbo = iris_draw_vbo;
    ctx->launch_grid = iris_launch_grid;

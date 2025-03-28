@@ -1028,7 +1028,6 @@ tu_lower_io(nir_shader *shader, struct tu_device *dev,
 struct lower_fdm_options {
    unsigned num_views;
    bool adjust_fragcoord;
-   bool multiview;
 };
 
 static bool
@@ -1055,7 +1054,7 @@ lower_fdm_instr(struct nir_builder *b, nir_instr *instr, void *data)
    nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
 
    nir_def *view;
-   if (options->multiview) {
+   if (options->num_views > 1) {
       nir_variable *view_var =
          nir_find_variable_with_location(b->shader, nir_var_shader_in,
                                          VARYING_SLOT_VIEW_INDEX);
@@ -1157,7 +1156,8 @@ tu_xs_get_immediates_packet_size_dwords(const struct ir3_shader_variant *xs)
 {
    const struct ir3_const_state *const_state = ir3_const_state(xs);
    uint32_t base = const_state->allocs.max_const_offset_vec4;
-   int32_t size = DIV_ROUND_UP(const_state->immediates_count, 4);
+   const struct ir3_imm_const_state *imm_state = &xs->imm_state;
+   int32_t size = DIV_ROUND_UP(imm_state->count, 4);
 
    /* truncate size to avoid writing constants that shader
     * does not use:
@@ -1365,6 +1365,7 @@ tu6_emit_xs(struct tu_cs *cs,
 
    const struct ir3_const_state *const_state = ir3_const_state(xs);
    uint32_t base = const_state->allocs.max_const_offset_vec4;
+   const struct ir3_imm_const_state *imm_state = &xs->imm_state;
    unsigned immediate_size = tu_xs_get_immediates_packet_size_dwords(xs);
 
    if (immediate_size > 0) {
@@ -1378,7 +1379,7 @@ tu6_emit_xs(struct tu_cs *cs,
       tu_cs_emit(cs, CP_LOAD_STATE6_1_EXT_SRC_ADDR(0));
       tu_cs_emit(cs, CP_LOAD_STATE6_2_EXT_SRC_ADDR_HI(0));
 
-      tu_cs_emit_array(cs, const_state->immediates, immediate_size);
+      tu_cs_emit_array(cs, imm_state->values, immediate_size);
    }
 
    if (const_state->consts_ubo.idx != -1) {
@@ -2078,7 +2079,6 @@ tu6_emit_fs(struct tu_cs *cs,
 
    if (CHIP >= A7XX) {
       tu_cs_emit_regs(cs, A6XX_GRAS_UNKNOWN_8110(0x2));
-      tu_cs_emit_regs(cs, A7XX_HLSQ_FS_UNKNOWN_A9AA(.consts_load_disable = false));
    }
 
    if (fs) {

@@ -582,7 +582,7 @@ radv_device_init_rgp(struct radv_device *device)
    if (!(instance->vk.trace_mode & RADV_TRACE_MODE_RGP))
       return VK_SUCCESS;
 
-   if (pdev->info.gfx_level < GFX8 || pdev->info.gfx_level > GFX11_5) {
+   if (pdev->info.gfx_level < GFX8 || pdev->info.gfx_level > GFX12) {
       fprintf(stderr, "GPU hardware not supported: refer to "
                       "the RGP documentation for the list of "
                       "supported GPUs!\n");
@@ -1376,11 +1376,6 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
 
    if (device->vk.enabled_features.rayTracingPipelineShaderGroupHandleCaptureReplay) {
       device->capture_replay_arena_vas = _mesa_hash_table_u64_create(NULL);
-   }
-
-   if (pdev->info.gfx_level == GFX11 && pdev->info.has_dedicated_vram && instance->drirc.force_pstate_peak_gfx11_dgpu) {
-      if (!radv_device_acquire_performance_counters(device))
-         fprintf(stderr, "radv: failed to set pstate to profile_peak.\n");
    }
 
    *pDevice = radv_device_to_handle(device);

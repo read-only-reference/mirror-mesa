@@ -2409,6 +2409,12 @@ typedef struct nir_tex_instr {
    /** True if this tg4 instruction has an implicit LOD or LOD bias, instead of using level 0 */
    unsigned is_gather_implicit_lod : 1;
 
+   /** True if helper invocation loads can be skipped
+    *
+    * This is set by nir_opt_tex_skip_helpers().
+    */
+   unsigned skip_helpers : 1;
+
    /** Gather offsets */
    int8_t tg4_offsets[4][2];
 
@@ -2428,6 +2434,9 @@ typedef struct nir_tex_instr {
     * expression, or texture lookup will result in undefined values.").
     */
    bool sampler_non_uniform;
+
+   /** True if the offset is not dynamically uniform */
+   bool offset_non_uniform;
 
    /** The texture index
     *
@@ -4235,6 +4244,15 @@ nir_instr_get_debug_info(nir_instr *instr)
    return container_of(instr, nir_instr_debug_info, instr);
 }
 
+static inline void *
+nir_instr_get_gc_pointer(nir_instr *instr)
+{
+   if (unlikely(instr->has_debug_info))
+      return nir_instr_get_debug_info(instr);
+
+   return instr;
+}
+
 typedef bool (*nir_foreach_def_cb)(nir_def *def, void *state);
 typedef bool (*nir_foreach_src_cb)(nir_src *src, void *state);
 static inline bool nir_foreach_src(nir_instr *instr, nir_foreach_src_cb cb, void *state);
@@ -5154,9 +5172,11 @@ nir_lower_shader_calls(nir_shader *shader,
                        void *mem_ctx);
 
 int nir_get_io_offset_src_number(const nir_intrinsic_instr *instr);
+int nir_get_io_index_src_number(const nir_intrinsic_instr *instr);
 int nir_get_io_arrayed_index_src_number(const nir_intrinsic_instr *instr);
 
 nir_src *nir_get_io_offset_src(nir_intrinsic_instr *instr);
+nir_src *nir_get_io_index_src(nir_intrinsic_instr *instr);
 nir_src *nir_get_io_arrayed_index_src(nir_intrinsic_instr *instr);
 nir_src *nir_get_shader_call_payload_src(nir_intrinsic_instr *call);
 
@@ -5630,14 +5650,20 @@ enum nir_lower_non_uniform_access_type {
    nir_lower_non_uniform_texture_access = (1 << 2),
    nir_lower_non_uniform_image_access = (1 << 3),
    nir_lower_non_uniform_get_ssbo_size = (1 << 4),
-   nir_lower_non_uniform_access_type_count = 5,
+   nir_lower_non_uniform_texture_offset_access = (1 << 5),
+   nir_lower_non_uniform_access_type_count = 6,
 };
 
+typedef bool (*nir_lower_non_uniform_src_access_callback)(const nir_tex_instr *, unsigned, void *);
 /* Given the nir_src used for the resource, return the channels which might be non-uniform. */
 typedef nir_component_mask_t (*nir_lower_non_uniform_access_callback)(const nir_src *, void *);
 
 typedef struct nir_lower_non_uniform_access_options {
    enum nir_lower_non_uniform_access_type types;
+   /* Called on nir_tex_instr to ask whether non-uniform lowering is required
+    * for a particular source
+    */
+   nir_lower_non_uniform_src_access_callback tex_src_callback;
    nir_lower_non_uniform_access_callback callback;
    void *callback_data;
 } nir_lower_non_uniform_access_options;
@@ -5765,6 +5791,16 @@ bool nir_lower_bit_size(nir_shader *shader,
                         void *callback_data);
 bool nir_lower_64bit_phis(nir_shader *shader);
 
+typedef struct nir_split_conversions_options {
+   nir_lower_bit_size_callback callback;
+   void *callback_data;
+   /* True if the implementation supports nir_intrinsic_convert_alu_types */
+   bool has_convert_alu_types;
+} nir_split_conversions_options;
+
+bool nir_split_conversions(nir_shader *shader,
+                           const nir_split_conversions_options *options);
+
 bool nir_split_64bit_vec3_and_vec4(nir_shader *shader);
 
 nir_lower_int64_options nir_lower_int64_op_to_options_mask(nir_op opcode);
@@ -5832,9 +5868,8 @@ bool nir_lower_interpolation(nir_shader *shader,
                              nir_lower_interpolation_options options);
 
 typedef enum {
-   nir_lower_discard_if_to_cf = (1 << 0),
-   nir_lower_demote_if_to_cf = (1 << 1),
-   nir_lower_terminate_if_to_cf = (1 << 2),
+   nir_lower_demote_if_to_cf = (1 << 0),
+   nir_lower_terminate_if_to_cf = (1 << 1),
 } nir_lower_discard_if_options;
 
 bool nir_lower_discard_if(nir_shader *shader, nir_lower_discard_if_options options);
@@ -6113,6 +6148,8 @@ bool nir_opt_move_discards_to_top(nir_shader *shader);
 bool nir_opt_ray_queries(nir_shader *shader);
 
 bool nir_opt_ray_query_ranges(nir_shader *shader);
+
+bool nir_opt_tex_skip_helpers(nir_shader *shader, bool no_add_divergence);
 
 void nir_sweep(nir_shader *shader);
 

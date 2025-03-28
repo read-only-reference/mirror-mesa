@@ -192,7 +192,7 @@ debian-testing-ubsan:
       -Wno-error=stringop-truncation
     CPP_ARGS: >
       -Wno-error=array-bounds
-    GALLIUM_DRIVERS: "swrast"
+    GALLIUM_DRIVERS: "llvmpipe,softpipe"
     VULKAN_DRIVERS: "swrast"
     EXTRA_OPTION: >
       -D b_sanitize=undefined
@@ -241,7 +241,6 @@ debian-build-testing:
     BUILDTYPE: "debugoptimized"
     EXTRA_OPTION: >
       -D spirv-to-dxil=true
-      -D osmesa=true
       -D tools=drm-shim,etnaviv,freedreno,glsl,intel,intel-ui,nir,nouveau,lima,panfrost,asahi
       -D perfetto=true
     S3_ARTIFACT_NAME: debian-build-testing
@@ -273,7 +272,6 @@ debian-release:
     VULKAN_DRIVERS: "swrast,intel_hasvk,imagination-experimental,microsoft-experimental"
     EXTRA_OPTION: >
       -D spirv-to-dxil=true
-      -D osmesa=true
       -D tools=all
       -D mesa-clc=enabled
       -D precomp-compiler=enabled
@@ -318,7 +316,7 @@ alpine-build-testing:
       -D microsoft-clc=disabled
       -D shared-llvm=enabled
     UNWIND: "disabled"
-    VULKAN_DRIVERS: "amd,asahi,broadcom,freedreno,intel,imagination-experimental"
+    VULKAN_DRIVERS: "amd,broadcom,freedreno,intel,imagination-experimental"
 
 fedora-release:
   extends:
@@ -344,7 +342,6 @@ fedora-release:
       -D glvnd=enabled
       -D platforms=x11,wayland
     EXTRA_OPTION: >
-      -D osmesa=true
       -D tools=drm-shim,etnaviv,freedreno,glsl,intel,nir,nouveau,lima,panfrost,imagination
       -D vulkan-layers=device-select,overlay
       -D intel-rt=enabled
@@ -422,22 +419,27 @@ debian-android:
       -D install-mesa-clc=true
       -D precomp-compiler=enabled
       -D install-precomp-compiler=true
-    ARTIFACTS_DEBUG_SYMBOLS: 1
     S3_ARTIFACT_NAME: mesa-x86_64-android-${BUILDTYPE}
   script:
-    - export CROSS=aarch64-linux-android
-    - export GALLIUM_DRIVERS=etnaviv,freedreno,lima,panfrost,vc4,v3d
-    - export VULKAN_DRIVERS=freedreno,broadcom,virtio
-    - *meson-build
     # x86_64 build:
     # Can't do AMD drivers because they require LLVM, which is currently
     # problematic in our Android builds.
     - export CROSS=x86_64-linux-android
-    - export GALLIUM_DRIVERS=iris,virgl,zink,softpipe,llvmpipe,swrast
+    - export GALLIUM_DRIVERS=iris,virgl,zink,softpipe
     - export VULKAN_DRIVERS=intel,virtio,swrast
     - .gitlab-ci/create-llvm-meson-wrap-file.sh
     - *meson-build
     - .gitlab-ci/prepare-artifacts.sh
+    # remove all the files created by the previous build before the next build
+    - git clean -dxf .
+    # aarch64 build:
+    # build-only, to catch compilation regressions
+    # without calling .gitlab-ci/prepare-artifacts.sh so that the
+    # artifacts are not shipped in mesa-x86_64-android-${BUILDTYPE}
+    - export CROSS=aarch64-linux-android
+    - export GALLIUM_DRIVERS=etnaviv,freedreno,lima,panfrost,vc4,v3d
+    - export VULKAN_DRIVERS=freedreno,broadcom,virtio
+    - *meson-build
 
 .meson-cross:
   extends:
@@ -450,7 +452,6 @@ debian-android:
       -D gbm=enabled
       -D egl=enabled
       -D platforms=x11,wayland
-      -D osmesa=false
     GALLIUM_ST: >
       -D gallium-vdpau=disabled
       -D gallium-va=disabled
@@ -465,8 +466,6 @@ debian-android:
     VULKAN_DRIVERS: "asahi,broadcom,freedreno"
     GALLIUM_DRIVERS: "etnaviv,freedreno,lima,nouveau,panfrost,llvmpipe,softpipe,tegra,v3d,vc4,zink"
     BUILDTYPE: "debugoptimized"
-  tags:
-    - aarch64
 
 debian-arm32:
   extends:
@@ -635,6 +634,7 @@ debian-no-libdrm:
       -D glx=disabled
       -D gbm=disabled
       -D egl=disabled
+      -D perfetto=true
 
 debian-clang:
   extends:
@@ -672,15 +672,14 @@ debian-clang:
       -D llvm=enabled
       -D microsoft-clc=disabled
       -D shared-llvm=enabled
-      -D shared-glapi=enabled
     GALLIUM_DRIVERS: "iris,nouveau,r300,r600,freedreno,llvmpipe,softpipe,svga,v3d,vc4,virgl,etnaviv,panfrost,lima,zink,radeonsi,tegra,d3d12,crocus,i915,asahi"
     VULKAN_DRIVERS: intel,amd,freedreno,broadcom,virtio,swrast,panfrost,imagination-experimental,microsoft-experimental,nouveau
     EXTRA_OPTION:
       -D spirv-to-dxil=true
-      -D osmesa=true
       -D imagination-srv=true
       -D tools=drm-shim,etnaviv,freedreno,glsl,intel,intel-ui,nir,nouveau,lima,panfrost,asahi,imagination
       -D vulkan-layers=device-select,overlay
+      -D build-radv-tests=true
       -D build-aco-tests=true
       -D mesa-clc=enabled
       -D precomp-compiler=enabled
@@ -711,7 +710,6 @@ debian-clang-release:
       -D llvm=enabled
       -D microsoft-clc=disabled
       -D shared-llvm=enabled
-      -D shared-glapi=disabled
 
 windows-msvc:
   extends:
@@ -743,7 +741,6 @@ debian-vulkan:
       -D gles2=disabled
       -D glvnd=disabled
       -D platforms=x11,wayland
-      -D osmesa=false
     GALLIUM_ST: >
       -D gallium-vdpau=disabled
       -D gallium-va=disabled
@@ -757,6 +754,7 @@ debian-vulkan:
     VULKAN_DRIVERS: amd,asahi,broadcom,freedreno,intel,intel_hasvk,panfrost,virtio,imagination-experimental,microsoft-experimental,nouveau
     EXTRA_OPTION: >
       -D vulkan-layers=device-select,overlay
+      -D build-radv-tests=true
       -D build-aco-tests=true
       -D intel-rt=disabled
       -D imagination-srv=true
@@ -801,7 +799,7 @@ debian-s390x:
     - .use-debian/s390x_build
     - .meson-build-only
   tags:
-    - kvm
+    - $FDO_RUNNER_JOB_PRIORITY_TAG_X86_64_KVM
   variables:
     BUILDTYPE: debug
     CROSS: s390x
@@ -837,5 +835,3 @@ python-artifacts:
   timeout: 10m
   script:
     - .gitlab-ci/prepare-artifacts-python.sh
-  tags:
-    - placeholder-job

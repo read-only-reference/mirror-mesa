@@ -177,6 +177,7 @@ struct radeon_winsys_bo {
    bool use_global_list;
    bool gfx12_allow_dcc;
    enum radeon_bo_domain initial_domain;
+   uint64_t obj_id;
 };
 
 struct radv_winsys_submit_info {
@@ -325,13 +326,6 @@ radeon_emit(struct radeon_cmdbuf *cs, uint32_t value)
 {
    assert(cs->cdw < cs->reserved_dw);
    cs->buf[cs->cdw++] = value;
-}
-
-static inline void
-radeon_emit_direct(struct radeon_cmdbuf *cs, uint32_t offset, uint32_t value)
-{
-   assert(offset < cs->reserved_dw);
-   cs->buf[offset] = value;
 }
 
 static inline void

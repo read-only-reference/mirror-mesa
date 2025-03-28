@@ -178,6 +178,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .KHR_maintenance5                      = true,
       .KHR_maintenance6                      = true,
       .KHR_maintenance7                      = true,
+      .KHR_maintenance8                      = true,
       .KHR_map_memory2                       = true,
       .KHR_multiview                         = true,
       .KHR_performance_query =
@@ -246,6 +247,10 @@ get_device_extensions(const struct anv_physical_device *device,
                                                (VIDEO_CODEC_H264DEC || VIDEO_CODEC_H265DEC)) ||
                                                (device->video_encode_enabled &&
                                                (VIDEO_CODEC_H264ENC || VIDEO_CODEC_H265ENC)),
+      .KHR_video_maintenance2                = (device->video_decode_enabled &&
+                                               (VIDEO_CODEC_H264DEC || VIDEO_CODEC_H265DEC)) ||
+                                               (device->video_encode_enabled &&
+                                               (VIDEO_CODEC_H264ENC || VIDEO_CODEC_H265ENC)),
       .KHR_vulkan_memory_model               = true,
       .KHR_workgroup_memory_explicit_layout  = true,
       .KHR_zero_initialize_workgroup_memory  = true,
@@ -267,6 +272,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .EXT_depth_range_unrestricted          = device->info.ver >= 20,
       .EXT_descriptor_buffer                 = true,
       .EXT_descriptor_indexing               = true,
+      .EXT_device_memory_report              = true,
 #ifdef VK_USE_PLATFORM_DISPLAY_KHR
       .EXT_display_control                   = true,
 #endif
@@ -578,6 +584,9 @@ get_features(const struct anv_physical_device *pdevice,
       /* VK_EXT_depth_clip_enable */
       .depthClipEnable = true,
 
+      /* VK_EXT_device_memory_report */
+      .deviceMemoryReport = true,
+
       /* VK_EXT_fragment_shader_interlock */
       .fragmentShaderSampleInterlock = true,
       .fragmentShaderPixelInterlock = true,
@@ -585,6 +594,9 @@ get_features(const struct anv_physical_device *pdevice,
 
       /* VK_EXT_global_priority_query */
       .globalPriorityQuery = true,
+
+      /* VK_EXT_device_memory_report */
+      .deviceMemoryReport = true,
 
       /* VK_EXT_graphics_pipeline_library */
       .graphicsPipelineLibrary =
@@ -880,6 +892,9 @@ get_features(const struct anv_physical_device *pdevice,
       /* VK_KHR_video_maintenance1 */
       .videoMaintenance1 = true,
 
+      /* VK_KHR_video_maintenance2 */
+      .videoMaintenance2 = true,
+
       /* VK_EXT_image_compression_control */
       .imageCompressionControl = true,
 
@@ -913,6 +928,9 @@ get_features(const struct anv_physical_device *pdevice,
       /* VK_EXT_shader_image_atomic_int64 */
       .shaderImageInt64Atomics = true,
       .sparseImageInt64Atomics = false,
+
+      /* VK_KHR_maintenance8 */
+      .maintenance8 = true,
    };
 
    /* The new DOOM and Wolfenstein games require depthBounds without
@@ -2027,6 +2045,18 @@ anv_physical_device_init_heaps(struct anv_physical_device *device, int fd)
       break;
    }
 
+   if (device->has_protected_contexts) {
+      /* Add a memory type for protected buffers, local and not host
+       * visible.
+       */
+      device->memory.types[device->memory.type_count++] =
+         (struct anv_memory_type) {
+            .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                             VK_MEMORY_PROPERTY_PROTECTED_BIT,
+            .heapIndex = 0,
+      };
+   }
+
    assert(device->memory.type_count < ARRAY_SIZE(device->memory.types));
 
    if (result != VK_SUCCESS)
@@ -2331,11 +2361,14 @@ anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
          };
       }
       if (c_count > 0) {
+         /* TODO: CCS don't support MI_SET_APPID instruction, that might be
+          * the reason some tests protected memory tests fail on CCS.
+          * Re-enable it if a workaround/solution is found.
+          */
          pdevice->queue.families[family_count++] = (struct anv_queue_family) {
             .queueFlags = VK_QUEUE_COMPUTE_BIT |
                           VK_QUEUE_TRANSFER_BIT |
-                          sparse_flags |
-                          protected_flag,
+                          sparse_flags,
             .queueCount = c_count,
             .engine_class = compute_class,
          };
@@ -2627,6 +2660,8 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
    device->isl_dev.buffer_length_in_aux_addr = !intel_needs_workaround(device->isl_dev.info, 14019708328);
    device->isl_dev.sampler_route_to_lsc =
       driQueryOptionb(&instance->dri_options, "intel_sampler_route_to_lsc");
+   device->isl_dev.l1_storage_wt =
+      driQueryOptionb(&instance->dri_options, "intel_storage_cache_policy_wt");
 
    result = anv_physical_device_init_uuids(device);
    if (result != VK_SUCCESS)
@@ -2733,7 +2768,7 @@ anv_physical_device_destroy(struct vk_physical_device *vk_device)
    vk_free(&device->instance->vk.alloc, device);
 }
 
-static const VkQueueFamilyProperties
+static VkQueueFamilyProperties
 get_anv_queue_family_properties_template(const struct anv_physical_device *device)
 {
 

@@ -211,6 +211,13 @@ format_srgb = custom_target(
   capture : true,
 )
 
+files_mesa_util += custom_target(
+  input : ['process_shader_stats.py', 'shader_stats.rnc', 'shader_stats.xml'],
+  output : 'shader_stats.h',
+  command : [prog_python, '@INPUT@'],
+  capture : true,
+)
+
 # subdir format provide files_mesa_format
 subdir('format')
 files_mesa_util += files_mesa_format
@@ -271,6 +278,7 @@ libmesa_util_sse41 = static_library(
   c_args : [c_msvc_compat_args, sse41_args],
   include_directories : [inc_util],
   gnu_symbol_visibility : 'hidden',
+  build_by_default : false,
 )
 
 _libmesa_util = static_library(

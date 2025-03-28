@@ -336,6 +336,9 @@
 #define DRI_CONFIG_INTEL_TE_DISTRIBUTION(def) \
    DRI_CONF_OPT_B(intel_te_distribution, def, "Enable tesselation distribution")
 
+#define DRI_CONFIG_INTEL_STORAGE_CACHE_POLICY_WT(def) \
+   DRI_CONF_OPT_B(intel_storage_cache_policy_wt, def, "Enable write-through cache policy for storage buffers/images.")
+
 #define DRI_CONF_INTEL_ENABLE_WA_14018912822(def) \
    DRI_CONF_OPT_B(intel_enable_wa_14018912822, def, \
                   "Intel workaround for using zero blend constants")
@@ -766,10 +769,6 @@
    DRI_CONF_OPT_B(radv_disable_dedicated_sparse_queue, def, \
                   "Disables the dedicated sparse queue. This replaces radv_legacy_sparse_binding as a compatible drirc workaround for games that might not expect a separate SPARSE queue")
 
-#define DRI_CONF_RADV_FORCE_PSTATE_PEAK_GFX11_DGPU(def) \
-   DRI_CONF_OPT_B(radv_force_pstate_peak_gfx11_dgpu, def, \
-                  "Force the performance level to profile_peak (all clocks to the highest levels) for RDNA3 dGPUs")
-
 /**
  * Overrides for forcing re-compilation of pipelines when RADV_BUILD_ID_OVERRIDE is enabled.
  * These need to be bumped every time a compiler bugfix is backported (up to 8 shader
@@ -806,6 +805,10 @@
 #define DRI_CONF_ANV_ASSUME_FULL_SUBGROUPS_WITH_BARRIER(def) \
    DRI_CONF_OPT_B(anv_assume_full_subgroups_with_barrier, def, \
                   "Assume full subgroups requirement for compute shaders that use control barriers")
+
+#define DRI_CONF_ANV_ASSUME_FULL_SUBGROUPS_WITH_SHARED_MEMORY(def) \
+   DRI_CONF_OPT_B(anv_assume_full_subgroups_with_shared_memory, def, \
+                  "Allow assuming full subgroups requirement for shaders using shared memory even when it's not specified explicitly")
 
 #define DRI_CONF_ANV_SAMPLE_MASK_OUT_OPENGL_BEHAVIOUR(def) \
    DRI_CONF_OPT_B(anv_sample_mask_out_opengl_behaviour, def, \

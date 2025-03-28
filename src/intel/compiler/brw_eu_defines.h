@@ -115,14 +115,14 @@ enum ENUM_PACKED brw_horizontal_stride {
    BRW_HORIZONTAL_STRIDE_4 = 3,
 };
 
-enum ENUM_PACKED gfx10_align1_3src_src_horizontal_stride {
+enum ENUM_PACKED brw_align1_3src_src_horizontal_stride {
    BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_0 = 0,
    BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_1 = 1,
    BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_2 = 2,
    BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_4 = 3,
 };
 
-enum ENUM_PACKED gfx10_align1_3src_dst_horizontal_stride {
+enum ENUM_PACKED brw_align1_3src_dst_horizontal_stride {
    BRW_ALIGN1_3SRC_DST_HORIZONTAL_STRIDE_1 = 0,
    BRW_ALIGN1_3SRC_DST_HORIZONTAL_STRIDE_2 = 1,
 };
@@ -193,6 +193,7 @@ enum opcode {
    BRW_OPCODE_CALL,
    BRW_OPCODE_RET,
    BRW_OPCODE_GOTO,
+   BRW_OPCODE_JOIN,
    BRW_OPCODE_WAIT,
    BRW_OPCODE_SEND,
    BRW_OPCODE_SENDC,
@@ -597,6 +598,8 @@ enum tex_logical_srcs {
    TEX_LOGICAL_SRC_SAMPLER_HANDLE,
    /** Texel offset for gathers */
    TEX_LOGICAL_SRC_TG4_OFFSET,
+   /** Texture offset */
+   TEX_LOGICAL_SRC_PACKED_OFFSET,
    /** REQUIRED: Number of coordinate components (as UD immediate) */
    TEX_LOGICAL_SRC_COORD_COMPONENTS,
    /** REQUIRED: Number of derivative components (as UD immediate) */
@@ -797,12 +800,12 @@ enum ENUM_PACKED brw_reg_file {
    UNIFORM, /* prog_data->params[reg] */
 };
 
-/* CNL adds Align1 support for 3-src instructions. Bit 35 of the instruction
+/* Align1 support for 3-src instructions. Bit 35 of the instruction
  * word is "Execution Datatype" which controls whether the instruction operates
  * on float or integer types. The register arguments have fields that offer
  * more fine control their respective types.
  */
-enum ENUM_PACKED gfx10_align1_3src_exec_type {
+enum ENUM_PACKED brw_align1_3src_exec_type {
    BRW_ALIGN1_3SRC_EXEC_TYPE_INT   = 0,
    BRW_ALIGN1_3SRC_EXEC_TYPE_FLOAT = 1,
 };
@@ -842,7 +845,7 @@ enum ENUM_PACKED brw_vertical_stride {
    BRW_VERTICAL_STRIDE_ONE_DIMENSIONAL = 0xF,
 };
 
-enum ENUM_PACKED gfx10_align1_3src_vertical_stride {
+enum ENUM_PACKED brw_align1_3src_vertical_stride {
    BRW_ALIGN1_3SRC_VERTICAL_STRIDE_0 = 0,
    BRW_ALIGN1_3SRC_VERTICAL_STRIDE_1 = 1,
    BRW_ALIGN1_3SRC_VERTICAL_STRIDE_2 = 1,
@@ -1574,7 +1577,9 @@ enum lsc_opcode {
    LSC_OP_ATOMIC_AND      = 24,
    LSC_OP_ATOMIC_OR       = 25,
    LSC_OP_ATOMIC_XOR      = 26,
-   LSC_OP_FENCE           = 31
+   LSC_OP_FENCE           = 31,
+   LSC_OP_LOAD_CMASK_MSRT     = 49,
+   LSC_OP_STORE_CMASK_MSRT    = 50
 };
 
 /*

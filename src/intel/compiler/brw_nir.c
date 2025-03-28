@@ -991,8 +991,7 @@ lower_bit_size_callback(const nir_instr *instr, UNUSED void *data)
       case nir_op_fcos:
          return 0;
       case nir_op_isign:
-         assert(!"Should have been lowered by nir_opt_algebraic.");
-         return 0;
+         unreachable("Should have been lowered by nir_opt_algebraic.");
       default:
          if (nir_op_infos[alu->op].num_inputs >= 2 &&
              alu->def.bit_size == 8)
@@ -1084,6 +1083,15 @@ lower_xehp_tg4_offset_filter(const nir_instr *instr, UNUSED const void *data)
    if (offset_index < 0)
       return false;
 
+   /* When we have LOD & offset, we can pack both (see
+    * intel_nir_lower_texture.c pack_lod_or_bias_and_offset)
+    */
+   bool has_lod =
+      nir_tex_instr_src_index(tex, nir_tex_src_lod) != -1 ||
+      nir_tex_instr_src_index(tex, nir_tex_src_bias) != -1;
+   if (has_lod)
+      return false;
+
    if (!nir_src_is_const(tex->src[offset_index].src))
       return true;
 
@@ -1128,39 +1136,6 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
     */
    if (intel_needs_workaround(devinfo, 1806565034) && !opts->robust_image_access)
       OPT(intel_nir_clamp_image_1d_2d_array_sizes);
-
-   const struct intel_nir_lower_texture_opts intel_tex_options = {
-      .combined_lod_or_bias_and_offset = compiler->devinfo->ver >= 20,
-   };
-   OPT(intel_nir_lower_texture, &intel_tex_options);
-
-   const nir_lower_tex_options tex_options = {
-      .lower_txp = ~0,
-      .lower_txf_offset = true,
-      .lower_rect_offset = true,
-      .lower_txd_cube_map = true,
-      /* For below, See bspec 45942, "Enable new message layout for cube array" */
-      .lower_txd_3d = devinfo->verx10 >= 125,
-      .lower_txd_array = devinfo->verx10 >= 125,
-      .lower_txb_shadow_clamp = true,
-      .lower_txd_shadow_clamp = true,
-      .lower_txd_offset_clamp = true,
-      .lower_tg4_offsets = true,
-      .lower_txs_lod = true, /* Wa_14012320009 */
-      .lower_offset_filter =
-         devinfo->verx10 >= 125 ? lower_xehp_tg4_offset_filter : NULL,
-      .lower_invalid_implicit_lod = true,
-   };
-
-   /* In the case where TG4 coords are lowered to offsets and we have a
-    * lower_xehp_tg4_offset_filter lowering those offsets further, we need to
-    * rerun the pass because the instructions inserted by the first lowering
-    * are not visible during that first pass.
-    */
-   if (OPT(nir_lower_tex, &tex_options)) {
-      OPT(intel_nir_lower_texture, &intel_tex_options);
-      OPT(nir_lower_tex, &tex_options);
-   }
 
    OPT(nir_normalize_cubemap_coords);
 
@@ -1432,17 +1407,6 @@ brw_nir_link_shaders(const struct brw_compiler *compiler,
       NIR_PASS(_, producer, nir_lower_global_vars_to_local);
       NIR_PASS(_, consumer, nir_lower_global_vars_to_local);
 
-      /* The backend might not be able to handle indirects on
-       * temporaries so we need to lower indirects on any of the
-       * varyings we have demoted here.
-       */
-      NIR_PASS(_, producer, nir_lower_indirect_derefs,
-                  brw_nir_no_indirect_mask(compiler, producer->info.stage),
-                  UINT32_MAX);
-      NIR_PASS(_, consumer, nir_lower_indirect_derefs,
-                  brw_nir_no_indirect_mask(compiler, consumer->info.stage),
-                  UINT32_MAX);
-
       brw_nir_optimize(producer, devinfo);
       brw_nir_optimize(consumer, devinfo);
 
@@ -1594,6 +1558,9 @@ get_mem_access_size_align(nir_intrinsic_op intrin, uint8_t bytes,
                           const void *cb_data)
 {
    const uint32_t align = nir_combined_align(align_mul, align_offset);
+   const struct brw_mem_access_cb_data *mem_cb_data =
+      (struct brw_mem_access_cb_data *)cb_data;
+   const struct intel_device_info *devinfo = mem_cb_data->devinfo;
 
    switch (intrin) {
    case nir_intrinsic_load_ssbo:
@@ -1661,13 +1628,27 @@ get_mem_access_size_align(nir_intrinsic_op intrin, uint8_t bytes,
       };
    } else {
       bytes = MIN2(bytes, 16);
-      return (nir_mem_access_size_align) {
-         .bit_size = 32,
-         .num_components = is_scratch ? 1 :
-                           is_load ? DIV_ROUND_UP(bytes, 4) : bytes / 4,
-         .align = 4,
-         .shift = nir_mem_access_shift_method_scalar,
-      };
+
+      /* With UGM LSC dataport, we don't need to lower 64bit data access into
+       * two 32bit single vector access since it supports direct 64bit data
+       * operation.
+       */
+      if (devinfo->has_lsc && align == 8 && bit_size == 64) {
+         return (nir_mem_access_size_align) {
+            .bit_size = bit_size,
+            .num_components = bytes / 8,
+            .align = bit_size / 8,
+            .shift = nir_mem_access_shift_method_scalar,
+         };
+      } else {
+         return (nir_mem_access_size_align) {
+            .bit_size = 32,
+            .num_components = is_scratch ? 1 :
+                              is_load ? DIV_ROUND_UP(bytes, 4) : bytes / 4,
+            .align = 4,
+            .shift = nir_mem_access_shift_method_scalar,
+         };
+      }
    }
 }
 
@@ -1723,6 +1704,11 @@ brw_vectorize_lower_mem_access(nir_shader *nir,
       }
    }
 
+
+   struct brw_mem_access_cb_data cb_data = {
+      .devinfo = compiler->devinfo,
+   };
+
    nir_lower_mem_access_bit_sizes_options mem_access_options = {
       .modes = nir_var_mem_ssbo |
                nir_var_mem_constant |
@@ -1732,6 +1718,7 @@ brw_vectorize_lower_mem_access(nir_shader *nir,
                nir_var_mem_global |
                nir_var_mem_shared,
       .callback = get_mem_access_size_align,
+      .cb_data = &cb_data,
    };
    OPT(nir_lower_mem_access_bit_sizes, &mem_access_options);
 
@@ -1774,6 +1761,37 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
 
    UNUSED bool progress; /* Written by OPT */
 
+   const nir_lower_tex_options tex_options = {
+      .lower_txp = ~0,
+      .lower_txf_offset = true,
+      .lower_rect_offset = true,
+      .lower_txd_cube_map = true,
+      /* For below, See bspec 45942, "Enable new message layout for cube array" */
+      .lower_txd_3d = devinfo->verx10 >= 125,
+      .lower_txd_array = devinfo->verx10 >= 125,
+      .lower_txb_shadow_clamp = true,
+      .lower_txd_shadow_clamp = true,
+      .lower_txd_offset_clamp = true,
+      .lower_tg4_offsets = true,
+      .lower_txs_lod = true, /* Wa_14012320009 */
+      .lower_offset_filter =
+         devinfo->verx10 >= 125 ? lower_xehp_tg4_offset_filter : NULL,
+      .lower_txd_clamp_bindless_sampler = true,
+      .lower_txd_clamp_if_sampler_index_not_lt_16 = true,
+      .lower_invalid_implicit_lod = true,
+      .lower_index_to_offset = true,
+   };
+
+   /* In the case where TG4 coords are lowered to offsets and we have a
+    * lower_xehp_tg4_offset_filter lowering those offsets further, we need to
+    * rerun the pass because the instructions inserted by the first lowering
+    * are not visible during that first pass.
+    */
+   if (OPT(nir_lower_tex, &tex_options))
+      OPT(nir_lower_tex, &tex_options);
+
+   OPT(brw_nir_lower_texture, devinfo);
+
    OPT(intel_nir_lower_sparse_intrinsics);
 
    OPT(nir_lower_bit_size, lower_bit_size_callback, (void *)compiler);
@@ -1793,6 +1811,9 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
       };
       OPT(nir_lower_idiv, &options);
    }
+
+   if (devinfo->ver >= 30)
+      NIR_PASS(_, nir, brw_nir_lower_sample_index_in_coord);
 
    if (gl_shader_stage_can_set_fragment_shading_rate(nir->info.stage))
       NIR_PASS(_, nir, intel_nir_lower_shading_rate_output);
@@ -2063,19 +2084,6 @@ brw_nir_apply_key(nir_shader *nir,
 {
    bool progress = false;
 
-   nir_lower_tex_options nir_tex_opts = {
-      .lower_txd_clamp_bindless_sampler = true,
-      .lower_txd_clamp_if_sampler_index_not_lt_16 = true,
-      .lower_invalid_implicit_lod = true,
-      .lower_index_to_offset = true,
-   };
-   OPT(nir_lower_tex, &nir_tex_opts);
-
-   const struct intel_nir_lower_texture_opts tex_opts = {
-      .combined_lod_and_array_index = compiler->devinfo->ver >= 20,
-   };
-   OPT(intel_nir_lower_texture, &tex_opts);
-
    const nir_lower_subgroups_options subgroups_options = {
       .subgroup_size = get_subgroup_size(&nir->info, max_subgroup_size),
       .ballot_bit_size = 32,
@@ -2170,11 +2178,15 @@ lsc_op_for_nir_intrinsic(const nir_intrinsic_instr *intrin)
 
    case nir_intrinsic_image_load:
    case nir_intrinsic_bindless_image_load:
-      return LSC_OP_LOAD_CMASK;
+      return nir_intrinsic_image_dim(intrin) == GLSL_SAMPLER_DIM_MS ?
+             LSC_OP_LOAD_CMASK_MSRT :
+             LSC_OP_LOAD_CMASK;
 
    case nir_intrinsic_image_store:
    case nir_intrinsic_bindless_image_store:
-      return LSC_OP_STORE_CMASK;
+      return nir_intrinsic_image_dim(intrin) == GLSL_SAMPLER_DIM_MS ?
+             LSC_OP_STORE_CMASK_MSRT :
+             LSC_OP_STORE_CMASK;
 
    default:
       assert(nir_intrinsic_has_atomic_op(intrin));

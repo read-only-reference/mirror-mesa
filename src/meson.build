@@ -102,7 +102,7 @@ endif
 if with_gfxstream_vk
   subdir('gfxstream')
 endif
-if with_gallium_asahi or with_tools.contains('asahi')
+if with_gallium_asahi or with_asahi_vk or with_tools.contains('asahi')
   subdir('asahi')
 endif
 if with_gallium
@@ -119,8 +119,7 @@ if with_gallium and (with_glx != 'disabled' or with_egl)
   if with_gles2 and not with_glvnd
     subdir('mapi/es2api')
   endif
-  if with_tests and with_shared_glapi
-    subdir('mapi/shared-glapi/tests')
+  if with_tests
     subdir('mesa/main/tests')
     subdir('mesa/state_tracker/tests')
   endif

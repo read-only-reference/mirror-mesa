@@ -14,7 +14,6 @@
 #include "util/u_cpu_detect.h"
 #include "util/u_screen.h"
 #include "util/u_video.h"
-#include "vl/vl_decoder.h"
 #include "vl/vl_video_buffer.h"
 #include <sys/utsname.h>
 
@@ -82,33 +81,6 @@ static const char *si_get_name(struct pipe_screen *pscreen)
    struct si_screen *sscreen = (struct si_screen *)pscreen;
 
    return sscreen->renderer_string;
-}
-
-static int si_get_video_param_no_video_hw(struct pipe_screen *screen, enum pipe_video_profile profile,
-                                          enum pipe_video_entrypoint entrypoint,
-                                          enum pipe_video_cap param)
-{
-   switch (param) {
-   case PIPE_VIDEO_CAP_SUPPORTED:
-      return vl_profile_supported(screen, profile, entrypoint);
-   case PIPE_VIDEO_CAP_NPOT_TEXTURES:
-      return 1;
-   case PIPE_VIDEO_CAP_MAX_WIDTH:
-   case PIPE_VIDEO_CAP_MAX_HEIGHT:
-      return vl_video_buffer_max_size(screen);
-   case PIPE_VIDEO_CAP_PREFERRED_FORMAT:
-      return PIPE_FORMAT_NV12;
-   case PIPE_VIDEO_CAP_PREFERS_INTERLACED:
-      return false;
-   case PIPE_VIDEO_CAP_SUPPORTS_INTERLACED:
-      return false;
-   case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
-      return true;
-   case PIPE_VIDEO_CAP_MAX_LEVEL:
-      return vl_level_supported(screen, profile);
-   default:
-      return 0;
-   }
 }
 
 static int si_get_video_param(struct pipe_screen *screen, enum pipe_video_profile profile,
@@ -876,9 +848,6 @@ void si_init_screen_get_functions(struct si_screen *sscreen)
       sscreen->b.get_video_param = si_get_video_param;
       sscreen->b.is_video_format_supported = si_vid_is_format_supported;
       sscreen->b.is_video_target_buffer_supported = si_vid_is_target_buffer_supported;
-   } else {
-      sscreen->b.get_video_param = si_get_video_param_no_video_hw;
-      sscreen->b.is_video_format_supported = vl_video_buffer_is_format_supported;
    }
 
    si_init_renderer_string(sscreen);
@@ -973,8 +942,6 @@ void si_init_shader_caps(struct si_screen *sscreen)
       caps->max_shader_images = SI_NUM_IMAGES;
 
       caps->supported_irs = (1 << PIPE_SHADER_IR_TGSI) | (1 << PIPE_SHADER_IR_NIR);
-      if (i == PIPE_SHADER_COMPUTE)
-         caps->supported_irs |= 1 << PIPE_SHADER_IR_NATIVE;
 
       /* Supported boolean features. */
       caps->cont_supported = true;
@@ -1015,12 +982,7 @@ void si_init_compute_caps(struct si_screen *sscreen)
    caps->max_block_size[1] =
    caps->max_block_size[2] = 1024;
 
-   caps->max_block_size_clover[0] =
-   caps->max_block_size_clover[1] =
-   caps->max_block_size_clover[2] = 256;
-
    caps->max_threads_per_block = 1024;
-   caps->max_threads_per_block_clover = 256;
    caps->address_bits = 64;
 
    /* Return 1/4 of the heap size as the maximum because the max size is not practically

@@ -757,6 +757,7 @@ lower_sampler_logical_send(const brw_builder &bld, brw_inst *inst,
                            const brw_reg &surface_handle,
                            const brw_reg &sampler_handle,
                            const brw_reg &tg4_offset,
+                           const brw_reg &packed_offset,
                            unsigned payload_type_bit_size,
                            unsigned coord_components,
                            unsigned grad_components,
@@ -784,6 +785,7 @@ lower_sampler_logical_send(const brw_builder &bld, brw_inst *inst,
    assert((sampler.file == BAD_FILE) != (sampler_handle.file == BAD_FILE));
 
    if (shader_opcode_needs_header(op, devinfo) || inst->offset != 0 ||
+       packed_offset.file != BAD_FILE ||
        sampler_handle.file != BAD_FILE ||
        is_high_sampler(devinfo, sampler) ||
        residency) {
@@ -825,8 +827,17 @@ lower_sampler_logical_send(const brw_builder &bld, brw_inst *inst,
          ubld.MOV(header, brw_imm_ud(0));
       else
          ubld.MOV(header, retype(brw_vec8_grf(0, 0), BRW_TYPE_UD));
-      if (inst->offset) {
-         ubld1.MOV(component(header, 2), brw_imm_ud(inst->offset));
+      if (packed_offset.file != BAD_FILE || inst->offset) {
+         if (inst->offset && packed_offset.file != BAD_FILE) {
+            if (packed_offset.file == IMM)
+               ubld1.MOV(component(header, 2), brw_imm_ud(packed_offset.ud | inst->offset));
+            else
+               ubld1.OR(component(header, 2), packed_offset, brw_imm_ud(inst->offset));
+         } else if (packed_offset.file != BAD_FILE) {
+            ubld1.MOV(component(header, 2), packed_offset);
+         } else {
+            ubld1.MOV(component(header, 2), brw_imm_ud(inst->offset));
+         }
       } else if (devinfo->ver < 11 &&
                  bld.shader->stage != MESA_SHADER_VERTEX &&
                  bld.shader->stage != MESA_SHADER_FRAGMENT) {
@@ -1286,6 +1297,7 @@ lower_sampler_logical_send(const brw_builder &bld, brw_inst *inst)
    const brw_reg surface_handle = inst->src[TEX_LOGICAL_SRC_SURFACE_HANDLE];
    const brw_reg sampler_handle = inst->src[TEX_LOGICAL_SRC_SAMPLER_HANDLE];
    const brw_reg tg4_offset = inst->src[TEX_LOGICAL_SRC_TG4_OFFSET];
+   const brw_reg packed_offset = inst->src[TEX_LOGICAL_SRC_PACKED_OFFSET];
    assert(inst->src[TEX_LOGICAL_SRC_COORD_COMPONENTS].file == IMM);
    const unsigned coord_components = inst->src[TEX_LOGICAL_SRC_COORD_COMPONENTS].ud;
    assert(inst->src[TEX_LOGICAL_SRC_GRAD_COMPONENTS].file == IMM);
@@ -1296,6 +1308,8 @@ lower_sampler_logical_send(const brw_builder &bld, brw_inst *inst)
    const unsigned msg_payload_type_bit_size =
       get_sampler_msg_payload_type_bit_size(devinfo, inst);
 
+   assert(tg4_offset.file == BAD_FILE || packed_offset.file == BAD_FILE);
+
    /* 16-bit payloads are available only on gfx11+ */
    assert(msg_payload_type_bit_size != 16 || devinfo->ver >= 11);
 
@@ -1304,7 +1318,7 @@ lower_sampler_logical_send(const brw_builder &bld, brw_inst *inst)
                               sample_index,
                               mcs, surface, sampler,
                               surface_handle, sampler_handle,
-                              tg4_offset,
+                              tg4_offset, packed_offset,
                               msg_payload_type_bit_size,
                               coord_components, grad_components,
                               residency);
@@ -1393,7 +1407,7 @@ setup_lsc_surface_descriptors(const brw_builder &bld, brw_inst *inst,
    switch (surf_type) {
    case LSC_ADDR_SURFTYPE_BSS:
       inst->send_ex_bso = compiler->extended_bindless_surface_offset;
-      /* fall-through */
+      FALLTHROUGH;
    case LSC_ADDR_SURFTYPE_SS:
       assert(surface.file != BAD_FILE);
       /* We assume that the driver provided the handle in the top 20 bits so
@@ -1882,7 +1896,7 @@ lower_hdc_memory_logical_send(const brw_builder &bld, brw_inst *inst)
       break;
    case LSC_ADDR_SURFTYPE_BSS:
       inst->send_ex_bso = compiler->extended_bindless_surface_offset;
-      /* fall-through */
+      FALLTHROUGH;
    case LSC_ADDR_SURFTYPE_SS:
       desc |= GFX9_BTI_BINDLESS;
 
@@ -2535,7 +2549,7 @@ brw_lower_logical_sends(brw_shader &s)
    bool progress = false;
 
    foreach_block_and_inst_safe(block, brw_inst, inst, s.cfg) {
-      const brw_builder ibld(&s, block, inst);
+      const brw_builder ibld(inst);
 
       switch (inst->opcode) {
       case FS_OPCODE_FB_WRITE_LOGICAL:
@@ -2683,8 +2697,7 @@ brw_lower_uniform_pull_constant_loads(brw_shader &s)
       assert(size_B.file == IMM);
 
       if (devinfo->has_lsc) {
-         const brw_builder ubld =
-            brw_builder(&s, block, inst).group(8, 0).exec_all();
+         const brw_builder ubld = brw_builder(inst).group(8, 0).exec_all();
 
          const brw_reg payload = ubld.vgrf(BRW_TYPE_UD);
          ubld.MOV(payload, offset_B);
@@ -2722,7 +2735,7 @@ brw_lower_uniform_pull_constant_loads(brw_shader &s)
          s.invalidate_analysis(BRW_DEPENDENCY_INSTRUCTIONS |
                                BRW_DEPENDENCY_VARIABLES);
       } else {
-         const brw_builder ubld = brw_builder(&s, block, inst).exec_all();
+         const brw_builder ubld = brw_builder(inst).exec_all();
          brw_reg header = brw_builder(&s, 8).exec_all().vgrf(BRW_TYPE_UD);
 
          ubld.group(8, 0).MOV(header,
@@ -2767,7 +2780,7 @@ brw_lower_send_descriptors(brw_shader &s)
           inst->opcode != SHADER_OPCODE_SEND_GATHER)
          continue;
 
-      const brw_builder ubld = brw_builder(&s, block, inst).exec_all().group(1, 0);
+      const brw_builder ubld = brw_builder(inst).exec_all().group(1, 0);
 
       /* Descriptor */
       const unsigned rlen = inst->dst.is_null() ? 0 : inst->size_written / REG_SIZE;

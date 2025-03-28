@@ -410,6 +410,13 @@ impl SM50Op for OpFAdd {
         let [src0, src1] = &mut self.srcs;
         swap_srcs_if_not_reg(src0, src1, GPR);
         b.copy_alu_src_if_not_reg(src0, GPR, SrcType::F32);
+
+        if src1.as_imm_not_f20().is_some()
+            && self.rnd_mode != FRndMode::NearestEven
+        {
+            // Hardware cannot encode long-immediate + rounding mode
+            b.copy_alu_src(src1, GPR, SrcType::F32);
+        }
     }
 
     fn encode(&self, e: &mut SM50Encoder<'_>) {
@@ -418,6 +425,7 @@ impl SM50Op for OpFAdd {
             e.set_dst(self.dst);
             e.set_reg_fmod_src(8..16, 54, 56, self.srcs[0]);
             e.set_src_imm32(20..52, imm32);
+            assert!(self.rnd_mode == FRndMode::NearestEven);
             e.set_bit(55, self.ftz);
         } else {
             match &self.srcs[1].src_ref {
@@ -562,6 +570,13 @@ impl SM50Op for OpFMul {
         b.copy_alu_src_if_fabs(src1, SrcType::F32);
         swap_srcs_if_not_reg(src0, src1, GPR);
         b.copy_alu_src_if_not_reg(src0, GPR, SrcType::F32);
+
+        if src1.as_imm_not_f20().is_some()
+            && self.rnd_mode != FRndMode::NearestEven
+        {
+            // Hardware cannot encode long-immediate + rounding mode
+            b.copy_alu_src(src1, GPR, SrcType::F32);
+        }
     }
 
     fn encode(&self, e: &mut SM50Encoder<'_>) {
@@ -579,6 +594,7 @@ impl SM50Op for OpFMul {
             e.set_bit(53, self.ftz);
             e.set_bit(54, self.dnz);
             e.set_bit(55, self.saturate);
+            assert!(self.rnd_mode == FRndMode::NearestEven);
 
             if fneg {
                 // Flip the immediate sign bit
@@ -2087,7 +2103,7 @@ impl SM50Op for OpTex {
         e.set_tex_dim(28..31, self.dim);
         e.set_field(31..35, self.mask);
         e.set_bit(35, false); // ToDo: NDV
-        e.set_bit(49, false); // TODO: .NODEP
+        e.set_bit(49, self.nodep);
         e.set_bit(50, self.z_cmpr);
     }
 }
@@ -2120,7 +2136,7 @@ impl SM50Op for OpTld {
         e.set_tex_dim(28..31, self.dim);
         e.set_field(31..35, self.mask);
         e.set_bit(35, self.offset);
-        e.set_bit(49, false); // TODO: .NODEP
+        e.set_bit(49, self.nodep);
         e.set_bit(50, self.is_ms);
 
         assert!(
@@ -2168,7 +2184,7 @@ impl SM50Op for OpTld4 {
         e.set_tex_dim(28..31, self.dim);
         e.set_field(31..35, self.mask);
         e.set_bit(35, false); // ToDo: NDV
-        e.set_bit(49, false); // TODO: .NODEP
+        e.set_bit(49, self.nodep);
         e.set_bit(50, self.z_cmpr);
     }
 }
@@ -2200,7 +2216,7 @@ impl SM50Op for OpTmml {
         e.set_tex_dim(28..31, self.dim);
         e.set_field(31..35, self.mask);
         e.set_bit(35, false); // ToDo: NDV
-        e.set_bit(49, false); // TODO: .NODEP
+        e.set_bit(49, self.nodep);
     }
 }
 
@@ -2232,7 +2248,7 @@ impl SM50Op for OpTxd {
         e.set_tex_dim(28..31, self.dim);
         e.set_field(31..35, self.mask);
         e.set_bit(35, self.offset);
-        e.set_bit(49, false); // TODO: .NODEP
+        e.set_bit(49, self.nodep);
     }
 }
 
@@ -2272,7 +2288,7 @@ impl SM50Op for OpTxq {
             },
         );
         e.set_field(31..35, self.mask);
-        e.set_bit(49, false); // TODO: .NODEP
+        e.set_bit(49, self.nodep);
     }
 }
 
@@ -2692,9 +2708,8 @@ impl SM50Op for OpAL2P {
         e.set_dst(self.dst);
         e.set_reg_src(8..16, self.offset);
 
-        e.set_field(20..31, self.access.addr);
-        assert!(!self.access.patch);
-        e.set_bit(32, self.access.output);
+        e.set_field(20..31, self.addr);
+        e.set_bit(32, self.output);
 
         e.set_field(47..49, 0_u8); // comps
         e.set_pred_dst(44..47, Dst::None);
@@ -2710,19 +2725,19 @@ impl SM50Op for OpALd {
         e.set_opcode(0xefd8);
 
         e.set_dst(self.dst);
-        if self.access.phys {
-            assert!(!self.access.patch);
+        if self.phys {
+            assert!(!self.patch);
             assert!(self.offset.src_ref.as_reg().is_some());
-        } else if !self.access.patch {
+        } else if !self.patch {
             assert!(self.offset.is_zero());
         }
         e.set_reg_src(8..16, self.offset);
         e.set_reg_src(39..47, self.vtx);
 
-        e.set_field(20..30, self.access.addr);
-        e.set_bit(31, self.access.patch);
-        e.set_bit(32, self.access.output);
-        e.set_field(47..49, self.access.comps - 1);
+        e.set_field(20..30, self.addr);
+        e.set_bit(31, self.patch);
+        e.set_bit(32, self.output);
+        e.set_field(47..49, self.comps - 1);
     }
 }
 
@@ -2738,12 +2753,11 @@ impl SM50Op for OpASt {
         e.set_reg_src(8..16, self.offset);
         e.set_reg_src(39..47, self.vtx);
 
-        assert!(!self.access.phys);
-        assert!(self.access.output);
-        e.set_field(20..30, self.access.addr);
-        e.set_bit(31, self.access.patch);
-        e.set_bit(32, self.access.output);
-        e.set_field(47..49, self.access.comps - 1);
+        assert!(!self.phys);
+        e.set_field(20..30, self.addr);
+        e.set_bit(31, self.patch);
+        e.set_bit(32, true); // output
+        e.set_field(47..49, self.comps - 1);
     }
 }
 

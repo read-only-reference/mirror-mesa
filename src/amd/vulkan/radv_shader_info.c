@@ -600,8 +600,10 @@ gather_shader_info_vs(struct radv_device *device, const nir_shader *nir,
    info->vs.needs_base_instance |= info->vs.has_prolog;
    info->vs.needs_draw_id |= info->vs.has_prolog;
 
-   if (info->vs.dynamic_inputs)
-      info->vs.vb_desc_usage_mask = BITFIELD_MASK(util_last_bit(info->vs.vb_desc_usage_mask));
+   if (info->vs.dynamic_inputs) {
+      info->vs.num_attributes = util_last_bit(info->vs.vb_desc_usage_mask);
+      info->vs.vb_desc_usage_mask = BITFIELD_MASK(info->vs.num_attributes);
+   }
 
    /* When the topology is unknown (with GPL), the number of vertices per primitive needs be passed
     * through a user SGPR for NGG streamout with VS. Otherwise, the XFB offset is incorrectly
@@ -971,7 +973,7 @@ gather_shader_info_fs(const struct radv_device *device, const nir_shader *nir,
 
    info->ps.allow_flat_shading =
       !(uses_persp_or_linear_interp || info->ps.needs_sample_positions || info->ps.reads_frag_shading_rate ||
-        info->ps.writes_memory || nir->info.fs.needs_quad_helper_invocations ||
+        info->ps.writes_memory || nir->info.fs.needs_coarse_quad_helper_invocations ||
         BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_FRAG_COORD) ||
         BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_PIXEL_COORD) ||
         BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_POINT_COORD) ||

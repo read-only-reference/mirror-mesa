@@ -620,7 +620,6 @@ static void r600_set_sampler_views(struct pipe_context *pipe,
 				   enum pipe_shader_type shader,
 				   unsigned start, unsigned count,
 				   unsigned unbind_num_trailing_slots,
-				   bool take_ownership,
 				   struct pipe_sampler_view **views)
 {
 	struct r600_context *rctx = (struct r600_context *) pipe;
@@ -654,10 +653,6 @@ static void r600_set_sampler_views(struct pipe_context *pipe,
 
 	for (i = 0; i < count; i++) {
 		if (rviews[i] == dst->views.views[i]) {
-			if (take_ownership) {
-				struct pipe_sampler_view *view = views[i];
-				pipe_sampler_view_reference(&view, NULL);
-			}
 			continue;
 		}
 
@@ -688,12 +683,7 @@ static void r600_set_sampler_views(struct pipe_context *pipe,
 				dirty_sampler_states_mask |= 1 << i;
 			}
 
-			if (take_ownership) {
-				pipe_sampler_view_reference((struct pipe_sampler_view **)&dst->views.views[i], NULL);
-				dst->views.views[i] = (struct r600_pipe_sampler_view*)views[i];
-			} else {
-				pipe_sampler_view_reference((struct pipe_sampler_view **)&dst->views.views[i], views[i]);
-			}
+			pipe_sampler_view_reference((struct pipe_sampler_view **)&dst->views.views[i], views[i]);
 			new_mask |= 1 << i;
 			r600_context_add_resource_size(pipe, views[i]->texture);
 		} else {
@@ -2211,30 +2201,16 @@ static void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
 			struct pipe_resource *out_buffer = NULL;
 			unsigned out_offset;
 			void *ptr;
-			unsigned start, count;
+			const unsigned out_size = sizeof(uint16_t);
+			const unsigned start = 0;
+			const unsigned count = likely(!indirect) ?
+				draws[0].count :
+				indexbuf->width0 - index_offset;
+			const unsigned out_width = count * out_size;
 
-			if (likely(!indirect)) {
-				start = 0;
-				count = draws[0].count;
-			}
-			else {
-				/* Have to get start/count from indirect buffer, slow path ahead... */
-				struct r600_resource *indirect_resource = (struct r600_resource *)indirect->buffer;
-				unsigned *data = r600_buffer_map_sync_with_rings(&rctx->b, indirect_resource,
-					PIPE_MAP_READ);
-				if (data) {
-					data += indirect->offset / sizeof(unsigned);
-					start = data[2] * index_size;
-					count = data[0];
-				}
-				else {
-					start = 0;
-					count = 0;
-				}
-			}
-
-			u_upload_alloc(ctx->stream_uploader, start, count * 2,
+			u_upload_alloc(ctx->stream_uploader, start, out_width,
                                        256, &out_offset, &out_buffer, &ptr);
+
 			if (unlikely(!ptr))
 				return;
 
@@ -2243,7 +2219,7 @@ static void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
 
 			indexbuf = out_buffer;
 			index_offset = out_offset;
-			index_size = 2;
+			index_size = out_size;
 			has_user_indices = false;
 		}
 
@@ -2289,8 +2265,27 @@ static void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
 		r600_mark_atom_dirty(rctx, &rctx->cb_misc_state.atom);
 	}
 
-	if (rctx->b.gfx_level >= EVERGREEN)
-		evergreen_setup_tess_constants(rctx, info, &num_patches);
+	if (rctx->b.gfx_level >= EVERGREEN) {
+		const bool vertexid = rctx->vs_shader->current->shader.vs_vertexid;
+
+		if (unlikely(indirect && vertexid)) {
+			const uint32_t indirect_offset =
+				indirect->offset + (info->index_size ?
+						    3 * sizeof(uint32_t) :
+						    2 * sizeof(uint32_t));
+			uint8_t *indirect_data =
+				r600_buffer_map_sync_with_rings(&rctx->b,
+								(struct r600_resource *)indirect->buffer,
+								PIPE_MAP_READ);
+
+			rctx->lds_constant_buffer.vertexid_base =
+				*(uint32_t *)(indirect_data + indirect_offset);
+		} else {
+			rctx->lds_constant_buffer.vertexid_base = 0;
+		}
+
+		evergreen_setup_tess_constants(rctx, info, &num_patches, vertexid);
+	}
 
 	/* Emit states. */
 	r600_need_cs_space(rctx, has_user_indices ? 5 : 0, true, util_bitcount(atomic_used_mask));
@@ -2432,7 +2427,10 @@ static void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
                                                                           RADEON_PRIO_INDEX_BUFFER));
 			}
 			else {
-				uint32_t max_size = (indexbuf->width0 - index_offset) / index_size;
+				const uint32_t max_size =
+					likely(indexbuf == info->index.resource) ?
+					(indexbuf->width0 - index_offset) / index_size :
+					info->index.resource->width0 - draws[0].start;
 
 				radeon_emit(cs, PKT3(EG_PKT3_INDEX_BASE, 1, 0));
 				radeon_emit(cs, va);
@@ -3454,6 +3452,7 @@ void r600_init_common_state_functions(struct r600_context *rctx)
 	rctx->b.b.set_vertex_buffers = r600_set_vertex_buffers;
 	rctx->b.b.set_sampler_views = r600_set_sampler_views;
 	rctx->b.b.sampler_view_destroy = r600_sampler_view_destroy;
+	rctx->b.b.sampler_view_release = u_default_sampler_view_release;
 	rctx->b.b.memory_barrier = r600_memory_barrier;
 	rctx->b.b.texture_barrier = r600_texture_barrier;
 	rctx->b.b.set_stream_output_targets = r600_set_streamout_targets;

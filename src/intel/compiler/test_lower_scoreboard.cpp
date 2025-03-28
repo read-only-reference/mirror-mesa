@@ -42,7 +42,6 @@ protected:
 };
 
 scoreboard_test::scoreboard_test()
-   : bld(NULL, 0)
 {
    ctx = ralloc_context(NULL);
    compiler = rzalloc(ctx, struct brw_compiler);
@@ -63,7 +62,7 @@ scoreboard_test::scoreboard_test()
    v = new brw_shader(compiler, &params, NULL, &prog_data->base, shader, 8,
                       false, false);
 
-   bld = brw_builder(v).at_end();
+   bld = brw_builder(v);
 }
 
 scoreboard_test::~scoreboard_test()
@@ -76,10 +75,11 @@ scoreboard_test::~scoreboard_test()
 }
 
 static brw_inst *
-instruction(bblock_t *block, int num)
+instruction(bblock_t *block, unsigned num)
 {
-   brw_inst *inst = (brw_inst *)block->start();
-   for (int i = 0; i < num; i++) {
+   assert(num < block->num_instructions);
+   brw_inst *inst = block->start();
+   for (unsigned i = 0; i < num; i++) {
       inst = (brw_inst *)inst->next;
    }
    return inst;
@@ -92,14 +92,14 @@ lower_scoreboard(brw_shader *v)
 
    if (print) {
       fprintf(stderr, "= Before =\n");
-      v->cfg->dump();
+      brw_print_instructions(*v, stderr);
    }
 
    brw_lower_scoreboard(*v);
 
    if (print) {
       fprintf(stderr, "\n= After =\n");
-      v->cfg->dump();
+      brw_print_instructions(*v, stderr);
    }
 }
 
@@ -161,12 +161,10 @@ TEST_F(scoreboard_test, RAW_inorder_inorder)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_null());
    EXPECT_EQ(instruction(block0, 1)->sched, tgl_swsb_null());
@@ -186,12 +184,10 @@ TEST_F(scoreboard_test, RAW_inorder_outoforder)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_null());
    EXPECT_EQ(instruction(block0, 1)->sched, tgl_swsb_null());
@@ -219,12 +215,10 @@ TEST_F(scoreboard_test, RAW_outoforder_inorder)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_sbid(TGL_SBID_SET, 0));
    EXPECT_EQ(instruction(block0, 1)->sched, tgl_swsb_null());
@@ -254,12 +248,10 @@ TEST_F(scoreboard_test, RAW_outoforder_outoforder)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(1, block0->end_ip);
+   ASSERT_EQ(2, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_sbid(TGL_SBID_SET, 0));
 
@@ -283,12 +275,10 @@ TEST_F(scoreboard_test, WAR_inorder_inorder)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_null());
    EXPECT_EQ(instruction(block0, 1)->sched, tgl_swsb_null());
@@ -308,12 +298,10 @@ TEST_F(scoreboard_test, WAR_inorder_outoforder)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_null());
    EXPECT_EQ(instruction(block0, 1)->sched, tgl_swsb_null());
@@ -340,12 +328,10 @@ TEST_F(scoreboard_test, WAR_outoforder_inorder)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_sbid(TGL_SBID_SET, 0));
    EXPECT_EQ(instruction(block0, 1)->sched, tgl_swsb_null());
@@ -364,12 +350,10 @@ TEST_F(scoreboard_test, WAR_outoforder_outoforder)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(1, block0->end_ip);
+   ASSERT_EQ(2, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_sbid(TGL_SBID_SET, 0));
 
@@ -393,12 +377,10 @@ TEST_F(scoreboard_test, WAW_inorder_inorder)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_null());
    EXPECT_EQ(instruction(block0, 1)->sched, tgl_swsb_null());
@@ -423,12 +405,10 @@ TEST_F(scoreboard_test, WAW_inorder_outoforder)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_null());
    EXPECT_EQ(instruction(block0, 1)->sched, tgl_swsb_null());
@@ -455,12 +435,10 @@ TEST_F(scoreboard_test, WAW_outoforder_inorder)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_sbid(TGL_SBID_SET, 0));
    EXPECT_EQ(instruction(block0, 1)->sched, tgl_swsb_null());
@@ -479,12 +457,10 @@ TEST_F(scoreboard_test, WAW_outoforder_outoforder)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(1, block0->end_ip);
+   ASSERT_EQ(2, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_sbid(TGL_SBID_SET, 0));
 
@@ -915,12 +891,10 @@ TEST_F(scoreboard_test, gfx125_RaR_over_different_pipes)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_null());
    EXPECT_EQ(instruction(block0, 1)->sched, tgl_swsb_null());
@@ -940,12 +914,10 @@ TEST_F(scoreboard_test, gitlab_issue_from_mr_29723)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(1, block0->end_ip);
+   ASSERT_EQ(2, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(1, block0->end_ip);
+   ASSERT_EQ(2, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_null());
    EXPECT_EQ(instruction(block0, 1)->sched, regdist(TGL_PIPE_FLOAT, 1));
@@ -967,12 +939,10 @@ TEST_F(scoreboard_test, combine_regdist_float_and_int_with_sbid_set)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_null());
    EXPECT_EQ(instruction(block0, 1)->sched, tgl_swsb_null());
@@ -1002,12 +972,10 @@ TEST_F(scoreboard_test, combine_regdist_float_with_sbid_set)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_null());
    EXPECT_EQ(instruction(block0, 1)->sched, tgl_swsb_null());
@@ -1037,12 +1005,10 @@ TEST_F(scoreboard_test, combine_regdist_int_with_sbid_set)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_null());
    EXPECT_EQ(instruction(block0, 1)->sched, tgl_swsb_null());
@@ -1069,12 +1035,10 @@ TEST_F(scoreboard_test, gitlab_issue_11069)
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(1, block0->end_ip);
+   ASSERT_EQ(2, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(1, block0->end_ip);
+   ASSERT_EQ(2, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_null());
    EXPECT_EQ(instruction(block0, 1)->sched, regdist(TGL_PIPE_FLOAT, 1));
@@ -1091,12 +1055,10 @@ TEST_F(scoreboard_test, gfx120_can_embed_outoforder_src_dependency_in_send_eot) 
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(1, block0->end_ip);
+   ASSERT_EQ(2, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(1, block0->end_ip);
+   ASSERT_EQ(2, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_sbid(TGL_SBID_SET, 0));
    EXPECT_EQ(instruction(block0, 1)->sched, tgl_swsb_sbid(TGL_SBID_SRC, 0));
@@ -1113,12 +1075,10 @@ TEST_F(scoreboard_test, gfx120_can_embed_outoforder_dst_dependency_in_send_eot) 
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(1, block0->end_ip);
+   ASSERT_EQ(2, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(1, block0->end_ip);
+   ASSERT_EQ(2, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_sbid(TGL_SBID_SET, 0));
    EXPECT_EQ(instruction(block0, 1)->sched, tgl_swsb_sbid(TGL_SBID_DST, 0));
@@ -1139,12 +1099,10 @@ TEST_F(scoreboard_test, gfx200_cannot_embed_outoforder_src_dependency_in_send_eo
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(1, block0->end_ip);
+   ASSERT_EQ(2, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_sbid(TGL_SBID_SET, 0));
 
@@ -1170,12 +1128,10 @@ TEST_F(scoreboard_test, gfx200_cannot_embed_outoforder_dst_dependency_in_send_eo
 
    brw_calculate_cfg(*v);
    bblock_t *block0 = v->cfg->blocks[0];
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(1, block0->end_ip);
+   ASSERT_EQ(2, block0->num_instructions);
 
    lower_scoreboard(v);
-   ASSERT_EQ(0, block0->start_ip);
-   ASSERT_EQ(2, block0->end_ip);
+   ASSERT_EQ(3, block0->num_instructions);
 
    EXPECT_EQ(instruction(block0, 0)->sched, tgl_swsb_sbid(TGL_SBID_SET, 0));
 

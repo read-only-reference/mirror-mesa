@@ -45,7 +45,9 @@ brw_has_jip(const struct intel_device_info *devinfo, enum opcode opcode)
           opcode == BRW_OPCODE_WHILE ||
           opcode == BRW_OPCODE_BREAK ||
           opcode == BRW_OPCODE_CONTINUE ||
-          opcode == BRW_OPCODE_HALT;
+          opcode == BRW_OPCODE_HALT ||
+          opcode == BRW_OPCODE_GOTO ||
+          opcode == BRW_OPCODE_JOIN;
 }
 
 bool
@@ -55,7 +57,8 @@ brw_has_uip(const struct intel_device_info *devinfo, enum opcode opcode)
           opcode == BRW_OPCODE_ELSE ||
           opcode == BRW_OPCODE_BREAK ||
           opcode == BRW_OPCODE_CONTINUE ||
-          opcode == BRW_OPCODE_HALT;
+          opcode == BRW_OPCODE_HALT ||
+          opcode == BRW_OPCODE_GOTO;
 }
 
 bool
@@ -585,6 +588,8 @@ static const char *const lsc_operation[] = {
    [LSC_OP_ATOMIC_AND]      = "atomic_and",
    [LSC_OP_ATOMIC_OR]       = "atomic_or",
    [LSC_OP_ATOMIC_XOR]      = "atomic_xor",
+   [LSC_OP_LOAD_CMASK_MSRT] = "load_cmask_msrt",
+   [LSC_OP_STORE_CMASK_MSRT] = "store_cmask_msrt",
 };
 
 const char *
@@ -948,6 +953,17 @@ dest(FILE *file, const struct brw_isa_info *isa, const brw_eu_inst *inst)
    return 0;
 }
 
+static enum brw_horizontal_stride
+hstride_from_align1_3src_dst_hstride(enum brw_align1_3src_dst_horizontal_stride hstride)
+{
+   switch (hstride) {
+   case BRW_ALIGN1_3SRC_DST_HORIZONTAL_STRIDE_1: return BRW_HORIZONTAL_STRIDE_1;
+   case BRW_ALIGN1_3SRC_DST_HORIZONTAL_STRIDE_2: return BRW_HORIZONTAL_STRIDE_2;
+   default:
+      unreachable("not reached");
+   }
+}
+
 static int
 dest_3src(FILE *file, const struct intel_device_info *devinfo,
           const brw_eu_inst *inst)
@@ -983,7 +999,11 @@ dest_3src(FILE *file, const struct intel_device_info *devinfo,
 
    if (subreg_nr)
       format(file, ".%u", subreg_nr);
-   string(file, "<1>");
+   string(file, "<");
+   unsigned _horiz_stride = devinfo->ver == 9 ? BRW_HORIZONTAL_STRIDE_1 :
+      hstride_from_align1_3src_dst_hstride(brw_eu_inst_3src_a1_dst_hstride(devinfo, inst));
+   err |= control(file, "horiz_stride", horiz_stride, _horiz_stride, NULL);
+   string(file, ">");
 
    if (!is_align1) {
       err |= control(file, "writemask", writemask,
@@ -1156,7 +1176,7 @@ src_da16(FILE *file,
 
 static enum brw_vertical_stride
 vstride_from_align1_3src_vstride(const struct intel_device_info *devinfo,
-                                 enum gfx10_align1_3src_vertical_stride vstride)
+                                 enum brw_align1_3src_vertical_stride vstride)
 {
    switch (vstride) {
    case BRW_ALIGN1_3SRC_VERTICAL_STRIDE_0: return BRW_VERTICAL_STRIDE_0;
@@ -1173,7 +1193,7 @@ vstride_from_align1_3src_vstride(const struct intel_device_info *devinfo,
 }
 
 static enum brw_horizontal_stride
-hstride_from_align1_3src_hstride(enum gfx10_align1_3src_src_horizontal_stride hstride)
+hstride_from_align1_3src_hstride(enum brw_align1_3src_src_horizontal_stride hstride)
 {
    switch (hstride) {
    case BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_0: return BRW_HORIZONTAL_STRIDE_0;
@@ -1186,7 +1206,7 @@ hstride_from_align1_3src_hstride(enum gfx10_align1_3src_src_horizontal_stride hs
 }
 
 static enum brw_vertical_stride
-vstride_from_align1_3src_hstride(enum gfx10_align1_3src_src_horizontal_stride hstride)
+vstride_from_align1_3src_hstride(enum brw_align1_3src_src_horizontal_stride hstride)
 {
    switch (hstride) {
    case BRW_ALIGN1_3SRC_SRC_HORIZONTAL_STRIDE_0: return BRW_VERTICAL_STRIDE_0;
@@ -2276,6 +2296,7 @@ brw_disassemble_inst(FILE *file, const struct brw_isa_info *isa,
                switch(op) {
                case LSC_OP_LOAD_CMASK:
                case LSC_OP_LOAD:
+               case LSC_OP_LOAD_CMASK_MSRT:
                   format(file, ",");
                   err |= control(file, "cache_load",
                                  devinfo->ver >= 20 ?

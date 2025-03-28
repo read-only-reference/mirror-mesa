@@ -44,6 +44,22 @@ with_mesa_debug = get_option('buildtype') == 'debug'
 # This means the final value of b_ndebug==true
 with_mesa_ndebug = get_option('b_ndebug') == 'true' or (get_option('buildtype') == 'release' and get_option('b_ndebug') == 'if-release')
 
+# We need to set -fmacro-prefix-map properly for driver CL reproducability.
+relative_dir = fs.relative_to(meson.global_source_root(), meson.global_build_root())
+
+cl_args = [
+  '-fmacro-prefix-map=@0@/='.format(relative_dir),
+
+  # Set the OpenCL standard to CL 2.0, enabling everything at a frontend.
+  # Drivers may not actually support everything but that's ok.
+  '-cl-std=cl2.0',
+  '-D__OPENCL_VERSION__=200'
+]
+
+if with_mesa_ndebug
+  cl_args += ['-DNDEBUG']
+endif
+
 # Arguments for the preprocessor, put these in a separate array from the C and
 # C++ (cpp in meson terminology) arguments since they need to be added to the
 # default arguments for both C and C++.
@@ -64,10 +80,10 @@ with_moltenvk_dir = get_option('moltenvk-dir')
 with_vulkan_icd_dir = get_option('vulkan-icd-dir')
 with_tests = get_option('build-tests')
 with_glcpp_tests = get_option('enable-glcpp-tests')
+with_radv_tests = get_option('build-radv-tests')
 with_aco_tests = get_option('build-aco-tests')
 with_glx_read_only_text = get_option('glx-read-only-text')
 with_glx_direct = get_option('glx-direct')
-with_osmesa = get_option('osmesa')
 with_vulkan_overlay_layer = get_option('vulkan-layers').contains('overlay')
 with_vulkan_device_select_layer = get_option('vulkan-layers').contains('device-select')
 with_vulkan_screenshot_layer = get_option('vulkan-layers').contains('screenshot')
@@ -104,28 +120,15 @@ if gbm_backends_path == ''
   gbm_backends_path = join_paths(get_option('prefix'), get_option('libdir'), 'gbm')
 endif
 
-# Default shared glapi disabled for windows, enabled elsewhere.
-with_shared_glapi = get_option('shared-glapi') \
-  .disable_auto_if(host_machine.system() == 'windows') \
-  .allowed()
-
 with_opengl = get_option('opengl')
-
-with_gles1 = get_option('gles1') \
-  .require(with_shared_glapi, error_message : 'OpengGL ES 1.x requires shared-glapi') \
-  .allowed()
-
-with_gles2 = get_option('gles2') \
-  .require(with_shared_glapi, error_message : 'OpengGL ES 2.x requires shared-glapi') \
-  .allowed()
+with_gles1 = get_option('gles1').allowed()
+with_gles2 = get_option('gles2').allowed()
 
 pre_args += '-DHAVE_OPENGL=@0@'.format(with_opengl.to_int())
 pre_args += '-DHAVE_OPENGL_ES_1=@0@'.format(with_gles1.to_int())
 pre_args += '-DHAVE_OPENGL_ES_2=@0@'.format(with_gles2.to_int())
 
 with_any_opengl = with_opengl or with_gles1 or with_gles2
-# Only build shared_glapi if at least one OpenGL API is enabled
-with_shared_glapi = with_shared_glapi and with_any_opengl
 
 system_has_kms_drm = ['openbsd', 'netbsd', 'freebsd', 'gnu/kfreebsd', 'dragonfly', 'linux', 'sunos', 'android', 'managarm'].contains(host_machine.system())
 
@@ -165,19 +168,11 @@ if gallium_drivers.contains('auto')
           host_machine.system()))
   endif
 elif gallium_drivers.contains('all')
-   # Build-test everything except for i915, which depends on libdrm-intel which
-   # is not available on non-Intel distros.
    gallium_drivers = [
-     'r300', 'r600', 'radeonsi', 'crocus', 'v3d', 'vc4', 'freedreno', 'etnaviv',
+     'r300', 'r600', 'radeonsi', 'crocus', 'v3d', 'vc4', 'freedreno', 'etnaviv', 'i915',
      'nouveau', 'svga', 'tegra', 'virgl', 'lima', 'panfrost', 'llvmpipe', 'softpipe', 'iris',
      'zink', 'd3d12', 'asahi'
    ]
-endif
-
-# compatibility for meson configurations asking for 'swrast'
-with_swrast = gallium_drivers.contains('swrast')
-if with_swrast
-  warning('`gallium-drivers=swrast` is a deprecated alias for `gallium-drivers=softpipe,llvmpipe` and will be removed in version 25.0')
 endif
 
 with_amdgpu_virtio = get_option('amdgpu-virtio')
@@ -187,8 +182,8 @@ with_gallium_r300 = gallium_drivers.contains('r300')
 with_gallium_r600 = gallium_drivers.contains('r600')
 with_gallium_nouveau = gallium_drivers.contains('nouveau')
 with_gallium_freedreno = gallium_drivers.contains('freedreno')
-with_gallium_softpipe = with_swrast or gallium_drivers.contains('softpipe')
-with_gallium_llvmpipe = with_swrast or gallium_drivers.contains('llvmpipe')
+with_gallium_softpipe = gallium_drivers.contains('softpipe')
+with_gallium_llvmpipe = gallium_drivers.contains('llvmpipe')
 with_gallium_vc4 = gallium_drivers.contains('vc4')
 with_gallium_v3d = gallium_drivers.contains('v3d')
 with_gallium_panfrost = gallium_drivers.contains('panfrost')
@@ -349,6 +344,9 @@ endif
 if with_aco_tests and not with_amd_vk
   error('ACO tests require Radv')
 endif
+if with_radv_tests and not with_amd_vk
+  error('RADV tests require RADV')
+endif
 
 with_microsoft_clc = get_option('microsoft-clc').enabled()
 with_spirv_to_dxil = get_option('spirv-to-dxil')
@@ -384,13 +382,7 @@ all_codecs = patent_codecs + free_codecs
 if _codecs.contains('all')
   _codecs = all_codecs
 elif _codecs.contains('all_free')
-  selected_codecs = _codecs
-  _codecs = free_codecs
-  foreach c : patent_codecs
-    if selected_codecs.contains(c)
-      _codecs += c
-    endif
-  endforeach
+  _codecs += free_codecs
 endif
 foreach c : all_codecs
    pre_args += '-DVIDEO_CODEC_@0@=@1@'.format(c.to_upper(), _codecs.contains(c).to_int())
@@ -460,7 +452,6 @@ if not (with_dri or with_gallium or with_glx != 'disabled')
   with_gles2 = false
   with_opengl = false
   with_any_opengl = false
-  with_shared_glapi = false
 endif
 
 with_gbm = get_option('gbm') \
@@ -474,7 +465,6 @@ with_xlib_lease = get_option('xlib-lease') \
 
 with_egl = get_option('egl') \
   .require(with_platform_windows or with_platform_haiku or with_dri or with_platform_android, error_message : 'EGL requires DRI, Haiku, Windows or Android') \
-  .require(with_shared_glapi, error_message : 'EGL requires shared-glapi') \
   .require(with_glx != 'xlib', error_message :'EGL requires DRI, but GLX is being built with xlib support') \
   .disable_auto_if(with_platform_haiku) \
   .allowed()
@@ -563,10 +553,6 @@ if with_glx != 'disabled'
       error('xlib based GLX requires softpipe or llvmpipe.')
     elif with_dri
       error('xlib conflicts with any dri driver')
-    endif
-  elif with_glx == 'dri'
-    if not with_shared_glapi
-      error('dri based GLX requires shared-glapi')
     endif
   endif
 endif
@@ -768,6 +754,8 @@ endif
 _opencl = get_option('gallium-opencl')
 _rtti = get_option('cpp_rtti')
 if _opencl != 'disabled'
+  warning('Clover will be removed in Mesa 25.2')
+
   if not with_gallium
     error('OpenCL Clover implementation requires at least one gallium driver.')
   endif
@@ -881,7 +869,7 @@ if with_platform_x11
 endif
 
 with_glapi_export_proto_entry_points = false
-if with_shared_glapi and not with_glx_indirect_rendering
+if not with_glx_indirect_rendering
   # Imply !defined(GLX_INDIRECT_RENDERING)
   with_glapi_export_proto_entry_points = true
 endif
@@ -1566,10 +1554,6 @@ if with_any_intel and ['x86', 'x86_64'].contains(host_machine.cpu_family())
   pre_args += '-DSUPPORT_INTEL_INTEGRATED_GPUS'
 endif
 
-if with_gallium_i915 and host_machine.cpu_family().startswith('x86') == false
-  error('Intel "i915" Gallium driver requires x86 or x86_64 CPU family')
-endif
-
 # Determine whether or not the rt library is needed for time functions
 if host_machine.system() == 'windows' or cc.has_function('clock_gettime')
   dep_clock = null_dep
@@ -2043,17 +2027,6 @@ if dep_unwind.found()
   pre_args += '-DHAVE_LIBUNWIND'
 endif
 
-if with_osmesa
-  if not with_gallium_swrast
-    error('OSMesa gallium requires gallium softpipe or llvmpipe.')
-  endif
-  if host_machine.system() == 'windows'
-    osmesa_lib_name = 'osmesa'
-  else
-    osmesa_lib_name = 'OSMesa'
-  endif
-endif
-
 # TODO: symbol mangling
 
 if with_platform_wayland
@@ -2352,7 +2325,6 @@ summary(
     'OpenGL': with_opengl,
     'ES1': with_gles1,
     'ES2': with_gles2,
-    'Shared glapi': with_shared_glapi,
     'GLVND': with_glvnd,
   },
   section: 'OpenGL', bool_yn: true
@@ -2456,7 +2428,6 @@ if with_gallium
     gallium_frontends += 'rusticl'
   endif
   gallium_summary += {'Frontends': gallium_frontends}
-  gallium_summary += {'Off-screen rendering (OSMesa)': with_osmesa ? 'lib' + osmesa_lib_name : false}
   gallium_summary += {'HUD lm-sensors': dep_lmsensors.found()}
 endif
 summary(gallium_summary, section: 'Gallium', bool_yn: true, list_sep: ' ')

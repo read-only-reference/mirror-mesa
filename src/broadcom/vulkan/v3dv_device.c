@@ -1045,7 +1045,7 @@ get_device_properties(const struct v3dv_physical_device *device,
       .subgroupSize = V3D_CHANNELS,
       .subgroupSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT |
                                  VK_SHADER_STAGE_FRAGMENT_BIT,
-      .subgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT,
+      .subgroupSupportedOperations = subgroup_ops,
       .subgroupQuadOperationsInAllStages = false,
       .pointClippingBehavior = VK_POINT_CLIPPING_BEHAVIOR_ALL_CLIP_PLANES,
       .maxMultiviewViewCount = MAX_MULTIVIEW_VIEW_COUNT,
@@ -1229,8 +1229,6 @@ get_device_properties(const struct v3dv_physical_device *device,
       .maxSubgroupSize = V3D_CHANNELS,
       .maxComputeWorkgroupSubgroups = 16, /* 256 / 16 */
       .requiredSubgroupSizeStages = VK_SHADER_STAGE_COMPUTE_BIT,
-
-      .subgroupSupportedOperations = subgroup_ops,
 
       /* VK_KHR_maintenance5 */
       .earlyFragmentMultisampleCoverageAfterSampleCounting = true,
@@ -1596,10 +1594,12 @@ enumerate_devices(struct vk_instance *vk_instance)
       if (devices[i]->bustype != DRM_BUS_PLATFORM)
          continue;
 
-      if ((devices[i]->available_nodes & 1 << DRM_NODE_RENDER))
+      if ((devices[i]->available_nodes & 1 << DRM_NODE_RENDER)) {
          try_device(devices[i]->nodes[DRM_NODE_RENDER], &render_fd, "v3d");
-      if ((devices[i]->available_nodes & 1 << DRM_NODE_PRIMARY))
+      } else if (primary_fd == -1 &&
+                 (devices[i]->available_nodes & 1 << DRM_NODE_PRIMARY)) {
          try_display_device(instance, devices[i]->nodes[DRM_NODE_PRIMARY], &primary_fd);
+      }
 #endif
 
       if (render_fd >= 0 && primary_fd >= 0)

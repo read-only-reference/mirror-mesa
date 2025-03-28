@@ -87,18 +87,6 @@ struct intel_device_info;
 #define ISL_DEV_IS_BAYTRAIL(__dev) ((__dev)->info->platform == INTEL_PLATFORM_BYT)
 #endif
 
-#ifndef ISL_DEV_USE_SEPARATE_STENCIL
-/**
- * You can define this as a compile-time constant in the CFLAGS. For example,
- * ``gcc -DISL_DEV_USE_SEPARATE_STENCIL(dev)=1 ...``.
- */
-#define ISL_DEV_USE_SEPARATE_STENCIL(__dev) ((__dev)->use_separate_stencil)
-#define ISL_DEV_USE_SEPARATE_STENCIL_SANITIZE(__dev)
-#else
-#define ISL_DEV_USE_SEPARATE_STENCIL_SANITIZE(__dev) \
-   (assert(ISL_DEV_USE_SEPARATE_STENCIL(__dev) == (__dev)->use_separate_stencil))
-#endif
-
 /**
  * Hardware enumeration SURFACE_FORMAT.
  *
@@ -1354,6 +1342,7 @@ struct isl_device {
 
    /* Options to configure by the driver: */
    bool sampler_route_to_lsc;
+   bool l1_storage_wt;
 
    /**
     * Write buffer length in the upper dword of the
@@ -1896,6 +1885,11 @@ struct isl_buffer_fill_state_info {
    uint32_t stride_B;
 
    bool is_scratch;
+
+   /**
+    * Indicates the usage of the buffer
+    */
+   isl_surf_usage_flags_t usage;
 };
 
 struct isl_depth_stencil_hiz_emit_info {
@@ -1984,6 +1978,11 @@ struct isl_cpb_emit_info {
     * The Memory Object Control state for the surface.
     */
    uint32_t mocs;
+
+   /**
+    * Aux usage of the CPB surface
+    */
+   enum isl_aux_usage aux_usage;
 };
 
 enum isl_surf_param {

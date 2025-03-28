@@ -74,6 +74,8 @@
 #include "util/u_vector.h"
 #include "egl_dri2.h"
 #include "egldefines.h"
+#include "mapi/glapi/glapi.h"
+#include "dispatch.h"
 
 #define NUM_ATTRIBS 16
 
@@ -97,27 +99,9 @@ dri_set_background_context(void *loaderPrivate)
 }
 
 static void
-dri2_gl_flush_get(_glapi_proc *glFlush)
-{
-   *glFlush = _mesa_glapi_get_proc_address("glFlush");
-}
-
-static void
 dri2_gl_flush()
 {
-   static void (*glFlush)(void);
-   static util_once_flag once = UTIL_ONCE_FLAG_INIT;
-
-   util_call_once_data(&once, (util_call_once_data_func)dri2_gl_flush_get,
-                       &glFlush);
-
-   /* if glFlush is not available things are horribly broken */
-   if (!glFlush) {
-      _eglLog(_EGL_WARNING, "DRI2: failed to find glFlush entry point");
-      return;
-   }
-
-   glFlush();
+   CALL_Flush(GET_DISPATCH(), ());
 }
 
 static GLboolean
@@ -586,8 +570,6 @@ dri2_load_driver(_EGLDisplay *disp)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
 
-   dri2_dpy->kopper = disp->Options.Zink && !debug_get_bool_option("LIBGL_KOPPER_DISABLE", false);
-   dri2_dpy->kopper_without_modifiers = dri2_dpy->kopper && debug_get_bool_option("LIBGL_KOPPER_DRI2", false);
    dri2_dpy->swrast = (disp->Options.ForceSoftware && !dri2_dpy->kopper && strcmp(dri2_dpy->driver_name, "vmwgfx")) ||
                       !dri2_dpy->driver_name || strstr(dri2_dpy->driver_name, "swrast");
    dri2_dpy->swrast_not_kms = dri2_dpy->swrast && (!dri2_dpy->driver_name || strcmp(dri2_dpy->driver_name, "kms_swrast"));
@@ -890,9 +872,13 @@ dri2_initialize(_EGLDisplay *disp)
       p_atomic_inc(&dri2_dpy->ref_count);
       return EGL_TRUE;
    }
+   dri2_dpy = dri2_display_create(disp);
+   if (!dri2_dpy)
+      return EGL_FALSE;
 
    loader_set_logger(_eglLog);
 
+   bool allow_dri2 = false;
    switch (disp->Platform) {
    case _EGL_PLATFORM_SURFACELESS:
       ret = dri2_initialize_surfaceless(disp);
@@ -902,7 +888,17 @@ dri2_initialize(_EGLDisplay *disp)
       break;
    case _EGL_PLATFORM_X11:
    case _EGL_PLATFORM_XCB:
-      ret = dri2_initialize_x11(disp);
+      ret = dri2_initialize_x11(disp, &allow_dri2);
+      /* platform_x11 detects dri2 availability */
+      if (!ret && allow_dri2) {
+         /* this is a fallthrough using the same dri2_dpy from dri3,
+         * so the existing one must be destroyed and a new one created
+         * the caller will switch to the new display automatically
+         */
+         dri2_display_destroy(disp);
+         dri2_display_create(disp);
+         ret = dri2_initialize_x11_dri2(disp);
+      }
       break;
    case _EGL_PLATFORM_DRM:
       ret = dri2_initialize_drm(disp);
@@ -918,8 +914,10 @@ dri2_initialize(_EGLDisplay *disp)
       return EGL_FALSE;
    }
 
-   if (!ret)
+   if (!ret) {
+      dri2_display_destroy(disp);
       return EGL_FALSE;
+   }
 
    if (_eglGetArraySize(disp->Configs) == 0) {
       _eglError(EGL_NOT_INITIALIZED, "failed to add any EGLConfigs");
@@ -1023,7 +1021,7 @@ dri2_display_destroy(_EGLDisplay *disp)
 }
 
 struct dri2_egl_display *
-dri2_display_create(void)
+dri2_display_create(_EGLDisplay *disp)
 {
    struct dri2_egl_display *dri2_dpy = calloc(1, sizeof *dri2_dpy);
    if (!dri2_dpy) {
@@ -1034,6 +1032,9 @@ dri2_display_create(void)
    dri2_dpy->fd_render_gpu = -1;
    dri2_dpy->fd_display_gpu = -1;
    dri2_dpy->multibuffers_available = true;
+   dri2_dpy->kopper = disp->Options.Zink && !debug_get_bool_option("LIBGL_KOPPER_DISABLE", false);
+   dri2_dpy->kopper_without_modifiers = dri2_dpy->kopper && debug_get_bool_option("LIBGL_KOPPER_DRI2", false);
+   disp->DriverData = (void *)dri2_dpy;
 
    return dri2_dpy;
 }

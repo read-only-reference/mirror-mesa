@@ -2046,7 +2046,7 @@ print_instr(const nir_instr *instr, print_state *state, unsigned tabs)
       debug_info->nir_line = (uint32_t)ftell(fp);
    }
 
-   if (state->shader->has_debug_info) {
+   if (state->shader->has_debug_info && !state->gather_debug_info) {
       nir_instr_debug_info *debug_info = nir_instr_get_debug_info((nir_instr *)instr);
 
       bool changed = state->last_debug_info.spirv_offset != debug_info->spirv_offset;
@@ -2702,7 +2702,8 @@ print_shader_info(const struct shader_info *info, FILE *fp)
       print_nz_bool(fp, "color_is_dual_source", info->fs.color_is_dual_source);
 
       print_nz_bool(fp, "require_full_quads", info->fs.require_full_quads);
-      print_nz_bool(fp, "needs_quad_helper_invocations", info->fs.needs_quad_helper_invocations);
+      print_nz_bool(fp, "needs_coarse_quad_helper_invocations", info->fs.needs_coarse_quad_helper_invocations);
+      print_nz_bool(fp, "needs_full_quad_helper_invocations", info->fs.needs_full_quad_helper_invocations);
       print_nz_bool(fp, "uses_sample_qualifier", info->fs.uses_sample_qualifier);
       print_nz_bool(fp, "uses_sample_shading", info->fs.uses_sample_shading);
       print_nz_bool(fp, "early_fragment_tests", info->fs.early_fragment_tests);

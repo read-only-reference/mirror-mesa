@@ -232,6 +232,38 @@ private:
    bblock_t **parents;
 };
 
+struct brw_ip_ranges {
+   brw_ip_ranges(const brw_shader *s);
+   ~brw_ip_ranges();
+
+   bool validate(const brw_shader *) const;
+
+   brw_analysis_dependency_class
+   dependency_class() const
+   {
+      return BRW_DEPENDENCY_INSTRUCTION_IDENTITY |
+             BRW_DEPENDENCY_BLOCKS;
+   }
+
+   int
+   start(const bblock_t *block) const
+   {
+      assert(block->num < num_blocks);
+      return start_ip[block->num];
+   }
+
+   int
+   end(const bblock_t *block) const
+   {
+      assert(block->num < num_blocks);
+      return start_ip[block->num] + block->num_instructions - 1;
+   }
+
+private:
+   int num_blocks;
+   int *start_ip;
+};
+
 /**
  * Register pressure analysis of a shader.  Estimates how many registers
  * are live at any point of the program in GRF units.
@@ -270,13 +302,6 @@ public:
              def_insts[reg.nr] : NULL;
    }
 
-   bblock_t *
-   get_block(const brw_reg &reg) const
-   {
-      return reg.file == VGRF && reg.nr < def_count ?
-             def_blocks[reg.nr] : NULL;
-   }
-
    uint32_t
    get_use_count(const brw_reg &reg) const
    {
@@ -303,11 +328,10 @@ public:
 private:
    void mark_invalid(int);
    bool fully_defines(const brw_shader *v, brw_inst *);
-   void update_for_reads(const brw_idom_tree &idom, bblock_t *block, brw_inst *);
-   void update_for_write(const brw_shader *v, bblock_t *block, brw_inst *);
+   void update_for_reads(const brw_idom_tree &idom, brw_inst *);
+   void update_for_write(const brw_shader *v, brw_inst *);
 
    brw_inst **def_insts;
-   bblock_t **def_blocks;
    uint32_t *def_use_counts;
    unsigned def_count;
 };
@@ -350,6 +374,9 @@ public:
       BITSET_WORD flag_use[1];
       BITSET_WORD flag_livein[1];
       BITSET_WORD flag_liveout[1];
+
+      int start_ip;
+      int end_ip;
    };
 
    brw_live_variables(const brw_shader *s);

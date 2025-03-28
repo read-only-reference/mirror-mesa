@@ -2228,7 +2228,7 @@ elk_fs_visitor::opt_algebraic()
             if (inst->dst.type != inst->src[0].type &&
                 inst->dst.type != ELK_REGISTER_TYPE_DF &&
                 inst->src[0].type != ELK_REGISTER_TYPE_F)
-               assert(!"unimplemented: saturate mixed types");
+               unreachable("unimplemented: saturate mixed types");
 
             if (elk_saturate_immediate(inst->src[0].type,
                                        &inst->src[0].as_elk_reg())) {
@@ -2437,6 +2437,7 @@ elk_fs_visitor::opt_algebraic()
                default:
                   break;
                }
+               break;
             default:
                break;
             }
@@ -3408,6 +3409,12 @@ elk_fs_visitor::workaround_source_arf_before_eot()
    return progress;
 }
 
+static bool
+has_compr4(const struct intel_device_info *devinfo)
+{
+   return devinfo->verx10 > 40 && devinfo->verx10 < 60;
+}
+
 bool
 elk_fs_visitor::lower_load_payload()
 {
@@ -3467,7 +3474,7 @@ elk_fs_visitor::lower_load_payload()
          assert(inst->header_size + 4 <= inst->sources);
          for (uint8_t i = inst->header_size; i < inst->header_size + 4; i++) {
             if (inst->src[i].file != BAD_FILE) {
-               if (devinfo->has_compr4) {
+               if (has_compr4(devinfo)) {
                   elk_fs_reg compr4_dst = retype(dst, inst->src[i].type);
                   compr4_dst.nr |= ELK_MRF_COMPR4;
                   ibld.MOV(compr4_dst, inst->src[i]);
@@ -6409,7 +6416,7 @@ elk_compute_barycentric_interp_modes(const struct intel_device_info *devinfo,
 
             barycentric_interp_modes |= 1 << bary;
 
-            if (devinfo->needs_unlit_centroid_workaround &&
+            if (elk_needs_unlit_centroid_workaround(devinfo) &&
                 bary_op == nir_intrinsic_load_barycentric_centroid)
                barycentric_interp_modes |= 1 << centroid_to_pixel(bary);
          }

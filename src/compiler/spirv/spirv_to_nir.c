@@ -189,6 +189,7 @@ static const struct spirv_capabilities implemented_capabilities = {
    .UniformAndStorageBuffer8BitAccess = true,
    .UniformBufferArrayDynamicIndexing = true,
    .UniformBufferArrayNonUniformIndexingEXT = true,
+   .UniformDecoration = true,
    .UniformTexelBufferArrayDynamicIndexingEXT = true,
    .UniformTexelBufferArrayNonUniformIndexingEXT = true,
    .VariablePointers = true,
@@ -2256,6 +2257,7 @@ vtn_null_constant(struct vtn_builder *b, struct vtn_type *type)
    switch (type->base_type) {
    case vtn_base_type_scalar:
    case vtn_base_type_vector:
+   case vtn_base_type_cooperative_matrix:
       c->is_null_constant = true;
       /* Nothing to do here.  It's already initialized to zero */
       break;
@@ -2613,7 +2615,6 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
          nir_alu_type dst_alu_type = nir_get_nir_type_for_glsl_type(val->type->type);
          nir_alu_type src_alu_type = dst_alu_type;
          unsigned num_components = glsl_get_vector_elements(val->type->type);
-         unsigned bit_size;
 
          vtn_assert(count <= 7);
 
@@ -2621,14 +2622,12 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
          case SpvOpSConvert:
          case SpvOpFConvert:
          case SpvOpUConvert:
-            /* We have a source in a conversion */
+            /* We have a different source type in a conversion. */
             src_alu_type =
                nir_get_nir_type_for_glsl_type(vtn_get_value_type(b, w[4])->type);
-            /* We use the bitsize of the conversion source to evaluate the opcode later */
-            bit_size = glsl_get_bit_size(vtn_get_value_type(b, w[4])->type);
             break;
          default:
-            bit_size = glsl_get_bit_size(val->type->type);
+            break;
          };
 
          bool exact;
@@ -2641,6 +2640,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
           */
          assert(!exact);
 
+         unsigned bit_size = glsl_get_bit_size(val->type->type);
          nir_const_value src[3][NIR_MAX_VEC_COMPONENTS];
 
          for (unsigned i = 0; i < count - 4; i++) {
@@ -3598,7 +3598,7 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
    if (operands & SpvImageOperandsNontemporalMask)
       access |= ACCESS_NON_TEMPORAL;
 
-   if (sampler && b->options->force_tex_non_uniform)
+   if (sampler && b->options->workarounds.force_tex_non_uniform)
       access |= ACCESS_NON_UNIFORM;
 
    if (sampled_val->propagated_non_uniform)

@@ -19,9 +19,9 @@
 
 struct vn_format_properties_entry {
    atomic_bool valid;
-   VkFormatProperties properties;
-   atomic_bool props3_valid;
-   VkFormatProperties3 properties3;
+   VkFormatProperties props;
+   VkFormatProperties3 props3;
+   VkBool32 srpq;
 };
 
 struct vn_image_format_properties {
@@ -32,6 +32,7 @@ struct vn_image_format_properties {
    VkHostImageCopyDevicePerformanceQuery host_copy;
    VkImageCompressionPropertiesEXT compression;
    VkSamplerYcbcrConversionImageFormatProperties ycbcr_conversion;
+   VkFilterCubicImageViewImageFormatPropertiesEXT filter_cubic;
 };
 
 struct vn_image_format_cache_entry {
@@ -52,6 +53,13 @@ struct vn_image_format_properties_cache {
    } debug;
 };
 
+struct vn_layered_api_properties {
+   VkPhysicalDeviceLayeredApiPropertiesKHR api;
+   VkPhysicalDeviceLayeredApiVulkanPropertiesKHR vk;
+   VkPhysicalDeviceDriverProperties driver;
+   VkPhysicalDeviceIDProperties id;
+};
+
 struct vn_physical_device {
    struct vn_physical_device_base base;
 
@@ -65,6 +73,9 @@ struct vn_physical_device {
     */
    uint32_t renderer_version;
 
+   /* For maintenance7 layered api properties. */
+   struct vn_layered_api_properties layered_properties;
+
    /* Between the driver and the app, base.base.supported_extensions is what
     * we advertise.
     *
@@ -73,6 +84,9 @@ struct vn_physical_device {
     */
    struct vk_device_extension_table renderer_extensions;
    uint32_t *extension_spec_versions;
+
+   /* passthrough ray tracing support */
+   bool ray_tracing;
 
    /* Venus feedback encounters cacheline overflush issue on Intel JSL, and
     * has to workaround by further aligning up the feedback buffer alignment.
@@ -120,7 +134,7 @@ struct vn_physical_device {
    struct vn_image_format_properties_cache image_format_cache;
 };
 VK_DEFINE_HANDLE_CASTS(vn_physical_device,
-                       base.base.base,
+                       base.vk.base,
                        VkPhysicalDevice,
                        VK_OBJECT_TYPE_PHYSICAL_DEVICE)
 

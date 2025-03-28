@@ -436,7 +436,7 @@ static void si_reset_sampler_view_slot(struct si_samplers *samplers, unsigned sl
 static void si_set_sampler_views(struct si_context *sctx, unsigned shader,
                                 unsigned start_slot, unsigned count,
                                 unsigned unbind_num_trailing_slots,
-                                bool take_ownership, struct pipe_sampler_view **views,
+                                struct pipe_sampler_view **views,
                                 bool disallow_early_out)
 {
    struct si_samplers *samplers = &sctx->samplers[shader];
@@ -452,10 +452,6 @@ static void si_set_sampler_views(struct si_context *sctx, unsigned shader,
          uint32_t *restrict desc = descs->list + desc_slot * 16;
 
          if (samplers->views[slot] == &sview->base && !disallow_early_out) {
-            if (take_ownership) {
-               struct pipe_sampler_view *view = views[i];
-               pipe_sampler_view_reference(&view, NULL);
-            }
             continue;
          }
 
@@ -501,12 +497,7 @@ static void si_set_sampler_views(struct si_context *sctx, unsigned shader,
                }
             }
 
-            if (take_ownership) {
-               pipe_sampler_view_reference(&samplers->views[slot], NULL);
-               samplers->views[slot] = &sview->base;
-            } else {
-               pipe_sampler_view_reference(&samplers->views[slot], &sview->base);
-            }
+            pipe_sampler_view_reference(&samplers->views[slot], &sview->base);
             samplers->enabled_mask |= 1u << slot;
 
             /* Since this can flush, it must be done after enabled_mask is
@@ -566,7 +557,7 @@ static void si_update_shader_needs_decompress_mask(struct si_context *sctx, unsi
 static void si_pipe_set_sampler_views(struct pipe_context *ctx, enum pipe_shader_type shader,
                                       unsigned start, unsigned count,
                                       unsigned unbind_num_trailing_slots,
-                                      bool take_ownership, struct pipe_sampler_view **views)
+                                      struct pipe_sampler_view **views)
 {
    struct si_context *sctx = (struct si_context *)ctx;
 
@@ -574,7 +565,7 @@ static void si_pipe_set_sampler_views(struct pipe_context *ctx, enum pipe_shader
       return;
 
    si_set_sampler_views(sctx, shader, start, count, unbind_num_trailing_slots,
-                        take_ownership, views, false);
+                        views, false);
    si_update_shader_needs_decompress_mask(sctx, shader);
 }
 
@@ -2015,7 +2006,7 @@ void si_update_all_texture_descriptors(struct si_context *sctx)
          if (!view || !view->texture || view->texture->target == PIPE_BUFFER)
             continue;
 
-         si_set_sampler_views(sctx, shader, i, 1, 0, false, &samplers->views[i], true);
+         si_set_sampler_views(sctx, shader, i, 1, 0, &samplers->views[i], true);
       }
 
       si_update_shader_needs_decompress_mask(sctx, shader);
@@ -2042,12 +2033,7 @@ void si_shader_pointers_mark_dirty(struct si_context *sctx)
 {
    sctx->shader_pointers_dirty =
       u_bit_consecutive(SI_DESCS_FIRST_SHADER, SI_NUM_DESCS - SI_DESCS_FIRST_SHADER);
-   sctx->vertex_buffers_dirty = sctx->num_vertex_elements > 0 &&
-                                /* si_draw_rectangle doesn't bind vertex elements, so we shouldn't
-                                 * mark vertex buffers as dirty. We can get here due to
-                                 * si_need_gfx_cs_space. */
-                                (!sctx->shader.vs.cso ||
-                                 !sctx->shader.vs.cso->info.base.vs.blit_sgprs_amd);
+   sctx->vertex_buffers_dirty = sctx->num_vertex_elements > 0;
    si_mark_atom_dirty(sctx, &sctx->atoms.s.gfx_shader_pointers);
    sctx->graphics_internal_bindings_pointer_dirty = sctx->descriptors[SI_DESCS_INTERNAL].buffer != NULL;
    sctx->compute_internal_bindings_pointer_dirty = sctx->descriptors[SI_DESCS_INTERNAL].buffer != NULL;

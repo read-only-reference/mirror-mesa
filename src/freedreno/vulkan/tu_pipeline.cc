@@ -18,6 +18,7 @@
 #include "spirv/nir_spirv.h"
 #include "util/u_debug.h"
 #include "util/mesa-sha1.h"
+#include "util/shader_stats.h"
 #include "vk_nir.h"
 #include "vk_pipeline.h"
 #include "vk_render_pass.h"
@@ -2050,7 +2051,7 @@ done:
    if (creation_feedback) {
       *creation_feedback->pPipelineCreationFeedback = pipeline_feedback;
 
-      for (uint32_t i = 0; i < builder->create_info->stageCount; i++) {
+      for (uint32_t i = 0; i < creation_feedback->pipelineStageCreationFeedbackCount; i++) {
          gl_shader_stage s =
             vk_to_mesa_shader_stage(builder->create_info->pStages[i].stage);
          creation_feedback->pPipelineStageCreationFeedbacks[i] = stage_feedbacks[s];
@@ -2099,7 +2100,6 @@ tu_pipeline_builder_parse_libraries(struct tu_pipeline_builder *builder,
          pipeline->output = library->base.output;
          pipeline->lrz_blend.reads_dest |= library->base.lrz_blend.reads_dest;
          pipeline->lrz_blend.valid |= library->base.lrz_blend.valid;
-         pipeline->prim_order = library->base.prim_order;
       }
 
       if ((library->state &
@@ -2108,6 +2108,12 @@ tu_pipeline_builder_parse_libraries(struct tu_pipeline_builder *builder,
            VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT)) {
          pipeline->prim_order = library->base.prim_order;
       }
+
+      if (library->base.bandwidth.valid)
+         pipeline->bandwidth = library->base.bandwidth;
+
+      if (library->base.disable_fs.valid)
+         pipeline->disable_fs = library->base.disable_fs;
 
       pipeline->set_state_mask |= library->base.set_state_mask;
 
@@ -2896,6 +2902,54 @@ tu_calc_bandwidth(struct tu_bandwidth *bandwidth,
             vk_format_to_pipe_format(rp->stencil_attachment_format),
             UTIL_FORMAT_COLORSPACE_ZS, 1) / 8;
    }
+
+   bandwidth->valid = true;
+}
+
+static const enum mesa_vk_dynamic_graphics_state tu_disable_fs_state[] = {
+   MESA_VK_DYNAMIC_CB_ATTACHMENT_COUNT,
+   MESA_VK_DYNAMIC_CB_COLOR_WRITE_ENABLES,
+   MESA_VK_DYNAMIC_CB_WRITE_MASKS,
+   MESA_VK_DYNAMIC_MS_ALPHA_TO_COVERAGE_ENABLE,
+};
+
+static bool
+tu_calc_disable_fs(const struct vk_color_blend_state *cb,
+                   const struct vk_render_pass_state *rp,
+                   bool alpha_to_coverage_enable,
+                   const struct tu_shader *fs)
+{
+   if (alpha_to_coverage_enable)
+      return false;
+   if (fs && !fs->variant->writes_only_color)
+      return false;
+
+   bool has_enabled_attachments = false;
+   for (unsigned i = 0; i < cb->attachment_count; i++) {
+      if (rp->color_attachment_formats[i] == VK_FORMAT_UNDEFINED)
+         continue;
+
+      const struct vk_color_blend_attachment_state *att = &cb->attachments[i];
+      if ((cb->color_write_enables & (1u << i)) && att->write_mask != 0) {
+         has_enabled_attachments = true;
+         break;
+      }
+   }
+
+   return !fs || fs->variant->empty ||
+          (fs->variant->writes_only_color && !has_enabled_attachments);
+}
+
+static void
+tu_emit_disable_fs(struct tu_disable_fs *disable_fs,
+                   const struct vk_color_blend_state *cb,
+                   const struct vk_render_pass_state *rp,
+                   bool alpha_to_coverage_enable,
+                   const struct tu_shader *fs)
+{
+   disable_fs->disable_fs =
+      tu_calc_disable_fs(cb, rp, alpha_to_coverage_enable, fs);
+   disable_fs->valid = true;
 }
 
 /* Return true if the blend state reads the color attachments. */
@@ -2905,6 +2959,22 @@ tu6_calc_blend_lrz(const struct vk_color_blend_state *cb,
 {
    if (cb->logic_op_enable && tu_logic_op_reads_dst((VkLogicOp)cb->logic_op))
       return true;
+
+   bool has_enabled_attachments = false;
+   for (unsigned i = 0; i < cb->attachment_count; i++) {
+      if (rp->color_attachment_formats[i] == VK_FORMAT_UNDEFINED)
+         continue;
+
+      const struct vk_color_blend_attachment_state *att = &cb->attachments[i];
+      if ((cb->color_write_enables & (1u << i)) && att->write_mask != 0) {
+         has_enabled_attachments = true;
+         break;
+      }
+   }
+
+   /* There is no partial write if there is no writes at all. */
+   if (!has_enabled_attachments)
+      return false;
 
    for (unsigned i = 0; i < cb->attachment_count; i++) {
       if (rp->color_attachment_formats[i] == VK_FORMAT_UNDEFINED)
@@ -3104,12 +3174,13 @@ tu6_rast_size(struct tu_device *dev,
               const struct vk_rasterization_state *rs,
               const struct vk_viewport_state *vp,
               bool multiview,
-              bool per_view_viewport)
+              bool per_view_viewport,
+              bool disable_fs)
 {
    if (CHIP == A6XX) {
       return 15 + (dev->physical_device->info->a6xx.has_legacy_pipeline_shading_rate ? 8 : 0);
    } else {
-      return 25;
+      return 27;
    }
 }
 
@@ -3119,7 +3190,8 @@ tu6_emit_rast(struct tu_cs *cs,
               const struct vk_rasterization_state *rs,
               const struct vk_viewport_state *vp,
               bool multiview,
-              bool per_view_viewport)
+              bool per_view_viewport,
+              bool disable_fs)
 {
    enum a5xx_line_mode line_mode =
       rs->line.mode == VK_LINE_RASTERIZATION_MODE_BRESENHAM_KHR ?
@@ -3174,12 +3246,22 @@ tu6_emit_rast(struct tu_cs *cs,
       bool conservative_ras_en =
          rs->conservative_mode ==
          VK_CONSERVATIVE_RASTERIZATION_MODE_OVERESTIMATE_EXT;
-
+      /* This is important to get D/S only draw calls to bypass invoking
+       * the fragment shader. The public documentation for Adreno states:
+       *  "Hint the driver to engage Fast-Z by using an empty fragment
+       *   shader and disabling frame buffer write masks for renderpasses
+       *   that modify Z values only."
+       *  "The GPU has a special mode that writes Z-only pixels at twice
+       *   the normal rate."
+       */
       tu_cs_emit_regs(cs, RB_RENDER_CNTL(CHIP,
+            .fs_disable = disable_fs,
             .raster_mode = TYPE_TILED,
             .raster_direction = LR_TB,
             .conservativerasen = conservative_ras_en));
-      tu_cs_emit_regs(cs, A7XX_GRAS_SU_RENDER_CNTL());
+      tu_cs_emit_regs(cs, A7XX_GRAS_SU_RENDER_CNTL(.fs_disable = disable_fs));
+      tu_cs_emit_regs(cs, A7XX_HLSQ_FS_UNKNOWN_A9AA(.fs_disable = disable_fs));
+
       tu_cs_emit_regs(cs,
                       A6XX_PC_DGEN_SU_CONSERVATIVE_RAS_CNTL(conservative_ras_en));
 
@@ -3595,6 +3677,13 @@ tu_pipeline_builder_emit_state(struct tu_pipeline_builder *builder,
    if (EMIT_STATE(bandwidth, attachments_valid))
       tu_calc_bandwidth(&pipeline->bandwidth, cb,
                         builder->graphics_state.rp);
+   if (EMIT_STATE(
+          disable_fs,
+          attachments_valid && pipeline_contains_all_shader_state(pipeline)))
+      tu_emit_disable_fs(&pipeline->disable_fs, cb,
+                         builder->graphics_state.rp,
+                         builder->graphics_state.ms->alpha_to_coverage_enable,
+                         pipeline->shaders[MESA_SHADER_FRAGMENT]);
    DRAW_STATE(blend_constants, TU_DYNAMIC_STATE_BLEND_CONSTANTS, cb);
 
    if (attachments_valid &&
@@ -3613,11 +3702,12 @@ tu_pipeline_builder_emit_state(struct tu_pipeline_builder *builder,
       BITSET_CLEAR(remove, MESA_VK_DYNAMIC_CB_BLEND_CONSTANTS);
    }
    DRAW_STATE_COND(rast, TU_DYNAMIC_STATE_RAST,
-                   pipeline_contains_all_shader_state(pipeline),
-                   builder->graphics_state.rs,
-                   builder->graphics_state.vp,
+                   pipeline_contains_all_shader_state(pipeline) &&
+                      pipeline->disable_fs.valid,
+                   builder->graphics_state.rs, builder->graphics_state.vp,
                    builder->graphics_state.rp->view_mask != 0,
-                   pipeline->program.per_view_viewport);
+                   pipeline->program.per_view_viewport,
+                   pipeline->disable_fs.disable_fs);
    DRAW_STATE_COND(ds, TU_DYNAMIC_STATE_DS,
               attachments_valid,
               builder->graphics_state.ds,
@@ -3832,6 +3922,21 @@ tu_emit_draw_state(struct tu_cmd_buffer *cmd)
        (EMIT_STATE(bandwidth) || (cmd->state.dirty & TU_CMD_DIRTY_SUBPASS)))
       tu_calc_bandwidth(&cmd->state.bandwidth, &cmd->vk.dynamic_graphics_state.cb,
                         &cmd->state.vk_rp);
+
+   if (!cmd->state.pipeline_disable_fs &&
+       (EMIT_STATE(disable_fs) ||
+        (cmd->state.dirty & TU_CMD_DIRTY_SUBPASS))) {
+      bool disable_fs = tu_calc_disable_fs(
+         &cmd->vk.dynamic_graphics_state.cb, &cmd->state.vk_rp,
+         cmd->vk.dynamic_graphics_state.ms.alpha_to_coverage_enable,
+         cmd->state.shaders[MESA_SHADER_FRAGMENT]);
+
+      if (disable_fs != cmd->state.disable_fs) {
+         cmd->state.disable_fs = disable_fs;
+         cmd->state.dirty |= TU_CMD_DIRTY_DISABLE_FS;
+      }
+   }
+
    DRAW_STATE(blend_constants, VK_DYNAMIC_STATE_BLEND_CONSTANTS,
               &cmd->vk.dynamic_graphics_state.cb);
 
@@ -3847,11 +3952,13 @@ tu_emit_draw_state(struct tu_cmd_buffer *cmd)
    }
    DRAW_STATE_COND(rast, TU_DYNAMIC_STATE_RAST,
                    cmd->state.dirty & (TU_CMD_DIRTY_SUBPASS |
-                                       TU_CMD_DIRTY_PER_VIEW_VIEWPORT),
+                                       TU_CMD_DIRTY_PER_VIEW_VIEWPORT |
+                                       TU_CMD_DIRTY_DISABLE_FS),
                    &cmd->vk.dynamic_graphics_state.rs,
                    &cmd->vk.dynamic_graphics_state.vp,
                    cmd->state.vk_rp.view_mask != 0,
-                   cmd->state.per_view_viewport);
+                   cmd->state.per_view_viewport,
+                   cmd->state.disable_fs);
    DRAW_STATE_COND(ds, TU_DYNAMIC_STATE_DS,
               cmd->state.dirty & TU_CMD_DIRTY_SUBPASS,
               &cmd->vk.dynamic_graphics_state.ds,
@@ -4541,8 +4648,10 @@ tu_compute_pipeline_create(VkDevice device,
 
    if (creation_feedback) {
       *creation_feedback->pPipelineCreationFeedback = pipeline_feedback;
-      assert(creation_feedback->pipelineStageCreationFeedbackCount == 1);
-      creation_feedback->pPipelineStageCreationFeedbacks[0] = pipeline_feedback;
+      if (creation_feedback->pipelineStageCreationFeedbackCount > 0) {
+         assert(creation_feedback->pipelineStageCreationFeedbackCount == 1);
+         creation_feedback->pPipelineStageCreationFeedbacks[0] = pipeline_feedback;
+      }
    }
 
    pipeline->base.active_desc_sets = shader->active_desc_sets;
@@ -4643,12 +4752,6 @@ tu_DestroyPipeline(VkDevice _device,
    vk_object_free(&dev->vk, pAllocator, pipeline);
 }
 
-#define WRITE_STR(field, ...) ({                                \
-   memset(field, 0, sizeof(field));                             \
-   UNUSED int _i = snprintf(field, sizeof(field), __VA_ARGS__); \
-   assert(_i > 0 && _i < sizeof(field));                        \
-})
-
 static const struct tu_pipeline_executable *
 tu_pipeline_get_executable(struct tu_pipeline *pipeline, uint32_t index)
 {
@@ -4676,11 +4779,11 @@ tu_GetPipelineExecutablePropertiesKHR(
          props->stages = mesa_to_vk_shader_stage(stage);
 
          if (!exe->is_binning)
-            WRITE_STR(props->name, "%s", _mesa_shader_stage_to_abbrev(stage));
+            VK_COPY_STR(props->name, _mesa_shader_stage_to_abbrev(stage));
          else
-            WRITE_STR(props->name, "Binning VS");
+            VK_COPY_STR(props->name, "Binning VS");
 
-         WRITE_STR(props->description, "%s", _mesa_shader_stage_to_string(stage));
+         VK_COPY_STR(props->description, _mesa_shader_stage_to_string(stage));
 
          props->subgroupSize =
             dev->compiler->threadsize_base * (exe->stats.double_threadsize ? 2 : 1);
@@ -4704,171 +4807,31 @@ tu_GetPipelineExecutableStatisticsKHR(
    const struct tu_pipeline_executable *exe =
       tu_pipeline_get_executable(pipeline, pExecutableInfo->executableIndex);
 
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "Max Waves Per Core");
-      WRITE_STR(stat->description,
-                "Maximum number of simultaneous waves per core.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.max_waves;
+   struct adreno_stats stats;
+   stats.maxwaves = exe->stats.max_waves;
+   stats.inst = exe->stats.instrs_count;
+   stats.code_size = exe->stats.sizedwords;
+   stats.nops = exe->stats.nops_count;
+   stats.mov = exe->stats.mov_count;
+   stats.cov = exe->stats.cov_count;
+   stats.full = exe->stats.max_reg + 1;
+   stats.half = exe->stats.max_half_reg + 1;
+   stats.last_baryf = exe->stats.last_baryf;
+   stats.last_helper = exe->stats.last_helper;
+   stats.ss = exe->stats.ss;
+   stats.sy = exe->stats.sy;
+   stats.ss_stall = exe->stats.sstall;
+   stats.sy_stall = exe->stats.systall;
+   stats.stps = exe->stats.stp_count;
+   stats.ldps = exe->stats.ldp_count;
+   stats.preamble_inst = exe->stats.preamble_instrs_count;
+   stats.early_preamble = exe->stats.early_preamble;
+
+   for (unsigned i = 0; i < ARRAY_SIZE(exe->stats.instrs_per_cat); ++i) {
+      stats.cat[i] = exe->stats.instrs_per_cat[i];
    }
 
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "Instruction Count");
-      WRITE_STR(stat->description,
-                "Total number of IR3 instructions in the final generated "
-                "shader executable.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.instrs_count;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "Code size");
-      WRITE_STR(stat->description,
-                "Total number of dwords in the final generated "
-                "shader executable.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.sizedwords;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "NOPs Count");
-      WRITE_STR(stat->description,
-                "Number of NOP instructions in the final generated "
-                "shader executable.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.nops_count;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "MOV Count");
-      WRITE_STR(stat->description,
-                "Number of MOV instructions in the final generated "
-                "shader executable.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.mov_count;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "COV Count");
-      WRITE_STR(stat->description,
-                "Number of COV instructions in the final generated "
-                "shader executable.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.cov_count;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "Registers used");
-      WRITE_STR(stat->description,
-                "Number of registers used in the final generated "
-                "shader executable.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.max_reg + 1;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "Half-registers used");
-      WRITE_STR(stat->description,
-                "Number of half-registers used in the final generated "
-                "shader executable.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.max_half_reg + 1;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "Last interpolation instruction");
-      WRITE_STR(stat->description,
-                "The instruction where varying storage in Local Memory is released");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.last_baryf;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "Last helper instruction");
-      WRITE_STR(stat->description,
-                "The instruction where helper invocations are killed");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.last_helper;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "Instructions with SS sync bit");
-      WRITE_STR(stat->description,
-                "SS bit is set for instructions which depend on a result "
-                "of \"long\" instructions to prevent RAW hazard.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.ss;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "Instructions with SY sync bit");
-      WRITE_STR(stat->description,
-                "SY bit is set for instructions which depend on a result "
-                "of loads from global memory to prevent RAW hazard.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.sy;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "Estimated cycles stalled on SS");
-      WRITE_STR(stat->description,
-                "A better metric to estimate the impact of SS syncs.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.sstall;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "Estimated cycles stalled on SY");
-      WRITE_STR(stat->description,
-                "A better metric to estimate the impact of SY syncs.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.systall;
-   }
-
-   for (int i = 0; i < ARRAY_SIZE(exe->stats.instrs_per_cat); i++) {
-      vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-         WRITE_STR(stat->name, "cat%d instructions", i);
-         WRITE_STR(stat->description,
-                  "Number of cat%d instructions.", i);
-         stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-         stat->value.u64 = exe->stats.instrs_per_cat[i];
-      }
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "STP Count");
-      WRITE_STR(stat->description,
-                "Number of STore Private instructions in the final generated "
-                "shader executable.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.stp_count;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "LDP Count");
-      WRITE_STR(stat->description,
-                "Number of LoaD Private instructions in the final generated "
-                "shader executable.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.ldp_count;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "Preamble Instruction Count");
-      WRITE_STR(stat->description,
-                "Total number of IR3 instructions in the preamble.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = exe->stats.preamble_instrs_count;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      WRITE_STR(stat->name, "Early preamble");
-      WRITE_STR(stat->description,
-                "Whether the preamble will be executed early.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR;
-      stat->value.b32 = exe->stats.early_preamble;
-   }
-
+   vk_add_adreno_stats(out, &stats);
    return vk_outarray_status(&out);
 }
 
@@ -4910,9 +4873,8 @@ tu_GetPipelineExecutableInternalRepresentationsKHR(
 
    if (exe->nir_from_spirv) {
       vk_outarray_append_typed(VkPipelineExecutableInternalRepresentationKHR, &out, ir) {
-         WRITE_STR(ir->name, "NIR from SPIRV");
-         WRITE_STR(ir->description,
-                   "Initial NIR before any optimizations");
+         VK_COPY_STR(ir->name, "NIR from SPIRV");
+         VK_COPY_STR(ir->description, "Initial NIR before any optimizations");
 
          if (!write_ir_text(ir, exe->nir_from_spirv))
             incomplete_text = true;
@@ -4921,9 +4883,9 @@ tu_GetPipelineExecutableInternalRepresentationsKHR(
 
    if (exe->nir_final) {
       vk_outarray_append_typed(VkPipelineExecutableInternalRepresentationKHR, &out, ir) {
-         WRITE_STR(ir->name, "Final NIR");
-         WRITE_STR(ir->description,
-                   "Final NIR before going into the back-end compiler");
+         VK_COPY_STR(ir->name, "Final NIR");
+         VK_COPY_STR(ir->description,
+                     "Final NIR before going into the back-end compiler");
 
          if (!write_ir_text(ir, exe->nir_final))
             incomplete_text = true;
@@ -4932,9 +4894,9 @@ tu_GetPipelineExecutableInternalRepresentationsKHR(
 
    if (exe->disasm) {
       vk_outarray_append_typed(VkPipelineExecutableInternalRepresentationKHR, &out, ir) {
-         WRITE_STR(ir->name, "IR3 Assembly");
-         WRITE_STR(ir->description,
-                   "Final IR3 assembly for the generated shader binary");
+         VK_COPY_STR(ir->name, "IR3 Assembly");
+         VK_COPY_STR(ir->description,
+                     "Final IR3 assembly for the generated shader binary");
 
          if (!write_ir_text(ir, exe->disasm))
             incomplete_text = true;

@@ -69,10 +69,11 @@ radv_vcn_sq_header(struct radeon_cmdbuf *cs, struct rvcn_sq_var *sq, unsigned ty
       /* vcn ib signature */
       radeon_emit(cs, RADEON_VCN_SIGNATURE_SIZE);
       radeon_emit(cs, RADEON_VCN_SIGNATURE);
-      sq->signature_ib_checksum = &cs->buf[cs->cdw];
       radeon_emit(cs, 0);
-      sq->signature_ib_total_size_in_dw = &cs->buf[cs->cdw];
       radeon_emit(cs, 0);
+
+      sq->signature_ib_checksum = &cs->buf[cs->cdw - 2];
+      sq->signature_ib_total_size_in_dw = &cs->buf[cs->cdw - 1];
    } else {
       sq->signature_ib_checksum = NULL;
       sq->signature_ib_total_size_in_dw = NULL;
@@ -82,8 +83,9 @@ radv_vcn_sq_header(struct radeon_cmdbuf *cs, struct rvcn_sq_var *sq, unsigned ty
    radeon_emit(cs, RADEON_VCN_ENGINE_INFO_SIZE);
    radeon_emit(cs, RADEON_VCN_ENGINE_INFO);
    radeon_emit(cs, type);
-   sq->engine_ib_size_of_packages = &cs->buf[cs->cdw];
    radeon_emit(cs, 0);
+
+   sq->engine_ib_size_of_packages = &cs->buf[cs->cdw - 1];
 }
 
 void
@@ -120,6 +122,10 @@ radv_vcn_write_event(struct radv_cmd_buffer *cmd_buffer, struct radv_event *even
    struct radv_physical_device *pdev = radv_device_physical(device);
    struct rvcn_sq_var sq;
    struct radeon_cmdbuf *cs = cmd_buffer->cs;
+
+   /* UVD doesn't support events, and probably never will */
+   if (pdev->vid_decode_ip == AMD_IP_UVD)
+      return;
 
    radv_cs_add_buffer(device->ws, cs, event->bo);
    uint64_t va = radv_buffer_get_va(event->bo);
@@ -1203,13 +1209,15 @@ get_h264_msg(struct radv_video_session *vid, struct radv_video_session_params *p
    const struct VkVideoDecodeH264PictureInfoKHR *h264_pic_info =
       vk_find_struct_const(frame_info->pNext, VIDEO_DECODE_H264_PICTURE_INFO_KHR);
 
+   const StdVideoH264SequenceParameterSet *sps;
+   const StdVideoH264PictureParameterSet *pps;
+
+   vk_video_get_h264_parameters(&vid->vk, params ? &params->vk : NULL, frame_info, h264_pic_info, &sps, &pps);
+
    *slice_offset = h264_pic_info->pSliceOffsets[0];
 
    memset(&result, 0, sizeof(result));
 
-   assert(params->vk.h264_dec.h264_sps_count > 0);
-   const StdVideoH264SequenceParameterSet *sps =
-      vk_video_find_h264_dec_std_sps(&params->vk, h264_pic_info->pStdPictureInfo->seq_parameter_set_id);
    switch (sps->profile_idc) {
    case STD_VIDEO_H264_PROFILE_IDC_BASELINE:
       result.profile = RDECODE_H264_PROFILE_BASELINE;
@@ -1249,8 +1257,6 @@ get_h264_msg(struct radv_video_session *vid, struct radv_video_session_params *p
 
    result.chroma_format = sps->chroma_format_idc;
 
-   const StdVideoH264PictureParameterSet *pps =
-      vk_video_find_h264_dec_std_pps(&params->vk, h264_pic_info->pStdPictureInfo->pic_parameter_set_id);
    result.pps_info_flags = 0;
    result.pps_info_flags |= pps->flags.transform_8x8_mode_flag << 0;
    result.pps_info_flags |= pps->flags.redundant_pic_cnt_present_flag << 1;
@@ -1354,10 +1360,10 @@ get_h265_msg(struct radv_device *device, struct radv_video_session *vid, struct 
       vk_find_struct_const(frame_info->pNext, VIDEO_DECODE_H265_PICTURE_INFO_KHR);
    memset(&result, 0, sizeof(result));
 
-   const StdVideoH265SequenceParameterSet *sps =
-      vk_video_find_h265_dec_std_sps(&params->vk, h265_pic_info->pStdPictureInfo->pps_seq_parameter_set_id);
-   const StdVideoH265PictureParameterSet *pps =
-      vk_video_find_h265_dec_std_pps(&params->vk, h265_pic_info->pStdPictureInfo->pps_pic_parameter_set_id);
+   const StdVideoH265SequenceParameterSet *sps = NULL;
+   const StdVideoH265PictureParameterSet *pps = NULL;
+
+   vk_video_get_h265_parameters(&vid->vk, params ? &params->vk : NULL, frame_info, h265_pic_info, &sps, &pps);
 
    result.sps_info_flags = 0;
    result.sps_info_flags |= sps->flags.scaling_list_enabled_flag << 0;
@@ -1526,7 +1532,11 @@ get_av1_msg(struct radv_device *device, struct radv_video_session *vid, struct r
    const struct VkVideoDecodeAV1PictureInfoKHR *av1_pic_info =
       vk_find_struct_const(frame_info->pNext, VIDEO_DECODE_AV1_PICTURE_INFO_KHR);
    const StdVideoDecodeAV1PictureInfo *pi = av1_pic_info->pStdPictureInfo;
-   const StdVideoAV1SequenceHeader *seq_hdr = &params->vk.av1_dec.seq_hdr.base;
+
+   const StdVideoAV1SequenceHeader *seq_hdr = NULL;
+
+   vk_video_get_av1_parameters(&vid->vk, params ? &params->vk : NULL, frame_info, &seq_hdr);
+
    memset(&result, 0, sizeof(result));
 
    const int intra_only_decoding = vid->vk.max_dpb_slots == 0;
@@ -2135,12 +2145,15 @@ get_uvd_h264_msg(struct radv_video_session *vid, struct radv_video_session_param
    const struct VkVideoDecodeH264PictureInfoKHR *h264_pic_info =
       vk_find_struct_const(frame_info->pNext, VIDEO_DECODE_H264_PICTURE_INFO_KHR);
 
+   const StdVideoH264SequenceParameterSet *sps;
+   const StdVideoH264PictureParameterSet *pps;
+
+   vk_video_get_h264_parameters(&vid->vk, params ? &params->vk : NULL, frame_info, h264_pic_info, &sps, &pps);
+
    *slice_offset = h264_pic_info->pSliceOffsets[0];
 
    memset(&result, 0, sizeof(result));
 
-   const StdVideoH264SequenceParameterSet *sps =
-      vk_video_find_h264_dec_std_sps(&params->vk, h264_pic_info->pStdPictureInfo->seq_parameter_set_id);
    switch (sps->profile_idc) {
    case STD_VIDEO_H264_PROFILE_IDC_BASELINE:
       result.profile = RUVD_H264_PROFILE_BASELINE;
@@ -2179,8 +2192,6 @@ get_uvd_h264_msg(struct radv_video_session *vid, struct radv_video_session_param
 
    result.chroma_format = sps->chroma_format_idc;
 
-   const StdVideoH264PictureParameterSet *pps =
-      vk_video_find_h264_dec_std_pps(&params->vk, h264_pic_info->pStdPictureInfo->pic_parameter_set_id);
    result.pps_info_flags = 0;
    result.pps_info_flags |= pps->flags.transform_8x8_mode_flag << 0;
    result.pps_info_flags |= pps->flags.redundant_pic_cnt_present_flag << 1;
@@ -2247,10 +2258,10 @@ get_uvd_h265_msg(struct radv_device *device, struct radv_video_session *vid, str
 
    memset(&result, 0, sizeof(result));
 
-   const StdVideoH265SequenceParameterSet *sps =
-      vk_video_find_h265_dec_std_sps(&params->vk, h265_pic_info->pStdPictureInfo->pps_seq_parameter_set_id);
-   const StdVideoH265PictureParameterSet *pps =
-      vk_video_find_h265_dec_std_pps(&params->vk, h265_pic_info->pStdPictureInfo->pps_pic_parameter_set_id);
+   const StdVideoH265SequenceParameterSet *sps = NULL;
+   const StdVideoH265PictureParameterSet *pps = NULL;
+
+   vk_video_get_h265_parameters(&vid->vk, params ? &params->vk : NULL, frame_info, h265_pic_info, &sps, &pps);
 
    result.sps_info_flags = 0;
    result.sps_info_flags |= sps->flags.scaling_list_enabled_flag << 0;
@@ -2671,7 +2682,7 @@ radv_uvd_decode_video(struct radv_cmd_buffer *cmd_buffer, const VkVideoDecodeInf
                radv_buffer_get_va(vid->ctx.mem->bo) + vid->ctx.offset);
 
    send_cmd(cmd_buffer, RDECODE_CMD_BITSTREAM_BUFFER, src_buffer->bo,
-            src_buffer->addr + frame_info->srcBufferOffset + slice_offset);
+            vk_buffer_address(&src_buffer->vk, frame_info->srcBufferOffset + slice_offset));
 
    struct radv_image_view *dst_iv = radv_image_view_from_handle(frame_info->dstPictureResource.imageViewBinding);
    struct radv_image *img = dst_iv->image;
@@ -2754,7 +2765,7 @@ radv_vcn_decode_video(struct radv_cmd_buffer *cmd_buffer, const VkVideoDecodeInf
                radv_buffer_get_va(vid->ctx.mem->bo) + vid->ctx.offset);
 
    send_cmd(cmd_buffer, RDECODE_CMD_BITSTREAM_BUFFER, src_buffer->bo,
-            src_buffer->addr + frame_info->srcBufferOffset + slice_offset);
+            vk_buffer_address(&src_buffer->vk, frame_info->srcBufferOffset + slice_offset));
 
    struct radv_image_view *dst_iv = radv_image_view_from_handle(frame_info->dstPictureResource.imageViewBinding);
    struct radv_image *img = dst_iv->image;
