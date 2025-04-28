@@ -54,6 +54,8 @@ struct ir3_compiler_options {
 
    /* "dual_color_blend_by_location" workaround is enabled: */
    bool dual_color_blend_by_location;
+
+   uint64_t uche_trap_base;
 };
 
 struct ir3_compiler {
@@ -126,6 +128,9 @@ struct ir3_compiler {
 
    /* The maximum number of constants, in vec4's, for compute shaders. */
    uint16_t max_const_compute;
+
+   /* See freedreno_dev_info::compute_lb_size. */
+   uint32_t compute_lb_size;
 
    /* Number of instructions that the shader's base address and length
     * (instrlen divides instruction count by this) must be aligned to.

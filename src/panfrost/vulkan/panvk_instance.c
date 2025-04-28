@@ -65,6 +65,7 @@ static const struct vk_instance_extension_table panvk_instance_extensions = {
 #endif
 #ifdef VK_USE_PLATFORM_DISPLAY_KHR
    .KHR_display = true,
+   .EXT_direct_mode_display = true,
    .EXT_display_surface_counter = true,
 #endif
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
@@ -161,6 +162,11 @@ static const driOptionDescription panvk_dri_options[] = {
       DRI_CONF_FORCE_VK_VENDOR()
       DRI_CONF_VK_WSI_FORCE_SWAPCHAIN_TO_CURRENT_EXTENT(false)
       DRI_CONF_VK_X11_IGNORE_SUBOPTIMAL(false)
+   DRI_CONF_SECTION_END
+
+   DRI_CONF_SECTION_MISCELLANEOUS
+      DRI_CONF_PAN_COMPUTE_CORE_MASK(~0ull)
+      DRI_CONF_PAN_FRAGMENT_CORE_MASK(~0ull)
    DRI_CONF_SECTION_END
 };
 

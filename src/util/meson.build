@@ -80,6 +80,8 @@ files_mesa_util = files(
   'os_misc.h',
   'os_socket.c',
   'os_socket.h',
+  'pb_slab.c',
+  'pb_slab.h',
   'ptralloc.h',
   'perf/u_trace.h',
   'perf/u_trace.c',
@@ -237,6 +239,11 @@ deps_for_libmesa_util = [
   idep_mesautilc11,
   idep_mesautilformat,
 ]
+
+if dep_libdrm.found()
+  files_mesa_util += files('u_sync_provider.c', 'u_sync_provider.h')
+  deps_for_libmesa_util += dep_libdrm
+endif
 
 if with_platform_android
   deps_for_libmesa_util += dep_android

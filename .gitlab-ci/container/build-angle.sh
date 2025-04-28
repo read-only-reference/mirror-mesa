@@ -3,17 +3,17 @@
 # When changing this file, you need to bump the following
 # .gitlab-ci/image-tags.yml tags:
 # DEBIAN_TEST_ANDROID_TAG
-# KERNEL_ROOTFS_TAG
+# DEBIAN_TEST_GL_TAG
 
 set -uex
 
-uncollapsed_section_start angle "Building ANGLE"
+section_start angle "Building ANGLE"
 
 # Do a very early check to make sure the tag is correct without the need of
 # setting up the environment variables locally
 ci_tag_build_time_check "ANGLE_TAG"
 
-ANGLE_REV="6abdc11741c4932e8e64ec055e67f556a7cbb5b1"
+ANGLE_REV="f355e2b37ed43939e2753fc7dacccf75abb4c1a3"
 
 # Set ANGLE_ARCH based on DEBIAN_ARCH if it hasn't been explicitly defined
 if [[ -z "${ANGLE_ARCH:-}" ]]; then
@@ -93,6 +93,7 @@ is_component_build=false
 is_debug=false
 target_cpu="${ANGLE_ARCH}"
 target_os="${ANGLE_TARGET}"
+treat_warnings_as_errors=false
 EOF
 
 case "$ANGLE_TARGET" in

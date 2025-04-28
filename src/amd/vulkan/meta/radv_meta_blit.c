@@ -289,12 +289,10 @@ meta_emit_blit(struct radv_cmd_buffer *cmd_buffer, struct radv_image_view *src_i
 
    VkRenderingAttachmentInfo color_att;
    if (src_image->vk.aspects == VK_IMAGE_ASPECT_COLOR_BIT) {
-      unsigned dst_layout = radv_meta_dst_layout_from_layout(dst_image_layout);
-
       color_att = (VkRenderingAttachmentInfo){
          .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
          .imageView = radv_image_view_to_handle(dst_iview),
-         .imageLayout = radv_meta_dst_layout_to_layout(dst_layout),
+         .imageLayout = dst_image_layout,
          .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
          .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
       };
@@ -304,12 +302,10 @@ meta_emit_blit(struct radv_cmd_buffer *cmd_buffer, struct radv_image_view *src_i
 
    VkRenderingAttachmentInfo depth_att;
    if (src_image->vk.aspects & VK_IMAGE_ASPECT_DEPTH_BIT) {
-      enum radv_blit_ds_layout ds_layout = radv_meta_blit_ds_to_type(dst_image_layout);
-
       depth_att = (VkRenderingAttachmentInfo){
          .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
          .imageView = radv_image_view_to_handle(dst_iview),
-         .imageLayout = radv_meta_blit_ds_to_layout(ds_layout),
+         .imageLayout = dst_image_layout,
          .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
          .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
       };
@@ -318,12 +314,10 @@ meta_emit_blit(struct radv_cmd_buffer *cmd_buffer, struct radv_image_view *src_i
 
    VkRenderingAttachmentInfo stencil_att;
    if (src_image->vk.aspects & VK_IMAGE_ASPECT_STENCIL_BIT) {
-      enum radv_blit_ds_layout ds_layout = radv_meta_blit_ds_to_type(dst_image_layout);
-
       stencil_att = (VkRenderingAttachmentInfo){
          .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
          .imageView = radv_image_view_to_handle(dst_iview),
-         .imageLayout = radv_meta_blit_ds_to_layout(ds_layout),
+         .imageLayout = dst_image_layout,
          .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
          .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
       };
@@ -386,12 +380,8 @@ blit_image(struct radv_cmd_buffer *cmd_buffer, struct radv_image *src_image, VkI
                       },
                       &cmd_buffer->vk.pool->alloc, &sampler);
 
-   /* VK_EXT_conditional_rendering says that blit commands should not be
-    * affected by conditional rendering.
-    */
    radv_meta_save(&saved_state, cmd_buffer,
-                  RADV_META_SAVE_GRAPHICS_PIPELINE | RADV_META_SAVE_CONSTANTS | RADV_META_SAVE_DESCRIPTORS |
-                     RADV_META_SUSPEND_PREDICATING);
+                  RADV_META_SAVE_GRAPHICS_PIPELINE | RADV_META_SAVE_CONSTANTS | RADV_META_SAVE_DESCRIPTORS);
 
    unsigned dst_start, dst_end;
    if (dst_image->vk.image_type == VK_IMAGE_TYPE_3D) {
@@ -532,8 +522,12 @@ radv_CmdBlitImage2(VkCommandBuffer commandBuffer, const VkBlitImageInfo2 *pBlitI
    VK_FROM_HANDLE(radv_image, src_image, pBlitImageInfo->srcImage);
    VK_FROM_HANDLE(radv_image, dst_image, pBlitImageInfo->dstImage);
 
+   radv_suspend_conditional_rendering(cmd_buffer);
+
    for (unsigned r = 0; r < pBlitImageInfo->regionCount; r++) {
       blit_image(cmd_buffer, src_image, pBlitImageInfo->srcImageLayout, dst_image, pBlitImageInfo->dstImageLayout,
                  &pBlitImageInfo->pRegions[r], pBlitImageInfo->filter);
    }
+
+   radv_resume_conditional_rendering(cmd_buffer);
 }

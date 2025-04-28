@@ -170,6 +170,14 @@ typedef enum {
     */
    nir_io_compaction_rotates_color_channels = BITFIELD_BIT(8),
 
+   /**
+    * Whether to group TES inputs as follows:
+    * - inputs used to compute only POS/CLIP outputs are first
+    * - inputs used to compute both POS/CLIP outputs and other outputs are next
+    * - inputs used to compute only other outputs are last
+    */
+   nir_io_compaction_groups_tes_inputs_into_pos_and_var_groups = BITFIELD_BIT(9),
+
    /* Options affecting the GLSL compiler or Gallium are below. */
 
    /**
@@ -243,6 +251,7 @@ typedef struct nir_shader_compiler_options {
    bool lower_usub_borrow;
    /** Lowers imul_high/umul_high to 16-bit multiplies and carry operations. */
    bool lower_mul_high;
+   bool lower_mul_high16;
    /** lowers fneg to fmul(x, -1.0). Driver must call nir_opt_algebraic_late() */
    bool lower_fneg;
    /** lowers ineg to isub. Driver must call nir_opt_algebraic_late(). */
@@ -282,9 +291,6 @@ typedef struct nir_shader_compiler_options {
 
    /* lower fdph to fdot4 */
    bool lower_fdph;
-
-   /** lower fdot to fmul and fsum/fadd. */
-   bool lower_fdot;
 
    /* Does the native fdot instruction replicate its result for four
     * components?  If so, then opt_algebraic_late will turn all fdotN

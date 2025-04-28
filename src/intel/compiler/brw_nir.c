@@ -41,6 +41,7 @@ type_size_xvec4(const struct glsl_type *type, bool as_vec4, bool bindless)
    case GLSL_TYPE_INT:
    case GLSL_TYPE_FLOAT:
    case GLSL_TYPE_FLOAT16:
+   case GLSL_TYPE_BFLOAT16:
    case GLSL_TYPE_BOOL:
    case GLSL_TYPE_DOUBLE:
    case GLSL_TYPE_UINT16:
@@ -1954,11 +1955,21 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
       OPT(nir_lower_subgroups, &subgroups_options);
    }
 
-   /* Run intel_nir_lower_conversions only after the last tiem
+   /* Run fsign lowering again after the last time brw_nir_optimize is called.
+    * As is the case with conversion lowering (below), brw_nir_optimize can
+    * create additional fsign instructions.
+    */
+   if (OPT(brw_nir_lower_fsign))
+      OPT(nir_opt_dce);
+
+   /* Run nir_split_conversions only after the last tiem
     * brw_nir_optimize is called. Various optimizations invoked there can
     * rematerialize the conversions that the lowering pass eliminates.
     */
-   OPT(intel_nir_lower_conversions);
+   const nir_split_conversions_options split_conv_opts = {
+      .callback = intel_nir_split_conversions_cb,
+   };
+   OPT(nir_split_conversions, &split_conv_opts);
 
    /* Do this only after the last opt_gcm. GCM will undo this lowering. */
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
@@ -2239,6 +2250,28 @@ lsc_op_for_nir_intrinsic(const nir_intrinsic_instr *intrin)
 
    default:
       unreachable("Unsupported NIR atomic intrinsic");
+   }
+}
+
+enum brw_reg_type
+brw_type_for_base_type(enum glsl_base_type base_type)
+{
+   switch (base_type) {
+   case GLSL_TYPE_UINT:      return BRW_TYPE_UD;
+   case GLSL_TYPE_INT:       return BRW_TYPE_D;
+   case GLSL_TYPE_FLOAT:     return BRW_TYPE_F;
+   case GLSL_TYPE_FLOAT16:   return BRW_TYPE_HF;
+   case GLSL_TYPE_BFLOAT16:  return BRW_TYPE_BF;
+   case GLSL_TYPE_DOUBLE:    return BRW_TYPE_DF;
+   case GLSL_TYPE_UINT16:    return BRW_TYPE_UW;
+   case GLSL_TYPE_INT16:     return BRW_TYPE_W;
+   case GLSL_TYPE_UINT8:     return BRW_TYPE_UB;
+   case GLSL_TYPE_INT8:      return BRW_TYPE_B;
+   case GLSL_TYPE_UINT64:    return BRW_TYPE_UQ;
+   case GLSL_TYPE_INT64:     return BRW_TYPE_Q;
+
+   default:
+      unreachable("invalid base type");
    }
 }
 

@@ -4,7 +4,7 @@ include:
 # Run five jobs in parallel each running 1/55th of the test suite
 radv-stoney-vkcts:
   extends:
-    - .lava-test-deqp:x86_64
+    - .lava-x86_64-test-vk
     - .radv-stoney-test:x86_64
   parallel: 5
   variables:
@@ -13,7 +13,7 @@ radv-stoney-vkcts:
 
 radv-stoney-angle:
   extends:
-    - .lava-test-deqp:x86_64
+    - .lava-x86_64-test-gl
     - .radv-stoney-test:x86_64
     - .test-angle
   variables:
@@ -32,8 +32,9 @@ radv-stoney-angle-full:
 
 radeonsi-stoney-glcts-piglit:
   extends:
-    - .lava-test-deqp:x86_64
+    - .lava-x86_64-test-gl
     - .radeonsi-stoney-test:x86_64
+    - .test-piglit
   parallel: 11
   variables:
     DEQP_SUITE: radeonsi-stoney
@@ -49,7 +50,7 @@ radeonsi-stoney-glcts-piglit-full:
 
 radeonsi-stoney-traces:
   extends:
-    - .lava-piglit-traces:x86_64
+    - .lava-x86_64-piglit-traces
     - .radeonsi-stoney-test:x86_64
   variables:
     EGL_PLATFORM: surfaceless
@@ -58,7 +59,7 @@ radeonsi-stoney-traces:
 
 radv-raven-vkcts:
   extends:
-    - .lava-test-deqp:x86_64
+    - .lava-x86_64-test-vk
     - .radv-raven-test:x86_64
     - .lava-asus-CM1400CXA-dalboz:x86_64
   parallel: 9
@@ -68,7 +69,7 @@ radv-raven-vkcts:
 
 amd-raven-skqp:
   extends:
-    - .lava-test-deqp:x86_64
+    - .lava-x86_64-test-gl
     - .amd-raven-test:x86_64
     - .lava-hp-x360-14a-cb0001xx-zork:x86_64
   variables:
@@ -80,7 +81,7 @@ amd-raven-skqp:
 # being disabled due to being flaky.
 .radv-raven-traces:
   extends:
-    - .lava-piglit-traces:x86_64
+    - .lava-x86_64-piglit-traces
     - .radv-raven-test:x86_64
     - .lava-asus-CM1400CXA-dalboz:x86_64
   variables:
@@ -91,13 +92,14 @@ amd-raven-skqp:
 
 radv-raven-traces-restricted:
   extends:
-    - .lava-piglit-traces:x86_64
+    - .lava-x86_64-piglit-traces
     - .radv-raven-test:x86_64
     - .lava-lenovo-TPad-C13-Yoga-zork:x86_64
     - .radv-collabora-restricted-rules
   variables:
     HWCI_START_WESTON: 1
-    PIGLIT_REPLAY_ANGLE_TAG: "2023-02-10-1"
+    ANGLE_TRACE_FILES_TAG: "2025-03-28"
+    PIGLIT_REPLAY_ANGLE_ARCH: x64
     PIGLIT_TRACES_FILE: restricted-traces-amd.yml
     PIGLIT_REPLAY_DEVICE_NAME: "vk-${GPU_VERSION}"
     PIGLIT_REPLAY_EXTRA_ARGS: --keep-image --minio_bucket=${S3_TRACIE_PRIVATE_BUCKET} --jwt-file=${S3_JWT_FILE}
@@ -106,8 +108,9 @@ radv-raven-traces-restricted:
 
 radeonsi-raven-piglit:
   extends:
-    - .lava-test-deqp:x86_64
+    - .lava-x86_64-test-gl
     - .radeonsi-raven-test:x86_64
+    - .test-piglit
     - .lava-lenovo-TPad-C13-Yoga-zork:x86_64
   parallel: 2
   variables:
@@ -117,8 +120,9 @@ radeonsi-raven-piglit:
 # lower image opcodes to emulate CDNA compute devices
 radeonsi-raven-cdna-lower-image-piglit:
   extends:
-    - .lava-test-deqp:x86_64
+    - .lava-x86_64-test-gl
     - .radeonsi-raven-test:x86_64
+    - .test-piglit
     - .lava-lenovo-TPad-C13-Yoga-zork:x86_64
   variables:
     DEQP_SUITE: radeonsi-raven-cdna
@@ -126,7 +130,7 @@ radeonsi-raven-cdna-lower-image-piglit:
 
 radeonsi-raven-va:
   extends:
-    - .lava-test-deqp:x86_64
+    - .lava-x86_64-test-video
     - .radeonsi-raven-test:x86_64
     - .radeonsi-vaapi-rules
     - .lava-hp-x360-14a-cb0001xx-zork:x86_64
@@ -146,7 +150,7 @@ radeonsi-raven-vaapi-fluster:
     - radeonsi-raven-va
     - .radeonsi-raven-vaapi-fluster
   timeout: 30m
-  parallel: 6
+  parallel: 2
   variables:
     FLUSTER_CODECS: VP9 H.264 H.265
     # FIXME: Downloading the vectors can take about 4-5 minutes
@@ -206,6 +210,7 @@ radv-polaris10-vkcts:
     B2C_TIMEOUT_BOOT_MINUTES: 70
     B2C_TIMEOUT_OVERALL_MINUTES: 70
     RADV_PERFTEST: video_decode,video_encode
+    radv_enable_float16_gfx8: true
 
 radv-vega10-vkcts:
   extends:
@@ -269,7 +274,7 @@ radv-vangogh-vkcts:
 .radeonsi-vangogh-glcts-common:
   extends:
     - .b2c-x86_64-test-gl
-    - .b2c-deqp-test
+    - .test-piglit
     - .vangogh-test-valve
   variables:
     GPU_VERSION: radeonsi-vangogh
@@ -322,6 +327,8 @@ radv-fossils:
     - .test-vk
     - .test-radv
     - .fossilize-test
+  rules:
+    - when: never # disabled due to broken job (no git in container)
   script:
     - export LD_PRELOAD=$PWD/install/lib/libamdgpu_noop_drm_shim.so
     # Pitcairn (GFX6)
@@ -354,7 +361,7 @@ radv-fossils:
 radv-tahiti-vkd3d:
   extends:
     - .b2c-test-radv-vk
-    - .b2c-vkd3d-proton-test
+    - .test-vkd3d-proton
     - .tahiti-test-valve
     - .radv-valve-manual-rules
   variables:
@@ -365,7 +372,7 @@ radv-tahiti-vkd3d:
 radv-hawaii-vkd3d:
   extends:
     - .b2c-test-radv-vk
-    - .b2c-vkd3d-proton-test
+    - .test-vkd3d-proton
     - .hawaii-test-valve
     - .radv-valve-manual-rules
   variables:
@@ -376,7 +383,7 @@ radv-hawaii-vkd3d:
 radv-polaris10-vkd3d:
   extends:
     - .b2c-test-radv-vk
-    - .b2c-vkd3d-proton-test
+    - .test-vkd3d-proton
     - .polaris10-test-valve-kws
     - .radv-valve-manual-rules
   variables:
@@ -387,7 +394,7 @@ radv-polaris10-vkd3d:
 radv-vega10-vkd3d:
   extends:
     - .b2c-test-radv-vk
-    - .b2c-vkd3d-proton-test
+    - .test-vkd3d-proton
     - .vega10-test-valve
     - .radv-valve-manual-rules
   variables:
@@ -398,7 +405,7 @@ radv-vega10-vkd3d:
 radv-renoir-vkd3d:
   extends:
     - .b2c-test-radv-vk
-    - .b2c-vkd3d-proton-test
+    - .test-vkd3d-proton
     - .renoir-test-valve
     - .radv-valve-manual-rules
   variables:
@@ -409,7 +416,7 @@ radv-renoir-vkd3d:
 radv-navi10-vkd3d:
   extends:
     - .b2c-test-radv-vk
-    - .b2c-vkd3d-proton-test
+    - .test-vkd3d-proton
     - .navi10-test-valve-mupuf
     - .radv-valve-manual-rules
   variables:
@@ -420,7 +427,7 @@ radv-navi10-vkd3d:
 radv-navi21-vkd3d:
   extends:
     - .b2c-test-radv-vk
-    - .b2c-vkd3d-proton-test
+    - .test-vkd3d-proton
     - .navi21-test-valve
     - .radv-valve-manual-rules
   variables:
@@ -431,7 +438,7 @@ radv-navi21-vkd3d:
 radv-vangogh-vkd3d:
   extends:
     - .b2c-test-radv-vk
-    - .b2c-vkd3d-proton-test
+    - .test-vkd3d-proton
     - .vangogh-test-valve
     - .radv-valve-manual-rules
   variables:
@@ -442,7 +449,7 @@ radv-vangogh-vkd3d:
 radv-raphael-vkd3d:
   extends:
     - .b2c-test-radv-vk
-    - .b2c-vkd3d-proton-test
+    - .test-vkd3d-proton
     - .raphael-test-valve
     - .radv-valve-manual-rules
   variables:
@@ -453,10 +460,19 @@ radv-raphael-vkd3d:
 radv-navi31-vkd3d:
   extends:
     - .b2c-test-radv-vk
-    - .b2c-vkd3d-proton-test
+    - .test-vkd3d-proton
     - .navi31-test-valve
     - .radv-valve-manual-rules
   variables:
     GPU_VERSION: radv-navi31
     # Random tests fail/crash when trying to run them in parallel
     FDO_CI_CONCURRENT: 1
+
+.radv-kabini-vkd3d:
+  extends:
+    - .b2c-test-radv-vk
+    - .test-vkd3d-proton
+    - .kabini-test-valve
+    - .radv-valve-manual-rules
+  variables:
+    GPU_VERSION: radv-kabini

@@ -1,5 +1,6 @@
 .llvmpipe-rules:
   stage: software-renderer
+  timeout: 12m
   rules:
     - !reference [.test, rules]
     - if: $EXTERNAL_KERNEL_TAG != null
@@ -22,7 +23,7 @@
       when: on_success
 
 .llvmpipe-manual-rules:
-  stage: software-renderer-postmerge
+  stage: software-renderer-nightly
   extends: .no-auto-retry
   rules:
     - !reference [.test, rules]
@@ -86,7 +87,6 @@
     - .llvmpipe-test
   variables:
     LP_NUM_THREADS: 1
-    PIGLIT_PROFILES: cl
 
 .llvmpipe-deqp-test:
   variables:

@@ -58,6 +58,12 @@
          .end = { ._int = max },                \
       }                                         \
 
+#define DRI_CONF_RANGE_U64(min, max)            \
+      .range = {                                \
+         .start = { ._uint64 = min },           \
+         .end = { ._uint64 = max },             \
+      }
+
 #define DRI_CONF_RANGE_F(min, max)              \
       .range = {                                \
          .start = { ._float = min },            \
@@ -86,6 +92,16 @@
          DRI_CONF_RANGE_I(min, max),                            \
       },                                                        \
       .value = { ._int = def },                                 \
+   },
+
+#define DRI_CONF_OPT_U64(_name, def, min, max, _desc) {         \
+      .desc = _desc,                                            \
+      .info = {                                                 \
+         .name = #_name,                                        \
+         .type = DRI_UINT64,                                    \
+         DRI_CONF_RANGE_U64(min, max),                          \
+      },                                                        \
+      .value = { ._uint64 = def },                                 \
    },
 
 #define DRI_CONF_OPT_F(_name, def, min, max, _desc) {           \
@@ -626,6 +642,18 @@
                   "Disable conservative LRZ")
 
 /**
+ * \brief panfrost specific configuration options
+ */
+
+#define DRI_CONF_PAN_COMPUTE_CORE_MASK(def) \
+   DRI_CONF_OPT_U64(pan_compute_core_mask, def, 0, UINT64_MAX, \
+                    "Bitmask of shader cores that may be used for compute jobs. If unset, defaults to scheduling across all available cores.")
+
+#define DRI_CONF_PAN_FRAGMENT_CORE_MASK(def) \
+   DRI_CONF_OPT_U64(pan_fragment_core_mask, def, 0, UINT64_MAX, \
+                    "Bitmask of shader cores that may be used for fragment jobs. If unset, defaults to scheduling across all available cores.")
+
+/**
  * \brief Turnip specific configuration options
  */
 
@@ -640,6 +668,10 @@
 #define DRI_CONF_TU_DISABLE_D24S8_BORDER_COLOR_WORKAROUND(def) \
    DRI_CONF_OPT_B(tu_disable_d24s8_border_color_workaround, def, \
                   "Use UBWC for D24S8 images with VK_IMAGE_USAGE_SAMPLED_BIT when customBorderColorWithoutFormat is enabled")
+
+#define DRI_CONF_TU_USE_TEX_COORD_ROUND_NEAREST_EVEN_MODE(def) \
+   DRI_CONF_OPT_B(tu_use_tex_coord_round_nearest_even_mode, def, \
+                  "Use D3D-compliant round-to-nearest-even mode for texture coordinates")
 
 /**
  * \brief Honeykrisp specific configuration options
@@ -793,6 +825,14 @@
 
 #define DRI_CONF_RADV_DISABLE_NGG_GS(def) \
    DRI_CONF_OPT_B(radv_disable_ngg_gs, def, "Disable NGG GS on GFX10/GFX10.3.")
+
+#define DRI_CONF_RADV_EMULATE_RT(def) \
+   DRI_CONF_OPT_B(radv_emulate_rt, def, \
+                  "Expose RT extensions on GFX10 and below through software emulation.")
+
+#define DRI_CONF_RADV_ENABLE_FLOAT16_GFX8(def) \
+   DRI_CONF_OPT_B(radv_enable_float16_gfx8, def, \
+                  "Expose float16 on GFX8, where it's supported but usually not beneficial.")
 
 /**
  * \brief ANV specific configuration options

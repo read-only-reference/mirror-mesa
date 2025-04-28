@@ -36,6 +36,8 @@
 #include "common/intel_tiled_render.h"
 #include "compiler/brw_prim.h"
 
+#include "genX_mi_builder.h"
+
 static const uint32_t vk_to_intel_blend[] = {
    [VK_BLEND_FACTOR_ZERO]                    = BLENDFACTOR_ZERO,
    [VK_BLEND_FACTOR_ONE]                     = BLENDFACTOR_ONE,
@@ -269,12 +271,24 @@ static const uint32_t vk_to_intel_shading_rate_combiner_op[] = {
 #endif
 
 static bool
-has_ds_feedback_loop(const struct vk_dynamic_graphics_state *dyn)
+has_ds_feedback_loop(const struct anv_pipeline_bind_map *bind_map,
+                     const struct vk_dynamic_graphics_state *dyn)
 {
-   return (dyn->feedback_loops & (VK_IMAGE_ASPECT_DEPTH_BIT |
-                                  VK_IMAGE_ASPECT_STENCIL_BIT)) ||
-      dyn->ial.depth_att != MESA_VK_ATTACHMENT_UNUSED ||
-      dyn->ial.stencil_att != MESA_VK_ATTACHMENT_UNUSED;
+   if (BITSET_IS_EMPTY(bind_map->input_attachments))
+      return false;
+
+   const unsigned depth_att = dyn->ial.depth_att == MESA_VK_ATTACHMENT_NO_INDEX ?
+      MAX_DESCRIPTOR_SET_INPUT_ATTACHMENTS : dyn->ial.depth_att;
+   const unsigned stencil_att = dyn->ial.stencil_att == MESA_VK_ATTACHMENT_NO_INDEX ?
+      MAX_DESCRIPTOR_SET_INPUT_ATTACHMENTS : dyn->ial.stencil_att;
+
+   return
+      (dyn->feedback_loops & (VK_IMAGE_ASPECT_DEPTH_BIT |
+                              VK_IMAGE_ASPECT_STENCIL_BIT)) != 0 ||
+      (dyn->ial.depth_att != MESA_VK_ATTACHMENT_UNUSED &&
+       BITSET_TEST(bind_map->input_attachments, depth_att)) ||
+      (dyn->ial.stencil_att != MESA_VK_ATTACHMENT_UNUSED &&
+       BITSET_TEST(bind_map->input_attachments, stencil_att));
 }
 
 UNUSED static bool
@@ -390,9 +404,10 @@ want_stencil_pma_fix(const struct vk_dynamic_graphics_state *dyn,
     *  3DSTATE_WM_CHROMAKEY::ChromaKeyKillEnable) ||
     * (3DSTATE_PS_EXTRA::Pixel Shader Computed Depth mode != PSCDEPTH_OFF)
     */
+   struct anv_shader_bin *fs_bin = pipeline->base.shaders[MESA_SHADER_FRAGMENT];
+
    return pipeline->kill_pixel ||
-          pipeline->rp_has_ds_self_dep ||
-          has_ds_feedback_loop(dyn) ||
+          has_ds_feedback_loop(&fs_bin->bind_map, dyn) ||
           wm_prog_data->computed_depth_mode != PSCDEPTH_OFF;
 }
 
@@ -875,27 +890,16 @@ update_ps_extra_has_uav(struct anv_gfx_dynamic_state *hw_state,
 {
    const struct brw_wm_prog_data *wm_prog_data = get_wm_prog_data(pipeline);
 
-#if GFX_VERx10 >= 125
-   SET_STAGE(PS_EXTRA, ps_extra.PixelShaderHasUAV,
-                       wm_prog_data && wm_prog_data->has_side_effects,
-                       FRAGMENT);
-#else
-   /* Prior to Gfx12.5 the HW seems to avoid spawning fragment shaders even if
-    * 3DSTATE_PS_EXTRA::PixelShaderKillsPixel=true when
-    * 3DSTATE_PS_BLEND::HasWriteableRT=false. This is causing problems with
-    * occlusion queries with 0 attachments. There are no CTS tests exercising
-    * this but zink+anv fails a bunch of tests like piglit
-    * arb_framebuffer_no_attachments-query.
-    *
-    * Here we choose to tweak the PixelShaderHasUAV to make sure the fragment
-    * shaders are run properly.
+   /* Force fragment shader execution if occlusion queries are active to
+    * ensure PS_DEPTH_COUNT is correct. Otherwise a fragment shader with
+    * discard and no render target setup could be increment PS_DEPTH_COUNT if
+    * the HW internally decides to not run the shader because it has already
+    * established that depth-test is passing.
     */
    SET_STAGE(PS_EXTRA, ps_extra.PixelShaderHasUAV,
                        wm_prog_data && (wm_prog_data->has_side_effects ||
-                                        (gfx->color_att_count == 0 &&
-                                         gfx->n_occlusion_queries > 0)),
+                                        gfx->n_occlusion_queries > 0),
                        FRAGMENT);
-#endif
 }
 
 ALWAYS_INLINE static void
@@ -904,12 +908,13 @@ update_ps_extra_kills_pixel(struct anv_gfx_dynamic_state *hw_state,
                             const struct anv_cmd_graphics_state *gfx,
                             const struct anv_graphics_pipeline *pipeline)
 {
+   struct anv_shader_bin *fs_bin = pipeline->base.shaders[MESA_SHADER_FRAGMENT];
    const struct brw_wm_prog_data *wm_prog_data = get_wm_prog_data(pipeline);
 
    SET_STAGE(PS_EXTRA, ps_extra.PixelShaderKillsPixel,
-                       wm_prog_data && (pipeline->rp_has_ds_self_dep ||
-                                        has_ds_feedback_loop(dyn) ||
-                                        wm_prog_data->uses_kill),
+                       wm_prog_data &&
+                       (has_ds_feedback_loop(&fs_bin->bind_map, dyn) ||
+                        wm_prog_data->uses_kill),
                        FRAGMENT);
 }
 
@@ -2146,6 +2151,7 @@ static void
 cmd_buffer_gfx_state_emission(struct anv_cmd_buffer *cmd_buffer)
 {
    struct anv_device *device = cmd_buffer->device;
+   struct anv_instance *instance = device->physical->instance;
    struct anv_cmd_graphics_state *gfx = &cmd_buffer->state.gfx;
    struct anv_graphics_pipeline *pipeline =
       anv_pipeline_to_graphics(gfx->base.pipeline);
@@ -2156,6 +2162,23 @@ cmd_buffer_gfx_state_emission(struct anv_cmd_buffer *cmd_buffer)
    struct anv_gfx_dynamic_state *hw_state = &gfx->dyn_state;
    const bool protected = cmd_buffer->vk.pool->flags &
                           VK_COMMAND_POOL_CREATE_PROTECTED_BIT;
+
+#define DEBUG_SHADER_HASH(stage) do {                                   \
+      if (unlikely(                                                     \
+             (instance->debug & ANV_DEBUG_SHADER_HASH) &&               \
+             anv_pipeline_has_stage(pipeline, stage))) {                \
+         mi_store(&b,                                                   \
+                  mi_mem32(device->workaround_address),                 \
+                  mi_imm(pipeline->base.shaders[stage]->                \
+                         prog_data->source_hash));                      \
+      }                                                                 \
+   } while (0)
+
+   struct mi_builder b;
+   if (unlikely(instance->debug & ANV_DEBUG_SHADER_HASH)) {
+      mi_builder_init(&b, device->info, &cmd_buffer->batch);
+      mi_builder_set_mocs(&b, isl_mocs(&device->isl_dev, 0, false));
+   }
 
 #if INTEL_WA_16011107343_GFX_VER
    /* Will be emitted in front of every draw instead */
@@ -2219,16 +2242,19 @@ cmd_buffer_gfx_state_emission(struct anv_cmd_buffer *cmd_buffer)
    }
 
    if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_VS)) {
+      DEBUG_SHADER_HASH(MESA_SHADER_VERTEX);
       anv_batch_emit_pipeline_state_protected(&cmd_buffer->batch, pipeline,
                                               final.vs, protected);
    }
 
    if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_HS)) {
+      DEBUG_SHADER_HASH(MESA_SHADER_TESS_CTRL);
       anv_batch_emit_pipeline_state_protected(&cmd_buffer->batch, pipeline,
                                               final.hs, protected);
    }
 
    if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_DS)) {
+      DEBUG_SHADER_HASH(MESA_SHADER_TESS_EVAL);
       anv_batch_emit_pipeline_state_protected(&cmd_buffer->batch, pipeline,
                                               final.ds, protected);
    }
@@ -2321,6 +2347,7 @@ cmd_buffer_gfx_state_emission(struct anv_cmd_buffer *cmd_buffer)
    /* Now the potentially dynamic instructions */
 
    if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_PS)) {
+      DEBUG_SHADER_HASH(MESA_SHADER_FRAGMENT);
       anv_batch_emit_merge_protected(&cmd_buffer->batch, GENX(3DSTATE_PS),
                                      pipeline, partial.ps, ps, protected) {
          SET(ps, ps, KernelStartPointer0);
@@ -2506,6 +2533,7 @@ cmd_buffer_gfx_state_emission(struct anv_cmd_buffer *cmd_buffer)
    }
 
    if (BITSET_TEST(hw_state->dirty, ANV_GFX_STATE_GS)) {
+      DEBUG_SHADER_HASH(MESA_SHADER_GEOMETRY);
       anv_batch_emit_merge_protected(&cmd_buffer->batch, GENX(3DSTATE_GS),
                                      pipeline, partial.gs, gs, protected) {
          SET(gs, gs, ReorderMode);
@@ -2856,6 +2884,7 @@ cmd_buffer_gfx_state_emission(struct anv_cmd_buffer *cmd_buffer)
 
 #undef INIT
 #undef SET
+#undef DEBUG_SHADER_HASH
 
    BITSET_ZERO(hw_state->dirty);
 }

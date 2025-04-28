@@ -609,18 +609,6 @@ pub struct RegRef {
 impl RegRef {
     pub const MAX_IDX: u32 = (1 << 26) - 1;
 
-    fn zero_idx(file: RegFile) -> u32 {
-        match file {
-            RegFile::GPR => 255,
-            RegFile::UGPR => 63,
-            RegFile::Pred => 7,
-            RegFile::UPred => 7,
-            RegFile::Carry => panic!("Carry has no zero index"),
-            RegFile::Bar => panic!("Bar has no zero index"),
-            RegFile::Mem => panic!("Mem has no zero index"),
-        }
-    }
-
     pub fn new(file: RegFile, base_idx: u32, comps: u8) -> RegRef {
         assert!(base_idx <= Self::MAX_IDX);
         let mut packed = base_idx;
@@ -629,10 +617,6 @@ impl RegRef {
         assert!(u8::from(file) < 8);
         packed |= u32::from(u8::from(file)) << 29;
         RegRef { packed: packed }
-    }
-
-    pub fn zero(file: RegFile, comps: u8) -> RegRef {
-        RegRef::new(file, RegRef::zero_idx(file), comps)
     }
 
     pub fn base_idx(&self) -> u32 {
@@ -798,6 +782,16 @@ impl SrcRef {
             SrcRef::SSA(ssa) => ssa.is_gpr(),
             SrcRef::Reg(reg) => reg.is_gpr(),
             SrcRef::True | SrcRef::False => false,
+        }
+    }
+
+    pub fn is_bindless_cbuf(&self) -> bool {
+        match self {
+            SrcRef::CBuf(cbuf) => match cbuf.buf {
+                CBuf::BindlessSSA(_) | CBuf::BindlessUGPR(_) => true,
+                _ => false,
+            },
+            _ => false,
         }
     }
 
@@ -1288,6 +1282,10 @@ impl Src {
         }
     }
 
+    pub fn is_bindless_cbuf(&self) -> bool {
+        self.src_ref.is_bindless_cbuf()
+    }
+
     pub fn is_predicate(&self) -> bool {
         self.src_ref.is_predicate()
     }
@@ -1311,6 +1309,7 @@ impl Src {
 
     pub fn is_fneg_zero(&self, src_type: SrcType) -> bool {
         match self.fold_imm(src_type).src_ref {
+            SrcRef::Zero => self.src_mod == SrcMod::FNeg,
             SrcRef::Imm32(0x00008000) => src_type == SrcType::F16,
             SrcRef::Imm32(0x80000000) => src_type == SrcType::F32,
             SrcRef::Imm32(0x80008000) => src_type == SrcType::F16v2,
@@ -1799,8 +1798,11 @@ impl fmt::Display for FloatCmpOp {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub enum IntCmpOp {
+    False,
+    True,
     Eq,
     Ne,
     Lt,
@@ -1812,6 +1814,7 @@ pub enum IntCmpOp {
 impl IntCmpOp {
     pub fn flip(self) -> IntCmpOp {
         match self {
+            IntCmpOp::False | IntCmpOp::True => self,
             IntCmpOp::Eq | IntCmpOp::Ne => self,
             IntCmpOp::Lt => IntCmpOp::Gt,
             IntCmpOp::Le => IntCmpOp::Ge,
@@ -1824,6 +1827,8 @@ impl IntCmpOp {
 impl fmt::Display for IntCmpOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            IntCmpOp::False => write!(f, ".f"),
+            IntCmpOp::True => write!(f, ".t"),
             IntCmpOp::Eq => write!(f, ".eq"),
             IntCmpOp::Ne => write!(f, ".ne"),
             IntCmpOp::Lt => write!(f, ".lt"),
@@ -2099,6 +2104,18 @@ pub enum TexLodMode {
     BiasClamp,
 }
 
+impl TexLodMode {
+    pub fn is_explicit_lod(&self) -> bool {
+        match self {
+            TexLodMode::Auto
+            | TexLodMode::Bias
+            | TexLodMode::Clamp
+            | TexLodMode::BiasClamp => false,
+            TexLodMode::Zero | TexLodMode::Lod => true,
+        }
+    }
+}
+
 impl fmt::Display for TexLodMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -2109,6 +2126,37 @@ impl fmt::Display for TexLodMode {
             TexLodMode::Clamp => write!(f, "lc"),
             TexLodMode::BiasClamp => write!(f, "lb.lc"),
         }
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct ChannelMask(u8);
+
+impl ChannelMask {
+    pub fn new(mask: u8) -> Self {
+        assert!(mask != 0 && (mask & !0xf) == 0);
+        ChannelMask(mask)
+    }
+
+    pub fn for_comps(comps: u8) -> Self {
+        assert!(comps > 0 && comps <= 4);
+        ChannelMask((1 << comps) - 1)
+    }
+
+    pub fn to_bits(self) -> u8 {
+        self.0
+    }
+}
+
+impl fmt::Display for ChannelMask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, ".")?;
+        for (i, c) in ['r', 'g', 'b', 'a'].into_iter().enumerate() {
+            if self.0 & (1 << i) != 0 {
+                write!(f, "{c}")?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -2487,6 +2535,15 @@ impl AtomType {
             AtomType::U64 | AtomType::I64 | AtomType::F64 => 64,
         }
     }
+
+    pub fn is_float(&self) -> bool {
+        match self {
+            AtomType::F16x2 | AtomType::F32 | AtomType::F64 => true,
+            AtomType::U32 | AtomType::I32 | AtomType::U64 | AtomType::I64 => {
+                false
+            }
+        }
+    }
 }
 
 impl fmt::Display for AtomType {
@@ -2832,6 +2889,80 @@ impl DisplayOp for OpFSwzAdd {
     }
 }
 impl_display_for_op!(OpFSwzAdd);
+
+/// Describes where the second src is taken before doing the ops
+#[allow(dead_code)]
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum FSwzShuffle {
+    Quad0,
+    Quad1,
+    Quad2,
+    Quad3,
+    // swap [0, 1] and [2, 3]
+    SwapHorizontal,
+    // swap [0, 2] and [1, 3]
+    SwapVertical,
+}
+
+impl fmt::Display for FSwzShuffle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FSwzShuffle::Quad0 => write!(f, ".0000"),
+            FSwzShuffle::Quad1 => write!(f, ".1111"),
+            FSwzShuffle::Quad2 => write!(f, ".2222"),
+            FSwzShuffle::Quad3 => write!(f, ".3333"),
+            FSwzShuffle::SwapHorizontal => write!(f, ".1032"),
+            FSwzShuffle::SwapVertical => write!(f, ".2301"),
+        }
+    }
+}
+
+/// Op only present in Kepler and older
+/// It first does a shuffle on the second src and then applies
+/// src0 op src1, each thread on a quad might do a different operation.
+///
+/// This is used to encode ddx/ddy
+/// ex: ddx
+///   src1 = shuffle swap horizontal src1
+///   ops = [sub, subr, sub, subr]
+#[repr(C)]
+#[derive(SrcsAsSlice, DstsAsSlice)]
+pub struct OpFSwz {
+    #[dst_type(F32)]
+    pub dst: Dst,
+
+    #[src_type(GPR)]
+    pub srcs: [Src; 2],
+
+    pub rnd_mode: FRndMode,
+    pub ftz: bool,
+    pub shuffle: FSwzShuffle,
+
+    pub ops: [FSwzAddOp; 4],
+}
+
+impl DisplayOp for OpFSwz {
+    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "fswz{}", self.shuffle)?;
+        if self.rnd_mode != FRndMode::NearestEven {
+            write!(f, "{}", self.rnd_mode)?;
+        }
+        if self.ftz {
+            write!(f, ".ftz")?;
+        }
+        write!(
+            f,
+            " {} {} [{}, {}, {}, {}]",
+            self.srcs[0],
+            self.srcs[1],
+            self.ops[0],
+            self.ops[1],
+            self.ops[2],
+            self.ops[3],
+        )
+    }
+}
+impl_display_for_op!(OpFSwz);
 
 pub enum RroOp {
     SinCos,
@@ -3724,6 +3855,8 @@ impl Foldable for OpISetP {
             let x = x as i32;
             let y = y as i32;
             match &self.cmp_op {
+                IntCmpOp::False => false,
+                IntCmpOp::True => true,
                 IntCmpOp::Eq => x == y,
                 IntCmpOp::Ne => x != y,
                 IntCmpOp::Lt => x < y,
@@ -3733,6 +3866,8 @@ impl Foldable for OpISetP {
             }
         } else {
             match &self.cmp_op {
+                IntCmpOp::False => false,
+                IntCmpOp::True => true,
                 IntCmpOp::Eq => x == y,
                 IntCmpOp::Ne => x != y,
                 IntCmpOp::Lt => x < y,
@@ -3742,7 +3877,9 @@ impl Foldable for OpISetP {
             }
         };
 
-        let cmp = if self.ex && x == y {
+        let cmp_op_is_const =
+            matches!(self.cmp_op, IntCmpOp::False | IntCmpOp::True);
+        let cmp = if self.ex && x == y && !cmp_op_is_const {
             // Pre-Volta, isetp.x takes the accumulator into account.  If we
             // want to support this, we need to take an an accumulator into
             // account.  Disallow it for now.
@@ -4829,7 +4966,7 @@ pub struct OpTex {
     pub offset: bool,
     pub mem_eviction_priority: MemEvictionPriority,
     pub nodep: bool,
-    pub mask: u8,
+    pub channel_mask: ChannelMask,
 }
 
 impl DisplayOp for OpTex {
@@ -4848,6 +4985,7 @@ impl DisplayOp for OpTex {
         if self.nodep {
             write!(f, ".nodep")?;
         }
+        write!(f, "{}", self.channel_mask)?;
         write!(f, " {} {} {}", self.tex, self.srcs[0], self.srcs[1])
     }
 }
@@ -4870,7 +5008,7 @@ pub struct OpTld {
     pub offset: bool,
     pub mem_eviction_priority: MemEvictionPriority,
     pub nodep: bool,
-    pub mask: u8,
+    pub channel_mask: ChannelMask,
 }
 
 impl DisplayOp for OpTld {
@@ -4889,6 +5027,7 @@ impl DisplayOp for OpTld {
         if self.nodep {
             write!(f, ".nodep")?;
         }
+        write!(f, "{}", self.channel_mask)?;
         write!(f, " {} {} {}", self.tex, self.srcs[0], self.srcs[1])
     }
 }
@@ -4911,7 +5050,7 @@ pub struct OpTld4 {
     pub z_cmpr: bool,
     pub mem_eviction_priority: MemEvictionPriority,
     pub nodep: bool,
-    pub mask: u8,
+    pub channel_mask: ChannelMask,
 }
 
 impl DisplayOp for OpTld4 {
@@ -4927,6 +5066,7 @@ impl DisplayOp for OpTld4 {
         if self.nodep {
             write!(f, ".nodep")?;
         }
+        write!(f, "{}", self.channel_mask)?;
         write!(f, " {} {} {}", self.tex, self.srcs[0], self.srcs[1])
     }
 }
@@ -4944,7 +5084,7 @@ pub struct OpTmml {
 
     pub dim: TexDim,
     pub nodep: bool,
-    pub mask: u8,
+    pub channel_mask: ChannelMask,
 }
 
 impl DisplayOp for OpTmml {
@@ -4953,6 +5093,7 @@ impl DisplayOp for OpTmml {
         if self.nodep {
             write!(f, ".nodep")?;
         }
+        write!(f, "{}", self.channel_mask)?;
         write!(f, " {} {} {}", self.tex, self.srcs[0], self.srcs[1])
     }
 }
@@ -4973,7 +5114,7 @@ pub struct OpTxd {
     pub offset: bool,
     pub mem_eviction_priority: MemEvictionPriority,
     pub nodep: bool,
-    pub mask: u8,
+    pub channel_mask: ChannelMask,
 }
 
 impl DisplayOp for OpTxd {
@@ -4986,6 +5127,7 @@ impl DisplayOp for OpTxd {
         if self.nodep {
             write!(f, ".nodep")?;
         }
+        write!(f, "{}", self.channel_mask)?;
         write!(f, " {} {} {}", self.tex, self.srcs[0], self.srcs[1])
     }
 }
@@ -5003,7 +5145,7 @@ pub struct OpTxq {
 
     pub query: TexQuery,
     pub nodep: bool,
-    pub mask: u8,
+    pub channel_mask: ChannelMask,
 }
 
 impl DisplayOp for OpTxq {
@@ -5012,10 +5154,26 @@ impl DisplayOp for OpTxq {
         if self.nodep {
             write!(f, ".nodep")?;
         }
+        write!(f, "{}", self.channel_mask)?;
         write!(f, " {} {} {}", self.tex, self.src, self.query)
     }
 }
 impl_display_for_op!(OpTxq);
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum ImageAccess {
+    Binary(MemType),
+    Formatted(ChannelMask),
+}
+
+impl fmt::Display for ImageAccess {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ImageAccess::Binary(mem_type) => write!(f, ".b{mem_type}"),
+            ImageAccess::Formatted(mask) => write!(f, ".p{mask}"),
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(SrcsAsSlice, DstsAsSlice)]
@@ -5023,10 +5181,10 @@ pub struct OpSuLd {
     pub dst: Dst,
     pub fault: Dst,
 
+    pub image_access: ImageAccess,
     pub image_dim: ImageDim,
     pub mem_order: MemOrder,
     pub mem_eviction_priority: MemEvictionPriority,
-    pub mask: u8,
 
     #[src_type(GPR)]
     pub handle: Src,
@@ -5039,7 +5197,8 @@ impl DisplayOp for OpSuLd {
     fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "suld.p{}{}{} [{}] {}",
+            "suld{}{}{}{} [{}] {}",
+            self.image_access,
             self.image_dim,
             self.mem_order,
             self.mem_eviction_priority,
@@ -5053,10 +5212,10 @@ impl_display_for_op!(OpSuLd);
 #[repr(C)]
 #[derive(SrcsAsSlice, DstsAsSlice)]
 pub struct OpSuSt {
+    pub image_access: ImageAccess,
     pub image_dim: ImageDim,
     pub mem_order: MemOrder,
     pub mem_eviction_priority: MemEvictionPriority,
-    pub mask: u8,
 
     #[src_type(GPR)]
     pub handle: Src,
@@ -5072,7 +5231,8 @@ impl DisplayOp for OpSuSt {
     fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "sust.p{}{}{} [{}] {} {}",
+            "sust{}{}{}{} [{}] {} {}",
+            self.image_access,
             self.image_dim,
             self.mem_order,
             self.mem_eviction_priority,
@@ -5751,6 +5911,25 @@ impl DisplayOp for OpBar {
 }
 impl_display_for_op!(OpBar);
 
+/// Instruction only used on Kepler(A|B).
+/// Kepler has explicit dependency tracking for texture loads.
+/// When a texture load is executed, it is put on some kind of FIFO queue
+/// for later execution.
+/// Before the results of a texture are used we need to wait on the queue,
+/// texdepbar waits until the queue has at most `textures_left` elements.
+#[repr(C)]
+#[derive(SrcsAsSlice, DstsAsSlice)]
+pub struct OpTexDepBar {
+    pub textures_left: i8,
+}
+
+impl DisplayOp for OpTexDepBar {
+    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "texdepbar {}", self.textures_left)
+    }
+}
+impl_display_for_op!(OpTexDepBar);
+
 #[repr(C)]
 #[derive(SrcsAsSlice, DstsAsSlice)]
 pub struct OpCS2R {
@@ -6388,6 +6567,7 @@ pub enum Op {
     FSet(OpFSet),
     FSetP(OpFSetP),
     FSwzAdd(OpFSwzAdd),
+    FSwz(OpFSwz),
     DAdd(OpDAdd),
     DFma(OpDFma),
     DMnMx(OpDMnMx),
@@ -6470,6 +6650,7 @@ pub enum Op {
     Exit(OpExit),
     WarpSync(OpWarpSync),
     Bar(OpBar),
+    TexDepBar(OpTexDepBar),
     CS2R(OpCS2R),
     Isberd(OpIsberd),
     Kill(OpKill),
@@ -6500,6 +6681,184 @@ impl Op {
             | Op::Sync(_)
             | Op::Brk(_)
             | Op::Cont(_)
+            | Op::Exit(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_fp64(&self) -> bool {
+        match self {
+            Op::MuFu(op) => matches!(op.op, MuFuOp::Rcp64H | MuFuOp::Rsq64H),
+            Op::DAdd(_)
+            | Op::DFma(_)
+            | Op::DMnMx(_)
+            | Op::DMul(_)
+            | Op::DSetP(_) => true,
+            Op::F2F(op) => op.src_type.bits() == 64 || op.dst_type.bits() == 64,
+            Op::F2I(op) => op.src_type.bits() == 64 || op.dst_type.bits() == 64,
+            Op::I2F(op) => op.src_type.bits() == 64 || op.dst_type.bits() == 64,
+            Op::FRnd(op) => {
+                op.src_type.bits() == 64 || op.dst_type.bits() == 64
+            }
+            _ => false,
+        }
+    }
+
+    pub fn has_fixed_latency(&self, sm: u8) -> bool {
+        match self {
+            // Float ALU
+            Op::F2FP(_)
+            | Op::FAdd(_)
+            | Op::FFma(_)
+            | Op::FMnMx(_)
+            | Op::FMul(_)
+            | Op::FSet(_)
+            | Op::FSetP(_)
+            | Op::HAdd2(_)
+            | Op::HFma2(_)
+            | Op::HMul2(_)
+            | Op::HSet2(_)
+            | Op::HSetP2(_)
+            | Op::HMnMx2(_)
+            | Op::FSwz(_)
+            | Op::FSwzAdd(_) => true,
+
+            // Multi-function unit is variable latency
+            Op::Rro(_) | Op::MuFu(_) => false,
+
+            // Double-precision float ALU
+            Op::DAdd(_)
+            | Op::DFma(_)
+            | Op::DMnMx(_)
+            | Op::DMul(_)
+            | Op::DSetP(_) => false,
+
+            // Integer ALU
+            Op::BRev(_) | Op::Flo(_) | Op::PopC(_) => false,
+            Op::IMad(_) | Op::IMul(_) => sm >= 70,
+            Op::BMsk(_)
+            | Op::IAbs(_)
+            | Op::IAdd2(_)
+            | Op::IAdd2X(_)
+            | Op::IAdd3(_)
+            | Op::IAdd3X(_)
+            | Op::IDp4(_)
+            | Op::IMad64(_)
+            | Op::IMnMx(_)
+            | Op::ISetP(_)
+            | Op::Lea(_)
+            | Op::LeaX(_)
+            | Op::Lop2(_)
+            | Op::Lop3(_)
+            | Op::Shf(_)
+            | Op::Shl(_)
+            | Op::Shr(_)
+            | Op::Bfe(_) => true,
+
+            // Conversions are variable latency?!?
+            Op::F2F(_) | Op::F2I(_) | Op::I2F(_) | Op::I2I(_) | Op::FRnd(_) => {
+                false
+            }
+
+            // Move ops
+            Op::Mov(_) | Op::Prmt(_) | Op::Sel(_) => true,
+            Op::Shfl(_) => false,
+
+            // Predicate ops
+            Op::PLop3(_) | Op::PSetP(_) => true,
+
+            // Uniform ops
+            Op::R2UR(_) => false,
+
+            // Texture ops
+            Op::Tex(_)
+            | Op::Tld(_)
+            | Op::Tld4(_)
+            | Op::Tmml(_)
+            | Op::Txd(_)
+            | Op::Txq(_) => false,
+
+            // Surface ops
+            Op::SuLd(_) | Op::SuSt(_) | Op::SuAtom(_) => false,
+
+            // Memory ops
+            Op::Ld(_)
+            | Op::Ldc(_)
+            | Op::St(_)
+            | Op::Atom(_)
+            | Op::AL2P(_)
+            | Op::ALd(_)
+            | Op::ASt(_)
+            | Op::Ipa(_)
+            | Op::CCtl(_)
+            | Op::LdTram(_)
+            | Op::MemBar(_) => false,
+
+            // Control-flow ops
+            Op::BClear(_)
+            | Op::Break(_)
+            | Op::BSSy(_)
+            | Op::BSync(_)
+            | Op::SSy(_)
+            | Op::Sync(_)
+            | Op::Brk(_)
+            | Op::PBk(_)
+            | Op::Cont(_)
+            | Op::PCnt(_)
+            | Op::Bra(_)
+            | Op::Exit(_)
+            | Op::WarpSync(_) => false,
+
+            // The barrier half is HW scoreboarded by the GPR isn't.  When
+            // moving from a GPR to a barrier, we still need a token for WaR
+            // hazards.
+            Op::BMov(_) => false,
+
+            // Geometry ops
+            Op::Out(_) | Op::OutFinal(_) => false,
+
+            // Miscellaneous ops
+            Op::Bar(_)
+            | Op::TexDepBar(_)
+            | Op::CS2R(_)
+            | Op::Isberd(_)
+            | Op::Kill(_)
+            | Op::PixLd(_)
+            | Op::S2R(_) => false,
+            Op::Nop(_) | Op::Vote(_) => true,
+
+            // Virtual ops
+            Op::Undef(_)
+            | Op::SrcBar(_)
+            | Op::PhiSrcs(_)
+            | Op::PhiDsts(_)
+            | Op::Copy(_)
+            | Op::Pin(_)
+            | Op::Unpin(_)
+            | Op::Swap(_)
+            | Op::ParCopy(_)
+            | Op::RegOut(_)
+            | Op::Annotate(_) => {
+                panic!("Not a hardware opcode")
+            }
+        }
+    }
+
+    /// Some decoupled instructions don't need
+    /// scoreboards, due to our usage.
+    pub fn no_scoreboard(&self) -> bool {
+        match self {
+            Op::BClear(_)
+            | Op::Break(_)
+            | Op::BSSy(_)
+            | Op::BSync(_)
+            | Op::SSy(_)
+            | Op::Sync(_)
+            | Op::Brk(_)
+            | Op::PBk(_)
+            | Op::Cont(_)
+            | Op::PCnt(_)
+            | Op::Bra(_)
             | Op::Exit(_) => true,
             _ => false,
         }
@@ -6672,7 +7031,6 @@ impl InstrDeps {
     }
 
     pub fn set_delay(&mut self, delay: u8) {
-        assert!(delay <= MAX_INSTR_DELAY);
         self.delay = delay;
     }
 
@@ -6852,6 +7210,7 @@ impl Instr {
             | Op::Exit(_)
             | Op::WarpSync(_)
             | Op::Bar(_)
+            | Op::TexDepBar(_)
             | Op::RegOut(_)
             | Op::Out(_)
             | Op::OutFinal(_)
@@ -6865,140 +7224,6 @@ impl Instr {
         match &self.op {
             Op::PhiDsts(_) => false,
             op => op.is_uniform(),
-        }
-    }
-
-    pub fn has_fixed_latency(&self, sm: u8) -> bool {
-        match &self.op {
-            // Float ALU
-            Op::F2FP(_)
-            | Op::FAdd(_)
-            | Op::FFma(_)
-            | Op::FMnMx(_)
-            | Op::FMul(_)
-            | Op::FSet(_)
-            | Op::FSetP(_)
-            | Op::HAdd2(_)
-            | Op::HFma2(_)
-            | Op::HMul2(_)
-            | Op::HSet2(_)
-            | Op::HSetP2(_)
-            | Op::HMnMx2(_)
-            | Op::FSwzAdd(_) => true,
-
-            // Multi-function unit is variable latency
-            Op::Rro(_) | Op::MuFu(_) => false,
-
-            // Double-precision float ALU
-            Op::DAdd(_)
-            | Op::DFma(_)
-            | Op::DMnMx(_)
-            | Op::DMul(_)
-            | Op::DSetP(_) => false,
-
-            // Integer ALU
-            Op::BRev(_) | Op::Flo(_) | Op::PopC(_) => false,
-            Op::IMad(_) | Op::IMul(_) => sm >= 70,
-            Op::BMsk(_)
-            | Op::IAbs(_)
-            | Op::IAdd2(_)
-            | Op::IAdd2X(_)
-            | Op::IAdd3(_)
-            | Op::IAdd3X(_)
-            | Op::IDp4(_)
-            | Op::IMad64(_)
-            | Op::IMnMx(_)
-            | Op::ISetP(_)
-            | Op::Lea(_)
-            | Op::LeaX(_)
-            | Op::Lop2(_)
-            | Op::Lop3(_)
-            | Op::Shf(_)
-            | Op::Shl(_)
-            | Op::Shr(_)
-            | Op::Bfe(_) => true,
-
-            // Conversions are variable latency?!?
-            Op::F2F(_) | Op::F2I(_) | Op::I2F(_) | Op::I2I(_) | Op::FRnd(_) => {
-                false
-            }
-
-            // Move ops
-            Op::Mov(_) | Op::Prmt(_) | Op::Sel(_) => true,
-            Op::Shfl(_) => false,
-
-            // Predicate ops
-            Op::PLop3(_) | Op::PSetP(_) => true,
-
-            // Uniform ops
-            Op::R2UR(_) => false,
-
-            // Texture ops
-            Op::Tex(_)
-            | Op::Tld(_)
-            | Op::Tld4(_)
-            | Op::Tmml(_)
-            | Op::Txd(_)
-            | Op::Txq(_) => false,
-
-            // Surface ops
-            Op::SuLd(_) | Op::SuSt(_) | Op::SuAtom(_) => false,
-
-            // Memory ops
-            Op::Ld(_)
-            | Op::Ldc(_)
-            | Op::St(_)
-            | Op::Atom(_)
-            | Op::AL2P(_)
-            | Op::ALd(_)
-            | Op::ASt(_)
-            | Op::Ipa(_)
-            | Op::CCtl(_)
-            | Op::LdTram(_)
-            | Op::MemBar(_) => false,
-
-            // Control-flow ops
-            Op::BClear(_) | Op::Break(_) | Op::BSSy(_) | Op::BSync(_) => true,
-            Op::SSy(_)
-            | Op::Sync(_)
-            | Op::Brk(_)
-            | Op::PBk(_)
-            | Op::Cont(_)
-            | Op::PCnt(_) => true,
-            Op::Bra(_) | Op::Exit(_) => true,
-            Op::WarpSync(_) => false,
-
-            // The barrier half is HW scoreboarded by the GPR isn't.  When
-            // moving from a GPR to a barrier, we still need a token for WaR
-            // hazards.
-            Op::BMov(_) => false,
-
-            // Geometry ops
-            Op::Out(_) | Op::OutFinal(_) => false,
-
-            // Miscellaneous ops
-            Op::Bar(_)
-            | Op::CS2R(_)
-            | Op::Isberd(_)
-            | Op::Kill(_)
-            | Op::PixLd(_)
-            | Op::S2R(_) => false,
-            Op::Nop(_) | Op::Vote(_) => true,
-
-            // Virtual ops
-            Op::Undef(_)
-            | Op::SrcBar(_)
-            | Op::PhiSrcs(_)
-            | Op::PhiDsts(_)
-            | Op::Copy(_)
-            | Op::Pin(_)
-            | Op::Unpin(_)
-            | Op::Swap(_)
-            | Op::ParCopy(_)
-            | Op::RegOut(_)
-            | Op::Annotate(_) => {
-                panic!("Not a hardware opcode")
-            }
         }
     }
 
@@ -7493,11 +7718,113 @@ pub struct ShaderInfo {
 
 pub trait ShaderModel {
     fn sm(&self) -> u8;
+
+    #[allow(dead_code)]
+    fn is_fermi(&self) -> bool {
+        self.sm() >= 20 && self.sm() < 30
+    }
+
+    #[allow(dead_code)]
+    fn is_kepler_a(&self) -> bool {
+        self.sm() >= 30 && self.sm() < 32
+    }
+
+    #[allow(dead_code)]
+    fn is_kepler_b(&self) -> bool {
+        // TK1 is SM 3.2 and desktop Kepler B is SM 3.3+
+        self.sm() >= 32 && self.sm() < 40
+    }
+
+    // The following helpers are pulled from GetSpaVersion in the open-source
+    // NVIDIA kernel driver sources
+
+    #[allow(dead_code)]
+    fn is_maxwell(&self) -> bool {
+        self.sm() >= 50 && self.sm() < 60
+    }
+
+    #[allow(dead_code)]
+    fn is_pascal(&self) -> bool {
+        self.sm() >= 60 && self.sm() < 70
+    }
+
+    #[allow(dead_code)]
+    fn is_volta(&self) -> bool {
+        self.sm() >= 70 && self.sm() < 73
+    }
+
+    #[allow(dead_code)]
+    fn is_turing(&self) -> bool {
+        self.sm() >= 73 && self.sm() < 80
+    }
+
+    #[allow(dead_code)]
+    fn is_ampere(&self) -> bool {
+        self.sm() >= 80 && self.sm() < 89
+    }
+
+    #[allow(dead_code)]
+    fn is_ada(&self) -> bool {
+        self.sm() == 89
+    }
+
+    #[allow(dead_code)]
+    fn is_hopper(&self) -> bool {
+        self.sm() >= 90 && self.sm() < 100
+    }
+
+    #[allow(dead_code)]
+    fn is_blackwell(&self) -> bool {
+        self.sm() >= 100 && self.sm() < 110
+    }
+
     fn num_regs(&self, file: RegFile) -> u32;
     fn hw_reserved_gprs(&self) -> u32;
     fn crs_size(&self, max_crs_depth: u32) -> u32;
 
     fn op_can_be_uniform(&self, op: &Op) -> bool;
+
+    // Scheduling information
+    fn op_needs_scoreboard(&self, op: &Op) -> bool {
+        !op.no_scoreboard() && !op.has_fixed_latency(self.sm())
+    }
+
+    /// Latency before another non-NOP can execute
+    fn exec_latency(&self, op: &Op) -> u32;
+
+    /// Read-after-read latency
+    fn raw_latency(
+        &self,
+        write: &Op,
+        dst_idx: usize,
+        read: &Op,
+        src_idx: usize,
+    ) -> u32;
+
+    /// Write-after-read latency
+    fn war_latency(
+        &self,
+        read: &Op,
+        src_idx: usize,
+        write: &Op,
+        dst_idx: usize,
+    ) -> u32;
+
+    /// Write-after-write latency
+    fn waw_latency(
+        &self,
+        a: &Op,
+        a_dst_idx: usize,
+        a_has_pred: bool,
+        b: &Op,
+        b_dst_idx: usize,
+    ) -> u32;
+
+    /// Predicate read-after-write latency
+    fn paw_latency(&self, write: &Op, dst_idx: usize) -> u32;
+
+    /// Worst-case access-after-write latency
+    fn worst_latency(&self, write: &Op, dst_idx: usize) -> u32;
 
     fn legalize_op(&self, b: &mut LegalizeBuilder, op: &mut Op);
     fn encode_shader(&self, s: &Shader<'_>) -> Vec<u32>;
@@ -7576,6 +7903,7 @@ impl Shader<'_> {
         let mut num_instrs = 0;
         let mut uses_global_mem = false;
         let mut writes_global_mem = false;
+        let mut uses_fp64 = false;
 
         self.for_each_instr(&mut |instr| {
             num_instrs += 1;
@@ -7587,11 +7915,16 @@ impl Shader<'_> {
             if !writes_global_mem {
                 writes_global_mem = instr.writes_global_mem();
             }
+
+            if !uses_fp64 {
+                uses_fp64 = instr.op.is_fp64();
+            }
         });
 
         self.info.num_instrs = num_instrs;
         self.info.uses_global_mem = uses_global_mem;
         self.info.writes_global_mem = writes_global_mem;
+        self.info.uses_fp64 = uses_fp64;
 
         self.info.max_warps_per_sm = max_warps_per_sm(
             self.info.num_gprs as u32 + self.sm.hw_reserved_gprs(),

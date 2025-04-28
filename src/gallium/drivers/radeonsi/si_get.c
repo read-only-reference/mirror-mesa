@@ -876,7 +876,7 @@ void si_init_screen_get_functions(struct si_screen *sscreen)
       (sscreen->info.family >= CHIP_GFX940 && !sscreen->info.has_graphics) ||
       /* fma32 is too slow for gpu < gfx9, so apply the option only for gpu >= gfx9 */
       (sscreen->info.gfx_level >= GFX9 && sscreen->options.force_use_fma32);
-   bool has_mediump = sscreen->info.gfx_level >= GFX8 && sscreen->options.fp16;
+   bool has_mediump = sscreen->info.gfx_level >= GFX9 && sscreen->options.mediump;
 
    nir_shader_compiler_options *options = sscreen->nir_options;
    ac_nir_set_options(&sscreen->info, !sscreen->use_aco, options);
@@ -901,7 +901,9 @@ void si_init_screen_get_functions(struct si_screen *sscreen)
     * when execution mode is rtz instead of rtne.
     */
    options->force_f2f16_rtz = true;
-   options->io_options |= (!has_mediump ? nir_io_mediump_is_32bit : 0) | nir_io_has_intrinsics;
+   options->io_options |= (!has_mediump ? nir_io_mediump_is_32bit : 0) | nir_io_has_intrinsics |
+                          (sscreen->use_ngg_culling ?
+                              nir_io_compaction_groups_tes_inputs_into_pos_and_var_groups : 0);
    options->lower_mediump_io = has_mediump ? si_lower_mediump_io : NULL;
    /* HW supports indirect indexing for: | Enabled in driver
     * -------------------------------------------------------
@@ -952,14 +954,16 @@ void si_init_shader_caps(struct si_screen *sscreen)
       caps->int64_atomics = true;
       caps->tgsi_any_inout_decl_range = true;
 
-      /* We need f16c for fast FP16 conversions in glUniform. */
-      caps->fp16_const_buffers =
-         util_get_cpu_caps()->has_f16c && sscreen->nir_options->lower_mediump_io;
+      /* We need F16C for fast FP16 conversions in glUniform.
+       * It's supported since Intel Ivy Bridge and AMD Bulldozer.
+       */
+      bool has_16bit_alu = sscreen->info.gfx_level >= GFX9 && util_get_cpu_caps()->has_f16c;
 
-      caps->fp16 =
-      caps->fp16_derivatives =
-      caps->glsl_16bit_consts =
-      caps->int16 = sscreen->nir_options->lower_mediump_io != NULL;
+      caps->fp16 = has_16bit_alu;
+      caps->fp16_derivatives = has_16bit_alu;
+      caps->fp16_const_buffers = has_16bit_alu;
+      caps->int16 = has_16bit_alu;
+      caps->glsl_16bit_consts = has_16bit_alu;
    }
 }
 

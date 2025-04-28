@@ -1019,6 +1019,13 @@ genX(set_fast_clear_state)(struct anv_cmd_buffer *cmd_buffer,
    }
 }
 
+static bool ATTRIBUTE_CONST
+queue_family_is_external(uint32_t index)
+{
+      return index == VK_QUEUE_FAMILY_FOREIGN_EXT ||
+             index == VK_QUEUE_FAMILY_EXTERNAL;
+}
+
 /**
  * @brief Transitions a color buffer from one layout to another.
  *
@@ -1029,6 +1036,9 @@ genX(set_fast_clear_state)(struct anv_cmd_buffer *cmd_buffer,
  * @param layer_count VK_REMAINING_ARRAY_LAYERS isn't supported. For 3D images,
  *                    this represents the maximum layers to transition at each
  *                    specified miplevel.
+ * @param acquire_unmodified True if
+ *    VkExternalMemoryAcquireUnmodifiedEXT::acquireUnmodifiedMemory is set and
+ *    relevant.
  */
 static void
 transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
@@ -1040,7 +1050,8 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
                         VkImageLayout final_layout,
                         uint32_t src_queue_family,
                         uint32_t dst_queue_family,
-                        bool will_full_fast_clear)
+                        bool will_full_fast_clear,
+                        bool acquire_unmodified)
 {
    struct anv_device *device = cmd_buffer->device;
    const struct intel_device_info *devinfo = device->info;
@@ -1067,13 +1078,8 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
       ? isl_drm_modifier_get_info(image->vk.drm_format_mod)
       : NULL;
 
-   const bool src_queue_external =
-      src_queue_family == VK_QUEUE_FAMILY_FOREIGN_EXT ||
-      src_queue_family == VK_QUEUE_FAMILY_EXTERNAL;
-
-   const bool dst_queue_external =
-      dst_queue_family == VK_QUEUE_FAMILY_FOREIGN_EXT ||
-      dst_queue_family == VK_QUEUE_FAMILY_EXTERNAL;
+   const bool src_queue_external = queue_family_is_external(src_queue_family);
+   const bool dst_queue_external = queue_family_is_external(dst_queue_family);
 
    /* If the queues are external, consider the first queue family flags
     * (should be the most capable)
@@ -1090,18 +1096,16 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
    /* Simultaneous acquire and release on external queues is illegal. */
    assert(!src_queue_external || !dst_queue_external);
 
-   /* Ownership transition on an external queue requires special action if the
-    * image has a DRM format modifier because we store image data in
-    * a driver-private bo which is inaccessible to the external queue.
+   /* Ownership transition on an external queue requires special action if we
+    * store any image data in a driver-private bo that is inaccessible to the
+    * external queue.
     */
    const bool private_binding_acquire =
       src_queue_external &&
-      anv_image_is_externally_shared(image) &&
       anv_image_has_private_binding(image);
 
    const bool private_binding_release =
       dst_queue_external &&
-      anv_image_is_externally_shared(image) &&
       anv_image_has_private_binding(image);
 
    if (initial_layout == final_layout &&
@@ -1225,8 +1229,7 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
 
          must_init_aux_surface = false;
       }
-
-   } else if (private_binding_acquire) {
+   } else if (private_binding_acquire && !acquire_unmodified) {
       /* The fast clear state lives in a driver-private bo, and therefore the
        * external/foreign queue is unaware of it.
        *
@@ -1259,6 +1262,19 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
           */
          must_init_aux_surface = false;
       }
+   } else if (private_binding_acquire && acquire_unmodified) {
+      /* The Vulkan 1.3.302 spec ensures we have previously initialized the
+       * image memory, and therefore initialized the fast clear state and aux
+       * surface, because initial_layout_undefined is false and
+       * acquireUnmodifiedMemory is true.
+       *
+       * Since the time of our most recent image ownership release and up
+       * until the current ownership re-acquisition, the externally-shared
+       * image memory has remained unmodified. Therefore the fast clear state
+       * and aux surface are valid and consistent with the image content.
+       */
+      must_init_fast_clear_state = false;
+      must_init_aux_surface = false;
    }
 
    if (must_init_fast_clear_state) {
@@ -2420,32 +2436,15 @@ genX(cmd_buffer_emit_push_descriptor_surfaces)(struct anv_cmd_buffer *cmd_buffer
    }
 }
 
-ALWAYS_INLINE void
-genX(batch_emit_pipe_control)(struct anv_batch *batch,
-                              const struct intel_device_info *devinfo,
-                              uint32_t current_pipeline,
-                              enum anv_pipe_bits bits,
-                              const char *reason)
-{
-   genX(batch_emit_pipe_control_write)(batch,
-                                       devinfo,
-                                       current_pipeline,
-                                       NoWrite,
-                                       ANV_NULL_ADDRESS,
-                                       0,
-                                       bits,
-                                       reason);
-}
-
-ALWAYS_INLINE void
-genX(batch_emit_pipe_control_write)(struct anv_batch *batch,
-                                    const struct intel_device_info *devinfo,
-                                    uint32_t current_pipeline,
-                                    uint32_t post_sync_op,
-                                    struct anv_address address,
-                                    uint32_t imm_data,
-                                    enum anv_pipe_bits bits,
-                                    const char *reason)
+static void
+emit_pipe_control(struct anv_batch *batch,
+                  const struct intel_device_info *devinfo,
+                  uint32_t current_pipeline,
+                  uint32_t post_sync_op,
+                  struct anv_address address,
+                  uint32_t imm_data,
+                  enum anv_pipe_bits bits,
+                  const char *reason)
 {
    if ((batch->engine_class == INTEL_ENGINE_CLASS_COPY) ||
        (batch->engine_class == INTEL_ENGINE_CLASS_VIDEO))
@@ -2467,18 +2466,38 @@ genX(batch_emit_pipe_control_write)(struct anv_batch *batch,
 
    /* XXX - insert all workarounds and GFX specific things below. */
 
-   /* Wa_14014966230: For COMPUTE Workload - Any PIPE_CONTROL command with
-    * POST_SYNC Operation Enabled MUST be preceded by a PIPE_CONTROL
-    * with CS_STALL Bit set (with No POST_SYNC ENABLED)
+#if INTEL_WA_1607156449_GFX_VER || INTEL_NEEDS_WA_18040903259
+   /* Wa_1607156449: For COMPUTE Workload - Any PIPE_CONTROL command with
+    * POST_SYNC Operation Enabled MUST be preceded by a PIPE_CONTROL with
+    * CS_STALL Bit set (with No POST_SYNC ENABLED)
+    *
+    * Wa_18040903259 says that timestamp are incorrect (not doing the CS Stall
+    * prior to writing the timestamp) with a command like this:
+    *
+    *   PIPE_CONTROL(CS Stall, Post Sync = Timestamp)
+    *
+    * should be turned into :
+    *
+    *   PIPE_CONTROL(CS Stall)
+    *   PIPE_CONTROL(CS Stall, Post Sync = Timestamp)
+    *
+    * Also : "This WA needs to be applied only when we have done a Compute
+    *         Walker and there is a request for a Timestamp."
+    *
+    * At the moment it's unclear whether all other parameters should go in the
+    * first or second PIPE_CONTROL. It seems logical that it should go to the
+    * first so that the timestamp accounts for all the associated flushes.
     */
-   if (intel_device_info_is_adln(devinfo) &&
+   if ((intel_needs_workaround(devinfo, 1607156449) ||
+        intel_needs_workaround(devinfo, 18040903259)) &&
        current_pipeline == GPGPU &&
        post_sync_op != NoWrite) {
-      anv_batch_emit(batch, GENX(PIPE_CONTROL), pipe) {
-         pipe.CommandStreamerStallEnable = true;
-         anv_debug_dump_pc(pipe, "Wa_14014966230");
-      };
+      emit_pipe_control(batch, devinfo, current_pipeline,
+                        NoWrite, ANV_NULL_ADDRESS, 0,
+                        bits, "Wa_18040903259/Wa_18040903259");
+      bits = ANV_PIPE_CS_STALL_BIT;
    }
+#endif
 
    /* SKL PRMs, Volume 7: 3D-Media-GPGPU, Programming Restrictions for
     * PIPE_CONTROL, Flush Types:
@@ -2602,6 +2621,31 @@ genX(batch_emit_pipe_control_write)(struct anv_batch *batch,
       batch->pc_reasons[3] = NULL;
       batch->pc_reasons_count = 0;
    }
+}
+
+void
+genX(batch_emit_pipe_control)(struct anv_batch *batch,
+                              const struct intel_device_info *devinfo,
+                              uint32_t current_pipeline,
+                              enum anv_pipe_bits bits,
+                              const char *reason)
+{
+   emit_pipe_control(batch, devinfo, current_pipeline,
+                     NoWrite, ANV_NULL_ADDRESS, 0, bits, reason);
+}
+
+void
+genX(batch_emit_pipe_control_write)(struct anv_batch *batch,
+                                    const struct intel_device_info *devinfo,
+                                    uint32_t current_pipeline,
+                                    uint32_t post_sync_op,
+                                    struct anv_address address,
+                                    uint32_t imm_data,
+                                    enum anv_pipe_bits bits,
+                                    const char *reason)
+{
+   emit_pipe_control(batch, devinfo, current_pipeline,
+                     post_sync_op, address, imm_data, bits, reason);
 }
 
 /* Set preemption on/off. */
@@ -4243,6 +4287,25 @@ cmd_buffer_has_pending_copy_query(struct anv_cmd_buffer *cmd_buffer)
            ANV_QUERY_WRITES_DATA_FLUSH) != 0;
 }
 
+static bool
+img_barrier_has_acquire_unmodified(const VkImageMemoryBarrier2 *img_barrier)
+{
+   /* The Vulkan 1.3.302 spec says:
+    *
+    *    This struct [VkExternalMemoryAcquireUnmodifiedEXT] is ignored if the
+    *    memory barrier's srcQueueFamilyIndex is not a special queue family
+    *    reserved for external memory ownership transfers.
+    */
+   if (!queue_family_is_external(img_barrier->srcQueueFamilyIndex))
+      return false;
+
+   const VkExternalMemoryAcquireUnmodifiedEXT *unmodified_info =
+      vk_find_struct_const(img_barrier->pNext,
+                           EXTERNAL_MEMORY_ACQUIRE_UNMODIFIED_EXT);
+
+   return unmodified_info && unmodified_info->acquireUnmodifiedMemory;
+}
+
 static void
 cmd_buffer_accumulate_barrier_bits(struct anv_cmd_buffer *cmd_buffer,
                                    uint32_t n_dep_infos,
@@ -4436,6 +4499,8 @@ cmd_buffer_accumulate_barrier_bits(struct anv_cmd_buffer *cmd_buffer,
          }
 
          if (range->aspectMask & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) {
+            bool acquire_unmodified =
+               img_barrier_has_acquire_unmodified(img_barrier);
             VkImageAspectFlags color_aspects =
                vk_image_expand_aspect_mask(&image->vk, range->aspectMask);
             anv_foreach_image_aspect_bit(aspect_bit, image, color_aspects) {
@@ -4445,7 +4510,8 @@ cmd_buffer_accumulate_barrier_bits(struct anv_cmd_buffer *cmd_buffer,
                                        old_layout, new_layout,
                                        img_barrier->srcQueueFamilyIndex,
                                        img_barrier->dstQueueFamilyIndex,
-                                       false /* will_full_fast_clear */);
+                                       false /* will_full_fast_clear */,
+                                       acquire_unmodified);
             }
          }
 #if GFX_VER < 20
@@ -5411,7 +5477,8 @@ void genX(CmdBeginRendering)(
                                           initial_layout, att->imageLayout,
                                           VK_QUEUE_FAMILY_IGNORED,
                                           VK_QUEUE_FAMILY_IGNORED,
-                                          fast_clear);
+                                          fast_clear,
+                                          false /* acquire_unmodified */);
                }
             } else {
                transition_color_buffer(cmd_buffer, iview->image,
@@ -5422,7 +5489,8 @@ void genX(CmdBeginRendering)(
                                        initial_layout, att->imageLayout,
                                        VK_QUEUE_FAMILY_IGNORED,
                                        VK_QUEUE_FAMILY_IGNORED,
-                                       fast_clear);
+                                       fast_clear,
+                                       false /* acquire_unmodified */);
             }
          }
 
@@ -6396,7 +6464,12 @@ genX(batch_emit_fast_color_dummy_blit)(struct anv_batch *batch,
 #if GFX_VERx10 >= 125
    anv_batch_emit(batch, GENX(XY_FAST_COLOR_BLT), blt) {
       blt.DestinationBaseAddress = device->workaround_address;
+#if GFX_VERx10 >= 200
+      blt.DestinationMOCSindex = MOCS_GET_INDEX(device->isl_dev.mocs.blitter_dst);
+      blt.DestinationEncryptEn = MOCS_GET_ENCRYPT_EN(device->isl_dev.mocs.blitter_dst);
+#else
       blt.DestinationMOCS = device->isl_dev.mocs.blitter_dst;
+#endif
       blt.DestinationPitch = 63;
       blt.DestinationX2 = 1;
       blt.DestinationY2 = 4;

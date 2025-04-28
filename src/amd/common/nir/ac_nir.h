@@ -118,7 +118,8 @@ ac_nir_lower_tes_inputs_to_mem(nir_shader *shader,
                                ac_nir_map_io_driver_location map);
 
 void
-ac_nir_compute_tess_wg_info(const struct radeon_info *info, const struct shader_info *tcs_info,
+ac_nir_compute_tess_wg_info(const struct radeon_info *info, uint64_t outputs_read, uint64_t outputs_written,
+                            uint32_t patch_outputs_read, uint32_t patch_outputs_written, unsigned tcs_vertices_out,
                             unsigned wave_size, bool tess_uses_primid, bool all_invocations_define_tess_levels,
                             unsigned num_tcs_input_cp, unsigned lds_input_vertex_size,
                             unsigned num_mem_tcs_outputs, unsigned num_mem_tcs_patch_outputs,
@@ -163,7 +164,9 @@ typedef struct {
    /* Skip culling dependent on the viewport state, which is frustum culling and small prim
     * culling. Set this when the shader writes the viewport index.
     */
-   bool skip_viewport_culling;
+   bool skip_viewport_state_culling;
+   /* Use the point-triangle intersection to cull small triangles. */
+   bool use_point_tri_intersection;
 
    /* VS */
    unsigned num_vertices_per_primitive;

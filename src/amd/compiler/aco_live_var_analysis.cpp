@@ -67,6 +67,8 @@ RegisterDemand get_temp_reg_changes(Instruction* instr)
    for (Operand op : instr->operands) {
       if (op.isFirstKillBeforeDef() || op.isCopyKill())
          available_def_space -= op.getTemp();
+      else if (op.isClobbered() && !op.isKill())
+         available_def_space -= op.getTemp();
    }
 
    return available_def_space;
@@ -243,9 +245,15 @@ process_live_temps_per_block(live_ctx& ctx, Block* block)
       }
 
       /* Check if a definition clobbers some operand */
-      int op_idx = get_op_fixed_to_def(insn);
-      if (op_idx != -1)
+      auto fixed_ops = get_ops_fixed_to_def(insn);
+      for (auto op_idx : fixed_ops) {
+         assert(std::none_of(fixed_ops.begin(), fixed_ops.end(),
+                             [&](uint32_t i) {
+                                return i != op_idx && insn->operands[i].getTemp() ==
+                                                         insn->operands[op_idx].getTemp();
+                             }));
          insn->operands[op_idx].setClobbered(true);
+      }
 
       /* we need to do this in a separate loop because the next one can
        * setKill() for several operands at once and we don't want to

@@ -38,7 +38,9 @@
 #include "util/u_math.h"
 #include "util/u_string.h"
 #include "util/u_debug.h"
+#include "util/u_printf.h"
 #include "util/mesa-blake3.h"
+#include "util/bfloat.h"
 
 #include <stdio.h>
 
@@ -57,6 +59,9 @@ static const struct spirv_capabilities implemented_capabilities = {
    .AtomicFloat32MinMaxEXT = true,
    .AtomicFloat64MinMaxEXT = true,
    .AtomicStorage = true,
+   .BFloat16CooperativeMatrixKHR = true,
+   .BFloat16DotProductKHR = true,
+   .BFloat16TypeKHR = true,
    .ClipDistance = true,
    .ComputeDerivativeGroupLinearKHR = true,
    .ComputeDerivativeGroupQuadsKHR = true,
@@ -804,6 +809,67 @@ vtn_foreach_instruction(struct vtn_builder *b, const uint32_t *start,
 }
 
 static bool
+vtn_handle_debug_printf(struct vtn_builder *b, SpvOp ext_opcode,
+                        const uint32_t *w, unsigned count)
+{
+   vtn_assert(ext_opcode == 1);
+
+   struct vtn_value *format = vtn_value(b, w[5], vtn_value_type_string);
+
+   b->shader->printf_info_count++;
+   b->shader->printf_info = reralloc(b->shader,
+                                     b->shader->printf_info,
+                                     u_printf_info,
+                                     b->shader->printf_info_count);
+
+   u_printf_info *info =
+      &b->shader->printf_info[b->shader->printf_info_count - 1];
+
+   uint32_t argc = count - 6;
+   *info = (u_printf_info) {
+      .arg_sizes = ralloc_array(b->shader, unsigned, argc),
+      .num_args = argc,
+      .strings = ralloc_strdup(b->shader, format->str),
+      .string_size = strlen(format->str) + 1,
+   };
+
+   uint32_t info_index = b->shader->printf_info_count - 1;
+
+   if (argc) {
+      glsl_struct_field *fields = calloc(argc, sizeof(glsl_struct_field));
+      for (uint32_t i = 0; i < argc; i++) {
+         struct vtn_ssa_value *arg = vtn_ssa_value(b, w[6 + i]);
+
+         fields[i].type = glsl_intN_t_type(arg->def->bit_size);
+         if (arg->def->num_components > 1)
+            fields[i].type = glsl_vector_type(fields[i].type->base_type, arg->def->num_components);
+
+         fields[i].name = "";
+
+         info->arg_sizes[i] = arg->def->bit_size / 8;
+      }
+
+      nir_variable *packed_args = nir_local_variable_create(
+         b->nb.impl, glsl_struct_type(fields, argc, "packed_args", false), "packed_args");
+      nir_deref_instr *var_deref = nir_build_deref_var(&b->nb, packed_args);
+      for (uint32_t i = 0; i < argc; i++) {
+         struct vtn_ssa_value *arg = vtn_ssa_value(b, w[6 + i]);
+         nir_deref_instr *arg_deref = nir_build_deref_struct(&b->nb, var_deref, i);
+         nir_store_deref(&b->nb, arg_deref, arg->def, BITFIELD_MASK(NIR_MAX_VEC_COMPONENTS));
+      }
+
+      nir_printf(&b->nb, &var_deref->def, .fmt_idx = info_index);
+
+      free(fields);
+   } else {
+      nir_printf(&b->nb, nir_undef(&b->nb, 1, 32), .fmt_idx = info_index);
+   }
+
+   /* Do nothing. */
+   return true;
+}
+
+static bool
 vtn_handle_non_semantic_instruction(struct vtn_builder *b, SpvOp ext_opcode,
                                     const uint32_t *w, unsigned count)
 {
@@ -873,6 +939,9 @@ vtn_handle_extension(struct vtn_builder *b, SpvOp opcode,
       } else if ((strcmp(ext, "NonSemantic.Shader.DebugInfo.100") == 0)
                 && (b->options && b->options->debug_info)) {
          val->ext_handler = vtn_handle_non_semantic_debug_info;
+      } else if (strcmp(ext, "NonSemantic.DebugPrintf") == 0
+                && (b->options && b->options->printf)) {
+         val->ext_handler = vtn_handle_debug_printf;
       } else if (strstr(ext, "NonSemantic.") == ext) {
          val->ext_handler = vtn_handle_non_semantic_instruction;
       } else {
@@ -1821,10 +1890,26 @@ vtn_handle_type(struct vtn_builder *b, SpvOp opcode,
    case SpvOpTypeFloat: {
       int bit_size = w[2];
       val->type->base_type = vtn_base_type_scalar;
-      vtn_fail_if(bit_size != 16 && bit_size != 32 && bit_size != 64,
-                  "Invalid float bit size: %u", bit_size);
-      val->type->type = glsl_floatN_t_type(bit_size);
       val->type->length = 1;
+
+      int32_t encoding = count > 3 ? w[3] : -1;
+      switch (encoding) {
+      case -1:
+         /* No encoding specified, it is a regular FP. */
+         vtn_fail_if(bit_size != 16 && bit_size != 32 && bit_size != 64,
+                     "Invalid float bit size: %u", bit_size);
+         val->type->type = glsl_floatN_t_type(bit_size);
+         break;
+
+      case SpvFPEncodingBFloat16KHR:
+         vtn_fail_if(bit_size != 16,
+                     "Invalid Bfloat16 bit size: %u", bit_size);
+         val->type->type = glsl_bfloatN_t_type(bit_size);
+         break;
+
+      default:
+         vtn_fail("Unsupported OpTypeFloat encoding: %d", encoding);
+      }
       break;
    }
 
@@ -2612,8 +2697,16 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
 
       default: {
          bool swap;
-         nir_alu_type dst_alu_type = nir_get_nir_type_for_glsl_type(val->type->type);
-         nir_alu_type src_alu_type = dst_alu_type;
+
+         const glsl_type *dst_type = val->type->type;
+         const glsl_type *src_type = dst_type;
+
+         const bool bfloat_dst = glsl_type_is_bfloat_16(dst_type);
+         bool bfloat_src = bfloat_dst;
+
+         if (bfloat_dst)
+            dst_type = glsl_float_type();
+
          unsigned num_components = glsl_get_vector_elements(val->type->type);
 
          vtn_assert(count <= 7);
@@ -2621,26 +2714,28 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
          switch (opcode) {
          case SpvOpSConvert:
          case SpvOpFConvert:
-         case SpvOpUConvert:
+         case SpvOpUConvert: {
             /* We have a different source type in a conversion. */
-            src_alu_type =
-               nir_get_nir_type_for_glsl_type(vtn_get_value_type(b, w[4])->type);
+            src_type = vtn_get_value_type(b, w[4])->type;
+            bfloat_src = glsl_type_is_bfloat_16(src_type);
+            if (bfloat_src)
+               src_type = glsl_float_type();
             break;
+         }
          default:
             break;
          };
 
          bool exact;
          nir_op op = vtn_nir_alu_op_for_spirv_opcode(b, opcode, &swap, &exact,
-                                                     nir_alu_type_get_type_size(src_alu_type),
-                                                     nir_alu_type_get_type_size(dst_alu_type));
+                                                     src_type, dst_type);
 
          /* No SPIR-V opcodes handled through this path should set exact.
           * Since it is ignored, assert on it.
           */
          assert(!exact);
 
-         unsigned bit_size = glsl_get_bit_size(val->type->type);
+         unsigned bit_size = glsl_get_bit_size(src_type);
          nir_const_value src[3][NIR_MAX_VEC_COMPONENTS];
 
          for (unsigned i = 0; i < count - 4; i++) {
@@ -2658,8 +2753,11 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
                                  num_components;
 
             unsigned j = swap ? 1 - i : i;
-            for (unsigned c = 0; c < src_comps; c++)
+            for (unsigned c = 0; c < src_comps; c++) {
                src[j][c] = src_val->constant->values[c];
+               if (bfloat_src)
+                  src[j][c].f32 = _mesa_bfloat16_bits_to_float(src[j][c].u16);
+            }
          }
 
          /* fix up fixed size sources */
@@ -2688,6 +2786,16 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
          nir_eval_const_opcode(op, val->constant->values,
                                num_components, bit_size, srcs,
                                b->shader->info.float_controls_execution_mode);
+
+         if (bfloat_dst) {
+            for (int i = 0; i < num_components; i++) {
+               /* Ensure the pad bits are zeroed by fully assigning the value. */
+               const uint16_t b =
+                  _mesa_float_to_bfloat16_bits_rte(val->constant->values[i].f32);
+               val->constant->values[i] = (nir_const_value){ .u16 = b };
+            }
+         }
+
          break;
       } /* default */
       }
@@ -3317,11 +3425,13 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
    case nir_texop_tex_prefetch:
       vtn_fail("unexpected nir_texop_tex_prefetch");
       break;
+   case nir_texop_lod_bias:
+      vtn_fail("unexpected nir_texop_lod_bias");
+      break;
    case nir_texop_descriptor_amd:
    case nir_texop_sampler_descriptor_amd:
       vtn_fail("unexpected nir_texop_*descriptor_amd");
       break;
-   case nir_texop_lod_bias_agx:
    case nir_texop_image_min_lod_agx:
    case nir_texop_custom_border_color_agx:
    case nir_texop_has_custom_border_color_agx:
@@ -7121,26 +7231,6 @@ spirv_to_nir(const uint32_t *words, size_t word_count,
     * validator a bit of heartburn.  Run dead code to get rid of them.
     */
    nir_opt_dce(b->shader);
-
-   /* Per SPV_KHR_workgroup_storage_explicit_layout, if one shared variable is
-    * a Block, all of them will be and Blocks are explicitly laid out.
-    */
-   nir_foreach_variable_with_modes(var, b->shader, nir_var_mem_shared) {
-      if (glsl_type_is_interface(var->type)) {
-         assert(b->supported_capabilities.WorkgroupMemoryExplicitLayoutKHR);
-         b->shader->info.shared_memory_explicit_layout = true;
-         break;
-      }
-   }
-   if (b->shader->info.shared_memory_explicit_layout) {
-      unsigned size = 0;
-      nir_foreach_variable_with_modes(var, b->shader, nir_var_mem_shared) {
-         assert(glsl_type_is_interface(var->type));
-         const bool align_to_stride = false;
-         size = MAX2(size, glsl_get_explicit_size(var->type, align_to_stride));
-      }
-      b->shader->info.shared_size = size;
-   }
 
    if (stage == MESA_SHADER_FRAGMENT) {
       /* From the Vulkan 1.2.199 spec:

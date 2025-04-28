@@ -1780,14 +1780,13 @@ platform_x11_finalize(_EGLDisplay *disp)
    dri2_setup_screen(disp);
 
    if (!dri2_dpy->swrast) {
-      dri2_x11_setup_swap_interval(disp);
-
 #ifdef HAVE_WAYLAND_PLATFORM
       if (dri2_dpy->kopper)
          dri2_dpy->device_name = strdup("zink");
 #endif
 
       dri2_dpy->swap_available = true;
+      dri2_x11_setup_swap_interval(disp);
       if (dri2_dpy->fd_render_gpu == dri2_dpy->fd_display_gpu)
          disp->Extensions.KHR_image_pixmap = EGL_TRUE;
       disp->Extensions.NOK_texture_from_pixmap = EGL_TRUE;
@@ -1908,8 +1907,7 @@ dri2_initialize_x11_dri2(_EGLDisplay *disp)
    if (!dri2_x11_connect(dri2_dpy))
       goto cleanup;
 
-   if (!dri2_load_driver(disp))
-      goto cleanup;
+   dri2_detect_swrast(disp);
 
    if (dri2_dpy->dri2_minor >= 1)
       dri2_dpy->loader_extensions = dri2_loader_extensions;
@@ -1990,12 +1988,18 @@ dri2_initialize_x11(_EGLDisplay *disp, bool *allow_dri2)
       /* the status here is ignored for zink-with-kopper and swrast,
        * otherwise return whatever error/fallback status as failure
        */
-      if (!dri2_dpy->kopper && !disp->Options.ForceSoftware && !status)
-         return EGL_FALSE;
+      if (!dri2_dpy->kopper && !disp->Options.ForceSoftware) {
+#ifdef HAVE_X11_DRI2
+         *allow_dri2 = !debug_get_bool_option("LIBGL_DRI2_DISABLE", false);
+#else
+         *allow_dri2 = false;
+#endif
+         if (!status)
+            return EGL_FALSE;
+      }
    }
 #endif
-   if (!dri2_load_driver(disp))
-      return EGL_FALSE;
+   dri2_detect_swrast(disp);
 
    if (disp->Options.ForceSoftware || dri2_dpy->kopper)
       return dri2_initialize_x11_swrast(disp);

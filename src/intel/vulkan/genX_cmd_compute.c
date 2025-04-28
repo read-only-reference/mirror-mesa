@@ -568,7 +568,17 @@ emit_cs_walker(struct anv_cmd_buffer *cmd_buffer,
                uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ,
                bool is_unaligned_size_x)
 {
+   struct anv_device *device = cmd_buffer->device;
+   struct anv_instance *instance = device->physical->instance;
    bool is_indirect = !anv_address_is_null(indirect_addr);
+
+   struct mi_builder b;
+   if (unlikely(instance->debug & ANV_DEBUG_SHADER_HASH)) {
+      mi_builder_init(&b, device->info, &cmd_buffer->batch);
+      mi_builder_set_mocs(&b, isl_mocs(&device->isl_dev, 0, false));
+      mi_store(&b, mi_mem32(device->workaround_address),
+                   mi_imm(prog_data->base.source_hash));
+   }
 
 #if GFX_VERx10 >= 125
    /* For unaligned dispatch, we need to tweak the dispatch value with
@@ -1047,13 +1057,28 @@ cmd_buffer_emit_rt_dispatch_globals(struct anv_cmd_buffer *cmd_buffer,
       .NumDSSRTStacks     = rt->scratch.layout.stack_ids_per_dss,
       .MaxBVHLevels       = BRW_RT_MAX_BVH_LEVELS,
       .Flags              = RT_DEPTH_TEST_LESS_EQUAL,
+#if GFX_VER >= 30
+      .HitGroupStride     = params->hit_sbt->stride,
+      .MissGroupStride    = params->miss_sbt->stride,
+      .HitGroupTable      =
+         anv_address_from_u64(params->hit_sbt->deviceAddress),
+      .MissGroupTable     =
+         anv_address_from_u64(params->miss_sbt->deviceAddress),
+#else
       .HitGroupTable      = vk_sdar_to_shader_table(params->hit_sbt),
       .MissGroupTable     = vk_sdar_to_shader_table(params->miss_sbt),
+#endif
       .SWStackSize        = rt->scratch.layout.sw_stack_size / 64,
       .LaunchWidth        = params->launch_size[0],
       .LaunchHeight       = params->launch_size[1],
       .LaunchDepth        = params->launch_size[2],
+#if GFX_VER >= 30
+      .CallableGroupTable =
+         anv_address_from_u64(params->callable_sbt->deviceAddress),
+      .CallableGroupStride = params->callable_sbt->stride,
+#else
       .CallableGroupTable = vk_sdar_to_shader_table(params->callable_sbt),
+#endif
    };
    GENX(RT_DISPATCH_GLOBALS_pack)(NULL, rtdg_state.map, &rtdg);
 
@@ -1338,6 +1363,10 @@ cmd_buffer_trace_rays(struct anv_cmd_buffer *cmd_buffer,
       }
 #if INTEL_NEEDS_WA_14017794102 || INTEL_NEEDS_WA_14023061436
       btd.BTDMidthreadpreemption = false;
+#endif
+
+#if GFX_VER >= 30
+      btd.RTMemStructures64bModeEnable = true;
 #endif
    }
 

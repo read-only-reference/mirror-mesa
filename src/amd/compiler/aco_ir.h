@@ -292,6 +292,7 @@ struct RegClass {
       v6 = 6 | (1 << 5),
       v7 = 7 | (1 << 5),
       v8 = 8 | (1 << 5),
+      v10 = 10 | (1 << 5),
       /* byte-sized register class */
       v1b = v1 | (1 << 7),
       v2b = v2 | (1 << 7),
@@ -360,6 +361,7 @@ static constexpr RegClass v5{RegClass::v5};
 static constexpr RegClass v6{RegClass::v6};
 static constexpr RegClass v7{RegClass::v7};
 static constexpr RegClass v8{RegClass::v8};
+static constexpr RegClass v10{RegClass::v10};
 static constexpr RegClass v1b{RegClass::v1b};
 static constexpr RegClass v2b{RegClass::v2b};
 static constexpr RegClass v3b{RegClass::v3b};
@@ -1625,15 +1627,14 @@ static_assert(sizeof(LDSDIR_instruction) == sizeof(Instruction) + 8, "Unexpected
 struct MUBUF_instruction : public Instruction {
    memory_sync_info sync;
    ac_hw_cache_flags cache;
-   bool offen : 1;           /* Supply an offset from VGPR (VADDR) */
-   bool idxen : 1;           /* Supply an index from VGPR (VADDR) */
-   bool addr64 : 1;          /* SI, CIK: Address size is 64-bit */
-   bool tfe : 1;             /* texture fail enable */
-   bool lds : 1;             /* Return read-data to LDS instead of VGPRs */
-   bool disable_wqm : 1;     /* Require an exec mask without helper invocations */
-   uint8_t padding0 : 2;
-   uint8_t padding1;
-   uint16_t offset; /* Unsigned byte offset - 12 bit */
+   uint32_t offset : 23;     /* Unsigned byte offset */
+   uint32_t offen : 1;       /* Supply an offset from VGPR (VADDR) */
+   uint32_t idxen : 1;       /* Supply an index from VGPR (VADDR) */
+   uint32_t addr64 : 1;      /* SI, CIK: Address size is 64-bit */
+   uint32_t tfe : 1;         /* texture fail enable */
+   uint32_t lds : 1;         /* Return read-data to LDS instead of VGPRs */
+   uint32_t disable_wqm : 1; /* Require an exec mask without helper invocations */
+   uint32_t padding : 3;
 };
 static_assert(sizeof(MUBUF_instruction) == sizeof(Instruction) + 8, "Unexpected padding");
 
@@ -1654,10 +1655,12 @@ struct MTBUF_instruction : public Instruction {
    bool idxen : 1;           /* Supply an index from VGPR (VADDR) */
    bool tfe : 1;             /* texture fail enable */
    bool disable_wqm : 1;     /* Require an exec mask without helper invocations */
-   uint8_t padding : 5;
-   uint16_t offset; /* Unsigned byte offset - 12 bit */
+   uint8_t padding0 : 5;
+   uint16_t padding1;
+   uint32_t offset : 23;     /* Unsigned byte offset */
+   uint32_t padding2 : 9;
 };
-static_assert(sizeof(MTBUF_instruction) == sizeof(Instruction) + 8, "Unexpected padding");
+static_assert(sizeof(MTBUF_instruction) == sizeof(Instruction) + 12, "Unexpected padding");
 
 /**
  * Vector Memory Image Instructions
@@ -1697,12 +1700,11 @@ static_assert(sizeof(MIMG_instruction) == sizeof(Instruction) + 8, "Unexpected p
 struct FLAT_instruction : public Instruction {
    memory_sync_info sync;
    ac_hw_cache_flags cache;
-   bool lds : 1;
-   bool nv : 1;
-   bool disable_wqm : 1; /* Require an exec mask without helper invocations */
-   uint8_t padding0 : 5;
-   uint8_t padding1;
-   int16_t offset; /* Vega/Navi only */
+   int32_t offset : 24;
+   uint32_t lds : 1;
+   uint32_t nv : 1;
+   uint32_t disable_wqm : 1; /* Require an exec mask without helper invocations */
+   uint32_t padding0 : 5;
 };
 static_assert(sizeof(FLAT_instruction) == sizeof(Instruction) + 8, "Unexpected padding");
 
@@ -2100,9 +2102,13 @@ struct DeviceInfo {
    bool xnack_enabled = false;
    bool sram_ecc_enabled = false;
 
-   int16_t scratch_global_offset_min;
-   int16_t scratch_global_offset_max;
+   int32_t scratch_global_offset_min;
+   int32_t scratch_global_offset_max;
    unsigned max_nsa_vgprs;
+
+   uint32_t buf_offset_max;
+   /* Note that GFX6/7 ignore the low 2 bits and this is only for positive offsets. */
+   uint32_t smem_offset_max;
 };
 
 enum class CompilationProgress {
@@ -2137,8 +2143,9 @@ public:
    std::vector<ac_shader_debug_info> debug_info;
 
    std::vector<uint8_t> constant_data;
-   Temp private_segment_buffer;
-   Temp scratch_offset;
+   /* Private segment buffers and scratch offsets. One entry per start/resume block */
+   aco::small_vec<Temp, 2> private_segment_buffers;
+   aco::small_vec<Temp, 2> scratch_offsets;
 
    uint16_t num_waves = 0;
    uint16_t min_waves = 0;
@@ -2216,6 +2223,8 @@ private:
 struct ra_test_policy {
    /* Force RA to always use its pessimistic fallback algorithm */
    bool skip_optimistic_path = false;
+   /* Force get_reg() to always use its compact_relocate_vars() path */
+   bool use_compact_relocate = false;
 };
 
 void init();
@@ -2320,7 +2329,7 @@ void _aco_err(Program* program, const char* file, unsigned line, const char* fmt
 
 #define aco_err(program, ...)      _aco_err(program, __FILE__, __LINE__, __VA_ARGS__)
 
-int get_op_fixed_to_def(Instruction* instr);
+aco::small_vec<uint32_t, 2> get_ops_fixed_to_def(Instruction* instr);
 
 /* utilities for dealing with register demand */
 RegisterDemand get_live_changes(Instruction* instr);

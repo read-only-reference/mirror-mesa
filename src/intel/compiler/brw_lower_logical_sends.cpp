@@ -1180,7 +1180,7 @@ lower_sampler_logical_send(const brw_builder &bld, brw_inst *inst,
       if (sampler_handle.file != BAD_FILE || sampler.file == IMM) {
          inst->src[0] = brw_imm_ud(0);
       } else {
-         const brw_builder ubld = bld.group(1, 0).exec_all();
+         const brw_builder ubld = bld.uniform();
          brw_reg desc = ubld.vgrf(BRW_TYPE_UD);
          ubld.SHL(desc, sampler, brw_imm_ud(8));
          inst->src[0] = component(desc, 0);
@@ -1199,7 +1199,7 @@ lower_sampler_logical_send(const brw_builder &bld, brw_inst *inst,
                                     msg_type,
                                     simd_mode,
                                     sampler_ret_type);
-      const brw_builder ubld = bld.group(1, 0).exec_all();
+      const brw_builder ubld = bld.uniform();
       brw_reg desc = ubld.vgrf(BRW_TYPE_UD);
       if (surface.equals(sampler)) {
          /* This case is common in GL */
@@ -1334,7 +1334,7 @@ emit_predicate_on_vector_mask(const brw_builder &bld, brw_inst *inst)
           bld.group() == inst->group &&
           bld.dispatch_width() == inst->exec_size);
 
-   const brw_builder ubld = bld.exec_all().group(1, 0);
+   const brw_builder ubld = bld.uniform();
 
    const brw_shader &s = *bld.shader;
    const brw_reg vector_mask = ubld.vgrf(BRW_TYPE_UW);
@@ -1386,7 +1386,7 @@ setup_surface_descriptors(const brw_builder &bld, brw_inst *inst, uint32_t desc,
       inst->send_ex_bso = compiler->extended_bindless_surface_offset;
    } else {
       inst->desc = desc;
-      const brw_builder ubld = bld.exec_all().group(1, 0);
+      const brw_builder ubld = bld.uniform();
       brw_reg tmp = ubld.vgrf(BRW_TYPE_UD);
       ubld.AND(tmp, surface, brw_imm_ud(0xff));
       inst->src[0] = component(tmp, 0);
@@ -1424,7 +1424,7 @@ setup_lsc_surface_descriptors(const brw_builder &bld, brw_inst *inst,
       if (surface.file == IMM) {
          inst->src[1] = brw_imm_ud(lsc_bti_ex_desc(devinfo, surface.ud));
       } else {
-         const brw_builder ubld = bld.exec_all().group(1, 0);
+         const brw_builder ubld = bld.uniform();
          brw_reg tmp = ubld.vgrf(BRW_TYPE_UD);
          ubld.SHL(tmp, surface, brw_imm_ud(24));
          inst->src[1] = component(tmp, 0);
@@ -2374,9 +2374,17 @@ lower_trace_ray_logical_send(const brw_builder &bld, brw_inst *inst)
     * payload register.
     */
    if (!synchronous) {
+      /* For Xe2+, Bspec 64643:
+       * "StackID": The maximum number of StackIDs can be 2^12- 1.
+       *
+       * For platforms < Xe2, The maximum number of StackIDs can be 2^11 - 1.
+       */
+      brw_reg stack_id_mask = devinfo->ver >= 20 ?
+                              brw_imm_uw(0xfff) :
+                              brw_imm_uw(0x7ff);
       bld.AND(subscript(payload, BRW_TYPE_UW, 1),
               retype(brw_vec8_grf(1 * unit, 0), BRW_TYPE_UW),
-              brw_imm_uw(0x7ff));
+              stack_id_mask);
    }
 
    /* Update the original instruction. */
@@ -2780,7 +2788,7 @@ brw_lower_send_descriptors(brw_shader &s)
           inst->opcode != SHADER_OPCODE_SEND_GATHER)
          continue;
 
-      const brw_builder ubld = brw_builder(inst).exec_all().group(1, 0);
+      const brw_builder ubld = brw_builder(inst).uniform();
 
       /* Descriptor */
       const unsigned rlen = inst->dst.is_null() ? 0 : inst->size_written / REG_SIZE;

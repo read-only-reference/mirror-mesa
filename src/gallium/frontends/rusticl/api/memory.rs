@@ -656,7 +656,7 @@ fn validate_buffer(
                                 let addr_alignment = dev.image_base_address_alignment();
                                 if addr_alignment == 0 {
                                     return Err(CL_INVALID_OPERATION);
-                                } else if !is_alligned(host_ptr, addr_alignment as usize) {
+                                } else if !is_aligned_to(host_ptr, addr_alignment as usize) {
                                     return Err(err);
                                 }
                             }
@@ -1020,10 +1020,16 @@ fn create_sampler_with_properties(
     let sampler_properties =
         unsafe { Properties::new(sampler_properties) }.ok_or(CL_INVALID_VALUE)?;
     for (&key, &val) in sampler_properties.iter() {
-        match key as u32 {
-            CL_SAMPLER_ADDRESSING_MODE => addressing_mode = val as u32,
-            CL_SAMPLER_FILTER_MODE => filter_mode = val as u32,
-            CL_SAMPLER_NORMALIZED_COORDS => normalized_coords = val as u32,
+        match u32::try_from(key).or(Err(CL_INVALID_VALUE))? {
+            CL_SAMPLER_ADDRESSING_MODE => {
+                addressing_mode = cl_addressing_mode::try_from(val).or(Err(CL_INVALID_VALUE))?
+            }
+            CL_SAMPLER_FILTER_MODE => {
+                filter_mode = cl_filter_mode::try_from(val).or(Err(CL_INVALID_VALUE))?
+            }
+            CL_SAMPLER_NORMALIZED_COORDS => {
+                normalized_coords = cl_bool::try_from(val).or(Err(CL_INVALID_VALUE))?
+            }
             // CL_INVALID_VALUE if the property name in sampler_properties is not a supported
             // property name
             _ => return Err(CL_INVALID_VALUE),
@@ -2330,7 +2336,7 @@ pub fn svm_alloc(
     context: cl_context,
     flags: cl_svm_mem_flags,
     size: usize,
-    mut alignment: cl_uint,
+    alignment: cl_uint,
 ) -> CLResult<*mut c_void> {
     // clSVMAlloc will fail if
 
@@ -2347,29 +2353,33 @@ pub fn svm_alloc(
         return Err(CL_INVALID_VALUE);
     }
 
-    // size is 0 or > CL_DEVICE_MAX_MEM_ALLOC_SIZE value for any device in context.
-    if size == 0 || checked_compare(size, Ordering::Greater, c.max_mem_alloc()) {
+    let alignment = if alignment != 0 {
+        alignment as usize
+    } else {
+        // When alignment is 0, the size of the largest supported type is used.
+        // In the case of the full profile, that's `long16`.
+        mem::size_of::<[u64; 16]>()
+    };
+
+    // clSVMAlloc will fail if alignment is not a power of two.
+    // `from_size_align()` verifies this condition is met.
+    let layout = Layout::from_size_align(size, alignment).or(Err(CL_INVALID_VALUE))?;
+
+    // clSVMAlloc will fail if size is 0 or > CL_DEVICE_MAX_MEM_ALLOC_SIZE value
+    // for any device in context.
+    // Verify that the requested size, once adjusted to be a multiple of
+    // alignment, fits within the maximum allocation size. While
+    // `from_size_align()` ensures that the allocation will fit in host memory,
+    // the maximum allocation may be smaller due to limitations from gallium or
+    // devices.
+    let size_aligned = layout.pad_to_align().size();
+    if size == 0 || checked_compare(size_aligned, Ordering::Greater, c.max_mem_alloc()) {
         return Err(CL_INVALID_VALUE);
     }
 
-    if alignment == 0 {
-        alignment = mem::size_of::<[u64; 16]>() as cl_uint;
-    }
-
-    // alignment is not a power of two
-    if !alignment.is_power_of_two() {
-        return Err(CL_INVALID_VALUE);
-    }
-
-    let layout;
-    let ptr;
-
-    // SAFETY: we already verify the parameters to from_size_align above and layout is of non zero
-    // size
-    unsafe {
-        layout = Layout::from_size_align_unchecked(size, alignment as usize);
-        ptr = alloc::alloc(layout);
-    }
+    // SAFETY: `size` is verified to be non-zero and the returned pointer is not
+    // expected to point to initialized memory.
+    let ptr = unsafe { alloc::alloc(layout) };
 
     if ptr.is_null() {
         return Err(CL_OUT_OF_HOST_MEMORY);

@@ -476,6 +476,9 @@ optimizations.extend([
    (('ffract@32', a), ('fsub', a, ('ffloor', a)), 'options->lower_ffract'),
    (('ffract@64', a), ('fsub', a, ('ffloor', a)),
     '(options->lower_ffract || (options->lower_doubles_options & nir_lower_dfract)) && !(options->lower_doubles_options & nir_lower_dfloor)'),
+   (('fadd@16', a, ('fneg(is_used_once)', ('ffloor(is_used_once)', a))), ('ffract', a), '!options->lower_ffract'),
+   (('fadd@32', a, ('fneg(is_used_once)', ('ffloor(is_used_once)', a))), ('ffract', a), '!options->lower_ffract'),
+   (('fadd@64', a, ('fneg(is_used_once)', ('ffloor(is_used_once)', a))), ('ffract', a), '!options->lower_ffract && !(options->lower_doubles_options & nir_lower_dfract)'),
    (('fceil', a), ('fneg', ('ffloor', ('fneg', a))), 'options->lower_fceil'),
    (('ffma@16', a, b, c), ('fadd', ('fmul', a, b), c), 'options->lower_ffma16'),
    (('ffma@32', a, b, c), ('fadd', ('fmul', a, b), c), 'options->lower_ffma32'),
@@ -506,12 +509,6 @@ optimizations.extend([
 
    (('fdot2', ('vec2', a, 0.0), b), ('fmul', a, b)),
    (('fdot2', a, 1.0), ('fadd', 'a.x', 'a.y')),
-
-   # Lower fdot to fsum when it is available
-   (('fdot2', a, b), ('fsum2', ('fmul', a, b)), 'options->lower_fdot'),
-   (('fdot3', a, b), ('fsum3', ('fmul', a, b)), 'options->lower_fdot'),
-   (('fdot4', a, b), ('fsum4', ('fmul', a, b)), 'options->lower_fdot'),
-   (('fsum2', a), ('fadd', 'a.x', 'a.y'), 'options->lower_fdot'),
 
    # If x >= 0 and x <= 1: fsat(1 - x) == 1 - fsat(x) trivially
    # If x < 0: 1 - fsat(x) => 1 - 0 => 1 and fsat(1 - x) => fsat(> 1) => 1
@@ -885,8 +882,12 @@ optimizations.extend([
    (('bcsel', a, b, a), ('iand', a, b)),
    (('bcsel', a, b, True), ('ior', ('inot', a), b)),
    (('bcsel', a, False, b), ('iand', ('inot', a), b)),
-   (('~fmin', a, a), a),
-   (('~fmax', a, a), a),
+   (('fmin', 'a@64', a), a, '!nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 64)'),
+   (('fmin', 'a@32', a), a, '!nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 32)'),
+   (('fmin', 'a@16', a), a, '!nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 16)'),
+   (('fmax', 'a@64', a), a, '!nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 64)'),
+   (('fmax', 'a@32', a), a, '!nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 32)'),
+   (('fmax', 'a@16', a), a, '!nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 16)'),
    (('imin', a, a), a),
    (('imax', a, a), a),
    (('umin', a, a), a),
@@ -1005,7 +1006,9 @@ optimizations.extend([
    (('~fmin', ('fsat', a), '#b(is_zero_to_one)'), ('fsat', ('fmin', a, b))),
 
    # If a >= 0 ... 1 + a >= 1 ... so fsat(1 + a) = 1
-   (('fsat', ('fadd', 1.0, 'a(is_ge_zero)')), 1.0),
+   # But 1 + NaN is NaN and fsat(NaN) = 0.
+   (('~fsat', ('fadd', 1.0, 'a(is_not_negative)')), 1.0),
+   (('fsat', ('fadd', 1.0, 'a(is_a_number_not_negative)')), 1.0),
 
    # Let constant folding do its job. This can have emergent behaviour.
    (('fneg', ('bcsel(is_used_once)', a, '#b', '#c')), ('bcsel', a, ('fneg', b), ('fneg', c))),
@@ -1015,14 +1018,20 @@ optimizations.extend([
    (('fmax', ('fneg', ('fmin', b, a)), b), ('fmax', ('fabs', b), ('fneg', a))),
    (('fmin', ('fneg', ('fmax', b, a)), b), ('fmin', ('fneg', ('fabs', b)), ('fneg', a))),
 
-   # If a in [0,b] then b-a is also in [0,b].  Since b in [0,1], max(b-a, 0) =
-   # fsat(b-a).
+   # If a in [-b,0] then a+b is in [0,b].  Since b in [0,1], max(a+b, 0) =
+   # fsat(a+b).
    #
-   # If a > b, then b-a < 0 and max(b-a, 0) = fsat(b-a) = 0
+   # If a < -b, then a+b < 0 and max(a+b, 0) = fsat(a+b) = 0
    #
    # This should be NaN safe since max(NaN, 0) = fsat(NaN) = 0.
-   (('fmax', ('fadd(is_used_once)', ('fneg', 'a(is_not_negative)'), '#b(is_zero_to_one)'), 0.0),
-    ('fsat', ('fadd', ('fneg',  a), b)), '!options->lower_fsat'),
+   (('fmax', ('fadd(is_used_once)', 'a(is_not_positive)', '#b(is_zero_to_one)'), 0.0),
+    ('fsat', ('fadd', a, b)), '!options->lower_fsat'),
+
+   # ffma variants of the pattern above.
+   (('fmax', ('ffma(is_used_once)', 'a(is_not_positive)', 'b(is_not_negative)', '#c(is_zero_to_one)'), 0.0),
+    ('fsat', ('ffma', a, b, c)), '!options->lower_fsat'),
+   (('fmax', ('ffma(is_used_once)', 'a', ('fneg', a), '#b(is_zero_to_one)'), 0.0),
+    ('fsat', ('ffma', a, ('fneg', a), b)), '!options->lower_fsat'),
 
    (('extract_u8', ('imin', ('imax', a, 0), 0xff), 0), ('imin', ('imax', a, 0), 0xff)),
 
@@ -1861,6 +1870,7 @@ optimizations.extend([
    (('fsat', 'a(is_not_positive)'), 0.0),
 
    (('~fmin', 'a(is_not_negative)', 1.0), ('fsat', a), '!options->lower_fsat'),
+   (('fmin', 'a(is_a_number_not_negative)', 1.0), ('fsat', a), '!options->lower_fsat'),
 
    # The result of the multiply must be in [-1, 0], so the result of the ffma
    # must be in [0, 1].
@@ -2671,6 +2681,9 @@ optimizations.extend([
    (('imul24', a, '#b@32(is_pos_power_of_two)'), ('ishl', a, ('find_lsb', b)), '!options->lower_bitops'),
    (('imul24', a, '#b@32(is_neg_power_of_two)'), ('ineg', ('ishl', a, ('find_lsb', ('iabs', b)))), '!options->lower_bitops'),
    (('imul24', a, 0), (0)),
+
+   (('imul_high@16', a, b), ('i2i16', ('ishr', ('imul24_relaxed', ('i2i32', a), ('i2i32', b)), 16)), 'options->lower_mul_high16'),
+   (('umul_high@16', a, b), ('u2u16', ('ushr', ('umul24_relaxed', ('u2u32', a), ('u2u32', b)), 16)), 'options->lower_mul_high16'),
 ])
 
 for bit_size in [8, 16, 32, 64]:

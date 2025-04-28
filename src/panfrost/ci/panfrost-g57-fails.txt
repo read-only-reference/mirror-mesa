@@ -66,8 +66,6 @@ spec@arb_texture_rg@fbo-blending-formats@GL_R8,Fail
 spec@arb_texture_rg@fbo-blending-formats@GL_RG8,Fail
 spec@arb_texture_rg@fbo-blending-formats@GL_RG,Fail
 spec@arb_transform_feedback_instanced@draw-auto instanced,Fail
-spec@arb_uniform_buffer_object@rendering-dsa-offset,Fail
-spec@arb_uniform_buffer_object@rendering-offset,Fail
 spec@egl 1.4@eglterminate then unbind context,Fail
 spec@egl_chromium_sync_control@conformance@eglGetSyncValuesCHROMIUM_msc_and_sbc_test,Fail
 spec@egl_chromium_sync_control@conformance,Fail
@@ -301,7 +299,7 @@ spec@ext_clear_texture@ext_clear_texture-base-formats,Fail
 spec@ext_disjoint_timer_query@simple,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-refcount-multithread,Crash
 spec@ext_timer_query@time-elapsed,Fail
-spec@ext_transform_feedback@max-varyings,Crash
+spec@ext_transform_feedback@max-varyings,Fail
 spec@ext_transform_feedback@max-varyings@max-varying-single-dimension-array,Fail
 spec@glsl-1.30@execution@tex-miplevel-selection texturegrad 1d,Fail
 spec@glsl-1.30@execution@tex-miplevel-selection texturegrad 1darray,Fail

@@ -1383,6 +1383,8 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
             break;
 
          case nir_intrinsic_load_output:
+         case nir_intrinsic_load_per_vertex_output:
+         case nir_intrinsic_load_per_primitive_output:
          case nir_intrinsic_store_output:
          case nir_intrinsic_store_per_primitive_output:
          case nir_intrinsic_store_per_vertex_output:
@@ -1757,6 +1759,9 @@ print_tex_instr(nir_tex_instr *instr, print_state *state)
    case nir_texop_tex_prefetch:
       fprintf(fp, "tex (pre-dispatchable) ");
       break;
+   case nir_texop_lod_bias:
+      fprintf(fp, "lod_bias ");
+      break;
    case nir_texop_fragment_fetch_amd:
       fprintf(fp, "fragment_fetch_amd ");
       break;
@@ -1768,9 +1773,6 @@ print_tex_instr(nir_tex_instr *instr, print_state *state)
       break;
    case nir_texop_sampler_descriptor_amd:
       fprintf(fp, "sampler_descriptor_amd ");
-      break;
-   case nir_texop_lod_bias_agx:
-      fprintf(fp, "lod_bias_agx ");
       break;
    case nir_texop_image_min_lod_agx:
       fprintf(fp, "image_min_lod_agx ");

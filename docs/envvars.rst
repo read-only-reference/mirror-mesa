@@ -201,10 +201,10 @@ Core Mesa environment variables
 
    if set, determines the directory to be used for the on-disk cache of
    compiled shader programs. If set then the cache will be stored in
-   ``$MESA_SHADER_CACHE_DIR/mesa_shader_cache_db``. If this variable is not
+   ``$MESA_SHADER_CACHE_DIR/mesa_shader_cache``. If this variable is not
    set, then the cache will be stored in
-   ``$XDG_CACHE_HOME/mesa_shader_cache_db`` (if that variable is set), or else
-   within ``.cache/mesa_shader_cache_db`` within the user's home directory.
+   ``$XDG_CACHE_HOME/mesa_shader_cache`` (if that variable is set), or else
+   within ``.cache/mesa_shader_cache`` within the user's home directory.
 
 .. envvar:: MESA_SHADER_CACHE_SHOW_STATS
 
@@ -228,9 +228,9 @@ Core Mesa environment variables
 
 .. envvar:: MESA_DISK_CACHE_MULTI_FILE
 
-   if set to 1, enables the multi file on-disk shader cache implementation
-   instead of the default Mesa-DB cache implementation.
-   This implementation increases the overall disk usage.
+   if set to 1 (set by default), enables the multi file on-disk
+   shader cache implementation. This implementation increases the overall
+   disk usage.
    If :envvar:`MESA_SHADER_CACHE_DIR` is set, the cache will be stored in
    ``$MESA_SHADER_CACHE_DIR/mesa_shader_cache``, or else within
    ``$XDG_CACHE_HOME/mesa_shader_cache`` (if that variable is set)
@@ -247,6 +247,18 @@ Core Mesa environment variables
    ``MESA_DISK_CACHE_SINGLE_FILE=filename1`` refers to ``filename1.foz``
    and ``filename1_idx.foz``. A limit of 8 DBs can be loaded and this limit
    is shared with :envvar:`MESA_DISK_CACHE_READ_ONLY_FOZ_DBS_DYNAMIC_LIST`.
+
+.. envvar:: MESA_DISK_CACHE_DATABASE
+
+   if set to 1, enables the Mesa-DB single file on-disk shader cache
+   implementation instead of the default multi-file cache implementation.
+   Like :envvar:`MESA_DISK_CACHE_SINGLE_FILE`, Mesa-DB reduces overall
+   disk usage but Mesa-DB supports cache size limits via
+   :envvar:`MESA_SHADER_CACHE_MAX_SIZE`. If
+   :envvar:`MESA_SHADER_CACHE_DIR` is not set, the cache will be stored
+   in ``$XDG_CACHE_HOME/mesa_shader_cache_db`` (if that variable is set)
+   or else within ``.cache/mesa_shader_cache_db`` within the user's home
+   directory.
 
 .. envvar:: MESA_DISK_CACHE_DATABASE_NUM_PARTS
 
@@ -781,7 +793,7 @@ Intel driver environment variables
    this folder and have a name formatted as ``sha1_of_assembly.bin``.
    The SHA-1 of a shader assembly is printed when assembly is dumped via
    corresponding :envvar:`INTEL_DEBUG` flag (e.g. ``vs`` for vertex shader).
-   A binary could be generated from a dumped assembly by ``i965_asm``.
+   A binary could be generated from a dumped assembly by ``brw_asm`` or ``elk_asm``.
    For :envvar:`INTEL_SHADER_ASM_READ_PATH` to work it is necessary to enable
    dumping of corresponding shader stages via :envvar:`INTEL_DEBUG`.
    It is advised to use ``nocompact`` flag of :envvar:`INTEL_DEBUG` when
@@ -797,7 +809,7 @@ Intel driver environment variables
    this folder and have a name formatted as ``sha1_of_assembly.bin``.
    The SHA-1 of a shader assembly is printed when assembly is dumped via
    corresponding :envvar:`INTEL_DEBUG` flag (e.g. ``vs`` for vertex shader).
-   A binary could be generated from a dumped assembly by ``i965_asm``.
+   A binary could be generated from a dumped assembly by ``brw_asm`` or ``elk_asm``.
    For :envvar:`INTEL_SHADER_ASM_READ_PATH` to work it is necessary to enable
    dumping of corresponding shader stages via :envvar:`INTEL_DEBUG`.
    It is advised to use ``nocompact`` flag of :envvar:`INTEL_DEBUG` when
@@ -860,34 +872,32 @@ Intel driver environment variables
 Anvil(ANV) driver environment variables
 ---------------------------------------
 
-.. envvar:: ANV_ENABLE_PIPELINE_CACHE
+.. envvar:: ANV_DEBUG
 
-   If defined to ``0`` or ``false``, this will disable pipeline
-   caching, forcing ANV to reparse and recompile any VkShaderModule
-   (SPIRV) it is given.
+  Accepts the following comma-separated list of flags:
 
-.. envvar:: ANV_DISABLE_SECONDARY_CMD_BUFFER_CALLS
+  ``bindless``
+    Forces all descriptor sets to use the internal :ref:`Bindless model`
+  ``no-gpl``
+    Disables `VK_KHR_graphics_pipeline_library` support
+  ``no-secondary-call``
+    Disables secondary command buffer calls
+  ``no-sparse``
+    Disables sparse support
+  ``sparse-trtt``
+    Forces use of TR-TT hardware for sparse support
+  ``video-decode``
+    Enables video decoding support
+  ``video-encode``
+    Enables video encoding support
+  ``shader-hash``
+    Emits dummy (MI_STORE_DATA_IMM) instructions containing the shader
+    source hash, preceding shader programming instructions (internal
+    shaders & ray-tracing shaders are omitted)
 
    If defined to ``1`` or ``true``, this will prevent usage of self
    modifying command buffers to implement ``vkCmdExecuteCommands``. As
    a result of this, it will also disable :ext:`VK_KHR_performance_query`.
-
-.. envvar:: ANV_ALWAYS_BINDLESS
-
-   If defined to ``1`` or ``true``, this forces all descriptor sets to
-   use the internal :ref:`Bindless model`.
-
-.. envvar:: ANV_QUEUE_THREAD_DISABLE
-
-   If defined to ``1`` or ``true``, this disables support for timeline
-   semaphores.
-
-.. envvar:: ANV_USERSPACE_RELOCS
-
-   If defined to ``1`` or ``true``, this forces ANV to always do
-   kernel relocations in command buffers. This should only have an
-   effect on hardware that doesn't support soft-pinning (Ivybridge,
-   Haswell, Cherryview).
 
 .. envvar:: ANV_PRIMITIVE_REPLICATION_MAX_VIEWS
 
@@ -896,10 +906,32 @@ Anvil(ANV) driver environment variables
    using instanced rendering. If unspecified, the value default to
    ``2``.
 
-.. envvar:: ANV_NO_GPL
+.. envvar:: ANV_PRINTF_BUFFER_SIZE
 
-   If set to 1, true, or yes, then VK_EXT_graphics_pipeline_library
-   will be disabled.
+   Specifies the size of the printf buffer.
+
+.. envvar:: ANV_QUEUE_OVERRIDE
+
+   Override exposed queue families & counts. The variable is a comma
+   separated list of queue overrides. To override the number queues:
+
+   - ``gc`` is for graphics queues with compute support
+   - ``g`` is for graphics queues with no compute support
+   - ``c`` is for compute queues with no graphics support
+   - ``v`` is for video queues with no graphics support
+   - ``b`` is for copy (blitter) queues with no graphics support
+
+   For example, ``ANV_QUEUE_OVERRIDE=gc=2,c=1`` would override the number
+   of advertised queues to be 2 queues with graphics+compute support,
+   and 1 queue with compute-only support.
+
+   ``ANV_QUEUE_OVERRIDE=c=1`` would override the number of advertised
+   queues to include 1 queue with compute-only support, but it will
+   not change the number of graphics+compute queues.
+
+   ``ANV_QUEUE_OVERRIDE=gc=0,c=1`` would override the number of
+   advertised queues to include 1 queue with compute-only support, and
+   it would override the number of graphics+compute queues to be 0.
 
 .. envvar:: ANV_SPARSE
 
@@ -913,6 +945,50 @@ Anvil(ANV) driver environment variables
    changes the implementation of sparse resources feature.
    For i915 there is no option, sparse resources is always implemented with
    TRTT.
+
+Hasvk driver environment variables
+---------------------------------------
+
+.. envvar:: HASVK_DISABLE_SECONDARY_CMD_BUFFER_CALLS
+
+   If defined to ``1`` or ``true``, this will prevent usage of self
+   modifying command buffers to implement ``vkCmdExecuteCommands``. As
+   a result of this, it will also disable :ext:`VK_KHR_performance_query`.
+
+.. envvar:: HASVK_ALWAYS_BINDLESS
+
+   If defined to ``1`` or ``true``, this forces all descriptor sets to
+   use the internal :ref:`Bindless model`.
+
+.. envvar:: HASVK_QUEUE_OVERRIDE
+
+   Override exposed queue families & counts. The variable is a comma
+   separated list of queue overrides. To override the number queues:
+
+   - ``gc`` is for graphics queues with compute support
+   - ``g`` is for graphics queues with no compute support
+   - ``c`` is for compute queues with no graphics support
+   - ``v`` is for video queues with no graphics support
+   - ``b`` is for copy (blitter) queues with no graphics support
+
+   For example, ``HASVK_QUEUE_OVERRIDE=gc=2,c=1`` would override the
+   number of advertised queues to be 2 queues with graphics+compute
+   support, and 1 queue with compute-only support.
+
+   ``HASVK_QUEUE_OVERRIDE=c=1`` would override the number of
+   advertised queues to include 1 queue with compute-only support, but
+   it will not change the number of graphics+compute queues.
+
+   ``HASVK_QUEUE_OVERRIDE=gc=0,c=1`` would override the number of
+   advertised queues to include 1 queue with compute-only support, and
+   it would override the number of graphics+compute queues to be 0.
+
+.. envvar:: HASVK_USERSPACE_RELOCS
+
+   If defined to ``1`` or ``true``, this forces ANV to always do
+   kernel relocations in command buffers. This should only have an
+   effect on hardware that doesn't support soft-pinning (Ivybridge,
+   Haswell, Cherryview).
 
 DRI environment variables
 -------------------------
@@ -1013,20 +1089,20 @@ Gallium environment variables
 
 .. envvar:: GALLIUM_TRACE
 
-   If set, this variable will cause the :ref:`trace` output to be written to the
+   If set, this variable will cause the trace output to be written to the
    specified file. Paths may be relative or absolute; relative paths are relative
    to the working directory.  For example, setting it to "trace.xml" will cause
    the trace to be written to a file of the same name in the working directory.
 
 .. envvar:: GALLIUM_TRACE_TC
 
-   If enabled while :ref:`trace` is active, this variable specifies that the threaded context
+   If enabled while trace is active, this variable specifies that the threaded context
    should be traced for drivers which implement it. By default, the driver thread is traced,
    which will include any reordering of the command stream from threaded context.
 
 .. envvar:: GALLIUM_TRACE_TRIGGER
 
-   If set while :ref:`trace` is active, this variable specifies a filename to monitor.
+   If set while trace is active, this variable specifies a filename to monitor.
    Once the file exists (e.g., from the user running 'touch /path/to/file'), a single
    frame will be recorded into the trace output.
    Paths may be relative or absolute; relative paths are relative to the working directory.
@@ -1070,54 +1146,6 @@ Gallium environment variables
    ``ssse3``
    ``sse4.1``
    ``avx``
-
-Clover environment variables
-----------------------------
-
-.. envvar:: CLOVER_DEVICE_TYPE
-
-   allows to overwrite the device type of devices. Possible values are
-   ``accelerator``, ``cpu``, ``custom`` and ``gpu``
-
-.. envvar:: CLOVER_DEVICE_VERSION_OVERRIDE
-
-   overwrites the auto detected OpenCL version of a device. Possible values:
-   ``1.0``
-   ``1.1``
-   ``1.2``
-   ``2.0``
-   ``2.1``
-   ``2.2``
-   ``3.0``
-
-.. envvar:: CLOVER_DEVICE_CLC_VERSION_OVERRIDE
-
-   overwrites the auto detected CLC version. Possible values:
-   ``1.0``
-   ``1.1``
-   ``1.2``
-   ``2.0``
-   ``2.1``
-   ``2.2``
-   ``3.0``
-
-.. envvar:: CLOVER_EXTRA_BUILD_OPTIONS
-
-   allows specifying additional compiler and linker options. Specified
-   options are appended after the options set by the OpenCL program in
-   ``clBuildProgram``.
-
-.. envvar:: CLOVER_EXTRA_COMPILE_OPTIONS
-
-   allows specifying additional compiler options. Specified options are
-   appended after the options set by the OpenCL program in
-   ``clCompileProgram``.
-
-.. envvar:: CLOVER_EXTRA_LINK_OPTIONS
-
-   allows specifying additional linker options. Specified options are
-   appended after the options set by the OpenCL program in
-   ``clLinkProgram``.
 
 .. _rusticl-env-var:
 
@@ -1445,6 +1473,8 @@ RADV driver environment variables
       Dump backend IR (ACO or LLVM) for selected shader stages.
    ``asm``
       Dump shader disassembly for selected shader stages.
+   ``bvh4``
+      Use bvh4 encoding on GPUs that support bvh8 encoding.
 
 .. envvar:: RADV_FORCE_FAMILY
 

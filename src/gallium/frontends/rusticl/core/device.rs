@@ -364,11 +364,14 @@ impl Device {
 
         // if we can't advertize 3d image write ext, we have to disable them all
         if !self.caps.has_3d_image_writes {
-            for f in &mut self.formats.values_mut() {
-                *f.get_mut(&CL_MEM_OBJECT_IMAGE3D).unwrap() &= !cl_mem_flags::from(
-                    CL_MEM_WRITE_ONLY | CL_MEM_READ_WRITE | CL_MEM_KERNEL_READ_AND_WRITE,
-                );
-            }
+            self.formats
+                .values_mut()
+                .filter_map(|f| f.get_mut(&CL_MEM_OBJECT_IMAGE3D))
+                .for_each(|flags| {
+                    *flags &= !cl_mem_flags::from(
+                        CL_MEM_WRITE_ONLY | CL_MEM_READ_WRITE | CL_MEM_KERNEL_READ_AND_WRITE,
+                    )
+                });
         }
 
         // we require formatted loads
@@ -782,7 +785,7 @@ impl Device {
             1 << 26,
             min(
                 self.max_mem_alloc(),
-                self.screen.caps().max_shader_buffer_size as u64,
+                self.screen.caps().max_shader_buffer_size.into(),
             ),
         )
     }
@@ -920,7 +923,7 @@ impl Device {
     }
 
     pub fn global_mem_size(&self) -> cl_ulong {
-        if let Some(memory_info) = self.screen().query_memory_info() {
+        if let Some(memory_info) = self.screen.query_memory_info() {
             let memory: cl_ulong = if memory_info.total_device_memory != 0 {
                 memory_info.total_device_memory.into()
             } else {
@@ -1000,17 +1003,20 @@ impl Device {
         self.screen.compute_caps().max_local_size as cl_ulong
     }
 
-    pub fn max_block_sizes(&self) -> Vec<usize> {
-        let v: [u32; 3] = self.screen.compute_caps().max_block_size;
-        v.into_iter().map(|v| v as usize).collect()
+    pub fn max_block_sizes(&self) -> [usize; 3] {
+        self.screen
+            .compute_caps()
+            .max_block_size
+            .map(|value| value as usize)
     }
 
-    pub fn max_grid_size(&self) -> Vec<usize> {
-        let v: [u32; 3] = self.screen.compute_caps().max_grid_size;
-        v.into_iter()
-            .map(|a| min(a, Platform::dbg().max_grid_size))
-            .map(|v| v as usize)
-            .collect()
+    pub fn max_grid_size(&self) -> [usize; 3] {
+        self.screen
+            .compute_caps()
+            .max_grid_size
+            .map(|screen_max_grid_size| {
+                min(screen_max_grid_size, Platform::dbg().max_grid_size) as usize
+            })
     }
 
     pub fn max_clock_freq(&self) -> cl_uint {
@@ -1022,12 +1028,26 @@ impl Device {
     }
 
     pub fn max_grid_dimensions(&self) -> cl_uint {
-        self.screen.compute_caps().grid_dimension
+        // Much of the kernel code assumes three-dimensional grids, implicitly
+        // capping this value. The OpenCL spec requires a minimum value of 3 for
+        // devices not of type CL_DEVICE_TYPE_CUSTOM.
+        const MAX_GRID_DIM: cl_uint = 3;
+
+        MAX_GRID_DIM
     }
 
+    /// Returns the maximum size in bytes of a memory allocation for this
+    /// device.
     pub fn max_mem_alloc(&self) -> cl_ulong {
-        // TODO: at the moment gallium doesn't support bigger buffers
-        min(self.screen.compute_caps().max_mem_alloc_size, 0x80000000)
+        // The returned value must always be less than or equal to `isize::MAX`,
+        // as this method may be used for bounds checking on allocations.
+        // TODO: Add support for larger allocations. gallium doesn't support
+        // buffers larger than `i32::MAX` due to constraints in the buffer
+        // mapping API.
+        min(
+            self.screen.compute_caps().max_mem_alloc_size,
+            i32::MAX as cl_ulong,
+        )
     }
 
     pub fn max_samplers(&self) -> cl_uint {

@@ -978,8 +978,7 @@ anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
                });
    }
 
-   if (nir->info.stage == MESA_SHADER_MESH ||
-         nir->info.stage == MESA_SHADER_TASK) {
+   if (gl_shader_stage_is_mesh(nir->info.stage)) {
       nir_lower_compute_system_values_options options = {
             .lower_workgroup_id_to_index = true,
             /* nir_lower_idiv generates expensive code */
@@ -1127,10 +1126,8 @@ anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
               pipeline->layout.type);
 
    if (gl_shader_stage_uses_workgroup(nir->info.stage)) {
-      if (!nir->info.shared_memory_explicit_layout) {
-         NIR_PASS(_, nir, nir_lower_vars_to_explicit_types,
-                  nir_var_mem_shared, shared_type_info);
-      }
+      NIR_PASS(_, nir, nir_lower_vars_to_explicit_types,
+               nir_var_mem_shared, shared_type_info);
 
       NIR_PASS(_, nir, nir_lower_explicit_io,
                nir_var_mem_shared, nir_address_format_32bit_offset);
@@ -1682,7 +1679,8 @@ anv_pipeline_add_executable(struct anv_pipeline *pipeline,
        * do it for every binary.
        */
       brw_disassemble_with_errors(&pipeline->device->physical->compiler->isa,
-                                  stage->code, code_offset, stream);
+                                  stage->code, code_offset,
+                                  &stage->bin->kernel.offset, stream);
 
       fclose(stream);
 
@@ -1692,6 +1690,13 @@ anv_pipeline_add_executable(struct anv_pipeline *pipeline,
       disasm[stream_size] = 0;
 
       free(stream_data);
+   }
+
+   if (INTEL_DEBUG(DEBUG_SHADERS_LINENO) && stage->code) {
+      brw_disassemble_with_lineno(&pipeline->device->physical->compiler->isa,
+                                  stage->stage, (int)stats->dispatch_width,
+                                  stage->source_hash, stage->code, code_offset,
+                                  stage->bin->kernel.offset, stderr);
    }
 
    const struct anv_pipeline_executable exe = {
@@ -3369,6 +3374,11 @@ compile_upload_rt_shader(struct anv_ray_tracing_pipeline *pipeline,
       pipeline->base.device->physical->compiler;
    const struct intel_device_info *devinfo = compiler->devinfo;
 
+   struct brw_nir_lower_shader_calls_state lowering_state = {
+      .devinfo = devinfo,
+      .key = &stage->key.bs,
+   };
+
    nir_shader **resume_shaders = NULL;
    uint32_t num_resume_shaders = 0;
    if (nir->info.stage != MESA_SHADER_COMPUTE) {
@@ -3383,12 +3393,12 @@ compile_upload_rt_shader(struct anv_ray_tracing_pipeline *pipeline,
 
       NIR_PASS(_, nir, nir_lower_shader_calls, &opts,
                &resume_shaders, &num_resume_shaders, mem_ctx);
-      NIR_PASS(_, nir, brw_nir_lower_shader_calls, &stage->key.bs);
+      NIR_PASS(_, nir, brw_nir_lower_shader_calls, &lowering_state);
       NIR_PASS_V(nir, brw_nir_lower_rt_intrinsics, &stage->key.base, devinfo);
    }
 
    for (unsigned i = 0; i < num_resume_shaders; i++) {
-      NIR_PASS(_,resume_shaders[i], brw_nir_lower_shader_calls, &stage->key.bs);
+      NIR_PASS(_,resume_shaders[i], brw_nir_lower_shader_calls, &lowering_state);
       NIR_PASS_V(resume_shaders[i], brw_nir_lower_rt_intrinsics, &stage->key.base, devinfo);
    }
 
@@ -3723,7 +3733,7 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
       nir_shader *nir = nir_shader_clone(tmp_stage_ctx, stages[i].nir);
       switch (stages[i].stage) {
       case MESA_SHADER_RAYGEN:
-         brw_nir_lower_raygen(nir);
+         brw_nir_lower_raygen(nir, devinfo);
          break;
 
       case MESA_SHADER_ANY_HIT:
@@ -3731,18 +3741,18 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
          break;
 
       case MESA_SHADER_CLOSEST_HIT:
-         brw_nir_lower_closest_hit(nir);
+         brw_nir_lower_closest_hit(nir, devinfo);
          break;
 
       case MESA_SHADER_MISS:
-         brw_nir_lower_miss(nir);
+         brw_nir_lower_miss(nir, devinfo);
          break;
 
       case MESA_SHADER_INTERSECTION:
          unreachable("These are handled later");
 
       case MESA_SHADER_CALLABLE:
-         brw_nir_lower_callable(nir);
+         brw_nir_lower_callable(nir, devinfo);
          break;
 
       default:

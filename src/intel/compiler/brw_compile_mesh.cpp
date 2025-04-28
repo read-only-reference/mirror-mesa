@@ -289,7 +289,7 @@ brw_nir_lower_mesh_primitive_count(nir_shader *nir)
 static void
 brw_emit_urb_fence(brw_shader &s)
 {
-   const brw_builder bld1 = brw_builder(&s).exec_all().group(1, 0);
+   const brw_builder bld1 = brw_builder(&s).uniform();
    brw_reg dst = bld1.vgrf(BRW_TYPE_UD);
    brw_inst *fence = bld1.emit(SHADER_OPCODE_MEMORY_FENCE, dst,
                               brw_vec8_grf(0, 0),
@@ -337,7 +337,6 @@ run_task_mesh(brw_shader &s, bool allow_spilling)
    s.assign_curb_setup();
 
    brw_lower_3src_null_dest(s);
-   brw_workaround_memory_fence_before_eot(s);
    brw_workaround_emit_dummy_mov_instruction(s);
 
    brw_allocate_registers(s, allow_spilling);

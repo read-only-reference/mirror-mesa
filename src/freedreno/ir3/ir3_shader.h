@@ -210,20 +210,18 @@ enum ir3_const_alloc_type {
     * for images that have image_{load,store,size,atomic*} intrinsics.
     */
    IR3_CONST_ALLOC_IMAGE_DIMS = 8,
-   /* OpenCL */
-   IR3_CONST_ALLOC_KERNEL_PARAMS = 9,
    /* OpenGL, TFBO addresses only for vs on a3xx/a4xx */
-   IR3_CONST_ALLOC_TFBO = 10,
+   IR3_CONST_ALLOC_TFBO = 9,
    /* Common, stage-dependent primitive params:
     *  vs, gs: uvec4(primitive_stride, vertex_stride, 0, 0)
     *  hs, ds: uvec4(primitive_stride, vertex_stride,
     *                patch_stride, patch_vertices_in)
     *          uvec4(tess_param_base, tess_factor_base)
     */
-   IR3_CONST_ALLOC_PRIMITIVE_PARAM = 11,
+   IR3_CONST_ALLOC_PRIMITIVE_PARAM = 10,
    /* Common, mapping from varying location to offset. */
-   IR3_CONST_ALLOC_PRIMITIVE_MAP = 12,
-   IR3_CONST_ALLOC_MAX = 13,
+   IR3_CONST_ALLOC_PRIMITIVE_MAP = 11,
+   IR3_CONST_ALLOC_MAX = 12,
 };
 
 struct ir3_const_allocation {
@@ -881,6 +879,7 @@ struct ir3_shader_variant {
    /* texture sampler pre-dispatches */
    uint32_t num_sampler_prefetch;
    struct ir3_sampler_prefetch sampler_prefetch[IR3_MAX_SAMPLER_PREFETCH];
+   enum ir3_bary prefetch_bary_type;
 
    /* If true, the last use of helper invocations is the texture prefetch and
     * they should be disabled for the actual shader. Equivalent to adding
@@ -932,7 +931,6 @@ struct ir3_shader_variant {
          bool fbfetch_coherent     : 1;
       } fs;
       struct {
-         unsigned req_input_mem;
          unsigned req_local_mem;
          bool force_linear_dispatch;
          uint32_t local_invocation_id;
@@ -1009,7 +1007,6 @@ struct ir3_shader {
    union {
       /* for compute shaders: */
       struct {
-         unsigned req_input_mem;    /* in dwords */
          unsigned req_local_mem;
          bool force_linear_dispatch;
       } cs;
@@ -1056,6 +1053,41 @@ ir3_const_state_mut(const struct ir3_shader_variant *v)
 }
 
 static inline unsigned
+ir3_max_const_compute(const struct ir3_shader_variant *v,
+                      const struct ir3_compiler *compiler)
+{
+   unsigned lm_size = v->local_size_variable ? compiler->local_mem_size :
+      v->cs.req_local_mem;
+
+   /* The LB is divided between consts and local memory. LB is split into
+    * wave_granularity banks, to make it possible for different ALUs to access
+    * it at the same time, and consts are duplicated into each bank so that they
+    * always take constant time to access while LM is spread across the banks.
+    *
+    * We cannot arbitrarily divide LB. Instead only certain configurations, as
+    * defined by the CONSTANTRAMMODE register field, are allowed. Not sticking
+    * with the right configuration can result in hangs when multiple compute
+    * shaders are in flight. We have to limit the constlen so that we can pick a
+    * configuration where there is enough space for LM.
+    */
+   unsigned lb_const_size =
+      ((compiler->compute_lb_size - lm_size) / compiler->wave_granularity) /
+      16 /* bytes per vec4 */;
+   if (lb_const_size < compiler->max_const_compute) {
+      const uint32_t lb_const_sizes[] = { 128, 192, 256, 512 };
+
+      assert(lb_const_size >= lb_const_sizes[0]);
+      for (unsigned i = 0; i < ARRAY_SIZE(lb_const_sizes) - 1; i++) {
+         if (lb_const_size < lb_const_sizes[i + 1])
+            return lb_const_sizes[i];
+      }
+      return lb_const_sizes[ARRAY_SIZE(lb_const_sizes) - 1];
+   } else {
+      return compiler->max_const_compute;
+   }
+}
+
+static inline unsigned
 _ir3_max_const(const struct ir3_shader_variant *v, bool safe_constlen)
 {
    if (v->binning_pass) {
@@ -1082,7 +1114,7 @@ _ir3_max_const(const struct ir3_shader_variant *v, bool safe_constlen)
 
    if ((v->type == MESA_SHADER_COMPUTE) ||
        (v->type == MESA_SHADER_KERNEL)) {
-      return compiler->max_const_compute - shared_consts_size;
+      return ir3_max_const_compute(v, compiler) - shared_consts_size;
    } else if (safe_constlen) {
       return compiler->max_const_safe - safe_shared_consts_size;
    } else if (v->type == MESA_SHADER_FRAGMENT) {

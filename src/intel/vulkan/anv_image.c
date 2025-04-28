@@ -213,6 +213,7 @@ anv_image_choose_isl_surf_usage(struct anv_physical_device *device,
                                 VkImageCompressionFlagsEXT comp_flags)
 {
    isl_surf_usage_flags_t isl_usage = isl_extra_usage;
+   const struct intel_device_info *devinfo = &device->info;
 
    /* On platform like MTL, we choose to allocate additional CCS memory at the
     * back of the VkDeviceMemory objects since different images can share the
@@ -242,7 +243,9 @@ anv_image_choose_isl_surf_usage(struct anv_physical_device *device,
        * compression for BLORP writes, but not for general rendering
        * nor image stores.
        */
-      if (vk_usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT))
+      if (devinfo->verx10 == 125 &&
+          vk_usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                      VK_IMAGE_USAGE_STORAGE_BIT))
          isl_usage |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
    }
 
@@ -2606,7 +2609,7 @@ anv_image_bind_address(struct anv_device *device,
       uint64_t offset = image->bindings[binding].address.offset +
                         image->bindings[binding].memory_range.offset;
       uint64_t map_offset, map_size;
-      anv_sanitize_map_params(device, offset,
+      anv_sanitize_map_params(device, image->bindings[binding].address.bo, offset,
                               image->bindings[binding].memory_range.size,
                               &map_offset, &map_size);
 

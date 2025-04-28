@@ -3,7 +3,7 @@
 
 use crate::api::{GetDebugFlags, DEBUG};
 use crate::ir::*;
-use crate::sched_common::*;
+use crate::reg_tracker::RegTracker;
 
 use std::cmp::max;
 use std::collections::{HashMap, HashSet};
@@ -257,18 +257,7 @@ fn assign_barriers(f: &mut Function, sm: &dyn ShaderModel) {
                     waits.extend_from_slice(u.deps());
                 });
 
-                if instr.has_fixed_latency(sm.sm()) {
-                    // Delays will cover us here.  We just need to make sure
-                    // that we wait on any uses that we consume.
-                    uses.for_each_instr_src_mut(instr, |_, u| {
-                        let u = u.clear_write();
-                        waits.extend_from_slice(u.deps());
-                    });
-                    uses.for_each_instr_dst_mut(instr, |_, u| {
-                        let u = u.clear();
-                        waits.extend_from_slice(u.deps());
-                    });
-                } else {
+                if sm.op_needs_scoreboard(&instr.op) {
                     let (rd, wr) = deps.add_instr(bi, ip);
                     uses.for_each_instr_src_mut(instr, |_, u| {
                         // Only mark a dep as signaled if we actually have
@@ -290,6 +279,17 @@ fn assign_barriers(f: &mut Function, sm: &dyn ShaderModel) {
                                 waits.push(*dep);
                             }
                         }
+                    });
+                } else {
+                    // Delays will cover us here.  We just need to make sure
+                    // that we wait on any uses that we consume.
+                    uses.for_each_instr_src_mut(instr, |_, u| {
+                        let u = u.clear_write();
+                        waits.extend_from_slice(u.deps());
+                    });
+                    uses.for_each_instr_dst_mut(instr, |_, u| {
+                        let u = u.clear();
+                        waits.extend_from_slice(u.deps());
                     });
                 }
                 deps.add_waits(bi, ip, waits);
@@ -314,7 +314,7 @@ fn assign_barriers(f: &mut Function, sm: &dyn ShaderModel) {
                 instr.deps.set_yield(true);
             }
 
-            if instr.has_fixed_latency(sm.sm()) {
+            if !sm.op_needs_scoreboard(&instr.op) {
                 continue;
             }
 
@@ -360,7 +360,7 @@ fn calc_delays(f: &mut Function, sm: &dyn ShaderModel) -> u32 {
 
         for ip in (0..b.instrs.len()).rev() {
             let instr = &b.instrs[ip];
-            let mut min_start = cycle + exec_latency(sm.sm(), &instr.op);
+            let mut min_start = cycle + sm.exec_latency(&instr.op);
             if let Some(bar) = instr.deps.rd_bar() {
                 min_start = max(min_start, bars[usize::from(bar)] + 2);
             }
@@ -372,15 +372,15 @@ fn calc_delays(f: &mut Function, sm: &dyn ShaderModel) -> u32 {
                     // We don't know how it will be used but it may be used in
                     // the next block so we need at least assume the maximum
                     // destination latency from the end of the block.
-                    let s = instr_latency(sm.sm(), &instr.op, i);
+                    let s = sm.worst_latency(&instr.op, i);
                     min_start = max(min_start, s);
                 }
                 RegUse::Write((w_ip, w_dst_idx)) => {
                     let s = instr_cycle[*w_ip]
-                        + waw_latency(
-                            sm.sm(),
+                        + sm.waw_latency(
                             &instr.op,
                             i,
+                            !instr.pred.pred_ref.is_none(),
                             &b.instrs[*w_ip].op,
                             *w_dst_idx,
                         );
@@ -390,10 +390,9 @@ fn calc_delays(f: &mut Function, sm: &dyn ShaderModel) -> u32 {
                     for (r_ip, r_src_idx) in reads {
                         let c = instr_cycle[*r_ip];
                         let s = if *r_src_idx == usize::MAX {
-                            c + paw_latency(sm.sm(), &instr.op, i)
+                            c + sm.paw_latency(&instr.op, i)
                         } else {
-                            c + raw_latency(
-                                sm.sm(),
+                            c + sm.raw_latency(
                                 &instr.op,
                                 i,
                                 &b.instrs[*r_ip].op,
@@ -408,8 +407,7 @@ fn calc_delays(f: &mut Function, sm: &dyn ShaderModel) -> u32 {
                 RegUse::None => (),
                 RegUse::Write((w_ip, w_dst_idx)) => {
                     let s = instr_cycle[*w_ip]
-                        + war_latency(
-                            sm.sm(),
+                        + sm.war_latency(
                             &instr.op,
                             i,
                             &b.instrs[*w_ip].op,
@@ -423,21 +421,21 @@ fn calc_delays(f: &mut Function, sm: &dyn ShaderModel) -> u32 {
             let instr = &mut b.instrs[ip];
 
             let delay = min_start - cycle;
-            let delay = delay
-                .clamp(MIN_INSTR_DELAY.into(), MAX_INSTR_DELAY.into())
-                .try_into()
-                .unwrap();
+            let delay = delay.max(MIN_INSTR_DELAY.into()).try_into().unwrap();
             instr.deps.set_delay(delay);
 
             instr_cycle[ip] = min_start;
+
+            // Set the writes before adding the reads
+            // as we are iterating backwards through instructions.
+            uses.for_each_instr_dst_mut(instr, |i, c| {
+                c.set_write((ip, i));
+            });
             uses.for_each_instr_pred_mut(instr, |c| {
                 c.add_read((ip, usize::MAX));
             });
             uses.for_each_instr_src_mut(instr, |i, c| {
                 c.add_read((ip, i));
-            });
-            uses.for_each_instr_dst_mut(instr, |i, c| {
-                c.set_write((ip, i));
             });
             for (bar, c) in bars.iter_mut().enumerate() {
                 if instr.deps.wt_bar_mask & (1 << bar) != 0 {
@@ -450,15 +448,26 @@ fn calc_delays(f: &mut Function, sm: &dyn ShaderModel) -> u32 {
         min_num_static_cycles += cycle;
     }
 
-    // It's unclear exactly why but the blob inserts a Nop with a delay of 2
-    // after every instruction which has an exec latency.  Perhaps it has
-    // something to do with .yld?  In any case, the extra 2 cycles aren't worth
-    // the chance of weird bugs.
     f.map_instrs(|mut instr, _| {
-        if matches!(instr.op, Op::SrcBar(_)) {
+        if instr.deps.delay > MAX_INSTR_DELAY {
+            let mut delay = instr.deps.delay - MAX_INSTR_DELAY;
+            instr.deps.set_delay(MAX_INSTR_DELAY);
+            let mut instrs = vec![instr];
+            while delay > 0 {
+                let mut nop = Instr::new_boxed(OpNop { label: None });
+                nop.deps.set_delay(delay.min(MAX_INSTR_DELAY));
+                delay -= nop.deps.delay;
+                instrs.push(nop);
+            }
+            MappedInstrs::Many(instrs)
+        } else if matches!(instr.op, Op::SrcBar(_)) {
             instr.op = Op::Nop(OpNop { label: None });
             MappedInstrs::One(instr)
-        } else if exec_latency(sm.sm(), &instr.op) > 1 {
+        } else if sm.exec_latency(&instr.op) > 1 {
+            // It's unclear exactly why but the blob inserts a Nop with a delay
+            // of 2 after every instruction which has an exec latency.  Perhaps
+            // it has something to do with .yld?  In any case, the extra 2
+            // cycles aren't worth the chance of weird bugs.
             let mut nop = Instr::new_boxed(OpNop { label: None });
             nop.deps.set_delay(2);
             MappedInstrs::Many(vec![instr, nop])
@@ -512,11 +521,16 @@ impl Shader<'_> {
                 min_num_static_cycles += calc_delays(f, self.sm);
             }
 
-            // Check that this file's model matches up with the model in
-            // opt_instr_sched_postpass. postpass includes an estimate of
-            // variable latency delays in its count, so we expect it to be >=
-            // the estimate here
-            assert!(self.info.num_static_cycles >= min_num_static_cycles);
+            if DEBUG.cycles() {
+                // This is useful for debugging differences in the scheduler
+                // cycle count model and the calc_delays() model.  However, it
+                // isn't totally valid since assign_barriers() can add extra
+                // dependencies for barrier re-use and those may add cycles.
+                // The chances of it doing this are low, thanks to our LRU
+                // allocation strategy, but it's still not an assert we want
+                // running in production.
+                assert!(self.info.num_static_cycles >= min_num_static_cycles);
+            }
         }
     }
 }

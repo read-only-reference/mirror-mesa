@@ -582,9 +582,7 @@ emit_alu(struct ir3_context *ctx, nir_alu_instr *alu)
       alu->op != nir_op_sdot_4x8_iadd &&
       alu->op != nir_op_sdot_4x8_iadd_sat &&
       alu->op != nir_op_sudot_4x8_iadd &&
-      alu->op != nir_op_sudot_4x8_iadd_sat &&
-      /* not supported in HW, we have to fall back to normal registers */
-      alu->op != nir_op_ffma;
+      alu->op != nir_op_sudot_4x8_iadd_sat;
 
    struct ir3_instruction **def = ir3_get_def(ctx, &alu->def, dst_sz);
 
@@ -721,7 +719,22 @@ emit_alu(struct ir3_context *ctx, nir_alu_instr *alu)
       dst = ir3_ADD_F_rpt(b, dst_sz, src[0], 0, src[1], IR3_REG_FNEG);
       break;
    case nir_op_ffma:
-      dst = ir3_MAD_F32_rpt(b, dst_sz, src[0], 0, src[1], 0, src[2], 0);
+      /* The scalar ALU doesn't support mad, so expand to mul+add so that we
+       * don't unnecessarily fall back to non-earlypreamble. This is safe
+       * because at least on a6xx+ mad is unfused.
+       */
+      if (use_shared) {
+         struct ir3_instruction_rpt mul01 =
+            ir3_MUL_F_rpt(b, dst_sz, src[0], 0, src[1], 0);
+
+         if (is_half(src[0].rpts[0])) {
+            set_dst_flags(mul01.rpts, dst_sz, IR3_REG_HALF);
+         }
+
+         dst = ir3_ADD_F_rpt(b, dst_sz, mul01, 0, src[2], 0);
+      } else {
+         dst = ir3_MAD_F32_rpt(b, dst_sz, src[0], 0, src[1], 0, src[2], 0);
+      }
       break;
    case nir_op_flt:
       dst = ir3_CMPS_F_rpt(b, dst_sz, src[0], 0, src[1], 0);
@@ -1332,41 +1345,6 @@ emit_intrinsic_load_ubo(struct ir3_context *ctx, nir_intrinsic_instr *intr,
                  create_immed(b, 1), 0); /* num components */
       load->cat6.type = TYPE_U32;
       dst[i] = load;
-   }
-}
-
-/* Load a kernel param: src[] = { address }. */
-static void
-emit_intrinsic_load_kernel_input(struct ir3_context *ctx,
-                                 nir_intrinsic_instr *intr,
-                                 struct ir3_instruction **dst)
-{
-   const struct ir3_const_state *const_state = ir3_const_state(ctx->so);
-   struct ir3_builder *b = &ctx->build;
-   unsigned offset = nir_intrinsic_base(intr);
-   unsigned p = ir3_const_reg(const_state, IR3_CONST_ALLOC_KERNEL_PARAMS, 0);
-
-   struct ir3_instruction *src0 = ir3_get_src(ctx, &intr->src[0])[0];
-
-   if (is_same_type_mov(src0) && (src0->srcs[0]->flags & IR3_REG_IMMED)) {
-      offset += src0->srcs[0]->iim_val;
-
-      /* kernel param position is in bytes, but constant space is 32b registers: */
-      compile_assert(ctx, !(offset & 0x3));
-
-      dst[0] = create_uniform(b, p + (offset / 4));
-   } else {
-      /* kernel param position is in bytes, but constant space is 32b registers: */
-      compile_assert(ctx, !(offset & 0x3));
-
-      /* TODO we should probably be lowering this in nir, and also handling
-       * non-32b inputs.. Also we probably don't want to be using
-       * SP_MODE_CONTROL.CONSTANT_DEMOTION_ENABLE for KERNEL shaders..
-       */
-      src0 = ir3_SHR_B(b, src0, 0, create_immed(b, 2), 0);
-
-      dst[0] = create_uniform_indirect(b, offset / 4, TYPE_U32,
-                                       ir3_get_addr0(ctx, src0, 1));
    }
 }
 
@@ -2238,47 +2216,11 @@ get_barycentric(struct ir3_context *ctx, enum ir3_bary bary)
    return ctx->ij[bary];
 }
 
-/* TODO: make this a common NIR helper?
- * there is a nir_system_value_from_intrinsic but it takes nir_intrinsic_op so
- * it can't be extended to work with this
- */
-static gl_system_value
-nir_intrinsic_barycentric_sysval(nir_intrinsic_instr *intr)
-{
-   enum glsl_interp_mode interp_mode = nir_intrinsic_interp_mode(intr);
-   gl_system_value sysval;
-
-   switch (intr->intrinsic) {
-   case nir_intrinsic_load_barycentric_pixel:
-      if (interp_mode == INTERP_MODE_NOPERSPECTIVE)
-         sysval = SYSTEM_VALUE_BARYCENTRIC_LINEAR_PIXEL;
-      else
-         sysval = SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL;
-      break;
-   case nir_intrinsic_load_barycentric_centroid:
-      if (interp_mode == INTERP_MODE_NOPERSPECTIVE)
-         sysval = SYSTEM_VALUE_BARYCENTRIC_LINEAR_CENTROID;
-      else
-         sysval = SYSTEM_VALUE_BARYCENTRIC_PERSP_CENTROID;
-      break;
-   case nir_intrinsic_load_barycentric_sample:
-      if (interp_mode == INTERP_MODE_NOPERSPECTIVE)
-         sysval = SYSTEM_VALUE_BARYCENTRIC_LINEAR_SAMPLE;
-      else
-         sysval = SYSTEM_VALUE_BARYCENTRIC_PERSP_SAMPLE;
-      break;
-   default:
-      unreachable("invalid barycentric intrinsic");
-   }
-
-   return sysval;
-}
-
 static void
 emit_intrinsic_barycentric(struct ir3_context *ctx, nir_intrinsic_instr *intr,
                            struct ir3_instruction **dst)
 {
-   gl_system_value sysval = nir_intrinsic_barycentric_sysval(intr);
+   gl_system_value sysval = ir3_nir_intrinsic_barycentric_sysval(intr);
 
    if (!ctx->so->key.msaa && ctx->compiler->gen < 6) {
       switch (sysval) {
@@ -2865,9 +2807,6 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
    case nir_intrinsic_load_input:
       setup_input(ctx, intr);
       break;
-   case nir_intrinsic_load_kernel_input:
-      emit_intrinsic_load_kernel_input(ctx, intr, dst);
-      break;
    /* All SSBO intrinsics should have been lowered by 'lower_io_offsets'
     * pass and replaced by an ir3-specifc version that adds the
     * dword-offset in the last source.
@@ -3350,9 +3289,7 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
       break;
 
    case nir_intrinsic_preamble_end_ir3: {
-      struct ir3_instruction *instr = ir3_SHPE(b);
-      instr->barrier_class = instr->barrier_conflict = IR3_BARRIER_CONST_W;
-      array_insert(ctx->block, ctx->block->keeps, instr);
+      ir3_SHPE(b);
       break;
    }
    case nir_intrinsic_store_const_ir3: {
@@ -3917,7 +3854,7 @@ emit_tex(struct ir3_context *ctx, nir_tex_instr *tex)
          ir3_builder_at(ir3_before_terminator(ctx->in_block));
       sam = ir3_SAM(&build, opc, type, MASK(ncomp), 0, NULL,
                     get_barycentric(ctx, IJ_PERSP_PIXEL), 0);
-      sam->prefetch.input_offset = ir3_nir_coord_offset(tex->src[idx].src.ssa);
+      sam->prefetch.input_offset = ir3_nir_coord_offset(tex->src[idx].src.ssa, NULL);
       /* make sure not to add irrelevant flags like S2EN */
       sam->flags = flags | (info.flags & IR3_INSTR_B);
       sam->prefetch.tex = info.tex_idx;
@@ -5794,7 +5731,7 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
       /* the folding doesn't seem to work reliably on a4xx */
       if (ctx->compiler->gen != 4)
          progress |= IR3_PASS(ir, ir3_cf);
-      progress |= IR3_PASS(ir, ir3_cp, so);
+      progress |= IR3_PASS(ir, ir3_cp, so, true);
       progress |= IR3_PASS(ir, ir3_cse);
       progress |= IR3_PASS(ir, ir3_dce, so);
       progress |= IR3_PASS(ir, ir3_opt_predicates, so);
@@ -5806,6 +5743,11 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 
    if (IR3_PASS(ir, ir3_imm_const_to_preamble, so)) {
       progress = true;
+
+      /* Propagate immediates created by ir3_imm_const_to_preamble but make sure
+       * we don't lower any more immediates to const registers.
+       */
+      IR3_PASS(ir, ir3_cp, so, false);
 
       /* ir3_imm_const_to_preamble might create duplicate a1.x movs. */
       IR3_PASS(ir, ir3_cse);
@@ -5828,24 +5770,7 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 
    ir3_debug_print(ir, "AFTER: ir3_sched");
 
-   /* Pre-assign VS inputs on a6xx+ binning pass shader, to align
-    * with draw pass VS, so binning and draw pass can both use the
-    * same VBO state.
-    *
-    * Note that VS inputs are expected to be full precision.
-    */
-   bool pre_assign_inputs = (ir->compiler->gen >= 6) &&
-                            (ir->type == MESA_SHADER_VERTEX) &&
-                            so->binning_pass;
-
-   if (pre_assign_inputs) {
-      foreach_input (in, ir) {
-         assert(in->opc == OPC_META_INPUT);
-         unsigned inidx = in->input.inidx;
-
-         in->dsts[0]->num = so->nonbinning->inputs[inidx].regid;
-      }
-   } else if (ctx->tcs_header) {
+   if (ctx->tcs_header) {
       /* We need to have these values in the same registers between VS and TCS
        * since the VS chains to TCS and doesn't get the sysvals redelivered.
        */
@@ -5868,7 +5793,8 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
       int idx = 0;
 
       foreach_input (instr, ir) {
-         if (instr->input.sysval != SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL)
+         if (instr->input.sysval !=
+             (SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL + so->prefetch_bary_type))
             continue;
 
          assert(idx < 2);
@@ -5926,20 +5852,8 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
    foreach_input (in, ir) {
       assert(in->opc == OPC_META_INPUT);
       unsigned inidx = in->input.inidx;
-
-      if (pre_assign_inputs && !so->inputs[inidx].sysval) {
-         if (VALIDREG(so->nonbinning->inputs[inidx].regid)) {
-            compile_assert(
-               ctx, in->dsts[0]->num == so->nonbinning->inputs[inidx].regid);
-            compile_assert(ctx, !!(in->dsts[0]->flags & IR3_REG_HALF) ==
-                                   so->nonbinning->inputs[inidx].half);
-         }
-         so->inputs[inidx].regid = so->nonbinning->inputs[inidx].regid;
-         so->inputs[inidx].half = so->nonbinning->inputs[inidx].half;
-      } else {
-         so->inputs[inidx].regid = in->dsts[0]->num;
-         so->inputs[inidx].half = !!(in->dsts[0]->flags & IR3_REG_HALF);
-      }
+      so->inputs[inidx].regid = in->dsts[0]->num;
+      so->inputs[inidx].half = !!(in->dsts[0]->flags & IR3_REG_HALF);
    }
 
    uint8_t clip_cull_mask = ctx->so->clip_mask | ctx->so->cull_mask;
@@ -5972,12 +5886,10 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
     * know what we might have to wait on when coming in from VS chsh.
     */
    if (so->type == MESA_SHADER_TESS_CTRL || so->type == MESA_SHADER_GEOMETRY) {
-      foreach_block (block, &ir->block_list) {
-         foreach_instr (instr, &block->instr_list) {
-            instr->flags |= IR3_INSTR_SS | IR3_INSTR_SY;
-            break;
-         }
-      }
+      struct ir3_block *first_block = ir3_start_block(ir);
+      struct ir3_instruction *first_instr = list_first_entry(
+         &first_block->instr_list, struct ir3_instruction, node);
+      first_instr->flags |= IR3_INSTR_SS | IR3_INSTR_SY;
    }
 
    if (ctx->compiler->gen >= 7 && so->type == MESA_SHADER_COMPUTE) {
@@ -6042,7 +5954,8 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
    }
 
    if (so->type == MESA_SHADER_FRAGMENT) {
-      so->empty = is_empty(ir) && so->num_sampler_prefetch == 0;
+      so->empty = is_empty(ir) && so->outputs_count == 0 &&
+                  so->num_sampler_prefetch == 0;
       so->writes_only_color = !ctx->s->info.writes_memory && !so->has_kill &&
                               !so->writes_pos && !so->writes_smask &&
                               !so->writes_stencilref;

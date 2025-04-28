@@ -109,8 +109,9 @@ ir3_context_init(struct ir3_compiler *compiler, struct ir3_shader *shader,
    /* Enable the texture pre-fetch feature only a4xx onwards.  But
     * only enable it on generations that have been tested:
     */
-   if ((so->type == MESA_SHADER_FRAGMENT) && compiler->has_fs_tex_prefetch)
-      NIR_PASS(_, ctx->s, ir3_nir_lower_tex_prefetch);
+   if ((so->type == MESA_SHADER_FRAGMENT) && compiler->has_fs_tex_prefetch) {
+      NIR_PASS(_, ctx->s, ir3_nir_lower_tex_prefetch, &so->prefetch_bary_type);
+   }
 
    bool vectorized = false;
    NIR_PASS(vectorized, ctx->s, nir_opt_vectorize, ir3_nir_vectorize_filter,
@@ -120,6 +121,14 @@ ir3_context_init(struct ir3_compiler *compiler, struct ir3_shader *shader,
       NIR_PASS(_, ctx->s, nir_opt_undef);
       NIR_PASS(_, ctx->s, nir_copy_prop);
       NIR_PASS(_, ctx->s, nir_opt_dce);
+
+      /* nir_opt_vectorize could replace swizzled movs with vectorized movs in a
+       * different block. If this happens with swizzled movs in a then block, it
+       * could leave this block empty. ir3 assumes only the else block can be
+       * empty (e.g., when lowering predicates) so make sure ifs are in that
+       * canonical form again.
+       */
+      NIR_PASS(_, ctx->s, nir_opt_if, 0);
    }
 
    NIR_PASS(progress, ctx->s, nir_convert_to_lcssa, true, true);
