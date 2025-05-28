@@ -75,7 +75,7 @@ void
 agx_legalize_compression(struct agx_context *ctx, struct agx_resource *rsrc,
                          enum pipe_format format)
 {
-   if (!ail_is_view_compatible(&rsrc->layout, format)) {
+   if (rsrc && !ail_is_view_compatible(&rsrc->layout, format)) {
       agx_decompress(ctx, rsrc, "Incompatible formats");
    }
 }
@@ -861,15 +861,12 @@ static struct pipe_surface *
 agx_create_surface(struct pipe_context *ctx, struct pipe_resource *texture,
                    const struct pipe_surface *surf_tmpl)
 {
-   agx_legalize_compression(agx_context(ctx), agx_resource(texture),
-                            surf_tmpl->format);
-
    struct pipe_surface *surface = CALLOC_STRUCT(pipe_surface);
 
    if (!surface)
       return NULL;
 
-   unsigned level = surf_tmpl->u.tex.level;
+   unsigned level = surf_tmpl->level;
 
    pipe_reference_init(&surface->reference, 1);
    pipe_resource_reference(&surface->texture, texture);
@@ -880,9 +877,9 @@ agx_create_surface(struct pipe_context *ctx, struct pipe_resource *texture,
    surface->format = surf_tmpl->format;
    surface->nr_samples = surf_tmpl->nr_samples;
    surface->texture = texture;
-   surface->u.tex.first_layer = surf_tmpl->u.tex.first_layer;
-   surface->u.tex.last_layer = surf_tmpl->u.tex.last_layer;
-   surface->u.tex.level = level;
+   surface->first_layer = surf_tmpl->first_layer;
+   surface->last_layer = surf_tmpl->last_layer;
+   surface->level = level;
 
    return surface;
 }
@@ -1101,6 +1098,16 @@ agx_set_framebuffer_state(struct pipe_context *pctx,
       return;
 
    util_copy_framebuffer_state(&ctx->framebuffer, state);
+
+   for (unsigned i = 0; i < state->nr_cbufs; ++i) {
+      agx_legalize_compression(ctx,
+                               agx_resource(ctx->framebuffer.cbufs[i].texture),
+                               ctx->framebuffer.cbufs[i].format);
+   }
+
+   agx_legalize_compression(ctx, agx_resource(ctx->framebuffer.zsbuf.texture),
+                            ctx->framebuffer.zsbuf.format);
+
    ctx->batch = NULL;
    agx_dirty_all(ctx);
 }
@@ -1111,7 +1118,7 @@ agx_set_framebuffer_state(struct pipe_context *pctx,
  * constructs the internal pipe_image_view used.
  */
 static struct pipe_image_view
-image_view_for_surface(struct pipe_surface *surf)
+image_view_for_surface(const struct pipe_surface *surf)
 {
    return (struct pipe_image_view){
       .resource = surf->texture,
@@ -1119,18 +1126,18 @@ image_view_for_surface(struct pipe_surface *surf)
       .access = PIPE_IMAGE_ACCESS_READ_WRITE,
       .shader_access = PIPE_IMAGE_ACCESS_READ_WRITE,
       .u.tex.single_layer_view =
-         surf->u.tex.first_layer == surf->u.tex.last_layer,
-      .u.tex.first_layer = surf->u.tex.first_layer,
-      .u.tex.last_layer = surf->u.tex.last_layer,
-      .u.tex.level = surf->u.tex.level,
+         surf->first_layer == surf->last_layer,
+      .u.tex.first_layer = surf->first_layer,
+      .u.tex.last_layer = surf->last_layer,
+      .u.tex.level = surf->level,
    };
 }
 
 /* Similarly, to read render targets, surfaces are bound as textures */
 static struct pipe_sampler_view
-sampler_view_for_surface(struct pipe_surface *surf)
+sampler_view_for_surface(const struct pipe_surface *surf)
 {
-   bool layered = surf->u.tex.last_layer > surf->u.tex.first_layer;
+   bool layered = surf->last_layer > surf->first_layer;
 
    return (struct pipe_sampler_view){
       /* To reduce shader variants, we always use a 2D texture. For reloads of
@@ -1143,10 +1150,10 @@ sampler_view_for_surface(struct pipe_surface *surf)
       .swizzle_a = PIPE_SWIZZLE_W,
       .u.tex =
          {
-            .first_layer = surf->u.tex.first_layer,
-            .last_layer = surf->u.tex.last_layer,
-            .first_level = surf->u.tex.level,
-            .last_level = surf->u.tex.level,
+            .first_layer = surf->first_layer,
+            .last_layer = surf->last_layer,
+            .first_level = surf->level,
+            .last_level = surf->level,
          },
    };
 }
@@ -1625,7 +1632,7 @@ agx_compile_variant(struct agx_device *dev, struct pipe_context *pctx,
          outputs = nir->info.outputs_written;
       }
    } else if (nir->info.stage == MESA_SHADER_TESS_CTRL) {
-      NIR_PASS_V(nir, agx_nir_lower_tcs);
+      NIR_PASS(_, nir, agx_nir_lower_tcs);
    } else if (nir->info.stage == MESA_SHADER_GEOMETRY) {
       struct asahi_gs_shader_key *key = &key_->gs;
 
@@ -2348,9 +2355,7 @@ agx_update_fs(struct agx_batch *batch)
       key.nr_samples = nr_samples;
 
       for (unsigned i = 0; i < batch->key.nr_cbufs; ++i) {
-         struct pipe_surface *surf = batch->key.cbufs[i];
-
-         key.rt_formats[i] = surf ? surf->format : PIPE_FORMAT_NONE;
+         key.rt_formats[i] = batch->key.cbufs[i].format;
       }
    }
 
@@ -2387,9 +2392,7 @@ agx_update_fs(struct agx_batch *batch)
    };
 
    for (unsigned i = 0; i < PIPE_MAX_COLOR_BUFS; ++i) {
-      struct pipe_surface *surf = batch->key.cbufs[i];
-
-      link_key.epilog.fs.rt_formats[i] = surf ? surf->format : PIPE_FORMAT_NONE;
+      link_key.epilog.fs.rt_formats[i] = batch->key.cbufs[i].format;
       link_key.epilog.fs.remap[i] =
          link_key.epilog.fs.link.broadcast_rt0 ? 0 : i;
    }
@@ -2736,8 +2739,8 @@ agx_upload_spilled_rt_descriptors(struct agx_texture_packed *out,
       struct agx_texture_packed *texture = out + (2 * rt);
       struct agx_pbe_packed *pbe = (struct agx_pbe_packed *)(texture + 1);
 
-      struct pipe_surface *surf = batch->key.cbufs[rt];
-      if (!surf)
+      const struct pipe_surface *surf = &batch->key.cbufs[rt];
+      if (!surf->texture)
          continue;
 
       struct agx_resource *rsrc = agx_resource(surf->texture);
@@ -3124,9 +3127,9 @@ agx_build_bg_eot(struct agx_batch *batch, bool store, bool partial_render)
       !store;
 
    for (unsigned rt = 0; rt < PIPE_MAX_COLOR_BUFS; ++rt) {
-      struct pipe_surface *surf = batch->key.cbufs[rt];
+      const struct pipe_surface *surf = &batch->key.cbufs[rt];
 
-      if (surf == NULL)
+      if (surf->texture == NULL)
          continue;
 
       if (store) {
@@ -3178,8 +3181,8 @@ agx_build_bg_eot(struct agx_batch *batch, bool store, bool partial_render)
 
          struct agx_ptr texture =
             agx_pool_alloc_aligned(&batch->pool, AGX_TEXTURE_LENGTH, 64);
-         struct pipe_surface *surf = batch->key.cbufs[rt];
-         assert(surf != NULL && "cannot load nonexistent attachment");
+         const struct pipe_surface *surf = &batch->key.cbufs[rt];
+         assert(surf->texture != NULL && "cannot load nonexistent attachment");
 
          struct agx_resource *rsrc = agx_resource(surf->texture);
          struct pipe_sampler_view sampler_view = sampler_view_for_surface(surf);
@@ -3200,7 +3203,7 @@ agx_build_bg_eot(struct agx_batch *batch, bool store, bool partial_render)
          uniforms = MAX2(uniforms, 4 + (8 * rt) + 8);
       } else if (key.op[rt] == AGX_EOT_STORE) {
          struct pipe_image_view view =
-            image_view_for_surface(batch->key.cbufs[rt]);
+            image_view_for_surface(&batch->key.cbufs[rt]);
          struct agx_ptr pbe =
             agx_pool_alloc_aligned(&batch->pool, AGX_PBE_LENGTH, 256);
 
@@ -3403,9 +3406,7 @@ agx_batch_init_state(struct agx_batch *batch)
    /* Choose a tilebuffer layout given the framebuffer key */
    enum pipe_format formats[PIPE_MAX_COLOR_BUFS] = {0};
    for (unsigned i = 0; i < batch->key.nr_cbufs; ++i) {
-      struct pipe_surface *surf = batch->key.cbufs[i];
-      if (surf)
-         formats[i] = surf->format;
+      formats[i] = batch->key.cbufs[i].format;
    }
 
    batch->tilebuffer_layout = agx_build_tilebuffer_layout(
@@ -3424,13 +3425,13 @@ agx_batch_init_state(struct agx_batch *batch)
          if (!batch->tilebuffer_layout.spilled[i])
             continue;
 
-         struct pipe_surface *surf = batch->key.cbufs[i];
-         if (!surf)
+         struct pipe_surface *surf = &batch->key.cbufs[i];
+         if (!surf->texture)
             continue;
 
          struct agx_resource *rsrc = agx_resource(surf->texture);
          struct ail_layout *layout = &rsrc->layout;
-         unsigned level = surf->u.tex.level;
+         unsigned level = surf->level;
 
          if (!ail_is_level_compressed(layout, level))
             continue;
@@ -3443,9 +3444,9 @@ agx_batch_init_state(struct agx_batch *batch)
       }
    }
 
-   if (batch->key.zsbuf) {
-      unsigned level = batch->key.zsbuf->u.tex.level;
-      struct agx_resource *rsrc = agx_resource(batch->key.zsbuf->texture);
+   if (batch->key.zsbuf.texture) {
+      unsigned level = batch->key.zsbuf.level;
+      struct agx_resource *rsrc = agx_resource(batch->key.zsbuf.texture);
 
       agx_batch_writes(batch, rsrc, level);
 
@@ -3454,9 +3455,9 @@ agx_batch_init_state(struct agx_batch *batch)
    }
 
    for (unsigned i = 0; i < batch->key.nr_cbufs; ++i) {
-      if (batch->key.cbufs[i]) {
-         struct agx_resource *rsrc = agx_resource(batch->key.cbufs[i]->texture);
-         unsigned level = batch->key.cbufs[i]->u.tex.level;
+      if (batch->key.cbufs[i].texture) {
+         struct agx_resource *rsrc = agx_resource(batch->key.cbufs[i].texture);
+         unsigned level = batch->key.cbufs[i].level;
 
          if (agx_resource_valid(rsrc, level))
             batch->load |= PIPE_CLEAR_COLOR0 << i;
@@ -4834,7 +4835,7 @@ agx_legalize_feedback_loop_surf(struct agx_context *ctx,
                                 struct agx_resource *rsrc,
                                 struct pipe_surface *surf, unsigned bit)
 {
-   if (!surf || agx_resource(surf->texture) != rsrc || !rsrc->layout.compressed)
+   if (agx_resource(surf->texture) != rsrc || !rsrc->layout.compressed)
       return;
 
    /* Decompress if we can and shadow if we can't. */
@@ -4882,11 +4883,11 @@ agx_legalize_feedback_loops(struct agx_context *ctx)
 
          for (unsigned cb = 0; cb < ctx->framebuffer.nr_cbufs; ++cb) {
             agx_legalize_feedback_loop_surf(
-               ctx, rsrc, ctx->framebuffer.cbufs[cb], PIPE_CLEAR_COLOR0 << i);
+               ctx, rsrc, &ctx->framebuffer.cbufs[cb], PIPE_CLEAR_COLOR0 << i);
          }
 
          /* TODO: Separate stencil? */
-         agx_legalize_feedback_loop_surf(ctx, rsrc, ctx->framebuffer.zsbuf,
+         agx_legalize_feedback_loop_surf(ctx, rsrc, &ctx->framebuffer.zsbuf,
                                          PIPE_CLEAR_DEPTH);
       }
    }
@@ -5515,7 +5516,7 @@ agx_decompress_inplace(struct agx_batch *batch, struct pipe_surface *surf,
    struct agx_device *dev = agx_device(ctx->base.screen);
    struct agx_resource *rsrc = agx_resource(surf->texture);
    struct ail_layout *layout = &rsrc->layout;
-   unsigned level = surf->u.tex.level;
+   unsigned level = surf->level;
 
    perf_debug(dev, "Decompressing in-place due to: %s", reason);
 
@@ -5536,10 +5537,10 @@ agx_decompress_inplace(struct agx_batch *batch, struct pipe_surface *surf,
    struct agx_grid grid =
       agx_3d(ail_metadata_width_tl(layout, level) * 32,
              ail_metadata_height_tl(layout, level),
-             surf->u.tex.last_layer - surf->u.tex.first_layer + 1);
+             surf->last_layer - surf->first_layer + 1);
 
    libagx_decompress(batch, grid, AGX_BARRIER_ALL, layout,
-                     surf->u.tex.first_layer, level,
+                     surf->first_layer, level,
                      agx_map_texture_gpu(rsrc, 0), images.gpu);
 }
 

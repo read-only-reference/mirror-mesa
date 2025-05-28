@@ -46,13 +46,14 @@
 #include "drm-uapi/panfrost_drm.h"
 
 #include "decode.h"
+#include "pan_afbc.h"
+#include "pan_afrc.h"
 #include "pan_bo.h"
 #include "pan_fence.h"
 #include "pan_public.h"
 #include "pan_resource.h"
 #include "pan_screen.h"
 #include "pan_shader.h"
-#include "pan_texture.h"
 #include "pan_util.h"
 
 #include "pan_context.h"
@@ -61,24 +62,24 @@
 
 /* clang-format off */
 static const struct debug_named_value panfrost_debug_options[] = {
-   {"perf",       PAN_DBG_PERF,     "Enable performance warnings"},
-   {"trace",      PAN_DBG_TRACE,    "Trace the command stream"},
-   {"dirty",      PAN_DBG_DIRTY,    "Always re-emit all state"},
-   {"sync",       PAN_DBG_SYNC,     "Wait for each job's completion and abort on GPU faults"},
-   {"nofp16",     PAN_DBG_NOFP16,    "Disable 16-bit support"},
-   {"gl3",        PAN_DBG_GL3,      "Enable experimental GL 3.x implementation, up to 3.3"},
-   {"noafbc",     PAN_DBG_NO_AFBC,  "Disable AFBC support"},
-   {"nocrc",      PAN_DBG_NO_CRC,   "Disable transaction elimination"},
-   {"msaa16",     PAN_DBG_MSAA16,   "Enable MSAA 8x and 16x support"},
-   {"linear",     PAN_DBG_LINEAR,   "Force linear textures"},
-   {"nocache",    PAN_DBG_NO_CACHE, "Disable BO cache"},
-   {"dump",       PAN_DBG_DUMP,     "Dump all graphics memory"},
+   {"perf",       PAN_DBG_PERF,       "Enable performance warnings"},
+   {"trace",      PAN_DBG_TRACE,      "Trace the command stream"},
+   {"dirty",      PAN_DBG_DIRTY,      "Always re-emit all state"},
+   {"sync",       PAN_DBG_SYNC,       "Wait for each job's completion and abort on GPU faults"},
+   {"nofp16",     PAN_DBG_NOFP16,     "Disable 16-bit support"},
+   {"gl3",        PAN_DBG_GL3,        "Enable experimental GL 3.x implementation, up to 3.3"},
+   {"noafbc",     PAN_DBG_NO_AFBC,    "Disable AFBC support"},
+   {"nocrc",      PAN_DBG_NO_CRC,     "Disable transaction elimination"},
+   {"msaa16",     PAN_DBG_MSAA16,     "Enable MSAA 8x and 16x support"},
+   {"linear",     PAN_DBG_LINEAR,     "Force linear textures"},
+   {"nocache",    PAN_DBG_NO_CACHE,   "Disable BO cache"},
+   {"dump",       PAN_DBG_DUMP,       "Dump all graphics memory"},
 #ifdef PAN_DBG_OVERFLOW
-   {"overflow",   PAN_DBG_OVERFLOW, "Check for buffer overflows in pool uploads"},
+   {"overflow",   PAN_DBG_OVERFLOW,   "Check for buffer overflows in pool uploads"},
 #endif
-   {"yuv",        PAN_DBG_YUV,      "Tint YUV textures with blue for 1-plane and green for 2-plane"},
-   {"forcepack",  PAN_DBG_FORCE_PACK,  "Force packing of AFBC textures on upload"},
-   {"cs",         PAN_DBG_CS,       "Enable extra checks in command stream"},
+   {"yuv",        PAN_DBG_YUV,        "Tint YUV textures with blue for 1-plane and green for 2-plane"},
+   {"forcepack",  PAN_DBG_FORCE_PACK, "Force packing of AFBC textures on upload"},
+   {"cs",         PAN_DBG_CS,         "Enable extra checks in command stream"},
    DEBUG_NAMED_VALUE_END
 };
 /* clang-format on */
@@ -125,13 +126,35 @@ from_kmod_group_allow_priority_flags(
 static uint32_t
 pipe_to_pan_bind_flags(uint32_t pipe_bind_flags)
 {
-   static_assert(PIPE_BIND_DEPTH_STENCIL == PAN_BIND_DEPTH_STENCIL, "");
-   static_assert(PIPE_BIND_RENDER_TARGET == PAN_BIND_RENDER_TARGET, "");
-   static_assert(PIPE_BIND_SAMPLER_VIEW == PAN_BIND_SAMPLER_VIEW, "");
-   static_assert(PIPE_BIND_VERTEX_BUFFER == PAN_BIND_VERTEX_BUFFER, "");
+   uint32_t pan_bind_flags = 0;
 
-   return pipe_bind_flags & (PAN_BIND_DEPTH_STENCIL | PAN_BIND_RENDER_TARGET |
-                             PAN_BIND_VERTEX_BUFFER | PAN_BIND_SAMPLER_VIEW);
+   if (pipe_bind_flags & PIPE_BIND_DEPTH_STENCIL)
+      pan_bind_flags |= PAN_BIND_DEPTH_STENCIL;
+   if (pipe_bind_flags & PIPE_BIND_RENDER_TARGET)
+      pan_bind_flags |= PAN_BIND_RENDER_TARGET;
+   if (pipe_bind_flags & PIPE_BIND_VERTEX_BUFFER)
+      pan_bind_flags |= PAN_BIND_VERTEX_BUFFER;
+   if (pipe_bind_flags & PIPE_BIND_SAMPLER_VIEW)
+      pan_bind_flags |= PAN_BIND_SAMPLER_VIEW;
+
+   return pan_bind_flags;
+}
+
+static unsigned
+get_max_msaa(struct panfrost_device *dev, enum pipe_format format)
+{
+   unsigned max_tib_size = pan_get_max_tib_size(dev->arch, dev->model);
+   unsigned max_cbuf_atts = pan_get_max_cbufs(dev->arch, max_tib_size);
+   unsigned format_size = util_format_get_blocksize(format);
+
+   unsigned max_msaa = pan_get_max_msaa(dev->arch, max_tib_size,
+                                        max_cbuf_atts, format_size);
+   assert(format_size > 16 || max_msaa >= 4);
+
+   if (dev->model->quirks.max_4x_msaa)
+      max_msaa = 4;
+
+   return max_msaa;
 }
 
 /**
@@ -148,6 +171,11 @@ panfrost_is_format_supported(struct pipe_screen *screen,
 {
    struct panfrost_device *dev = pan_device(screen);
 
+   unsigned max_msaa = get_max_msaa(dev, format);
+   if (!util_is_power_of_two_or_zero(sample_count) ||
+       MAX2(sample_count, 1) > max_msaa)
+      return false;
+
    /* MSAA 2x gets rounded up to 4x. MSAA 8x/16x only supported on v5+.
     * TODO: debug MSAA 8x/16x */
 
@@ -156,6 +184,11 @@ panfrost_is_format_supported(struct pipe_screen *screen,
    case 1:
    case 4:
       break;
+   case 2:
+      if (dev->arch >= 12)
+         break;
+      else
+         return false;
    case 8:
    case 16:
       if (dev->debug & PAN_DBG_MSAA16)
@@ -176,7 +209,7 @@ panfrost_is_format_supported(struct pipe_screen *screen,
    /* Check we support the format with the given bind */
 
    unsigned pan_bind_flags = pipe_to_pan_bind_flags(bind);
-   struct panfrost_format fmt = dev->formats[format];
+   struct pan_format fmt = dev->formats[format];
    unsigned fmt_bind_flags = fmt.bind;
 
    /* Also check that compressed texture formats are supported on this
@@ -222,7 +255,7 @@ panfrost_query_compression_rates(struct pipe_screen *screen,
       return;
    }
 
-   *count = panfrost_afrc_query_rates(format, max, rates);
+   *count = pan_afrc_query_rates(format, max, rates);
 }
 
 /* We always support linear and tiled operations, both external and internal.
@@ -238,45 +271,46 @@ panfrost_walk_dmabuf_modifiers(struct pipe_screen *screen,
    /* Query AFBC status */
    struct panfrost_device *dev = pan_device(screen);
    bool afbc =
-      dev->has_afbc && panfrost_format_supports_afbc(dev->arch, format);
-   bool ytr = panfrost_afbc_can_ytr(format);
-   bool tiled_afbc = panfrost_afbc_can_tile(dev->arch);
-   bool afrc = allow_afrc && dev->has_afrc && panfrost_format_supports_afrc(format);
+      dev->has_afbc && pan_format_supports_afbc(dev->arch, format);
+   bool ytr = pan_afbc_can_ytr(format);
+   bool tiled_afbc = pan_afbc_can_tile(dev->arch);
+   bool afrc = allow_afrc && dev->has_afrc && pan_format_supports_afrc(format);
+   PAN_SUPPORTED_MODIFIERS(supported_mods);
 
    unsigned count = 0;
 
-   for (unsigned i = 0; i < PAN_MODIFIER_COUNT; ++i) {
-      if (drm_is_afbc(pan_best_modifiers[i])) {
+   for (unsigned i = 0; i < ARRAY_SIZE(supported_mods); ++i) {
+      if (drm_is_afbc(supported_mods[i])) {
          if (!afbc)
             continue;
 
-         if ((pan_best_modifiers[i] & AFBC_FORMAT_MOD_SPLIT) &&
-             !panfrost_afbc_can_split(dev->arch, format, pan_best_modifiers[i]))
+         if ((supported_mods[i] & AFBC_FORMAT_MOD_SPLIT) &&
+             !pan_afbc_can_split(dev->arch, format, supported_mods[i]))
             continue;
 
-         if ((pan_best_modifiers[i] & AFBC_FORMAT_MOD_YTR) && !ytr)
+         if ((supported_mods[i] & AFBC_FORMAT_MOD_YTR) && !ytr)
             continue;
 
-         if ((pan_best_modifiers[i] & AFBC_FORMAT_MOD_TILED) && !tiled_afbc)
+         if ((supported_mods[i] & AFBC_FORMAT_MOD_TILED) && !tiled_afbc)
             continue;
       }
 
-      if (drm_is_afrc(pan_best_modifiers[i]) && !afrc)
+      if (drm_is_afrc(supported_mods[i]) && !afrc)
          continue;
 
-      if (drm_is_mtk_tiled(format, pan_best_modifiers[i]) &&
-          !panfrost_format_supports_mtk_tiled(format))
+      if (drm_is_mtk_tiled(supported_mods[i]) &&
+          !pan_format_supports_mtk_tiled(format))
          continue;
 
       if (test_modifier != DRM_FORMAT_MOD_INVALID &&
-          test_modifier != pan_best_modifiers[i])
+          test_modifier != supported_mods[i])
          continue;
 
       if (max > (int)count) {
-         modifiers[count] = pan_best_modifiers[i];
+         modifiers[count] = supported_mods[i];
 
          if (external_only)
-            external_only[count] = drm_is_mtk_tiled(format, modifiers[count]);
+            external_only[count] = drm_is_mtk_tiled(modifiers[count]);
       }
       count++;
    }
@@ -309,7 +343,7 @@ panfrost_query_compression_modifiers(struct pipe_screen *screen,
                                      DRM_FORMAT_MOD_INVALID,
                                      false /* disallow afrc */);
    else if (dev->has_afrc)
-      *count = panfrost_afrc_get_modifiers(format, rate, max, modifiers);
+      *count = pan_afrc_get_modifiers(format, rate, max, modifiers);
    else
       *count = 0;  /* compression requested but not supported */
 }
@@ -380,6 +414,7 @@ panfrost_init_shader_caps(struct panfrost_screen *screen)
       caps->glsl_16bit_consts = !is_nofp16;
       caps->fp16_derivatives =
       caps->fp16_const_buffers = dev->arch >= 6 && !is_nofp16;
+      caps->glsl_16bit_load_dst = true;
       /* Blocked on https://gitlab.freedesktop.org/mesa/mesa/-/issues/6075 */
       caps->int16 = false;
       STATIC_ASSERT(PIPE_MAX_SAMPLERS < 0x10000);
@@ -446,20 +481,17 @@ panfrost_init_compute_caps(struct panfrost_screen *screen)
     * things so it matches kmod VA range limitations.
     */
    uint64_t user_va_start =
-      panfrost_clamp_to_usable_va_range(dev->kmod.dev, PAN_VA_USER_START);
+      pan_clamp_to_usable_va_range(dev->kmod.dev, PAN_VA_USER_START);
    uint64_t user_va_end =
-      panfrost_clamp_to_usable_va_range(dev->kmod.dev, PAN_VA_USER_END);
+      pan_clamp_to_usable_va_range(dev->kmod.dev, PAN_VA_USER_END);
 
    /* We cannot support more than the VA limit */
    caps->max_global_size =
    caps->max_mem_alloc_size = MIN2(available_ram, user_va_end - user_va_start);
 
    caps->max_local_size = 32768;
-   caps->max_private_size =
-   caps->max_input_size = 4096;
    caps->max_clock_frequency = 800; /* MHz -- TODO */
    caps->max_compute_units = dev->core_count;
-   caps->images_supported = true;
    caps->subgroup_sizes = pan_subgroup_size(dev->arch);
    caps->max_variable_threads_per_block = 1024; // TODO
 }
@@ -476,8 +508,8 @@ panfrost_init_screen_caps(struct panfrost_screen *screen)
    /* Our GL 3.x implementation is WIP */
    bool is_gl3 = dev->debug & PAN_DBG_GL3;
 
-   /* Native MRT is introduced with v5 */
-   bool has_mrt = (dev->arch >= 5);
+   unsigned max_tib_size =
+      pan_get_max_tib_size(dev->arch, dev->model);
 
    caps->npot_textures = true;
    caps->mixed_color_depth_bits = true;
@@ -501,7 +533,7 @@ panfrost_init_screen_caps(struct panfrost_screen *screen)
                                             : PIPE_POINT_SIZE_LOWER_NEVER;
 
    caps->max_render_targets =
-   caps->fbfetch = has_mrt ? 8 : 1;
+   caps->fbfetch = pan_get_max_cbufs(dev->arch, max_tib_size);
    caps->fbfetch_coherent = true;
 
    caps->max_dual_source_render_targets = 1;
@@ -725,7 +757,6 @@ panfrost_destroy_screen(struct pipe_screen *pscreen)
    panfrost_resource_screen_destroy(pscreen);
    panfrost_pool_cleanup(&screen->mempools.bin);
    panfrost_pool_cleanup(&screen->mempools.desc);
-   pan_blend_shader_cache_cleanup(&dev->blend_shaders);
 
    if (screen->vtbl.screen_destroy)
       screen->vtbl.screen_destroy(pscreen);
@@ -743,7 +774,7 @@ panfrost_screen_get_compiler_options(struct pipe_screen *pscreen,
                                      enum pipe_shader_ir ir,
                                      enum pipe_shader_type shader)
 {
-   return pan_screen(pscreen)->vtbl.get_compiler_options();
+   return pan_shader_get_compiler_options(pan_screen(pscreen)->dev.arch);
 }
 
 static struct disk_cache *
@@ -905,8 +936,6 @@ panfrost_create_screen(int fd, const struct pipe_screen_config *config,
       panfrost_query_compression_modifiers;
 
    panfrost_resource_screen_init(&screen->base);
-   pan_blend_shader_cache_init(&dev->blend_shaders,
-                               panfrost_device_gpu_id(dev));
 
    panfrost_init_shader_caps(screen);
    panfrost_init_compute_caps(screen);

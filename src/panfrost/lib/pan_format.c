@@ -78,7 +78,7 @@
       BFMT2(pipe##_SRGB, R8G8B8A8, writeback, 1)
 
 const struct pan_blendable_format
-   GENX(panfrost_blendable_formats)[PIPE_FORMAT_COUNT] = {
+   GENX(pan_blendable_formats)[PIPE_FORMAT_COUNT] = {
       BFMT_SRGB(L8, R8),
       BFMT_SRGB(L8A8, R8G8),
       BFMT_SRGB(R8, R8),
@@ -174,7 +174,7 @@ const struct pan_blendable_format
 #endif
 
 /* clang-format off */
-const struct panfrost_format GENX(panfrost_pipe_format)[PIPE_FORMAT_COUNT] = {
+const struct pan_format GENX(pan_pipe_format)[PIPE_FORMAT_COUNT] = {
    FMT(NONE,                    CONSTANT,        0000, L, VTR_I),
 
 #if PAN_ARCH >= 7
@@ -226,30 +226,30 @@ const struct panfrost_format GENX(panfrost_pipe_format)[PIPE_FORMAT_COUNT] = {
    /* If ASTC decode mode is set to RGBA8, the hardware format
     * will be overriden to RGBA8_UNORM later on.
     */
-   FMTC(ASTC_4x4,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_5x4,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_5x5,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_6x5,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_6x6,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_8x5,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_8x6,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_8x8,                ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_10x5,               ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_10x6,               ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_10x8,               ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_10x10,              ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_12x10,              ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_12x12,              ASTC_2D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_3x3x3,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_4x3x3,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_4x4x3,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_4x4x4,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_5x4x4,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_5x5x4,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_5x5x5,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_6x5x5,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_6x6x5,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
-   FMTC(ASTC_6x6x6,              ASTC_3D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_4x4,                ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x4,                ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x5,                ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x5,                ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x6,                ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_8x5,                ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_8x6,                ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_8x8,                ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x5,               ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x6,               ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x8,               ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x10,              ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_12x10,              ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_12x12,              ASTC_2D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_3x3x3,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_4x3x3,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_4x4x3,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_4x4x4,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x4x4,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x5x4,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x5x5,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x5x5,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x6x5,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x6x6,              ASTC_3D_LDR,     RGBA16F,     RGBA, L),
 
    /* By definition, sRGB formats are narrow */
    FMTC(ASTC_4x4_SRGB,           ASTC_2D_LDR,     RGBA8_UNORM, RGBA, S),
@@ -276,6 +276,21 @@ const struct panfrost_format GENX(panfrost_pipe_format)[PIPE_FORMAT_COUNT] = {
    FMTC(ASTC_6x5x5_SRGB,         ASTC_3D_LDR,     RGBA8_UNORM, RGBA, S),
    FMTC(ASTC_6x6x5_SRGB,         ASTC_3D_LDR,     RGBA8_UNORM, RGBA, S),
    FMTC(ASTC_6x6x6_SRGB,         ASTC_3D_LDR,     RGBA8_UNORM, RGBA, S),
+
+   FMTC(ASTC_4x4_FLOAT,          ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x4_FLOAT,          ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_5x5_FLOAT,          ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x5_FLOAT,          ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_6x6_FLOAT,          ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_8x5_FLOAT,          ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_8x6_FLOAT,          ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_8x8_FLOAT,          ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x5_FLOAT,         ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x6_FLOAT,         ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x8_FLOAT,         ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_10x10_FLOAT,        ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_12x10_FLOAT,        ASTC_2D_HDR,     RGBA16F,     RGBA, L),
+   FMTC(ASTC_12x12_FLOAT,        ASTC_2D_HDR,     RGBA16F,     RGBA, L),
 
    FMT(R5G6B5_UNORM,            RGB565,          RGB1, L, VTR_I),
    FMT(B5G6R5_UNORM,            RGB565,          BGR1, L, VTR_I),
@@ -566,6 +581,27 @@ const struct panfrost_format GENX(panfrost_pipe_format)[PIPE_FORMAT_COUNT] = {
 #endif
 };
 /* clang-format on */
+
+/* This is only needed on Midgard. It's the same on both v4 and v5, so only
+ * compile once to avoid the GenXML dependency for calls.
+ */
+#if PAN_ARCH == 5
+uint8_t
+pan_raw_format_mask_midgard(enum pipe_format *formats)
+{
+   uint8_t out = 0;
+
+   for (unsigned i = 0; i < 8; i++) {
+      enum pipe_format fmt = formats[i];
+      unsigned wb_fmt = pan_blendable_formats_v6[fmt].writeback;
+
+      if (wb_fmt < MALI_COLOR_FORMAT_R8)
+         out |= BITFIELD_BIT(i);
+   }
+
+   return out;
+}
+#endif
 
 #if PAN_ARCH == 7 || PAN_ARCH >= 10
 /*

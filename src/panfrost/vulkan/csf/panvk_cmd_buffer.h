@@ -94,6 +94,7 @@ struct panvk_cs_subqueue_context {
    uint64_t syncobjs;
    uint32_t iter_sb;
    uint32_t pad;
+   uint64_t reg_dump_addr;
    struct {
       struct panvk_cs_desc_ringbuf desc_ringbuf;
       uint64_t tiler_heap;
@@ -105,7 +106,6 @@ struct panvk_cs_subqueue_context {
       uint64_t fbds[PANVK_IR_PASS_COUNT];
       uint32_t td_count;
       uint32_t layer_count;
-      uint64_t reg_dump_addr;
    } tiler_oom_ctx;
    struct {
       uint64_t syncobjs;
@@ -147,20 +147,18 @@ enum panvk_sb_ids {
 #define SB_ID(nm)       PANVK_SB_##nm
 #define SB_ITER(x)      (PANVK_SB_ITER_START + (x))
 #define SB_WAIT_ITER(x) BITFIELD_BIT(PANVK_SB_ITER_START + (x))
-#define SB_ALL_ITERS_MASK                                                      \
-   BITFIELD_RANGE(PANVK_SB_ITER_START, PANVK_SB_ITER_COUNT)
-#define SB_ALL_MASK     BITFIELD_MASK(8)
-
-static inline uint32_t
-next_iter_sb(uint32_t sb)
-{
-   return sb + 1 < PANVK_SB_ITER_COUNT ? sb + 1 : 0;
-}
 
 enum panvk_cs_regs {
    /* RUN_IDVS staging regs. */
    PANVK_CS_REG_RUN_IDVS_SR_START = 0,
+
+#if PAN_ARCH >= 12
+   PANVK_CS_REG_RUN_IDVS_SR_END = 65,
+#elif PAN_ARCH == 11
+   PANVK_CS_REG_RUN_IDVS_SR_END = 63,
+#else
    PANVK_CS_REG_RUN_IDVS_SR_END = 60,
+#endif
 
    /* RUN_FRAGMENT staging regs.
     * SW ABI:
@@ -178,6 +176,17 @@ enum panvk_cs_regs {
     * all queues. Note that some queues have extra space they can use
     * as scratch space.*/
    PANVK_CS_REG_SCRATCH_START = 66,
+
+   /* On v12+, we have 128 registers so that gives us way more space to work with */
+#if PAN_ARCH >= 12
+   PANVK_CS_REG_SCRATCH_END = 115,
+
+   /* Driver context. */
+   PANVK_CS_REG_PROGRESS_SEQNO_START = 116,
+   PANVK_CS_REG_PROGRESS_SEQNO_END = 121,
+   PANVK_CS_REG_SUBQUEUE_CTX_START = 122,
+   PANVK_CS_REG_SUBQUEUE_CTX_END = 123,
+#else
    PANVK_CS_REG_SCRATCH_END = 83,
 
    /* Driver context. */
@@ -185,6 +194,7 @@ enum panvk_cs_regs {
    PANVK_CS_REG_PROGRESS_SEQNO_END = 89,
    PANVK_CS_REG_SUBQUEUE_CTX_START = 90,
    PANVK_CS_REG_SUBQUEUE_CTX_END = 91,
+#endif
 };
 
 #define CS_REG_SCRATCH_COUNT                                                   \
@@ -231,8 +241,6 @@ struct panvk_cs_reg_upd_context {
 
 struct panvk_cs_state {
    struct cs_builder builder;
-
-   struct cs_load_store_tracker ls_tracker;
 
    /* Used to debug register writes in invalid contexts. */
    struct {
@@ -349,7 +357,7 @@ panvk_cs_reg_whitelist(cmdbuf_regs, {PANVK_CS_REG_RUN_IDVS_SR_START,
 #define cs_update_cmdbuf_regs(__b) panvk_cs_reg_upd_ctx(__b, cmdbuf_regs)
 
 struct panvk_tls_state {
-   struct panfrost_ptr desc;
+   struct pan_ptr desc;
    struct pan_tls_info info;
    unsigned max_wg_count;
 };
@@ -377,6 +385,14 @@ struct panvk_cmd_buffer {
 
 VK_DEFINE_HANDLE_CASTS(panvk_cmd_buffer, vk.base, VkCommandBuffer,
                        VK_OBJECT_TYPE_COMMAND_BUFFER)
+
+static inline uint32_t
+next_iter_sb(struct panvk_cmd_buffer *cmdbuf, uint32_t sb)
+{
+   struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
+
+   return sb + 1 < dev->csf.sb.iter_count ? sb + 1 : 0;
+}
 
 static bool
 inherits_render_ctx(struct panvk_cmd_buffer *cmdbuf)
@@ -436,7 +452,7 @@ panvk_per_arch(calculate_task_axis_and_increment)(
     * utilization. */
    unsigned threads_per_wg = shader->cs.local_size.x * shader->cs.local_size.y *
                              shader->cs.local_size.z;
-   unsigned max_thread_cnt = panfrost_compute_max_thread_count(
+   unsigned max_thread_cnt = pan_compute_max_thread_count(
       &phys_dev->kmod.props, shader->info.work_reg_count);
    unsigned threads_per_task = threads_per_wg;
    unsigned local_size[3] = {

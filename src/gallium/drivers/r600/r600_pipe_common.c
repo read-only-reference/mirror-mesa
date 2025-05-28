@@ -622,7 +622,7 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 	if (!rctx->b.const_uploader)
 		return false;
 
-	rctx->ctx = rctx->ws->ctx_create(rctx->ws, RADEON_CTX_PRIORITY_MEDIUM, false);
+	rctx->ctx = rctx->ws->ctx_create(rctx->ws, context_flags);
 	if (!rctx->ctx)
 		return false;
 
@@ -806,54 +806,6 @@ static int r600_get_video_param(struct pipe_screen *screen,
 		return vl_level_supported(screen, profile);
 	default:
 		return 0;
-	}
-}
-
-const char *r600_get_llvm_processor_name(enum radeon_family family)
-{
-	switch (family) {
-	case CHIP_R600:
-	case CHIP_RV630:
-	case CHIP_RV635:
-	case CHIP_RV670:
-		return "r600";
-	case CHIP_RV610:
-	case CHIP_RV620:
-	case CHIP_RS780:
-	case CHIP_RS880:
-		return "rs880";
-	case CHIP_RV710:
-		return "rv710";
-	case CHIP_RV730:
-		return "rv730";
-	case CHIP_RV740:
-	case CHIP_RV770:
-		return "rv770";
-	case CHIP_PALM:
-	case CHIP_CEDAR:
-		return "cedar";
-	case CHIP_SUMO:
-	case CHIP_SUMO2:
-		return "sumo";
-	case CHIP_REDWOOD:
-		return "redwood";
-	case CHIP_JUNIPER:
-		return "juniper";
-	case CHIP_HEMLOCK:
-	case CHIP_CYPRESS:
-		return "cypress";
-	case CHIP_BARTS:
-		return "barts";
-	case CHIP_TURKS:
-		return "turks";
-	case CHIP_CAICOS:
-		return "caicos";
-	case CHIP_CAYMAN:
-        case CHIP_ARUBA:
-		return "cayman";
-
-	default:
-		return "";
 	}
 }
 

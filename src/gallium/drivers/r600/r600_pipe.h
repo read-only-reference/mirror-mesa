@@ -17,6 +17,7 @@
 #include "util/list.h"
 #include "util/u_transfer.h"
 #include "util/u_memory.h"
+#include "util/u_framebuffer.h"
 
 #include "tgsi/tgsi_scan.h"
 
@@ -189,6 +190,7 @@ struct r600_cs_shader_state {
 
 struct r600_framebuffer {
 	struct r600_atom atom;
+	PIPE_FB_SURFACES; //STOP USING THIS
 	struct pipe_framebuffer_state state;
 	unsigned compressed_cb_mask;
 	unsigned nr_samples;
@@ -274,8 +276,9 @@ struct r600_rasterizer_state {
 	unsigned			pa_su_sc_mode_cntl;
 	float				offset_units;
 	float				offset_scale;
+	float				line_width;
+	float				max_point_size;
 	bool				offset_enable;
-	bool				offset_units_unscaled;
 	bool				scissor_enable;
 	bool				multisample_enable;
 	bool				clip_halfz;
@@ -287,7 +290,6 @@ struct r600_poly_offset_state {
 	enum pipe_format		zs_format;
 	float				offset_units;
 	float				offset_scale;
-	bool				offset_units_unscaled;
 };
 
 struct r600_blend_state {
@@ -484,6 +486,10 @@ struct r600_context {
 	struct r600_screen		*screen;
 	struct blitter_context		*blitter;
 	struct u_suballocator		allocator_fetch_shader;
+
+	/* blitter state */
+	void *vs_pos_only[4];
+	void *velem_state_readbuf[4]; /**< X, XY, XYZ, XYZW */
 
 	/* Hardware info. */
 	bool				has_vertex_cache;

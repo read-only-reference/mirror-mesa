@@ -226,6 +226,7 @@ index("nir_alu_type", "dest_type")
 # Source and destination data types for dpas_intel.  Needed here to
 # represent types that won't have a nir_alu_type.
 index("enum glsl_base_type", "src_base_type")
+index("enum glsl_base_type", "src_base_type2")
 index("enum glsl_base_type", "dest_base_type")
 
 # The swizzle mask for quad_swizzle_amd & masked_swizzle_amd
@@ -1621,6 +1622,10 @@ intrinsic("load_local_shared_r600", src_comp=[0], dest_comp=0, indices = [], fla
 store("local_shared_r600", [1], [WRITE_MASK])
 store("tf_r600", [])
 
+# these two definitions are aimed at r600 indirect per_vertex_input accesses
+intrinsic("r600_indirect_vertex_at_index", dest_comp=1, src_comp=[1], flags=[CAN_ELIMINATE, CAN_REORDER])
+load("r600_indirect_per_vertex_input", [1, 1], [BASE, RANGE, COMPONENT, DEST_TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
+
 # AMD GCN/RDNA specific intrinsics
 
 # This barrier is a hint that prevents moving the instruction that computes
@@ -1982,7 +1987,7 @@ intrinsic("strict_wqm_coord_amd", src_comp=[0], dest_comp=0, bit_sizes=[32], ind
           flags=[CAN_ELIMINATE])
 
 intrinsic("cmat_muladd_amd", src_comp=[-1, -1, 0], dest_comp=0, bit_sizes=src2,
-          indices=[SATURATE, NEG_LO_AMD, NEG_HI_AMD, CMAT_SIGNED_MASK], flags=[CAN_ELIMINATE])
+          indices=[SATURATE, NEG_LO_AMD, NEG_HI_AMD, SRC_BASE_TYPE, SRC_BASE_TYPE2], flags=[CAN_ELIMINATE])
 
 # Get the debug log buffer descriptor.
 intrinsic("load_debug_log_desc_amd", bit_sizes=[32], dest_comp=4, flags=[CAN_ELIMINATE, CAN_REORDER])
@@ -2303,6 +2308,15 @@ image("load_raw_intel", src_comp=[1], dest_comp=0,
       flags=[CAN_ELIMINATE])
 image("store_raw_intel", src_comp=[1, 0])
 
+# Maximum number of polygons processed in the fragment shader
+system_value("max_polygon_intel", 1, bit_sizes=[32])
+
+# Read the attribute thread payload at a given offset
+# src[] = { offset }
+intrinsic("read_attribute_payload_intel", dest_comp=1, bit_sizes=[32],
+          src_comp=[1],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
+
 # Number of data items being operated on for a SIMD program.
 system_value("simd_width_intel", 1)
 
@@ -2372,6 +2386,9 @@ load("shared_uniform_block_intel", [1], [BASE, ALIGN_MUL, ALIGN_OFFSET], [CAN_EL
 intrinsic("load_inline_data_intel", [], dest_comp=0,
           indices=[BASE],
           flags=[CAN_ELIMINATE, CAN_REORDER])
+
+# Dynamic fragment shader parameters.
+system_value("fs_msaa_intel", 1)
 
 # Intrinsics for Intel bindless thread dispatch
 # BASE=brw_topoloy_id
@@ -2446,6 +2463,8 @@ intrinsic("load_sysval_nv", dest_comp=1, src_comp=[], bit_sizes=[32, 64],
           indices=[ACCESS, BASE], flags=[CAN_ELIMINATE])
 intrinsic("isberd_nv", dest_comp=1, src_comp=[1], bit_sizes=[32],
           flags=[CAN_ELIMINATE, CAN_REORDER])
+intrinsic("vild_nv", dest_comp=1, src_comp=[1], bit_sizes=[32],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
 intrinsic("al2p_nv", dest_comp=1, src_comp=[1], bit_sizes=[32],
           indices=[BASE, FLAGS], flags=[CAN_ELIMINATE, CAN_REORDER])
 # src[] = { vtx, offset }.
@@ -2465,7 +2484,35 @@ intrinsic("ldtram_nv", dest_comp=2, bit_sizes=[32],
           indices=[BASE, FLAGS], flags=[CAN_ELIMINATE, CAN_REORDER])
 
 # NVIDIA-specific Image intrinsics
-image("load_raw_nv", src_comp=[4, 1, 1], extra_indices=[DEST_TYPE], dest_comp=0, flags=[CAN_ELIMINATE])
+# only used for kepler address calculations.
+intrinsic("image_deref_load_info_nv", dest_comp=0, src_comp=[-1], bit_sizes=[32],
+          indices=[BASE], flags=[CAN_ELIMINATE, CAN_REORDER])
+# FLAGS is struct nak_nir_suclamp_flags
+intrinsic("suclamp_nv", dest_comp=2, src_comp=[1, 1], bit_sizes=[32],
+          indices=[FLAGS], flags=[CAN_ELIMINATE, CAN_REORDER])
+# FLAGS is 1 if .is3d, otherwise 0
+intrinsic("subfm_nv", dest_comp=2, src_comp=[1, 1, 1], bit_sizes=[32],
+          indices=[FLAGS], flags=[CAN_ELIMINATE, CAN_REORDER])
+# src[] = { offset, bitfield, address }.
+intrinsic("sueau_nv", dest_comp=1, src_comp=[1, 1, 1], bit_sizes=[32],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
+# src0 * src1 + src2 (with variable bit sizes)
+# FLAGS is struct nak_nir_imadsp_flags
+intrinsic("imadsp_nv", dest_comp=1, src_comp=[1, 1, 1], bit_sizes=[32],
+          indices=[FLAGS], flags=[CAN_ELIMINATE, CAN_REORDER])
+# src[] = { address, fmt, pred }.
+# FORMAT describes how many bits to load from memory
+# FLAGS is enum nak_su_ga_offset_mode
+intrinsic("suldga_nv", dest_comp=0, src_comp=[2, 1, 1], bit_sizes=[32],
+          indices=[FORMAT, ACCESS, FLAGS], flags=[CAN_ELIMINATE])
+# src[] = { address, fmt, pred, data }.
+# FLAGS is enum nak_su_ga_offset_mode
+intrinsic("sustga_nv", src_comp=[2, 1, 1, 0],
+          indices=[ACCESS, FLAGS], bit_sizes=[32])
+# Nvidia Kepler specific load-lock store-unlock
+# used to lower shared atomics.
+intrinsic("load_shared_lock_nv", src_comp=[1], dest_comp=2)
+intrinsic("store_shared_unlock_nv", src_comp=[1, 1], dest_comp=1)
 
 # NVIDIA-specific Geometry Shader intrinsics.
 # These contain an additional integer source and destination with the primitive handle input/output.

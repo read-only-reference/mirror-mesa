@@ -333,6 +333,7 @@ struct gl_shader_compiler_options
    GLboolean LowerPrecisionInt16;
    GLboolean LowerPrecisionDerivatives;
    GLboolean LowerPrecisionFloat16Uniforms;
+   GLboolean LowerPrecision16BitLoadDst;
 
    /**
     * This enables lowering of 16b constants.  Some drivers may not
@@ -925,6 +926,9 @@ struct gl_constants
 
    /** Override GL_MAP_UNSYNCHRONIZED_BIT */
    bool ForceMapBufferSynchronized;
+
+   /** Override GL_DEPTH_COMPONENT type from unsigned short to unsigned int */
+   bool ForceDepthComponentTypeInt;
 
    /** GL_ARB_get_program_binary */
    GLuint NumProgramBinaryFormats;

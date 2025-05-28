@@ -29,7 +29,6 @@
 #include "util/u_range.h"
 #include "pan_minmax_cache.h"
 #include "pan_screen.h"
-#include "pan_texture.h"
 
 #define LAYOUT_CONVERT_THRESHOLD 8
 #define PAN_MAX_BATCHES          32
@@ -86,7 +85,7 @@ struct panfrost_resource {
    uint8_t stencil_value;
 
    /* Cached min/max values for index buffers */
-   struct panfrost_minmax_cache *index_cache;
+   struct pan_minmax_cache *index_cache;
 };
 
 static inline struct panfrost_resource *
@@ -138,6 +137,9 @@ enum {
    PAN_RENDER_CLEAR = PAN_SAVE_FRAGMENT_STATE | PAN_SAVE_FRAGMENT_CONSTANT,
 };
 
+/* Callers should ensure that all AFBC/AFRC resources that will be used in the
+ * blit operation are legalized before calling blitter operations, otherwise
+ * we may trigger a recursive blit */
 void panfrost_blitter_save(struct panfrost_context *ctx,
                            const enum panfrost_blitter_op blitter_op);
 

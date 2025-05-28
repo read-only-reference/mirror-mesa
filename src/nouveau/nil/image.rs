@@ -8,7 +8,7 @@ use crate::tiling::Tiling;
 use crate::Minify;
 
 use nil_rs_bindings::*;
-use nvidia_headers::classes::{cl9097, clc597};
+use nvidia_headers::classes::{cl9097, cla097, clb197, clc597};
 
 use std::panic;
 
@@ -225,7 +225,7 @@ impl Image {
     }
 
     fn new_linear(
-        _dev: &nil_rs_bindings::nv_device_info,
+        dev: &nil_rs_bindings::nv_device_info,
         info: &ImageInitInfo,
     ) -> Self {
         // Linear images need to be 2D
@@ -238,7 +238,7 @@ impl Image {
         assert!(info.samples == 1);
         let sample_layout = SampleLayout::_1x1;
 
-        let align_B = if info.explicit_row_stride_B > 0 {
+        let mut align_B = if info.explicit_row_stride_B > 0 {
             // If we're importing an image, allow smaller stride and offset
             // alignments.  The texture headers can handle as low as 32B-aligned
             // and NVK has workarounds for rendering if needed.
@@ -251,12 +251,19 @@ impl Image {
             128
         };
 
+        // Kepler image storage needs 256B-aligned addresses.
+        if dev.cls_eng3d >= cla097::KEPLER_A
+            && dev.cls_eng3d < clb197::MAXWELL_B
+        {
+            align_B = align_B.max(256);
+        }
+
         let extent_B = info.extent_px.to_B(info.format, sample_layout);
         let row_stride_B = if info.explicit_row_stride_B > 0 {
             debug_assert!(info.explicit_row_stride_B % align_B == 0);
             info.explicit_row_stride_B
         } else {
-            extent_B.width.next_multiple_of(128)
+            extent_B.width.next_multiple_of(align_B)
         };
         let level0 = ImageLevel {
             offset_B: 0,
@@ -271,7 +278,7 @@ impl Image {
             extent_px: info.extent_px,
             sample_layout,
             num_levels: info.levels,
-            levels: [ImageLevel::default(); MAX_LEVELS as usize],
+            levels: [ImageLevel::default(); MAX_LEVELS],
             array_stride_B: 0,
             align_B,
             size_B,
@@ -352,7 +359,7 @@ impl Image {
             extent_px: info.extent_px,
             sample_layout,
             num_levels: info.levels,
-            levels: [ImageLevel::default(); MAX_LEVELS as usize],
+            levels: [ImageLevel::default(); MAX_LEVELS],
             array_stride_B: 0,
             align_B: 0,
             size_B: 0,
@@ -434,8 +441,8 @@ impl Image {
             assert!(bl_mod.pte_kind() == image.pte_kind);
         }
 
-        image.tile_mode = u16::from(image.levels[0].tiling.y_log2) << 4
-            | u16::from(image.levels[0].tiling.z_log2) << 8;
+        image.tile_mode = (u16::from(image.levels[0].tiling.y_log2) << 4)
+            | (u16::from(image.levels[0].tiling.z_log2) << 8);
 
         image.align_B = std::cmp::max(image.align_B, 4096);
         if image.pte_kind >= 0xb && image.pte_kind <= 0xe {
@@ -632,7 +639,7 @@ impl Image {
             size_B -= next_lvl_offset_in_bytes - lvl.offset_B;
         }
 
-        let mut levels: [ImageLevel; MAX_LEVELS as usize] = Default::default();
+        let mut levels: [ImageLevel; MAX_LEVELS] = Default::default();
         levels[0] = lvl;
 
         *offset_in_bytes_out = lvl.offset_B;
@@ -938,9 +945,9 @@ impl Image {
         );
 
         let tiling_extent_B = lvl_tiling.extent_B();
-        let offset_B = offset_B
-            + u64::from(tiling_extent_B.width * tiling_extent_B.height * z_gob);
+
         offset_B
+            + u64::from(tiling_extent_B.width * tiling_extent_B.height * z_gob)
     }
 }
 

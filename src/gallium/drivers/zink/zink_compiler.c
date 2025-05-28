@@ -5472,7 +5472,8 @@ rework_io_vars(nir_shader *nir, nir_variable_mode mode, struct zink_shader *zs)
    uint64_t inputs_read = nir->info.inputs_read;
    uint64_t inputs_read_indirectly = nir->info.inputs_read_indirectly;
    uint64_t outputs_accessed = nir->info.outputs_written | nir->info.outputs_read;
-   uint64_t outputs_accessed_indirectly = nir->info.outputs_accessed_indirectly;
+   uint64_t outputs_accessed_indirectly = nir->info.outputs_read_indirectly |
+                                          nir->info.outputs_written_indirectly;
 
    /* fragment outputs are special: handle separately */
    if (mode == nir_var_shader_out && nir->info.stage == MESA_SHADER_FRAGMENT) {
@@ -5620,7 +5621,10 @@ rework_io_vars(nir_shader *nir, nir_variable_mode mode, struct zink_shader *zs)
    if ((nir->info.stage == MESA_SHADER_TESS_CTRL && mode == nir_var_shader_out) ||
        (nir->info.stage == MESA_SHADER_TESS_EVAL && mode == nir_var_shader_in)) {
       uint64_t patch_outputs_accessed = nir->info.patch_outputs_read | nir->info.patch_outputs_written;
-      uint64_t indirect_patch_mask = mode == nir_var_shader_in ? nir->info.patch_inputs_read_indirectly : nir->info.patch_outputs_accessed_indirectly;
+      uint64_t indirect_patch_mask =
+         mode == nir_var_shader_in ? nir->info.patch_inputs_read_indirectly
+                                   : (nir->info.patch_outputs_read_indirectly |
+                                      nir->info.patch_outputs_written_indirectly);
       uint64_t patch_mask = mode == nir_var_shader_in ? nir->info.patch_inputs_read : patch_outputs_accessed;
 
       loop_io_var_mask(nir, mode, true, true, indirect_patch_mask);
@@ -6457,13 +6461,11 @@ gfx_shader_prune(struct zink_screen *screen, struct zink_shader *shader)
       prog->base.removed = true;
       simple_mtx_unlock(&prog->base.ctx->program_lock[idx]);
 
-      for (unsigned r = 0; r < ARRAY_SIZE(prog->pipelines); r++) {
-         for (int i = 0; i < ARRAY_SIZE(prog->pipelines[0]); ++i) {
-            hash_table_foreach(&prog->pipelines[r][i], table_entry) {
-               struct zink_gfx_pipeline_cache_entry *pc_entry = table_entry->data;
+      for (int i = 0; i < ARRAY_SIZE(prog->pipelines); ++i) {
+         hash_table_foreach(&prog->pipelines[i], table_entry) {
+            struct zink_gfx_pipeline_cache_entry *pc_entry = table_entry->data;
 
-               util_queue_fence_wait(&pc_entry->fence);
-            }
+            util_queue_fence_wait(&pc_entry->fence);
          }
       }
    }

@@ -107,9 +107,9 @@ struct radeon_enc_pic {
    unsigned total_coloc_bytes;
    rvcn_enc_quality_modes_t quality_modes;
 
-   bool not_referenced;
    bool use_rc_per_pic_ex;
    bool av1_tile_splitting_legacy_flag;
+   bool has_dependent_slice_instructions;
 
    struct {
       union {
@@ -220,8 +220,6 @@ struct radeon_encoder {
    void (*mq_begin)(struct radeon_encoder *enc);
    void (*mq_encode)(struct radeon_encoder *enc);
    void (*mq_destroy)(struct radeon_encoder *enc);
-
-   unsigned stream_handle;
 
    struct pipe_screen *screen;
    struct radeon_winsys *ws;

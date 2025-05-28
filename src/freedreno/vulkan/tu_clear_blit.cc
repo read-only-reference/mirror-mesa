@@ -276,14 +276,13 @@ r2d_src(struct tu_cmd_buffer *cmd,
    if (filter != VK_FILTER_NEAREST)
       src_info |= A6XX_SP_PS_2D_SRC_INFO_FILTER;
 
-   enum a6xx_format fmt = (enum a6xx_format)(
-      src_info & A6XX_SP_PS_2D_SRC_INFO_COLOR_FORMAT__MASK);
+   enum a6xx_format fmt = (enum a6xx_format) pkt_field_get(
+      A6XX_SP_PS_2D_SRC_INFO_COLOR_FORMAT, src_info);
    enum pipe_format src_format = iview->format;
    fixup_src_format(&src_format, dst_format, &fmt);
 
    src_info =
-      (src_info & ~A6XX_SP_PS_2D_SRC_INFO_COLOR_FORMAT__MASK) |
-      A6XX_SP_PS_2D_SRC_INFO_COLOR_FORMAT(fmt);
+      pkt_field_set(A6XX_SP_PS_2D_SRC_INFO_COLOR_FORMAT, src_info, fmt);
 
    tu_cs_emit_pkt4(cs, SP_PS_2D_SRC_INFO(CHIP,).reg, 5);
    tu_cs_emit(cs, src_info);
@@ -397,13 +396,12 @@ r2d_dst(struct tu_cs *cs, const struct fdl6_view *iview, uint32_t layer,
         enum pipe_format src_format)
 {
    uint32_t dst_info = iview->RB_2D_DST_INFO;
-   enum a6xx_format fmt =
-      (enum a6xx_format)(dst_info & A6XX_RB_2D_DST_INFO_COLOR_FORMAT__MASK);
+   enum a6xx_format fmt = (enum a6xx_format) pkt_field_get(
+      A6XX_RB_2D_DST_INFO_COLOR_FORMAT, dst_info);
    enum pipe_format dst_format = iview->format;
    fixup_dst_format(src_format, &dst_format, &fmt);
 
-   dst_info =
-         (dst_info & ~A6XX_RB_2D_DST_INFO_COLOR_FORMAT__MASK) | fmt;
+   dst_info = pkt_field_set(A6XX_RB_2D_DST_INFO_COLOR_FORMAT, dst_info, fmt);
    tu_cs_emit_pkt4(cs, REG_A6XX_RB_2D_DST_INFO, 4);
    tu_cs_emit(cs, dst_info);
    tu_cs_image_ref_2d<CHIP>(cs, iview, layer, false);
@@ -1174,12 +1172,11 @@ r3d_src(struct tu_cmd_buffer *cmd,
    uint32_t desc[A6XX_TEX_CONST_DWORDS];
    memcpy(desc, iview->descriptor, sizeof(desc));
 
-   enum a6xx_format fmt = (enum a6xx_format)(
-      (desc[0] & A6XX_TEX_CONST_0_FMT__MASK) >> A6XX_TEX_CONST_0_FMT__SHIFT);
+   enum a6xx_format fmt =
+      (enum a6xx_format) pkt_field_get(A6XX_TEX_CONST_0_FMT, desc[0]);
    enum pipe_format src_format = iview->format;
    fixup_src_format(&src_format, dst_format, &fmt);
-   desc[0] = (desc[0] & ~A6XX_TEX_CONST_0_FMT__MASK) |
-      A6XX_TEX_CONST_0_FMT(fmt);
+   desc[0] = pkt_field_set(A6XX_TEX_CONST_0_FMT, desc[0], fmt);
 
    r3d_src_common(cmd, cs, desc,
                   iview->layer_size * layer,
@@ -1246,8 +1243,9 @@ r3d_src_depth(struct tu_cmd_buffer *cmd,
    desc[2] =
       A6XX_TEX_CONST_2_PITCH(iview->depth_pitch) |
       A6XX_TEX_CONST_2_TYPE(A6XX_TEX_2D);
-   desc[3] = A6XX_TEX_CONST_3_ARRAY_PITCH(iview->depth_layer_size) |
-      (iview->view.descriptor[3] & ~A6XX_TEX_CONST_3_ARRAY_PITCH__MASK);
+   desc[3] =
+      pkt_field_set(A6XX_TEX_CONST_3_ARRAY_PITCH, iview->view.descriptor[3],
+                    iview->depth_layer_size);
    desc[4] = va;
    desc[5] = va >> 32;
 
@@ -1305,11 +1303,13 @@ r3d_src_gmem_load(struct tu_cmd_buffer *cmd,
    if (format == PIPE_FORMAT_X24S8_UINT ||
        format == PIPE_FORMAT_Z24X8_UNORM ||
        format == PIPE_FORMAT_Z24_UNORM_S8_UINT) {
-      desc[0] &= ~A6XX_TEX_CONST_0_FMT__MASK;
+      enum a6xx_format tex_format;
       if (iview->view.ubwc_enabled)
-         desc[0] |= A6XX_TEX_CONST_0_FMT(FMT6_Z24_UNORM_S8_UINT_AS_R8G8B8A8);
+         tex_format = FMT6_Z24_UNORM_S8_UINT_AS_R8G8B8A8;
       else
-         desc[0] |= A6XX_TEX_CONST_0_FMT(FMT6_8_8_8_8_UNORM);
+         tex_format = FMT6_8_8_8_8_UNORM;
+
+      desc[0] = pkt_field_set(A6XX_TEX_CONST_0_FMT, desc[0], tex_format);
    }
 
    /* When loading/storing GMEM we always load the full image and don't do any
@@ -1359,24 +1359,21 @@ r3d_src_gmem(struct tu_cmd_buffer *cmd,
                A6XX_TEX_CONST_0_SWIZ_W(A6XX_TEX_W);
 
    /* patched for gmem */
-   desc[0] &= ~A6XX_TEX_CONST_0_TILE_MODE__MASK;
+   desc[0] = pkt_field_set(A6XX_TEX_CONST_0_TILE_MODE, desc[0], TILE6_2);
    if (!iview->view.is_mutable)
-      desc[0] &= ~A6XX_TEX_CONST_0_SWAP__MASK;
-   desc[0] |= A6XX_TEX_CONST_0_TILE_MODE(TILE6_2);
+      desc[0] = pkt_field_set(A6XX_TEX_CONST_0_SWAP, desc[0], WZYX);
 
    /* If FDM offset is used, the last row and column extend beyond the
     * framebuffer but are shifted over when storing. Expand the width and
     * height to account for that.
     */
    if (tu_enable_fdm_offset(cmd)) {
-      uint32_t width = desc[1] & A6XX_TEX_CONST_1_WIDTH__MASK;
-      uint32_t height = (desc[1] & A6XX_TEX_CONST_1_HEIGHT__MASK) >>
-         A6XX_TEX_CONST_1_HEIGHT__SHIFT;
+      uint32_t width = pkt_field_get(A6XX_TEX_CONST_1_WIDTH, desc[1]);
+      uint32_t height = pkt_field_get(A6XX_TEX_CONST_1_HEIGHT, desc[1]);
       width += cmd->state.tiling->tile0.width;
       height += cmd->state.tiling->tile0.height;
-      desc[1] = (desc[1] & ~(A6XX_TEX_CONST_1_WIDTH__MASK |
-                            A6XX_TEX_CONST_1_HEIGHT__MASK)) |
-         A6XX_TEX_CONST_1_WIDTH(width) | A6XX_TEX_CONST_1_HEIGHT(height);
+      desc[1] = pkt_field_set(A6XX_TEX_CONST_1_WIDTH, desc[1], width);
+      desc[1] = pkt_field_set(A6XX_TEX_CONST_1_HEIGHT, desc[1], height);
    }
 
    desc[2] =
@@ -1398,13 +1395,12 @@ r3d_dst(struct tu_cs *cs, const struct fdl6_view *iview, uint32_t layer,
 {
    uint32_t mrt_buf_info = iview->RB_MRT_BUF_INFO;
 
-   enum a6xx_format fmt = (enum a6xx_format)(
-      mrt_buf_info & A6XX_RB_MRT_BUF_INFO_COLOR_FORMAT__MASK);
+   enum a6xx_format fmt = (enum a6xx_format) pkt_field_get(
+      A6XX_RB_MRT_BUF_INFO_COLOR_FORMAT, mrt_buf_info);
    enum pipe_format dst_format = iview->format;
    fixup_dst_format(src_format, &dst_format, &fmt);
    mrt_buf_info =
-      (mrt_buf_info & ~A6XX_RB_MRT_BUF_INFO_COLOR_FORMAT__MASK) |
-      A6XX_RB_MRT_BUF_INFO_COLOR_FORMAT(fmt);
+      pkt_field_set(A6XX_RB_MRT_BUF_INFO_COLOR_FORMAT, mrt_buf_info, fmt);
 
    tu_cs_emit_regs(cs,
       RB_MRT_BUF_INFO(CHIP, 0, .dword = mrt_buf_info),
@@ -1512,8 +1508,8 @@ r3d_dst_gmem(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
                    A6XX_RB_MRT_BASE(0, 0),
                    A6XX_RB_MRT_BASE_GMEM(0, gmem_offset));
 
-   enum a6xx_format color_format =
-      (enum a6xx_format)(RB_MRT_BUF_INFO & A6XX_RB_MRT_BUF_INFO_COLOR_FORMAT__MASK);
+   enum a6xx_format color_format = (enum a6xx_format) pkt_field_get(
+      A6XX_RB_MRT_BUF_INFO_COLOR_FORMAT, RB_MRT_BUF_INFO);
    tu_cs_emit_regs(cs,
                    A6XX_GRAS_LRZ_MRT_BUF_INFO_0(.color_format = color_format));
 
@@ -2305,7 +2301,7 @@ tu6_blit_image(struct tu_cmd_buffer *cmd,
       src_image->vk.format, info->srcSubresource.aspectMask);
    enum pipe_format dst_format = tu_aspects_to_plane(
       dst_image->vk.format, info->dstSubresource.aspectMask);
-   trace_start_blit(&cmd->trace, cs,
+   trace_start_blit(&cmd->trace, cs, cmd,
                   ops == &r3d_ops<CHIP>,
                   src_image->vk.format,
                   dst_image->vk.format,
@@ -3286,8 +3282,21 @@ copy_buffer(struct tu_cmd_buffer *cmd,
 {
    const struct blit_ops *ops = &r2d_ops<CHIP>;
    struct tu_cs *cs = &cmd->cs;
-   enum pipe_format format = block_size == 4 ? PIPE_FORMAT_R32_UINT : PIPE_FORMAT_R8_UNORM;
    uint64_t blocks = size / block_size;
+   enum pipe_format format;
+
+   switch (block_size) {
+   case 16:
+      format = PIPE_FORMAT_R32G32B32A32_UINT;
+      break;
+   case 4:
+      format = PIPE_FORMAT_R32_UINT;
+      break;
+   default:
+      assert(block_size == 1);
+      format = PIPE_FORMAT_R8_UNORM;
+      break;
+   }
 
    handle_buffer_unaligned_store<CHIP>(cmd, dst_va, size, unaligned_store);
 
@@ -3321,13 +3330,33 @@ tu_CmdCopyBuffer2(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(tu_buffer, src_buffer, pCopyBufferInfo->srcBuffer);
    VK_FROM_HANDLE(tu_buffer, dst_buffer, pCopyBufferInfo->dstBuffer);
 
+   /* Choose the largest common block size for all copy regions
+    * to prevent WaW hazards when potentially performing non-overlapping
+    * unaligned stores through CCU. See handle_buffer_unaligned_store.
+    */
+   uint32_t block_size = 16;
+   for (unsigned i = 0; i < pCopyBufferInfo->regionCount; ++i) {
+      const VkBufferCopy2 *region = &pCopyBufferInfo->pRegions[i];
+      uint64_t alignment_target = region->size |
+                                  vk_buffer_address(&src_buffer->vk, region->srcOffset) |
+                                  vk_buffer_address(&dst_buffer->vk, region->dstOffset);
+
+      uint32_t region_block_size = 1;
+      if (!(alignment_target & 15))
+         region_block_size = 16;
+      else if (!(alignment_target & 3))
+         region_block_size = 4;
+
+      block_size = MIN2(block_size, region_block_size);
+   }
+
    bool unaligned_store = false;
    for (unsigned i = 0; i < pCopyBufferInfo->regionCount; ++i) {
       const VkBufferCopy2 *region = &pCopyBufferInfo->pRegions[i];
       copy_buffer<CHIP>(cmd,
                         vk_buffer_address(&dst_buffer->vk, region->dstOffset),
                         vk_buffer_address(&src_buffer->vk, region->srcOffset),
-                        region->size, 1, &unaligned_store);
+                        region->size, block_size, &unaligned_store);
    }
 
    after_buffer_unaligned_buffer_store<CHIP>(cmd, unaligned_store);
@@ -3352,10 +3381,18 @@ tu_CmdUpdateBuffer(VkCommandBuffer commandBuffer,
       return;
    }
 
+   /* As in tu_CmdCopyBuffer2(), the largest viable block size is used. */
+   uint64_t alignment_target = dataSize | vk_buffer_address(&buffer->vk, dstOffset);
+   uint32_t block_size = 1;
+   if (!(alignment_target & 15))
+      block_size = 16;
+   else if (!(alignment_target & 3))
+      block_size = 4;
+
    bool unaligned_store = false;
    memcpy(tmp.map, pData, dataSize);
    copy_buffer<CHIP>(cmd, vk_buffer_address(&buffer->vk, dstOffset),
-                     tmp.iova, dataSize, 4, &unaligned_store);
+                     tmp.iova, dataSize, block_size, &unaligned_store);
 
    after_buffer_unaligned_buffer_store<CHIP>(cmd, unaligned_store);
 }
@@ -3498,7 +3535,7 @@ resolve_sysmem(struct tu_cmd_buffer *cmd,
 {
    const struct blit_ops *ops = &r2d_ops<CHIP>;
 
-   trace_start_sysmem_resolve(&cmd->trace, cs, vk_dst_format);
+   trace_start_sysmem_resolve(&cmd->trace, cs, cmd, vk_dst_format);
 
    enum pipe_format src_format = vk_format_to_pipe_format(vk_src_format);
    enum pipe_format dst_format = vk_format_to_pipe_format(vk_dst_format);
@@ -3987,7 +4024,7 @@ tu_clear_sysmem_attachments(struct tu_cmd_buffer *cmd,
    bool z_clear = false;
    bool s_clear = false;
 
-   trace_start_sysmem_clear_all(&cmd->trace, cs, mrt_count, rect_count);
+   trace_start_sysmem_clear_all(&cmd->trace, cs, cmd, mrt_count, rect_count);
 
    for (uint32_t i = 0; i < attachment_count; i++) {
       uint32_t a;
@@ -4253,7 +4290,7 @@ tu_emit_clear_gmem_attachment(struct tu_cmd_buffer *cmd,
    const struct tu_render_pass_attachment *att =
       &cmd->state.pass->attachments[attachment];
 
-   trace_start_gmem_clear(&cmd->trace, cs, att->format, att->samples);
+   trace_start_gmem_clear(&cmd->trace, cs, cmd, att->format, att->samples);
 
    tu_cs_emit_regs(cs,
                    A6XX_RB_BLIT_GMEM_MSAA_CNTL(tu_msaa_samples(att->samples)));
@@ -4538,7 +4575,7 @@ tu_clear_attachments_generic(struct tu_cmd_buffer *cmd,
       if (a != VK_ATTACHMENT_UNUSED) {
          const struct tu_render_pass_attachment *att = &cmd->state.pass->attachments[a];
          const struct tu_image_view *iview = cmd->state.attachments[a];
-         trace_start_generic_clear(&cmd->trace, cs, att->format,
+         trace_start_generic_clear(&cmd->trace, cs, cmd, att->format,
                                    iview->view.ubwc_enabled, att->samples);
          for (unsigned j = 0; j < rectCount; j++) {
             tu7_clear_attachment_generic_single_rect(
@@ -4601,7 +4638,7 @@ clear_sysmem_attachment(struct tu_cmd_buffer *cmd,
    if (cmd->state.pass->attachments[a].samples > 1)
       ops = &r3d_ops<CHIP>;
 
-   trace_start_sysmem_clear(&cmd->trace, cs, vk_format, ops == &r3d_ops<CHIP>,
+   trace_start_sysmem_clear(&cmd->trace, cs, cmd, vk_format, ops == &r3d_ops<CHIP>,
                             cmd->state.pass->attachments[a].samples);
 
    ops->setup(cmd, cs, format, format, clear_mask, 0, true, iview->view.ubwc_enabled,
@@ -4708,7 +4745,7 @@ tu7_generic_clear_attachment(struct tu_cmd_buffer *cmd,
    const VkClearValue *value = &cmd->state.clear_values[a];
    const struct tu_image_view *iview = cmd->state.attachments[a];
 
-   trace_start_generic_clear(&cmd->trace, cs, att->format,
+   trace_start_generic_clear(&cmd->trace, cs, cmd, att->format,
                              iview->view.ubwc_enabled, att->samples);
 
    enum pipe_format format = vk_format_to_pipe_format(att->format);
@@ -5003,7 +5040,7 @@ tu_load_gmem_attachment(struct tu_cmd_buffer *cmd,
    if (!load_common && !load_stencil)
       return;
 
-   trace_start_gmem_load(&cmd->trace, cs, attachment->format, force_load);
+   trace_start_gmem_load(&cmd->trace, cs, cmd, attachment->format, force_load);
 
    /* If attachment will be cleared by vkCmdClearAttachments - it is likely
     * that it would be partially cleared, and since it is done by 2d blit
@@ -5401,7 +5438,7 @@ tu_store_gmem_attachment(struct tu_cmd_buffer *cmd,
                         !resolve_d24s8_s8 &&
                         (a == gmem_a || blit_can_resolve(dst->format));
 
-   trace_start_gmem_store(&cmd->trace, cs, dst->format, use_fast_path, unaligned);
+   trace_start_gmem_store(&cmd->trace, cs, cmd, dst->format, use_fast_path, unaligned);
 
    /* Unconditional store should happen only if attachment was cleared,
     * which could have happened either by load_op or via vkCmdClearAttachments.

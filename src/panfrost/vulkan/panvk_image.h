@@ -8,16 +8,13 @@
 
 #include "vk_image.h"
 
-#include "pan_texture.h"
+#include "pan_image.h"
 
 #define PANVK_MAX_PLANES 3
 
 struct panvk_image {
    struct vk_image vk;
 
-   /* TODO: See if we can rework the synchronization logic so we don't need to
-    * pass BOs around.
-    */
    struct pan_kmod_bo *bo;
 
    uint8_t plane_count;

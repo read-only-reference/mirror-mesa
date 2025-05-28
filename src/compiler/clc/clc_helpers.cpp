@@ -864,7 +864,11 @@ clc_compile_to_llvm_module(LLVMContext &llvm_ctx,
                            &c->getDiagnosticOpts()));
 
    c->setTarget(clang::TargetInfo::CreateTargetInfo(
+#if LLVM_VERSION_MAJOR >= 21
+                   c->getDiagnostics(), c->getInvocation().getTargetOpts()));
+#else
                    c->getDiagnostics(), c->getInvocation().TargetOpts));
+#endif
 
    c->getFrontendOpts().ProgramAction = clang::frontend::EmitLLVMOnly;
 
@@ -996,6 +1000,11 @@ clc_compile_to_llvm_module(LLVMContext &llvm_ctx,
    if (args->features.intel_subgroups) {
       c->getTargetOpts().OpenCLExtensionsAsWritten.push_back("+cl_intel_subgroups");
       needs_opencl_c_h = true;
+   }
+   if (args->features.kernel_clock && LLVM_VERSION_MAJOR >= 19) {
+      c->getPreprocessorOpts().addMacroDef("cl_khr_kernel_clock=1");
+      c->getPreprocessorOpts().addMacroDef("__opencl_c_kernel_clock_scope_device=1");
+      c->getPreprocessorOpts().addMacroDef("__opencl_c_kernel_clock_scope_sub_group=1");
    }
    if (args->features.subgroups) {
       c->getTargetOpts().OpenCLExtensionsAsWritten.push_back("+__opencl_c_subgroups");

@@ -301,7 +301,6 @@ impl PipeContext {
         let state = pipe_compute_state {
             ir_type: pipe_shader_ir::PIPE_SHADER_IR_NIR,
             prog: nir.dup_for_driver().cast(),
-            req_input_mem: 0,
             static_shared_mem: static_local_mem,
         };
         unsafe { self.pipe.as_ref().create_compute_state.unwrap()(self.pipe.as_ptr(), &state) }
@@ -455,12 +454,16 @@ impl PipeContext {
         block: [u32; 3],
         grid: [u32; 3],
         variable_local_mem: u32,
+        globals: &[&PipeResource],
     ) {
+        let mut globals: Vec<*mut pipe_resource> = globals.iter().map(|res| res.pipe()).collect();
         let info = pipe_grid_info {
             variable_shared_mem: variable_local_mem,
             work_dim: work_dim,
             block: block,
             grid: grid,
+            globals: globals.as_mut_ptr(),
+            num_globals: globals.len() as u32,
             ..Default::default()
         };
         unsafe { self.pipe.as_ref().launch_grid.unwrap()(self.pipe.as_ptr(), &info) }

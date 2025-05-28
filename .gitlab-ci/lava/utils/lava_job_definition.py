@@ -1,5 +1,11 @@
+# When changing this file, you need to bump the following
+# .gitlab-ci/image-tags.yml tags:
+# ALPINE_X86_64_LAVA_TRIGGER_TAG
+
 from io import StringIO
 from typing import TYPE_CHECKING, Any
+import base64
+import shlex
 
 from ruamel.yaml import YAML
 
@@ -202,13 +208,6 @@ class LAVAJobDefinition:
                 f"{self.job_submitter.dtb_filename}.dtb"
             }
 
-    def attach_external_modules(self, deploy_field):
-        if self.job_submitter.kernel_external:
-            deploy_field["modules"] = {
-                "url": f"{self.job_submitter.kernel_url_prefix}/modules.tar.zst",
-                "compression": "zstd"
-            }
-
     def jwt_steps(self):
         """
         This function is responsible for setting up the SSH server in the DUT and to
@@ -262,6 +261,15 @@ class LAVAJobDefinition:
                 + "https://github.com/allahjasif1990/hdk888-firmware/raw/main/a660_zap.mbn "
                 + '-o "/lib/firmware/qcom/sm8350/a660_zap.mbn"'
             )
+
+        # Forward environmental variables to the DUT
+        # base64-encoded to avoid YAML quoting issues
+        with open(self.job_submitter.env_file, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode()
+            safe_encoded = shlex.quote(encoded)
+            run_steps += [
+                f'echo "eval \\\"$(echo {safe_encoded} | base64 -d)\\\"" >> /set-job-env-vars.sh',
+            ]
 
         run_steps.append("export CURRENT_SECTION=dut_boot")
 

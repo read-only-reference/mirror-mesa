@@ -831,6 +831,11 @@ Intel driver environment variables
       are always dumped if :envvar:`INTEL_SHADER_BIN_DUMP_PATH` variable is
       set.
 
+.. envvar:: INTEL_SHADER_DUMP_FILTER
+
+   Only dump information about shaders that match the specified hexadecimal
+   source hash.
+
 .. envvar:: INTEL_SIMD_DEBUG
 
    a comma-separated list of named flags, which control simd dispatch widths:
@@ -1077,11 +1082,6 @@ Gallium environment variables
    specifies a file for logging all errors, warnings, etc. rather than
    stderr.
 
-.. envvar:: GALLIUM_PIPE_SEARCH_DIR
-
-   specifies an alternate search directory for pipe-loader which overrides
-   the compile-time path based on the install location.
-
 .. envvar:: GALLIUM_PRINT_OPTIONS
 
    if non-zero, print all the Gallium environment variables which are
@@ -1188,6 +1188,7 @@ Rusticl environment variables
 
    - ``fp16`` enables OpenCL half support
    - ``fp64`` enables OpenCL double support
+   - ``intel`` enables various Intel OpenCL extensions
 
 .. envvar:: RUSTICL_DEBUG
 
@@ -1195,6 +1196,7 @@ Rusticl environment variables
 
    - ``allow_invalid_spirv`` disables validation of any input SPIR-V
    - ``clc`` dumps all OpenCL C source being compiled
+   - ``memory`` enables debugging of memory objects
    - ``nir`` dumps nirs in various compilation stages. Might print nothing if shader caching is
              enabled.
    - ``no_reuse_context`` pipe_contexts are not recycled
@@ -1607,8 +1609,8 @@ RADV driver environment variables
    ``validateir``
       validate the ACO IR at various points of compilation (enabled by
       default for debug/debugoptimized builds)
-   ``novalidateir``
-      disable ACO IR validation in debug/debugoptimized builds
+   ``novalidate``
+      don't enable some ACO validation by default in debug/debugoptimized builds
    ``validatera``
       validate register assignment of ACO IR and catches many RA bugs
    ``force-waitcnt``

@@ -76,14 +76,14 @@ nvk_get_image_plane_format_features(const struct nvk_physical_device *pdev,
       features |= VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT;
    }
 
-   if (nil_format_supports_storage(&pdev->info, p_format)) {
+   if (nvk_format_supports_storage(pdev, p_format)) {
       features |= VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT |
                   VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
       if (pdev->info.cls_eng3d >= MAXWELL_A)
          features |= VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT;
    }
 
-   if (nvk_format_supports_atomics(&pdev->info, p_format))
+   if (nvk_format_supports_atomics(pdev, p_format))
       features |= VK_FORMAT_FEATURE_2_STORAGE_IMAGE_ATOMIC_BIT;
 
    if (p_format == PIPE_FORMAT_R8_UINT && tiling == VK_IMAGE_TILING_OPTIMAL)
@@ -543,12 +543,12 @@ nvk_GetPhysicalDeviceImageFormatProperties2(
          break;
 
       case VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT:
-         if (!tiling_has_explicit_layout) {
-            return vk_errorf(pdev, VK_ERROR_FORMAT_NOT_SUPPORTED,
-                             "VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT "
-                             "requires VK_IMAGE_TILING_LINEAR or "
-                             "VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT");
-         }
+         /* VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT requires
+          * VK_IMAGE_TILING_LINEAR or VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT
+          */
+         if (!tiling_has_explicit_layout)
+            return VK_ERROR_FORMAT_NOT_SUPPORTED;
+
          ext_mem_props = &nvk_dma_buf_mem_props;
          break;
 

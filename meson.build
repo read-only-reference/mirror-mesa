@@ -53,7 +53,10 @@ cl_args = [
   # Set the OpenCL standard to CL 2.0, enabling everything at a frontend.
   # Drivers may not actually support everything but that's ok.
   '-cl-std=cl2.0',
-  '-D__OPENCL_VERSION__=200'
+  '-D__OPENCL_VERSION__=200',
+
+  # Declare supported clang builtins since we don't autodetect for OpenCL
+  '-DHAVE___BUILTIN_FFS',
 ]
 
 if with_mesa_ndebug
@@ -304,29 +307,12 @@ with_any_broadcom = [
 
 with_intel_vk_rt = get_option('intel-rt') \
    .disable_auto_if(not with_intel_vk) \
-   .disable_if(get_option('intel-bvh-grl') and \
-               host_machine.cpu_family() != 'x86_64', \
-               error_message : 'Intel Ray Tracing is only supported on x86_64') \
   .allowed()
-
-with_intel_bvh_grl = get_option('intel-bvh-grl')
-
-if get_option('intel-clc') != 'system' and \
-   get_option('precomp-compiler') != 'system' and \
-   with_intel_bvh_grl
-  # Require intel-clc with Anv & Iris (for internal shaders)
-  with_intel_clc = get_option('intel-clc') == 'enabled' or \
-                   get_option('precomp-compiler') == 'enabled' or \
-                   with_intel_bvh_grl
-else
-  with_intel_clc = false
-endif
 
 with_any_intel = [
   with_gallium_crocus,
   with_gallium_i915,
   with_gallium_iris,
-  with_intel_clc,
   with_intel_hasvk,
   with_intel_tools,
   with_intel_vk,
@@ -597,6 +583,14 @@ if with_gallium_d3d12 or with_microsoft_clc or with_microsoft_vk or with_gfxstre
   endif
 endif
 
+if dep_dxheaders.found()
+  if (dep_dxheaders.version().version_compare('>= 1.700.0'))
+    pre_args += '-DUSE_D3D12_PREVIEW_HEADERS=1'
+  else
+    pre_args += '-DUSE_D3D12_PREVIEW_HEADERS=0'
+  endif
+endif
+
 _with_gallium_d3d12_video = get_option('gallium-d3d12-video')
 with_gallium_d3d12_video = false
 if with_gallium_d3d12 and not _with_gallium_d3d12_video.disabled()
@@ -683,38 +677,28 @@ if va_drivers_path == ''
   va_drivers_path = join_paths(get_option('libdir'), 'dri')
 endif
 
-with_gallium_xa = get_option('gallium-xa') \
-  .require(system_has_kms_drm, error_message : 'XA state tracker can only be built on unix-like OSes.') \
-  .require(with_gallium_nouveau or with_gallium_freedreno or with_gallium_i915 or with_gallium_svga,
-           error_message : 'XA state tracker requires at least one of the following gallium drivers: nouveau, freedreno, i915, svga.') \
-  .allowed()
+_mediafoundation_drivers = [
+  with_gallium_d3d12_video,
+]
+
+with_gallium_mediafoundation = get_option('gallium-mediafoundation') \
+  .require(host_machine.system() == 'windows', error_message : 'mediafoundation only supported on Windows') \
+  .require(_mediafoundation_drivers.contains(true),
+           error_message : 'Media foundation state tracker requires at least one of the following gallium drivers: d3d12 (with option gallium-d3d12-video).') \
+  .enabled()
+
+with_gallium_mediafoundation_test = get_option('gallium-mediafoundation-test')
+if with_gallium_mediafoundation_test
+  if not with_gallium_mediafoundation
+    error('The mediafoundation test requires mediafoundation.')
+  endif
+endif
 
 d3d_drivers_path = get_option('d3d-drivers-path')
 if d3d_drivers_path == ''
   d3d_drivers_path = join_paths(get_option('prefix'), get_option('libdir'), 'd3d')
 endif
 
-with_gallium_st_nine =  get_option('gallium-nine')
-if with_gallium_st_nine
-  warning('The nine state tracker will be removed in Mesa 25.2')
-  if not with_gallium_swrast
-    error('The nine state tracker requires gallium softpipe/llvmpipe.')
-  elif not [
-             with_gallium_crocus,
-             with_gallium_freedreno,
-             with_gallium_i915,
-             with_gallium_iris,
-             with_gallium_nouveau,
-             with_gallium_panfrost,
-             with_gallium_r300,
-             with_gallium_r600,
-             with_gallium_radeonsi,
-             with_gallium_svga,
-             with_gallium_zink,
-           ].contains(true)
-    error('The nine state tracker requires at least one non-swrast gallium driver.')
-  endif
-endif
 with_gallium_st_d3d10umd =  get_option('gallium-d3d10umd')
 if with_gallium_st_d3d10umd
   if not with_gallium_swrast
@@ -785,6 +769,17 @@ if with_gallium_rusticl or with_nouveau_vk or with_tools.contains('etnaviv')
           'If your distribution does not ship a recent enough version, ' +
           'you can install the latest version for your user with `cargo install bindgen-cli`.')
   endif
+
+  bindgen_output_args = [
+    # can't do anything about it anyway
+    '--raw-line', '#![allow(clippy::all)]',
+    '--raw-line', '#![allow(improper_ctypes)]',
+    # Some bindgen versions assume `unsafe_op_in_unsafe_fn`
+    '--raw-line', '#![allow(unused_unsafe)]',
+    '--raw-line', '#![allow(non_camel_case_types)]',
+    '--raw-line', '#![allow(non_snake_case)]',
+    '--raw-line', '#![allow(non_upper_case_globals)]',
+  ]
 endif
 
 if get_option('precomp-compiler') != 'system'
@@ -1658,12 +1653,18 @@ if _drm_blame != ''
   message('libdrm @0@ needed because @1@ has the highest requirement'.format(_drm_ver, _drm_blame))
 endif
 
+allow_fallback_for_libdrm = get_option('allow-fallback-for').contains('libdrm')
+
 # Then get each libdrm module
 foreach d : _libdrm_checks
   if d[1]
     set_variable(
       'dep_libdrm_' + d[0],
-      dependency('libdrm_' + d[0], version : '>=' + _drm_ver)
+      dependency(
+        'libdrm_' + d[0],
+        version : '>=' + _drm_ver,
+        allow_fallback: allow_fallback_for_libdrm,
+      )
     )
   endif
 endforeach
@@ -1672,7 +1673,8 @@ with_gallium_drisw_kms = false
 if system_has_kms_drm
   dep_libdrm = dependency(
     'libdrm', version : '>=' + _drm_ver,
-    required : with_dri2 or with_dri or with_gbm
+    required : with_dri2 or with_dri or with_gbm,
+    allow_fallback: allow_fallback_for_libdrm,
   )
 else
   # We should prevent libdrm from being available when the target doesn't have it to avoid transitive
@@ -2120,7 +2122,7 @@ if with_platform_x11
   if (with_egl or
       with_dri or
       with_any_vk or
-      with_gallium_vdpau or with_gallium_xa)
+      with_gallium_vdpau)
     dep_xcb_xfixes = dependency('xcb-xfixes')
   endif
   if with_any_vk
@@ -2186,6 +2188,12 @@ endif
 with_gpuvis = get_option('gpuvis')
 if with_gpuvis
   pre_args += '-DHAVE_GPUVIS'
+endif
+
+with_sysprof = get_option('sysprof')
+if with_sysprof
+  dep_sysprof = dependency('sysprof-capture-4', version: '>= 3.38.0')
+  pre_args += '-DHAVE_SYSPROF'
 endif
 
 add_project_arguments(pre_args, language : ['c', 'cpp'])
@@ -2350,12 +2358,11 @@ endif
 if with_gallium_va
   video_apis += 'va'
 endif
+if with_gallium_mediafoundation
+  video_apis += 'mediafoundation'
+endif
 if with_any_vk
   video_apis += 'vulkan'
-endif
-if with_gallium_xa
-  warning('XA will be removed in Mesa 25.2')
-  video_apis += 'xa'
 endif
 video_summary += {'APIs': video_apis.length() != 0 ? video_apis : false}
 summary(video_summary, section: 'Video', bool_yn: true, list_sep: ' ')
@@ -2372,17 +2379,14 @@ if with_gallium
   gallium_summary += {'Platforms': _platforms}
 
   gallium_frontends = ['mesa']
-  if with_gallium_xa
-    gallium_frontends += 'xa'
-  endif
   if with_gallium_vdpau
     gallium_frontends += 'vdpau'
   endif
   if with_gallium_va
     gallium_frontends += 'va'
   endif
-  if with_gallium_st_nine
-    gallium_frontends += 'nine'
+  if with_gallium_mediafoundation
+    gallium_frontends += 'mediafoundation'
   endif
   if with_gallium_rusticl
     gallium_frontends += 'rusticl'

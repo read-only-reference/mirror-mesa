@@ -377,8 +377,6 @@ Capability about the features and limits of the driver/GPU.
   shaders.
 * ``pipe_caps.max_window_rectangles``: The maximum number of window rectangles
   supported in ``set_window_rectangles``.
-* ``pipe_caps.polygon_offset_units_unscaled``: If true, the driver implements support
-  for ``pipe_rasterizer_state::offset_units_unscaled``.
 * ``pipe_caps.viewport_subpixel_bits``: Number of bits of subpixel precision for
   floating point viewport bounds.
 * ``pipe_caps.rasterizer_subpixel_bits``: Number of bits of subpixel precision used
@@ -560,7 +558,6 @@ Capability about the features and limits of the driver/GPU.
   functionality is supported.
 * ``pipe_caps.atomic_float_minmax``: Atomic float point minimum,
   maximum, exchange and compare-and-swap support to buffer and shared variables.
-* ``pipe_caps.tgsi_div``: Whether opcode DIV is supported
 * ``pipe_caps.dithering``: Whether dithering is supported
 * ``pipe_caps.fragment_shader_texture_lod``: Whether texture lookups with
   explicit LOD is supported in the fragment shader.
@@ -580,9 +577,9 @@ Capability about the features and limits of the driver/GPU.
 * ``pipe_caps.demote_to_helper_invocation``: True if driver supports demote keyword in GLSL programs.
 * ``pipe_caps.tgsi_tg4_component_in_swizzle``: True if driver wants the TG4 component encoded in sampler swizzle rather than as a separate source.
 * ``pipe_caps.flatshade``: Driver supports pipe_rasterizer_state::flatshade.  Must be 1
-    for non-NIR drivers or gallium nine.
+    for non-NIR drivers.
 * ``pipe_caps.alpha_test``: Driver supports alpha-testing.  Must be 1
-    for non-NIR drivers or gallium nine.  If set, frontend may set
+    for non-NIR drivers.  If set, frontend may set
     ``pipe_depth_stencil_alpha_state->alpha_enabled`` and ``alpha_func``.
     Otherwise, alpha test will be lowered to a comparison and discard_if in the
     fragment shader.
@@ -639,7 +636,7 @@ Capability about the features and limits of the driver/GPU.
 * ``pipe_caps.validate_all_dirty_states`` : Whether state validation must also validate the state changes for resources types used in the previous shader but not in the current shader.
 * ``pipe_caps.has_const_bw``: Whether the driver only supports non-data-dependent layouts (ie. not bandwidth compressed formats like AFBC, UBWC, etc), or supports ``PIPE_BIND_CONST_BW`` to disable data-dependent layouts on requested resources.
 * ``pipe_caps.performance_monitor``: Whether GL_AMD_performance_monitor should be exposed.
-* ``pipe_caps.texture_sampler_independent``: Whether sampler views and sampler states are independent objects, meaning both can be freely mixed and matched by the frontend. This isn't required for OpenGL where on the shader level those are the same object. However for proper gallium nine and OpenCL support this is required.
+* ``pipe_caps.texture_sampler_independent``: Whether sampler views and sampler states are independent objects, meaning both can be freely mixed and matched by the frontend. This isn't required for OpenGL where on the shader level those are the same object. However for proper OpenCL support this is required.
 * ``pipe_caps.astc_decode_mode``: Whether the driver supports ASTC decode precision. The :ext:`GL_EXT_texture_compression_astc_decode_mode` extension will only get exposed if :ext:`GL_KHR_texture_compression_astc_ldr<GL_KHR_texture_compression_astc_hdr>` is also supported.
 * ``pipe_caps.shader_subgroup_size``: A fixed subgroup size shader runs on GPU when GLSL GL_KHR_shader_subgroup_* extensions are enabled.
 * ``pipe_caps.shader_subgroup_supported_stages``: Bitmask of shader stages which support GL_KHR_shader_subgroup_* intrinsics.
@@ -750,32 +747,20 @@ pipe_compute_caps
 Compute-specific capabilities. They can be queried using
 pipe_screen::get_compute_param.
 
-* ``pipe_compute_caps.ir_target``: A description of the target of the form
-  ``processor-arch-manufacturer-os`` that will be passed on to the compiler.
-  This CAP is only relevant for drivers that specify PIPE_SHADER_IR_NATIVE for
-  their preferred IR.
 * ``pipe_compute_caps.grid_dimension``: Number of supported dimensions
   for grid and block coordinates.
 * ``pipe_compute_caps.max_grid_size``: Maximum grid size in block
   units.
 * ``pipe_compute_caps.max_block_size``: Maximum block size in thread
   units.
-* ``pipe_compute_caps.max_block_size_clover``: Same as ``pipe_compute_caps.max_block_size``
-  but used by clover only.
 * ``pipe_compute_caps.max_threads_per_block``: Maximum number of threads that
   a single block can contain.
   This may be less than the product of the components of MAX_BLOCK_SIZE and is
   usually limited by the number of threads that can be resident simultaneously
   on a compute unit.
-* ``pipe_compute_caps.max_threads_per_block_clover``: Same as
-  ``pipe_compute_caps.max_threads_per_block`` but used by clover only.
 * ``pipe_compute_caps.max_global_size``: Maximum size of the GLOBAL
   resource.
 * ``pipe_compute_caps.max_local_size``: Maximum size of the LOCAL
-  resource.
-* ``pipe_compute_caps.max_private_size``: Maximum size of the PRIVATE
-  resource.
-* ``pipe_compute_caps.max_input_size``: Maximum size of the INPUT
   resource.
 * ``pipe_compute_caps.max_mem_alloc_size``: Maximum size of a memory object
   allocation in bytes.
@@ -786,8 +771,6 @@ pipe_screen::get_compute_param.
   inside a block. Non 0 indicates support for OpenCL subgroups including
   implementing ``get_compute_state_subgroup_size`` if multiple subgroup sizes
   are supported.
-* ``pipe_compute_caps.images_supported``: Whether images are supported
-  non-zero means yes, zero means no
 * ``pipe_compute_caps.subgroup_sizes``: Ored power of two sizes of a basic execution
   unit in threads. Also known as wavefront size, warp size or SIMD width.
   E.g. ``64 | 32``.
@@ -839,8 +822,6 @@ resources might be created and handled quite differently.
   to a shader and can be used with load, store, and atomic instructions.
 * ``PIPE_BIND_SHADER_IMAGE``: A buffer or texture with a format that can be
   bound to a shader and can be used with load, store, and atomic instructions.
-* ``PIPE_BIND_COMPUTE_RESOURCE``: A buffer or texture that can be
-  bound to the compute program as a shader resource.
 * ``PIPE_BIND_COMMAND_ARGS_BUFFER``: A buffer that may be sourced by the
   GPU command processor. It can contain, for example, the arguments to
   indirect draw calls.
@@ -1015,7 +996,11 @@ resource_destroy
 
 Destroy a resource. A resource is destroyed if it has no more references.
 
+resource_get_address
+^^^^^^^^^^^^^^^^^^^^
 
+Returns the address of **resource** created with
+``PIPE_RESOURCE_FLAG_FIXED_ADDRESS``.
 
 get_timestamp
 ^^^^^^^^^^^^^

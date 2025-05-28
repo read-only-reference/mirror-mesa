@@ -116,6 +116,13 @@ panvk_lower_sysvals(nir_builder *b, nir_instr *instr, void *data)
       assert(b->shader->info.stage == MESA_SHADER_FRAGMENT);
       val = load_sysval(b, graphics, bit_size, layer_id);
       break;
+   case nir_intrinsic_load_view_index:
+      assert(b->shader->info.stage != MESA_SHADER_COMPUTE);
+      if (ctx->state->rp->view_mask == 0)
+         val = nir_imm_zero(b, 1, 32);
+      else
+         val = load_sysval(b, graphics, bit_size, layer_id);
+      break;
 #endif
 
    case nir_intrinsic_load_draw_id:
@@ -340,7 +347,8 @@ panvk_get_nir_options(UNUSED struct vk_physical_device *vk_pdev,
                       UNUSED gl_shader_stage stage,
                       UNUSED const struct vk_pipeline_robustness_state *rs)
 {
-   return GENX(pan_shader_get_compiler_options)();
+   struct panvk_physical_device *phys_dev = to_panvk_physical_device(vk_pdev);
+   return pan_shader_get_compiler_options(pan_arch(phys_dev->kmod.props.gpu_prod_id));
 }
 
 static struct spirv_to_nir_options
@@ -428,26 +436,30 @@ panvk_preprocess_nir(UNUSED struct vk_physical_device *vk_pdev,
 }
 
 static void
-panvk_hash_graphics_state(struct vk_physical_device *device,
-                          const struct vk_graphics_pipeline_state *state,
-                          VkShaderStageFlags stages, blake3_hash blake3_out)
+panvk_hash_state(struct vk_physical_device *device,
+                 const struct vk_graphics_pipeline_state *state,
+                 const struct vk_features *enabled_features,
+                 VkShaderStageFlags stages, blake3_hash blake3_out)
 {
    struct mesa_blake3 blake3_ctx;
    _mesa_blake3_init(&blake3_ctx);
 
-   /* This doesn't impact the shader compile but it does go in the
-    * panvk_shader and gets [de]serialized along with the binary so
-    * we need to hash it.
-    */
-   bool sample_shading_enable = state->ms && state->ms->sample_shading_enable;
-   _mesa_blake3_update(&blake3_ctx, &sample_shading_enable,
-                       sizeof(sample_shading_enable));
+   if (state != NULL) {
+      /* This doesn't impact the shader compile but it does go in the
+       * panvk_shader and gets [de]serialized along with the binary so
+       * we need to hash it.
+       */
+      bool sample_shading_enable =
+         state->ms && state->ms->sample_shading_enable;
+      _mesa_blake3_update(&blake3_ctx, &sample_shading_enable,
+                          sizeof(sample_shading_enable));
 
-   _mesa_blake3_update(&blake3_ctx, &state->rp->view_mask,
-                       sizeof(state->rp->view_mask));
+      _mesa_blake3_update(&blake3_ctx, &state->rp->view_mask,
+                          sizeof(state->rp->view_mask));
 
-   if (state->ial)
-      _mesa_blake3_update(&blake3_ctx, state->ial, sizeof(*state->ial));
+      if (state->ial)
+         _mesa_blake3_update(&blake3_ctx, state->ial, sizeof(*state->ial));
+   }
 
    _mesa_blake3_final(&blake3_ctx, blake3_out);
 }
@@ -728,7 +740,7 @@ panvk_lower_nir(struct panvk_device *dev, nir_shader *nir,
                 const struct vk_pipeline_robustness_state *rs,
                 uint32_t *noperspective_varyings,
                 const struct vk_graphics_pipeline_state *state,
-                const struct panfrost_compile_inputs *compile_input,
+                const struct pan_compile_inputs *compile_input,
                 struct panvk_shader *shader)
 {
    struct panvk_instance *instance =
@@ -876,7 +888,7 @@ panvk_lower_nir(struct panvk_device *dev, nir_shader *nir,
 static VkResult
 panvk_compile_nir(struct panvk_device *dev, nir_shader *nir,
                   VkShaderCreateFlagsEXT shader_flags,
-                  struct panfrost_compile_inputs *compile_input,
+                  struct pan_compile_inputs *compile_input,
                   struct panvk_shader *shader)
 {
    const bool dump_asm =
@@ -884,7 +896,7 @@ panvk_compile_nir(struct panvk_device *dev, nir_shader *nir,
 
    struct util_dynarray binary;
    util_dynarray_init(&binary, NULL);
-   GENX(pan_shader_compile)(nir, compile_input, &binary, &shader->info);
+   pan_shader_compile(nir, compile_input, &binary, &shader->info);
 
    void *bin_ptr = util_dynarray_element(&binary, uint8_t, 0);
    unsigned bin_size = util_dynarray_num_elements(&binary, uint8_t);
@@ -1218,7 +1230,7 @@ panvk_compile_shader(struct panvk_device *dev,
       return panvk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    shader->own_bin = true;
-   struct panfrost_compile_inputs inputs = {
+   struct pan_compile_inputs inputs = {
       .gpu_id = phys_dev->kmod.props.gpu_prod_id,
       .view_mask = (state && state->rp) ? state->rp->view_mask : 0,
    };
@@ -1299,6 +1311,7 @@ static VkResult
 panvk_compile_shaders(struct vk_device *vk_dev, uint32_t shader_count,
                       struct vk_shader_compile_info *infos,
                       const struct vk_graphics_pipeline_state *state,
+                      const struct vk_features *enabled_features,
                       const VkAllocationCallbacks *pAllocator,
                       struct vk_shader **shaders_out)
 {
@@ -1600,10 +1613,10 @@ panvk_shader_get_executable_statistics(
                           statistic_count);
 
    assert(executable_index == 0 || executable_index == 1);
-   struct panfrost_stats *stats =
+   struct pan_stats *stats =
       executable_index ? &shader->info.stats_idvs_varying : &shader->info.stats;
 
-   vk_add_panfrost_stats(out, stats);
+   vk_add_pan_stats(out, stats);
    return vk_outarray_status(&out);
 }
 
@@ -1676,19 +1689,19 @@ get_varying_format(gl_shader_stage stage, gl_varying_slot loc,
    case VARYING_SLOT_PNTC:
    case VARYING_SLOT_PSIZ:
 #if PAN_ARCH <= 6
-      return (MALI_R16F << 12) | panfrost_get_default_swizzle(1);
+      return (MALI_R16F << 12) | pan_get_default_swizzle(1);
 #else
       return (MALI_R16F << 12) | MALI_RGB_COMPONENT_ORDER_R000;
 #endif
    case VARYING_SLOT_POS:
 #if PAN_ARCH <= 6
-      return (MALI_SNAP_4 << 12) | panfrost_get_default_swizzle(4);
+      return (MALI_SNAP_4 << 12) | pan_get_default_swizzle(4);
 #else
       return (MALI_SNAP_4 << 12) | MALI_RGB_COMPONENT_ORDER_RGBA;
 #endif
    default:
       assert(pfmt != PIPE_FORMAT_NONE);
-      return GENX(panfrost_format_from_pipe_format)(pfmt)->hw;
+      return GENX(pan_format_from_pipe_format)(pfmt)->hw;
    }
 }
 
@@ -1732,18 +1745,18 @@ varying_format(gl_varying_slot loc, enum pipe_format pfmt)
    case VARYING_SLOT_PNTC:
    case VARYING_SLOT_PSIZ:
 #if PAN_ARCH <= 6
-      return (MALI_R16F << 12) | panfrost_get_default_swizzle(1);
+      return (MALI_R16F << 12) | pan_get_default_swizzle(1);
 #else
       return (MALI_R16F << 12) | MALI_RGB_COMPONENT_ORDER_R000;
 #endif
    case VARYING_SLOT_POS:
 #if PAN_ARCH <= 6
-      return (MALI_SNAP_4 << 12) | panfrost_get_default_swizzle(4);
+      return (MALI_SNAP_4 << 12) | pan_get_default_swizzle(4);
 #else
       return (MALI_SNAP_4 << 12) | MALI_RGB_COMPONENT_ORDER_RGBA;
 #endif
    default:
-      return GENX(panfrost_format_from_pipe_format)(pfmt)->hw;
+      return GENX(pan_format_from_pipe_format)(pfmt)->hw;
    }
 }
 
@@ -1942,7 +1955,7 @@ const struct vk_device_shader_ops panvk_per_arch(device_shader_ops) = {
    .get_nir_options = panvk_get_nir_options,
    .get_spirv_options = panvk_get_spirv_options,
    .preprocess_nir = panvk_preprocess_nir,
-   .hash_graphics_state = panvk_hash_graphics_state,
+   .hash_state = panvk_hash_state,
    .compile = panvk_compile_shaders,
    .deserialize = panvk_deserialize_shader,
    .cmd_set_dynamic_graphics_state = vk_cmd_set_dynamic_graphics_state,
@@ -1976,7 +1989,7 @@ static const struct vk_shader_ops panvk_internal_shader_ops = {
 VkResult
 panvk_per_arch(create_internal_shader)(
    struct panvk_device *dev, nir_shader *nir,
-   struct panfrost_compile_inputs *compiler_inputs,
+   struct pan_compile_inputs *compiler_inputs,
    struct panvk_internal_shader **shader_out)
 {
    struct panvk_internal_shader *shader =
@@ -1989,7 +2002,7 @@ panvk_per_arch(create_internal_shader)(
    struct util_dynarray binary;
 
    util_dynarray_init(&binary, nir);
-   GENX(pan_shader_compile)(nir, compiler_inputs, &binary, &shader->info);
+   pan_shader_compile(nir, compiler_inputs, &binary, &shader->info);
 
    unsigned bin_size = util_dynarray_num_elements(&binary, uint8_t);
    if (bin_size) {

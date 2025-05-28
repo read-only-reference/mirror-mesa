@@ -11,6 +11,7 @@
 #include "panvk_entrypoints.h"
 
 #include "pan_desc.h"
+#include "pan_util.h"
 
 static void
 render_state_set_color_attachment(struct panvk_cmd_buffer *cmdbuf,
@@ -223,6 +224,11 @@ panvk_per_arch(cmd_init_render_state)(struct panvk_cmd_buffer *cmdbuf,
    memset(state->render.fb.bos, 0, sizeof(state->render.fb.bos));
 #endif
 
+   state->render.first_provoking_vertex = U_TRISTATE_UNSET;
+#if PAN_ARCH >= 10
+   state->render.maybe_set_tds_provoking_vertex = NULL;
+   state->render.maybe_set_fbds_provoking_vertex = NULL;
+#endif
    memset(state->render.fb.crc_valid, 0, sizeof(state->render.fb.crc_valid));
    memset(&state->render.color_attachments, 0,
           sizeof(state->render.color_attachments));
@@ -235,8 +241,8 @@ panvk_per_arch(cmd_init_render_state)(struct panvk_cmd_buffer *cmdbuf,
       pRenderingInfo->layerCount;
    cmdbuf->state.gfx.render.view_mask = pRenderingInfo->viewMask;
    *fbinfo = (struct pan_fb_info){
-      .tile_buf_budget = panfrost_query_optimal_tib_size(phys_dev->model),
-      .z_tile_buf_budget = panfrost_query_optimal_z_tib_size(phys_dev->model),
+      .tile_buf_budget = pan_query_optimal_tib_size(phys_dev->model),
+      .z_tile_buf_budget = pan_query_optimal_z_tib_size(phys_dev->model),
       .nr_samples = 0,
       .rt_count = pRenderingInfo->colorAttachmentCount,
    };
@@ -552,7 +558,7 @@ void
 panvk_per_arch(cmd_preload_render_area_border)(
    struct panvk_cmd_buffer *cmdbuf, const VkRenderingInfo *render_info)
 {
-   const unsigned meta_tile_size = panfrost_meta_tile_size(PAN_ARCH);
+   const unsigned meta_tile_size = pan_meta_tile_size(PAN_ARCH);
    struct panvk_cmd_graphics_state *state = &cmdbuf->state.gfx;
    struct pan_fb_info *fbinfo = &state->render.fb.info;
 
@@ -599,7 +605,7 @@ prepare_iam_sysvals(struct panvk_cmd_buffer *cmdbuf, BITSET_WORD *dirty_sysvals)
 
       pan_pack(&conv, INTERNAL_CONVERSION, cfg) {
          cfg.memory_format =
-            GENX(panfrost_dithered_format_from_pipe_format)(pfmt, false);
+            GENX(pan_dithered_format_from_pipe_format)(pfmt, false);
 #if PAN_ARCH <= 7
          cfg.register_format =
             vk_format_is_uint(fmt)   ? MALI_REGISTER_FILE_FORMAT_U32
@@ -628,7 +634,7 @@ prepare_iam_sysvals(struct panvk_cmd_buffer *cmdbuf, BITSET_WORD *dirty_sysvals)
       pan_pack(&conv, INTERNAL_CONVERSION, cfg) {
          cfg.register_format = MALI_REGISTER_FILE_FORMAT_F32;
          cfg.memory_format =
-            GENX(panfrost_dithered_format_from_pipe_format)(pfmt, false);
+            GENX(pan_dithered_format_from_pipe_format)(pfmt, false);
       }
       iam[ia_idx].conversion = conv.opaque[0];
 #endif
