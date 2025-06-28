@@ -44,10 +44,11 @@ radv_choose_tiling(struct radv_device *device, const VkImageCreateInfo *pCreateI
       return RADEON_SURF_MODE_LINEAR_ALIGNED;
    }
 
-   if (pCreateInfo->usage & (VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR))
+   if (pdev->info.vcn_ip_version < VCN_1_0_0 &&
+       pCreateInfo->usage & (VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR | VK_IMAGE_USAGE_VIDEO_ENCODE_DPB_BIT_KHR))
       return RADEON_SURF_MODE_LINEAR_ALIGNED;
 
-   if (pCreateInfo->usage & (VK_IMAGE_USAGE_VIDEO_ENCODE_DPB_BIT_KHR | VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR))
+   if (pCreateInfo->usage & (VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR))
       return RADEON_SURF_MODE_LINEAR_ALIGNED;
 
    /* MSAA resources must be 2D tiled. */
@@ -483,9 +484,9 @@ radv_patch_surface_from_metadata(struct radv_device *device, struct radeon_surf 
    if (pdev->info.gfx_level >= GFX12) {
       surface->u.gfx9.swizzle_mode = md->u.gfx12.swizzle_mode;
       surface->u.gfx9.color.dcc.max_compressed_block_size = md->u.gfx12.dcc_max_compressed_block;
-      surface->u.gfx9.color.dcc_data_format = md->u.gfx12.dcc_data_format;
-      surface->u.gfx9.color.dcc_number_type = md->u.gfx12.dcc_number_type;
-      surface->u.gfx9.color.dcc_write_compress_disable = md->u.gfx12.dcc_write_compress_disable;
+      surface->u.gfx9.dcc_data_format = md->u.gfx12.dcc_data_format;
+      surface->u.gfx9.dcc_number_type = md->u.gfx12.dcc_number_type;
+      surface->u.gfx9.dcc_write_compress_disable = md->u.gfx12.dcc_write_compress_disable;
    } else if (pdev->info.gfx_level >= GFX9) {
       if (md->u.gfx9.swizzle_mode > 0)
          surface->flags |= RADEON_SURF_SET(RADEON_SURF_MODE_2D, MODE);
@@ -711,6 +712,9 @@ radv_get_surface_flags(struct radv_device *device, struct radv_image *image, uns
       flags |= RADEON_SURF_VRS_RATE | RADEON_SURF_DISABLE_DCC;
    if (!(pCreateInfo->usage & (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT)))
       flags |= RADEON_SURF_NO_TEXTURE;
+   if (pCreateInfo->usage & (VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR | VK_IMAGE_USAGE_VIDEO_ENCODE_DPB_BIT_KHR) &&
+       !(pCreateInfo->usage & (VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_VIDEO_ENCODE_DST_BIT_KHR)))
+      flags |= RADEON_SURF_VIDEO_REFERENCE;
 
    if (alignment && alignment->maximumRequestedAlignment && !(instance->debug_flags & RADV_DEBUG_FORCE_COMPRESS)) {
       bool is_4k_capable;
@@ -782,9 +786,9 @@ radv_image_bo_set_metadata(struct radv_device *device, struct radv_image *image,
    if (pdev->info.gfx_level >= GFX12) {
       md.u.gfx12.swizzle_mode = surface->u.gfx9.swizzle_mode;
       md.u.gfx12.dcc_max_compressed_block = surface->u.gfx9.color.dcc.max_compressed_block_size;
-      md.u.gfx12.dcc_number_type = surface->u.gfx9.color.dcc_number_type;
-      md.u.gfx12.dcc_data_format = surface->u.gfx9.color.dcc_data_format;
-      md.u.gfx12.dcc_write_compress_disable = surface->u.gfx9.color.dcc_write_compress_disable;
+      md.u.gfx12.dcc_number_type = surface->u.gfx9.dcc_number_type;
+      md.u.gfx12.dcc_data_format = surface->u.gfx9.dcc_data_format;
+      md.u.gfx12.dcc_write_compress_disable = surface->u.gfx9.dcc_write_compress_disable;
       md.u.gfx12.scanout = (surface->flags & RADEON_SURF_SCANOUT) != 0;
    } else if (pdev->info.gfx_level >= GFX9) {
       const uint64_t dcc_offset = surface->display_dcc_offset ? surface->display_dcc_offset : surface->meta_offset;
@@ -1216,9 +1220,9 @@ radv_image_create_layout(struct radv_device *device, struct radv_image_create_in
          const enum pipe_format format = radv_format_to_pipe_format(image->vk.format);
 
          /* Set DCC tilings for both color and depth/stencil. */
-         image->planes[plane].surface.u.gfx9.color.dcc_number_type = ac_get_cb_number_type(format);
-         image->planes[plane].surface.u.gfx9.color.dcc_data_format = ac_get_cb_format(pdev->info.gfx_level, format);
-         image->planes[plane].surface.u.gfx9.color.dcc_write_compress_disable = false;
+         image->planes[plane].surface.u.gfx9.dcc_number_type = ac_get_cb_number_type(format);
+         image->planes[plane].surface.u.gfx9.dcc_data_format = ac_get_cb_format(pdev->info.gfx_level, format);
+         image->planes[plane].surface.u.gfx9.dcc_write_compress_disable = false;
       }
 
       if (create_info.bo_metadata && !mod_info &&

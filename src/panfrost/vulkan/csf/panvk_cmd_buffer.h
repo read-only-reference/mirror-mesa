@@ -86,20 +86,22 @@ get_fbd_size(bool has_zs_ext, uint32_t rt_count)
     (PANVK_IR_##_pass##_PASS * sizeof(uint64_t)))
 
 struct panvk_cs_occlusion_query {
-   uint64_t next;
+   struct cs_single_link_list_node node;
    uint64_t syncobj;
 };
 
 struct panvk_cs_subqueue_context {
    uint64_t syncobjs;
+#if PAN_ARCH == 10
    uint32_t iter_sb;
    uint32_t pad;
+#endif
    uint64_t reg_dump_addr;
    struct {
       struct panvk_cs_desc_ringbuf desc_ringbuf;
       uint64_t tiler_heap;
       uint64_t geom_buf;
-      uint64_t oq_chain;
+      struct cs_single_link_list oq_chain;
    } render;
    struct {
       uint32_t counter;
@@ -386,14 +388,6 @@ struct panvk_cmd_buffer {
 VK_DEFINE_HANDLE_CASTS(panvk_cmd_buffer, vk.base, VkCommandBuffer,
                        VK_OBJECT_TYPE_COMMAND_BUFFER)
 
-static inline uint32_t
-next_iter_sb(struct panvk_cmd_buffer *cmdbuf, uint32_t sb)
-{
-   struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
-
-   return sb + 1 < dev->csf.sb.iter_count ? sb + 1 : 0;
-}
-
 static bool
 inherits_render_ctx(struct panvk_cmd_buffer *cmdbuf)
 {
@@ -430,8 +424,9 @@ extern const struct vk_command_buffer_ops panvk_per_arch(cmd_buffer_ops);
 
 void panvk_per_arch(cmd_flush_draws)(struct panvk_cmd_buffer *cmdbuf);
 
-void panvk_per_arch(cs_pick_iter_sb)(struct panvk_cmd_buffer *cmdbuf,
-                                     enum panvk_subqueue_id subqueue);
+void panvk_per_arch(cs_next_iter_sb)(struct panvk_cmd_buffer *cmdbuf,
+                                     enum panvk_subqueue_id subqueue,
+                                     struct cs_index scratch_regs);
 
 void panvk_per_arch(get_cs_deps)(struct panvk_cmd_buffer *cmdbuf,
                                  const VkDependencyInfo *in,

@@ -445,36 +445,39 @@ normalize_dependency(VkPipelineStageFlags2 *src_stages,
                      VkAccessFlags2 *src_access, VkAccessFlags2 *dst_access,
                      uint32_t src_qfi, uint32_t dst_qfi)
 {
-   /* queue family acquire operation */
-   switch (src_qfi) {
-   case VK_QUEUE_FAMILY_EXTERNAL:
-      /* no execution dependency and no availability operation */
-      *src_stages = VK_PIPELINE_STAGE_2_NONE;
-      *src_access = VK_ACCESS_2_NONE;
-      break;
-   case VK_QUEUE_FAMILY_FOREIGN_EXT:
-      /* treat the foreign queue as the host */
-      *src_stages = VK_PIPELINE_STAGE_2_HOST_BIT;
-      *src_access = VK_ACCESS_2_HOST_WRITE_BIT;
-      break;
-   default:
-      break;
-   }
+   /* Perform queue family ownership transfer if src and dst are unequal. */
+   if (src_qfi != dst_qfi) {
+      /* queue family acquire operation */
+      switch (src_qfi) {
+      case VK_QUEUE_FAMILY_EXTERNAL:
+         /* no execution dependency and no availability operation */
+         *src_stages = VK_PIPELINE_STAGE_2_NONE;
+         *src_access = VK_ACCESS_2_NONE;
+         break;
+      case VK_QUEUE_FAMILY_FOREIGN_EXT:
+         /* treat the foreign queue as the host */
+         *src_stages = VK_PIPELINE_STAGE_2_HOST_BIT;
+         *src_access = VK_ACCESS_2_HOST_WRITE_BIT;
+         break;
+      default:
+         break;
+      }
 
-   /* queue family release operation */
-   switch (dst_qfi) {
-   case VK_QUEUE_FAMILY_EXTERNAL:
-      /* no execution dependency and no visibility operation */
-      *dst_stages = VK_PIPELINE_STAGE_2_NONE;
-      *dst_access = VK_ACCESS_2_NONE;
-      break;
-   case VK_QUEUE_FAMILY_FOREIGN_EXT:
-      /* treat the foreign queue as the host */
-      *dst_stages = VK_PIPELINE_STAGE_2_HOST_BIT;
-      *dst_access = VK_ACCESS_2_HOST_WRITE_BIT;
-      break;
-   default:
-      break;
+      /* queue family release operation */
+      switch (dst_qfi) {
+      case VK_QUEUE_FAMILY_EXTERNAL:
+         /* no execution dependency and no visibility operation */
+         *dst_stages = VK_PIPELINE_STAGE_2_NONE;
+         *dst_access = VK_ACCESS_2_NONE;
+         break;
+      case VK_QUEUE_FAMILY_FOREIGN_EXT:
+         /* treat the foreign queue as the host */
+         *dst_stages = VK_PIPELINE_STAGE_2_HOST_BIT;
+         *dst_access = VK_ACCESS_2_HOST_WRITE_BIT;
+         break;
+      default:
+         break;
+      }
    }
 
    *src_stages = vk_expand_src_stage_flags2(*src_stages);
@@ -617,20 +620,49 @@ panvk_per_arch(CmdPipelineBarrier2)(VkCommandBuffer commandBuffer,
    }
 }
 
+#if PAN_ARCH >= 11
 void
-panvk_per_arch(cs_pick_iter_sb)(struct panvk_cmd_buffer *cmdbuf,
-                                enum panvk_subqueue_id subqueue)
+panvk_per_arch(cs_next_iter_sb)(struct panvk_cmd_buffer *cmdbuf,
+                                enum panvk_subqueue_id subqueue,
+                                struct cs_index scratch_regs)
 {
    struct cs_builder *b = panvk_get_cs_builder(cmdbuf, subqueue);
-   struct cs_index iter_sb = cs_scratch_reg32(b, 0);
-   struct cs_index cmp_scratch = cs_scratch_reg32(b, 1);
+   struct cs_index iter_sb = cs_extract32(b, scratch_regs, 0);
+   struct cs_index sb_wait_mask = cs_extract32(b, scratch_regs, 1);
+
+   /* Wait for scoreboard to be available and select the next scoreboard entry */
+   cs_next_sb_entry(b, iter_sb, MALI_CS_SCOREBOARD_TYPE_ENDPOINT,
+                    MALI_CS_NEXT_SB_ENTRY_FORMAT_INDEX);
+
+   /* Setup indirect scoreboard wait mask now for indirect defer */
+   cs_move32_to(b, sb_wait_mask, 0);
+   cs_bit_set32(b, sb_wait_mask, sb_wait_mask, iter_sb);
+   cs_set_state(b, MALI_CS_SET_STATE_TYPE_SB_MASK_WAIT, sb_wait_mask);
+}
+#else
+void
+panvk_per_arch(cs_next_iter_sb)(struct panvk_cmd_buffer *cmdbuf,
+                                enum panvk_subqueue_id subqueue,
+                                struct cs_index scratch_regs)
+{
+   struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
+   struct cs_builder *b = panvk_get_cs_builder(cmdbuf, subqueue);
+   struct cs_index iter_sb = cs_extract32(b, scratch_regs, 0);
+   struct cs_index cmp_scratch = cs_extract32(b, scratch_regs, 1);
 
    cs_load32_to(b, iter_sb, cs_subqueue_ctx_reg(b),
                 offsetof(struct panvk_cs_subqueue_context, iter_sb));
 
+   /* Select next scoreboard entry and wrap around if we get past the limit */
+   cs_add32(b, iter_sb, iter_sb, 1);
+   cs_add32(b, cmp_scratch, iter_sb, -SB_ITER(dev->csf.sb.iter_count));
+   cs_if(b, MALI_CS_CONDITION_GEQUAL, cmp_scratch) {
+      cs_move32_to(b, iter_sb, SB_ITER(0));
+   }
+
    cs_match(b, iter_sb, cmp_scratch) {
 #define CASE(x)                                                                \
-   cs_case(b, x) {                                                             \
+   cs_case(b, SB_ITER(x)) {                                                    \
       cs_wait_slot(b, SB_ITER(x));                                             \
       cs_select_sb_entries_for_async_ops(b, SB_ITER(x));                       \
    }
@@ -642,7 +674,12 @@ panvk_per_arch(cs_pick_iter_sb)(struct panvk_cmd_buffer *cmdbuf,
       CASE(4)
 #undef CASE
    }
+
+   cs_store32(b, iter_sb, cs_subqueue_ctx_reg(b),
+              offsetof(struct panvk_cs_subqueue_context, iter_sb));
+   cs_flush_stores(b);
 }
+#endif
 
 static struct cs_buffer
 alloc_cs_buffer(void *cookie)
@@ -937,6 +974,11 @@ panvk_per_arch(CmdExecuteCommands)(VkCommandBuffer commandBuffer,
        * command buffer suspended the render pass. */
       primary->state.gfx.render.suspended =
          secondary->state.gfx.render.suspended;
+
+      /* Inherit the occlusion query state so that if the secondary contains
+       * begin/end, but the renderpass ends in the primary, the primary can
+       * correctly detect that an oq has ended in EndRendering. */
+      primary->state.gfx.render.oq = secondary->state.gfx.render.oq;
 
       /* If the render context we passed to the secondary command buffer got
        * invalidated, reset the FB/tiler descs and treat things as if we

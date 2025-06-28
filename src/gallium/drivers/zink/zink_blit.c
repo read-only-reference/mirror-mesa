@@ -330,6 +330,18 @@ zink_blit(struct pipe_context *pctx,
    struct zink_resource *use_src = src;
    struct zink_resource *dst = zink_resource(info->dst.resource);
    bool needs_present_readback = false;
+
+   if (ctx->awaiting_resolve && ctx->in_rp && ctx->dynamic_fb.tc_info.has_resolve) {
+      struct pipe_resource *resolve = ctx->fb_state.resolve;
+      if (!resolve)
+         resolve = ctx->dynamic_fb.tc_info.resolve;
+      if (resolve == info->dst.resource) {
+         zink_batch_no_rp_safe(ctx);
+         ctx->awaiting_resolve = false;
+         return;
+      }
+   }
+
    if (zink_is_swapchain(dst)) {
       if (!zink_kopper_acquire(ctx, dst, UINT64_MAX))
          return;
@@ -447,11 +459,10 @@ zink_blit(struct pipe_context *pctx,
    ctx->blit_nearest = info->filter == PIPE_TEX_FILTER_NEAREST;
 
    if (stencil_blit) {
-      struct pipe_surface *dst_view, dst_templ;
+      struct pipe_surface dst_templ;
       util_blitter_default_dst_texture(&dst_templ, info->dst.resource, info->dst.level, info->dst.box.z);
-      dst_view = pctx->create_surface(pctx, info->dst.resource, &dst_templ);
 
-      util_blitter_clear_depth_stencil(ctx->blitter, dst_view, PIPE_CLEAR_STENCIL,
+      util_blitter_clear_depth_stencil(ctx->blitter, &dst_templ, PIPE_CLEAR_STENCIL,
                                        0, 0, info->dst.box.x, info->dst.box.y,
                                        info->dst.box.width, info->dst.box.height);
       zink_blit_begin(ctx, ZINK_BLIT_SAVE_FB | ZINK_BLIT_SAVE_FS | ZINK_BLIT_SAVE_TEXTURES | ZINK_BLIT_SAVE_FS_CONST_BUF);
@@ -463,8 +474,6 @@ zink_blit(struct pipe_context *pctx,
                                     info->src.level,
                                     &info->src.box,
                                     info->scissor_enable ? &info->scissor : NULL);
-
-      pipe_surface_unref(pctx, &dst_view);
    } else {
       struct pipe_blit_info new_info = *info;
       new_info.src.resource = &use_src->base.b;
@@ -569,14 +578,14 @@ zink_blit_barriers(struct zink_context *ctx, struct zink_resource *src, struct z
       pipeline = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
    }
    if (src == dst) {
-      VkImageLayout layout = zink_screen(ctx->base.screen)->info.have_EXT_attachment_feedback_loop_layout ?
+      VkImageLayout layout = !screen->driver_workarounds.general_layout && screen->info.have_EXT_attachment_feedback_loop_layout ?
                              VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT :
                              VK_IMAGE_LAYOUT_GENERAL;
       screen->image_barrier(ctx, src, layout, VK_ACCESS_SHADER_READ_BIT | flags, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | pipeline);
    } else {
       if (src) {
-         VkImageLayout layout = util_format_is_depth_or_stencil(src->base.b.format) &&
-                                src->obj->vkusage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT ?
+         VkImageLayout layout = screen->driver_workarounds.general_layout ? VK_IMAGE_LAYOUT_GENERAL :
+                                util_format_is_depth_or_stencil(src->base.b.format) && src->obj->vkusage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT ?
                                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
          screen->image_barrier(ctx, src, layout,
@@ -584,9 +593,10 @@ zink_blit_barriers(struct zink_context *ctx, struct zink_resource *src, struct z
          if (!ctx->unordered_blitting)
             src->obj->unordered_read = false;
       }
-      VkImageLayout layout = util_format_is_depth_or_stencil(dst->base.b.format) ?
-                           VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL :
-                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+      VkImageLayout layout = screen->driver_workarounds.general_layout ? VK_IMAGE_LAYOUT_GENERAL :
+                             util_format_is_depth_or_stencil(dst->base.b.format) ?
+                             VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL :
+                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
       screen->image_barrier(ctx, dst, layout, flags, pipeline);
    }
    if (!ctx->unordered_blitting)

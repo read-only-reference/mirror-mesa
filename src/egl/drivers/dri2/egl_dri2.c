@@ -595,6 +595,16 @@ dri2_query_driver_config(_EGLDisplay *disp)
    return ret;
 }
 
+static bool
+dri2_query_device_info(const void* driver_device_identifier,
+                       struct egl_device_info *device_info)
+{
+   const char* drm_device_name = (const char*)driver_device_identifier;
+   return dri_get_drm_device_info(
+      drm_device_name, device_info->device_uuid, device_info->driver_uuid,
+      &device_info->vendor_name, &device_info->renderer_name, &device_info->driver_name);
+}
+
 void
 dri2_setup_screen(_EGLDisplay *disp)
 {
@@ -2278,6 +2288,8 @@ dri2_num_fourcc_format_planes(EGLint format)
    case DRM_FORMAT_Y410:
    case DRM_FORMAT_Y412:
    case DRM_FORMAT_Y416:
+   case DRM_FORMAT_YUV420_8BIT:
+   case DRM_FORMAT_YUV420_10BIT:
       return 1;
 
    case DRM_FORMAT_NV12:
@@ -2303,6 +2315,15 @@ dri2_num_fourcc_format_planes(EGLint format)
    case DRM_FORMAT_YVU422:
    case DRM_FORMAT_YUV444:
    case DRM_FORMAT_YVU444:
+   case DRM_FORMAT_S010:
+   case DRM_FORMAT_S210:
+   case DRM_FORMAT_S410:
+   case DRM_FORMAT_S012:
+   case DRM_FORMAT_S212:
+   case DRM_FORMAT_S412:
+   case DRM_FORMAT_S016:
+   case DRM_FORMAT_S216:
+   case DRM_FORMAT_S416:
       return 3;
 
    default:
@@ -3338,6 +3359,7 @@ const _EGLDriver _eglDriver = {
    .QuerySurface = dri2_query_surface,
    .QueryDriverName = dri2_query_driver_name,
    .QueryDriverConfig = dri2_query_driver_config,
+   .QueryDeviceInfo = dri2_query_device_info,
 #ifdef HAVE_LIBDRM
    .CreateDRMImageMESA = dri2_create_drm_image_mesa,
    .ExportDRMImageMESA = dri2_export_drm_image_mesa,

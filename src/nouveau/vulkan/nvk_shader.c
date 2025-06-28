@@ -137,6 +137,13 @@ nvk_preprocess_nir(struct vk_physical_device *vk_pdev,
       container_of(vk_pdev, struct nvk_physical_device, vk);
 
    nak_preprocess_nir(nir, pdev->nak);
+
+   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+      nir_input_attachment_options ia_opts = {
+         .use_ia_coord_intrin = true,
+      };
+      NIR_PASS(_, nir, nir_lower_input_attachments, &ia_opts);
+   }
 }
 
 static void
@@ -203,9 +210,6 @@ nvk_hash_state(struct vk_physical_device *device,
       struct nak_fs_key key;
       nvk_populate_fs_key(&key, state);
       _mesa_blake3_update(&blake3_ctx, &key, sizeof(key));
-
-      const bool is_multiview = state->rp->view_mask != 0;
-      _mesa_blake3_update(&blake3_ctx, &is_multiview, sizeof(is_multiview));
 
       /* This doesn't impact the shader compile but it does go in the
        * nvk_shader and gets [de]serialized along with the binary so we
@@ -335,21 +339,11 @@ static void
 nvk_lower_nir(struct nvk_device *dev, nir_shader *nir,
               VkShaderCreateFlagsEXT shader_flags,
               const struct vk_pipeline_robustness_state *rs,
-              bool is_multiview,
               uint32_t set_layout_count,
               struct vk_descriptor_set_layout * const *set_layouts,
               struct nvk_cbuf_map *cbuf_map_out)
 {
    const struct nvk_physical_device *pdev = nvk_device_physical(dev);
-
-   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
-      NIR_PASS(_, nir, nir_lower_input_attachments,
-               &(nir_input_attachment_options) {
-                  .use_fragcoord_sysval = true,
-                  .use_layer_id_sysval = true,
-                  .use_view_id_for_layer = is_multiview,
-               });
-   }
 
    if (nir->info.stage == MESA_SHADER_TESS_EVAL) {
       NIR_PASS(_, nir, nir_lower_patch_vertices,
@@ -371,27 +365,6 @@ nvk_lower_nir(struct nvk_device *dev, nir_shader *nir,
    /* Lower push constants before lower_descriptors */
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_push_const,
             nir_address_format_32bit_offset);
-
-   /* Lower non-uniform access before lower_descriptors */
-   enum nir_lower_non_uniform_access_type lower_non_uniform_access_types =
-      nir_lower_non_uniform_ubo_access;
-
-   if (pdev->info.cls_eng3d < TURING_A) {
-      lower_non_uniform_access_types |= nir_lower_non_uniform_texture_access |
-                                        nir_lower_non_uniform_image_access;
-   }
-
-   /* In practice, most shaders do not have non-uniform-qualified accesses
-    * thus a cheaper and likely to fail check is run first.
-    */
-   if (nir_has_non_uniform_access(nir, lower_non_uniform_access_types)) {
-      struct nir_lower_non_uniform_access_options opts = {
-         .types = lower_non_uniform_access_types,
-         .callback = NULL,
-      };
-      NIR_PASS(_, nir, nir_opt_non_uniform_access);
-      NIR_PASS(_, nir, nir_lower_non_uniform_access, &opts);
-   }
 
    struct nvk_cbuf_map *cbuf_map = NULL;
    if (!(pdev->debug_flags & NVK_DEBUG_NO_CBUF)) {
@@ -419,6 +392,36 @@ nvk_lower_nir(struct nvk_device *dev, nir_shader *nir,
 
    NIR_PASS(_, nir, nvk_nir_lower_descriptors, pdev, shader_flags, rs,
             set_layout_count, set_layouts, cbuf_map);
+
+   if (nvk_use_bindless_cbuf(&pdev->info)) {
+      /* On Turing+ where we have bindless cbufs, we use ACCESS_NON_UNIFORM to
+       * determine whether or not it's safe to assume a uniform handle so we
+       * want to optimize it away whenever possible.
+       */
+      if (nir_has_non_uniform_access(nir, nir_lower_non_uniform_ubo_access))
+         NIR_PASS(_, nir, nir_opt_non_uniform_access);
+   }
+
+   if (pdev->info.cls_eng3d < TURING_A) {
+      /* NOTE: This does nothing for images on Kepler since those are lowered
+       * to suldga/sustga before we get here.  That's fine, though, because
+       * our nil_su_info fetches and calculations work fine with non-uniform
+       * descriptors.
+       */
+      struct nir_lower_non_uniform_access_options opts = {
+         .types = nir_lower_non_uniform_texture_access |
+                  nir_lower_non_uniform_image_access,
+         .callback = NULL,
+      };
+      /* In practice, most shaders do not have non-uniform-qualified accesses
+       * thus a cheaper and likely to fail check is run first.
+       */
+      if (nir_has_non_uniform_access(nir, opts.types)) {
+         NIR_PASS(_, nir, nir_opt_non_uniform_access);
+         NIR_PASS(_, nir, nir_lower_non_uniform_access, &opts);
+      }
+   }
+
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_global,
             nir_address_format_64bit_global);
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_ssbo,
@@ -887,10 +890,7 @@ nvk_compile_shader(struct nvk_device *dev,
       return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
 
-   /* TODO: Multiview with ESO */
-   const bool is_multiview = state && state->rp->view_mask != 0;
-
-   nvk_lower_nir(dev, nir, info->flags, info->robustness, is_multiview,
+   nvk_lower_nir(dev, nir, info->flags, info->robustness,
                  info->set_layout_count, info->set_layouts,
                  &shader->cbuf_map);
 

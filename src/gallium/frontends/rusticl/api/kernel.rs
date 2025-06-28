@@ -118,6 +118,7 @@ unsafe impl CLInfoObj<cl_kernel_work_group_info, cl_device_id> for cl_kernel {
                 v.write::<usize>(kernel.preferred_simd_size(dev))
             }
             CL_KERNEL_PRIVATE_MEM_SIZE => v.write::<cl_ulong>(kernel.priv_mem_size(dev)),
+            CL_KERNEL_SPILL_MEM_SIZE_INTEL => v.write::<cl_ulong>(kernel.priv_mem_size(dev)),
             CL_KERNEL_WORK_GROUP_SIZE => v.write::<usize>(kernel.max_threads_per_block(dev)),
             // CL_INVALID_VALUE if param_name is not one of the supported values
             _ => Err(CL_INVALID_VALUE),
@@ -419,42 +420,55 @@ fn set_kernel_arg(
         };
 
         // let's create the arg now
-        let arg = unsafe {
-            match arg.kind {
-                KernelArgType::Constant(_) if !arg.dead => KernelArgValue::Constant(
-                    slice::from_raw_parts(arg_value.cast(), arg_size).to_vec(),
-                ),
-                KernelArgType::MemConstant | KernelArgType::MemGlobal => {
-                    let ptr: *const cl_mem = arg_value.cast();
-                    if ptr.is_null() || (*ptr).is_null() {
-                        KernelArgValue::None
-                    } else {
-                        let buffer = Buffer::arc_from_raw(*ptr)?;
-                        KernelArgValue::Buffer(Arc::downgrade(&buffer))
-                    }
-                }
-                KernelArgType::MemLocal if !arg.dead => KernelArgValue::LocalMem(arg_size),
-                KernelArgType::Image | KernelArgType::RWImage | KernelArgType::Texture
-                    if !arg.dead =>
-                {
-                    let img: *const cl_mem = arg_value.cast();
-                    let img = Image::arc_from_raw(*img)?;
-                    KernelArgValue::Image(Arc::downgrade(&img))
-                }
-                KernelArgType::Sampler if !arg.dead => {
-                    let ptr: *const cl_sampler = arg_value.cast();
-                    KernelArgValue::Sampler(Sampler::arc_from_raw(*ptr)?)
-                }
-                _ => {
-                    debug_assert!(
-                        arg.dead
-                            || matches!(
-                                arg.kind,
-                                KernelArgType::MemConstant | KernelArgType::MemGlobal
-                            )
-                    );
+        let arg = match arg.kind {
+            KernelArgType::Constant(_) if !arg.dead => KernelArgValue::Constant(
+                // SAFETY: for constant args arg_value points to raw data.
+                unsafe { slice::from_raw_parts(arg_value.cast(), arg_size) }.to_vec(),
+            ),
+            KernelArgType::MemConstant | KernelArgType::MemGlobal => {
+                let ptr: *const cl_mem = arg_value.cast();
+                // SAFETY: for buffer args arg_value points to a cl_mem object or NULL.
+                if ptr.is_null() || unsafe { *ptr }.is_null() {
                     KernelArgValue::None
+                } else {
+                    // SAFETY: as above
+                    let buffer = Buffer::arc_from_raw(unsafe { *ptr })?;
+                    KernelArgValue::Buffer(Arc::downgrade(&buffer))
                 }
+            }
+            KernelArgType::MemLocal if !arg.dead => KernelArgValue::LocalMem(arg_size),
+            KernelArgType::Image | KernelArgType::RWImage | KernelArgType::Texture if !arg.dead => {
+                let img: *const cl_mem = arg_value.cast();
+                // SAFETY: for image args arg_value pointers to a cl_mem object.
+                let img = Image::arc_from_raw(unsafe { *img })?;
+
+                // CL_INVALID_ARG_VALUE if the argument is an image declared with the read_only
+                // qualifier and arg_value refers to an image object created with cl_mem_flags
+                // of CL_MEM_WRITE_ONLY or if the image argument is declared with the write_only
+                // qualifier and arg_value refers to an image object created with cl_mem_flags
+                // of CL_MEM_READ_ONLY.
+                if arg.kind == KernelArgType::Texture && bit_check(img.flags, CL_MEM_WRITE_ONLY)
+                    || arg.kind == KernelArgType::Image && bit_check(img.flags, CL_MEM_READ_ONLY)
+                {
+                    return Err(CL_INVALID_ARG_VALUE);
+                }
+
+                KernelArgValue::Image(Arc::downgrade(&img))
+            }
+            KernelArgType::Sampler if !arg.dead => {
+                let ptr: *const cl_sampler = arg_value.cast();
+                // SAFETY: for a sampler arg arg_value points to a cl_sampler object.
+                KernelArgValue::Sampler(Sampler::arc_from_raw(unsafe { *ptr })?)
+            }
+            _ => {
+                debug_assert!(
+                    arg.dead
+                        || matches!(
+                            arg.kind,
+                            KernelArgType::MemConstant | KernelArgType::MemGlobal
+                        )
+                );
+                KernelArgValue::None
             }
         };
         k.set_kernel_arg(arg_index, arg)
@@ -463,7 +477,6 @@ fn set_kernel_arg(
     }
 
     //• CL_INVALID_DEVICE_QUEUE for an argument declared to be of type queue_t when the specified arg_value is not a valid device queue object. This error code is missing before version 2.0.
-    //• CL_INVALID_ARG_VALUE if the argument is an image declared with the read_only qualifier and arg_value refers to an image object created with cl_mem_flags of CL_MEM_WRITE_ONLY or if the image argument is declared with the write_only qualifier and arg_value refers to an image object created with cl_mem_flags of CL_MEM_READ_ONLY.
     //• CL_MAX_SIZE_RESTRICTION_EXCEEDED if the size in bytes of the memory object (if the argument is a memory object) or arg_size (if the argument is declared with local qualifier) exceeds a language- specified maximum size restriction for this argument, such as the MaxByteOffset SPIR-V decoration. This error code is missing before version 2.2.
 }
 

@@ -1,86 +1,23 @@
-# Shared between windows and Linux
-.build-common:
-  extends: .container+build-rules
-  # Cancel job if a newer commit is pushed to the same branch
-  interruptible: true
-  variables:
-    # Build jobs are typically taking between 5-12 minutes, depending on how
-    # much they build and how many new Rust compilers we have to build twice.
-    # Allow 25 minutes as a reasonable margin: beyond this point, something
-    # has gone badly wrong, and we should try again to see if we can get
-    # something from it.
-    #
-    # Some jobs not in the critical path use a higher timeout, particularly
-    # when building with ASan or UBSan.
-    BUILD_JOB_TIMEOUT: 12m
-    RUN_MESON_TESTS: "true"
-  timeout: 16m
-  # We don't want to download any previous job's artifacts
-  dependencies: []
-  artifacts:
-    name: "${CI_PROJECT_NAME}_${CI_JOB_NAME}"
-    when: always
-    paths:
-      - _build/meson-logs/*.txt
-      - _build/meson-logs/strace
-      - _build/.ninja_log
-      - artifacts
+include:
+  - local: '.gitlab-ci/build/gitlab-ci-inc.yml'
 
-.build-run-long:
-  variables:
-    BUILD_JOB_TIMEOUT: 18m
-  timeout: 25m
+# Git archive
 
-
-# Just Linux
-.build-linux:
-  extends: .build-common
-  variables:
-    C_ARGS: >
-      -Wno-error=deprecated-declarations
-    CCACHE_COMPILERCHECK: "content"
-    CCACHE_COMPRESS: "true"
-    CCACHE_DIR: /cache/mesa/ccache
-  # Use ccache transparently, and print stats before/after
-  before_script:
-    - !reference [default, before_script]
-    - |
-      export PATH="/usr/lib/ccache:$PATH"
-      export CCACHE_BASEDIR="$PWD"
-      if test -x /usr/bin/ccache; then
-        section_start ccache_before "ccache stats before build"
-        ccache --show-stats
-        section_end ccache_before
-      fi
-  after_script:
-    - if test -x /usr/bin/ccache; then ccache --show-stats | grep "Hits:"; fi
-    - !reference [default, after_script]
-
-.build-windows:
+make-git-archive:
   extends:
-    - .build-common
-    - .windows-docker-tags
-  cache:
-    key: ${CI_JOB_NAME}
-    paths:
-      - subprojects/packagecache
-
-.meson-build-for-tests:
-  extends:
-    - .build-linux
-  stage: build-for-tests
+    - .fdo.ci-fairy
+  stage: git-archive
+  rules:
+    - !reference [.scheduled_pipeline-rules, rules]
   script:
-    - &meson-build timeout --verbose ${BUILD_JOB_TIMEOUT_OVERRIDE:-$BUILD_JOB_TIMEOUT} bash --login .gitlab-ci/meson/build.sh
-    - .gitlab-ci/prepare-artifacts.sh
+    # Compactify the .git directory
+    - git gc --aggressive
+    # Download & cache the perfetto subproject as well.
+    - rm -rf subprojects/perfetto ; mkdir -p subprojects/perfetto && curl --fail https://android.googlesource.com/platform/external/perfetto/+archive/$(grep 'revision =' subprojects/perfetto.wrap | cut -d ' ' -f3).tar.gz | tar zxf - -C subprojects/perfetto
+    # compress the current folder
+    - tar -cvzf ../$CI_PROJECT_NAME.tar.gz .
 
-.meson-build-only:
-  extends:
-    - .meson-build-for-tests
-    - .build-only-delayed-rules
-  stage: build-only
-  script:
-    - *meson-build
-
+    - ci-fairy s3cp --token-file "${S3_JWT_FILE}" ../$CI_PROJECT_NAME.tar.gz https://$S3_HOST/git-cache/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME/$CI_PROJECT_NAME.tar.gz
 
 debian-x86_64:
   extends:
@@ -302,7 +239,7 @@ debian-release:
     BUILDTYPE: "release"
     S3_ARTIFACT_NAME: "mesa-x86_64-default-${BUILDTYPE}"
   script:
-    - *meson-build
+    - !reference [.meson-build-only, script]
     - 'if [ -n "$MESA_CI_PERFORMANCE_ENABLED" ]; then .gitlab-ci/prepare-artifacts.sh; fi'
 
 alpine-build-testing:
@@ -418,6 +355,7 @@ debian-android:
       -D platforms=android
     FORCE_FALLBACK_FOR: llvm
     EXTRA_OPTION: >
+      -D amd-use-llvm=false
       -D android-stub=true
       -D platform-sdk-version=${ANDROID_SDK_VERSION}
       -D cpp_rtti=false
@@ -446,14 +384,11 @@ debian-android:
     S3_ARTIFACT_NAME: mesa-x86_64-android-${BUILDTYPE}
   script:
     # x86_64 build:
-    # Can't do AMD drivers because they require LLVM, which is currently
-    # problematic in our Android builds.
     - export CROSS=x86_64-linux-android
-    - export GALLIUM_DRIVERS=iris,virgl,zink,softpipe
-    - export VULKAN_DRIVERS=intel,virtio,swrast
+    - export GALLIUM_DRIVERS=iris,radeonsi,softpipe,virgl,zink
+    - export VULKAN_DRIVERS=amd,intel,swrast,virtio
     - .gitlab-ci/create-llvm-meson-wrap-file.sh
-    - *meson-build
-    - .gitlab-ci/prepare-artifacts.sh
+    - !reference [.meson-build-for-tests, script]
     # remove all the files created by the previous build before the next build
     - git clean -dxf .
     # aarch64 build:
@@ -463,7 +398,7 @@ debian-android:
     - export CROSS=aarch64-linux-android
     - export GALLIUM_DRIVERS=etnaviv,freedreno,lima,panfrost,vc4,v3d
     - export VULKAN_DRIVERS=freedreno,broadcom,virtio
-    - *meson-build
+    - !reference [.meson-build-only, script]
 
 .meson-cross:
   extends:
@@ -640,7 +575,7 @@ debian-arm64-release:
       -Wno-error=stringop-overread
       -Wno-error=deprecated-declarations
   script:
-    - *meson-build
+    - !reference [.meson-build-only, script]
     - 'if [ -n "$MESA_CI_PERFORMANCE_ENABLED" ]; then .gitlab-ci/prepare-artifacts.sh; fi'
 
 debian-no-libdrm:

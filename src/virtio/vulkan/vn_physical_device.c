@@ -523,26 +523,6 @@ vn_physical_device_sanitize_properties(struct vn_physical_device *physical_dev)
    }
    memcpy(props->deviceName, device_name, device_name_len + 1);
 
-   /* force prime blit on NV proprietary driver */
-   if (props->driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY) {
-      /* intentionally fail same_gpu check on x11 */
-      physical_dev->base.vk.supported_extensions.EXT_pci_bus_info = false;
-      props->pciDomain = 0;
-      props->pciBus = 0;
-      props->pciDevice = 0;
-      props->pciFunction = 0;
-
-      /* intentionally fail same_gpu check on wayland */
-      physical_dev->base.vk.supported_extensions.EXT_physical_device_drm =
-         false;
-      props->drmHasPrimary = false;
-      props->drmHasRender = false;
-      props->drmPrimaryMajor = 0;
-      props->drmPrimaryMinor = 0;
-      props->drmRenderMajor = 0;
-      props->drmRenderMinor = 0;
-   }
-
    /* store renderer VkDriverId for implementation specific workarounds */
    physical_dev->renderer_driver_id = props->driverID;
    props->driverID = VK_DRIVER_ID_MESA_VENUS;
@@ -860,7 +840,7 @@ vn_physical_device_init_properties(struct vn_physical_device *physical_dev)
 
 #if DETECT_OS_ANDROID
    /* VK_ANDROID_native_buffer */
-   if (vn_android_gralloc_get_shared_present_usage())
+   if (vk_android_get_front_buffer_usage())
       props->sharedImage = true;
 #endif
 
@@ -2079,8 +2059,9 @@ vn_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
    if (!layered_vk_props)
       return;
 
-   VN_COPY_STRUCT_GUTS(layered_vk_props, &layered_props->vk,
-                       sizeof(layered_props->vk));
+   VN_COPY_STRUCT_GUTS(&layered_vk_props->properties,
+                       &layered_props->vk.properties,
+                       sizeof(layered_props->vk.properties));
    vk_foreach_struct(layered_vk_pnext, layered_vk_props->properties.pNext) {
       switch (layered_vk_pnext->sType) {
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES:
@@ -2893,11 +2874,10 @@ vn_GetPhysicalDeviceImageFormatProperties2(
     */
    if (wsi_info && physical_dev->renderer_driver_id ==
                       VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA) {
-      if (pImageFormatInfo != &local_info.format) {
-         local_info.format = *pImageFormatInfo;
-         pImageFormatInfo = &local_info.format;
-      }
+      assert(!external_info);
+      local_info.format = *pImageFormatInfo;
       local_info.format.flags &= ~VK_IMAGE_CREATE_ALIAS_BIT;
+      pImageFormatInfo = &local_info.format;
    }
 
    /* Check if image format props is in the cache. */
