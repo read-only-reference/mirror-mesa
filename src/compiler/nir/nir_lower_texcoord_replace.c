@@ -49,7 +49,7 @@ get_io_index(nir_builder *b, nir_deref_instr *deref)
 
          offset = nir_iadd(b, offset, mul);
       } else
-         unreachable("Unsupported deref type");
+         UNREACHABLE("Unsupported deref type");
    }
 
    nir_deref_path_finish(&path);
@@ -74,7 +74,7 @@ nir_lower_texcoord_replace_impl(nir_function_impl *impl,
       /* find or create pntc */
       nir_variable *pntc = nir_get_variable_with_location(b.shader, nir_var_shader_in,
                                                           VARYING_SLOT_PNTC, glsl_vec_type(2));
-      b.shader->info.inputs_read |= BITFIELD64_BIT(VARYING_SLOT_PNTC);
+      b.shader->info.inputs_read |= VARYING_BIT_PNTC;
       new_coord = nir_load_var(&b, pntc);
    }
 

@@ -462,7 +462,7 @@ get_rat_opcode(const nir_atomic_op opcode)
    case nir_atomic_op_dec_wrap:
       return RatInstr::WRAP_DEC_RTN;
    default:
-      unreachable("Unsupported atomic");
+      UNREACHABLE("Unsupported atomic");
    }
 }
 
@@ -491,7 +491,7 @@ get_rat_opcode_wo(const nir_atomic_op opcode)
    case nir_atomic_op_xchg:
       return RatInstr::XCHG_RTN;
    default:
-      unreachable("Unsupported atomic");
+      UNREACHABLE("Unsupported atomic");
    }
 }
 
@@ -618,11 +618,15 @@ RatInstr::emit_ssbo_store(nir_intrinsic_instr *instr, Shader& shader)
    auto addr_base = vf.temp_register();
 
    auto [offset, rat_id] = shader.evaluate_resource_offset(instr, 1);
+   const unsigned wrmask = nir_intrinsic_write_mask(instr);
 
    shader.emit_instruction(
       new AluInstr(op2_lshr_int, addr_base, orig_addr, vf.literal(2), AluInstr::write));
 
    for (unsigned i = 0; i < nir_src_num_components(instr->src[0]); ++i) {
+      if (!(BITFIELD_BIT(i) & wrmask))
+         continue;
+
       auto addr_vec = vf.temp_vec4(pin_group, {0, 1, 2, 7});
       if (i == 0) {
          shader.emit_instruction(

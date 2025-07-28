@@ -196,7 +196,7 @@ global_priority_to_group_allow_priority_flag(
    case VK_QUEUE_GLOBAL_PRIORITY_REALTIME_KHR:
       return PAN_KMOD_GROUP_ALLOW_PRIORITY_REALTIME;
    default:
-      unreachable("Invalid global priority");
+      UNREACHABLE("Invalid global priority");
    }
 }
 
@@ -281,7 +281,7 @@ panvk_queue_destroy(struct vk_queue *queue)
       panvk_per_arch(destroy_gpu_queue)(queue);
       break;
    default:
-      unreachable("Unknown queue family");
+      UNREACHABLE("Unknown queue family");
    }
 }
 
@@ -608,4 +608,72 @@ panvk_per_arch(GetRenderingAreaGranularityKHR)(
    VkExtent2D *pGranularity)
 {
    *pGranularity = (VkExtent2D){32, 32};
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+panvk_per_arch(GetCalibratedTimestampsKHR)(
+   VkDevice _device, uint32_t timestampCount,
+   const VkCalibratedTimestampInfoKHR *pTimestampInfos, uint64_t *pTimestamps,
+   uint64_t *pMaxDeviation)
+{
+   VK_FROM_HANDLE(panvk_device, device, _device);
+   struct panvk_physical_device *pdev =
+      to_panvk_physical_device(device->vk.physical);
+
+   bool requested_domain[] = {
+      [VK_TIME_DOMAIN_DEVICE_KHR] = false,
+      [VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR] = false,
+      [VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR] = false,
+   };
+   uint64_t timestamps[] = {
+      [VK_TIME_DOMAIN_DEVICE_KHR] = 0,
+      [VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR] = 0,
+      [VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR] = 0,
+   };
+   uint64_t max_period = 0;
+
+   for (uint32_t idx = 0; idx < timestampCount; ++idx)
+      requested_domain[pTimestampInfos[idx].timeDomain] |= true;
+
+   uint64_t begin, end;
+#ifdef CLOCK_MONOTONIC_RAW
+   requested_domain[VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR] = true;
+   begin = vk_clock_gettime(CLOCK_MONOTONIC_RAW);
+#else
+   requested_domain[VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR] = true;
+   begin = vk_clock_gettime(CLOCK_MONOTONIC);
+#endif
+
+   if (requested_domain[VK_TIME_DOMAIN_DEVICE_KHR]) {
+      timestamps[VK_TIME_DOMAIN_DEVICE_KHR] =
+         pan_kmod_query_timestamp(pdev->kmod.dev);
+      max_period = MAX2(max_period, panvk_get_gpu_system_timestamp_period(pdev));
+   }
+
+   if (requested_domain[VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR]) {
+      timestamps[VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR] =
+         vk_clock_gettime(CLOCK_MONOTONIC);
+      max_period = MAX2(max_period, 1);
+   }
+
+#ifdef CLOCK_MONOTONIC_RAW
+   if (requested_domain[VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR]) {
+      timestamps[VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR] =
+         vk_clock_gettime(CLOCK_MONOTONIC_RAW);
+      max_period = MAX2(max_period, 1);
+   }
+#endif
+
+#ifdef CLOCK_MONOTONIC_RAW
+   end = timestamps[VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR];
+#else
+   end = timestamps[VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR];
+#endif
+
+   for (uint32_t idx = 0; idx < timestampCount; ++idx)
+      pTimestamps[idx] = timestamps[pTimestampInfos[idx].timeDomain];
+
+   *pMaxDeviation = vk_time_max_deviation(begin, end, max_period);
+
+   return VK_SUCCESS;
 }

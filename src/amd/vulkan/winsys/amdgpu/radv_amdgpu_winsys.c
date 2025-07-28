@@ -73,7 +73,7 @@ radv_amdgpu_winsys_query_value(struct radeon_winsys *rws, enum radeon_value_id v
       ac_drm_query_sensor_info(ws->dev, AMDGPU_INFO_SENSOR_GFX_MCLK, 4, &retval);
       return retval;
    default:
-      unreachable("invalid query value");
+      UNREACHABLE("invalid query value");
    }
 
    return 0;
@@ -211,8 +211,7 @@ radv_amdgpu_winsys_create(int fd, uint64_t debug_flags, uint64_t perftest_flags,
       ++ws->refcount;
    }
 
-   if (is_virtio &&
-       (perftest_flags & (RADV_PERFTEST_BO_LIST | RADV_PERFTEST_LOCAL_BOS))) {
+   if (is_virtio && (perftest_flags & (RADV_PERFTEST_BO_LIST | RADV_PERFTEST_LOCAL_BOS))) {
       /* virtio doesn't support VM_ALWAYS_VALID, so disable options that requires it. */
       fprintf(stderr, "localbos and bolist options are not supported values for RADV_PERFTEST with virtio.\n");
       return VK_ERROR_INITIALIZATION_FAILED;

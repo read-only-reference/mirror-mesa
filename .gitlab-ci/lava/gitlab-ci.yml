@@ -30,9 +30,9 @@ variables:
   # to a lack of available devices to run the jobs.
   timeout: 1h
   variables:
-    GIT_STRATEGY: none # testing doesn't build anything from source
+    GIT_STRATEGY: none  # testing doesn't build anything from source
     HWCI_TEST_SCRIPT: ./install/deqp-runner.sh
-    FDO_CI_CONCURRENT: 6 # should be replaced by per-machine definitions
+    FDO_CI_CONCURRENT: 6  # should be replaced by per-machine definitions
     # the dispatchers use this to cache data locally
     LAVA_HTTP_CACHE_URI: "http://caching-proxy/cache/?uri="
     LAVA_ROOTFS_PATH: "${MESA_IMAGE_PATH}:${FDO_DISTRIBUTION_TAG}/lava-rootfs.tar.zst"
@@ -90,9 +90,9 @@ variables:
     - job: debian/x86_64_test-android
       artifacts: false
       optional: true
-    - job: debian-x86_64 # The generic Linux build for the host will be downloaded later
+    - job: debian-x86_64  # The generic Linux build for the host will be downloaded later
       artifacts: false
-    - job: debian-android # The Android build for the guest will be downloaded later and installed via adb
+    - job: debian-android  # The Android build for the guest will be downloaded later and installed via adb
       artifacts: false
 
 .lava-x86_64-test-gl:
@@ -175,6 +175,21 @@ variables:
     - job: debian-arm64
       artifacts: false
 
+.lava-arm64-test-asan-gl:
+  extends:
+    - .use-debian/arm64_test-gl
+    - .lava-arm64-test
+  variables:
+    DEQP_FORCE_ASAN: 1
+    S3_ARTIFACT_NAME: mesa-arm64-asan-debugoptimized
+  needs:
+    - !reference [.lava-test, needs]
+    - job: debian/arm64_test-gl
+      artifacts: false
+      optional: true
+    - job: debian-arm64-asan
+      artifacts: false
+
 .lava-arm64-test-vk:
   extends:
     - .use-debian/arm64_test-vk
@@ -187,18 +202,28 @@ variables:
     - job: debian-arm64
       artifacts: false
 
+.lava-arm64-test-asan-vk:
+  extends:
+    - .use-debian/arm64_test-vk
+    - .lava-arm64-test
+  variables:
+    DEQP_FORCE_ASAN: 1
+    S3_ARTIFACT_NAME: mesa-arm64-asan-debugoptimized
+  needs:
+    - !reference [.lava-test, needs]
+    - job: debian/arm64_test-vk
+      artifacts: false
+      optional: true
+    - job: debian-arm64-asan
+      artifacts: false
+
 .lava-piglit-traces:
   extends:
-    - .test-piglit
+    - .piglit-traces-test
   variables:
-    HWCI_TEST_SCRIPT: "/install/piglit/piglit-traces.sh"
     # until we overcome Infrastructure issues, give traces extra 5 min before timeout
     DEVICE_HANGING_TIMEOUT_SEC: 600
     PIGLIT_REPLAY_DEVICE_NAME: "gl-${GPU_VERSION}"
-    PIGLIT_RESULTS: "${GPU_VERSION}-replay"
-  artifacts:
-    reports:
-      junit: results/junit.xml
 
 .lava-x86_64-piglit-traces:
   extends:

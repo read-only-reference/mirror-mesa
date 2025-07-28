@@ -913,7 +913,7 @@ panfrost_set_global_binding(struct pipe_context *pctx, unsigned first,
       /* we are screwed no matter what */
       if (!util_dynarray_grow(&ctx->global_buffers, *resources,
                               (first + count) - old_size))
-         unreachable("out of memory");
+         UNREACHABLE("out of memory");
 
       for (unsigned i = old_size; i < first + count; i++)
          *util_dynarray_element(&ctx->global_buffers, struct pipe_resource *,
@@ -960,11 +960,13 @@ panfrost_create_fence_fd(struct pipe_context *pctx,
 
 static void
 panfrost_fence_server_sync(struct pipe_context *pctx,
-                           struct pipe_fence_handle *f)
+                           struct pipe_fence_handle *f,
+                           uint64_t value)
 {
    struct panfrost_device *dev = pan_device(pctx->screen);
    struct panfrost_context *ctx = pan_context(pctx);
    int fd = -1, ret;
+   assert(!value);
 
    ret = drmSyncobjExportSyncFile(panfrost_device_fd(dev), f->syncobj, &fd);
    assert(!ret);

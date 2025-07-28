@@ -39,7 +39,7 @@ static unsigned get_coord_components(enum glsl_sampler_dim dim, bool is_array)
    case GLSL_SAMPLER_DIM_3D:
       return 3;
    default:
-      unreachable("unexpected sampler type");
+      UNREACHABLE("unexpected sampler type");
    }
 }
 
@@ -402,7 +402,7 @@ static bool lower_image_opcodes(nir_builder *b, nir_instr *instr, void *data)
          return true;
 
       default:
-         unreachable("shouldn't get here");
+         UNREACHABLE("shouldn't get here");
       }
    } else if (instr->type == nir_instr_type_tex) {
       nir_tex_instr *tex = nir_instr_as_tex(instr);
@@ -428,6 +428,7 @@ static bool lower_image_opcodes(nir_builder *b, nir_instr *instr, void *data)
                new_tex->is_array = tex->is_array;
                new_tex->texture_index = tex->texture_index;
                new_tex->sampler_index = tex->sampler_index;
+               new_tex->can_speculate = tex->can_speculate;
                new_tex->dest_type = nir_type_int32;
                new_tex->src[0].src = nir_src_for_ssa(tex->src[i].src.ssa);
                new_tex->src[0].src_type = tex->src[i].src_type;
@@ -447,6 +448,7 @@ static bool lower_image_opcodes(nir_builder *b, nir_instr *instr, void *data)
                new_tex->is_array = tex->is_array;
                new_tex->texture_index = tex->texture_index;
                new_tex->sampler_index = tex->sampler_index;
+               new_tex->can_speculate = tex->can_speculate;
                new_tex->dest_type = nir_type_int32;
                new_tex->src[0].src = nir_src_for_ssa(tex->src[i].src.ssa);
                new_tex->src[0].src_type = tex->src[i].src_type;
@@ -466,7 +468,7 @@ static bool lower_image_opcodes(nir_builder *b, nir_instr *instr, void *data)
             case nir_tex_src_texture_offset:
             case nir_tex_src_sampler_offset:
             case nir_tex_src_plane:
-               unreachable("unsupported texture src");
+               UNREACHABLE("unsupported texture src");
 
             default:;
             }
@@ -491,7 +493,7 @@ static bool lower_image_opcodes(nir_builder *b, nir_instr *instr, void *data)
             return true;
 
          default:
-            unreachable("shouldn't get here");
+            UNREACHABLE("shouldn't get here");
          }
          break;
 

@@ -214,12 +214,8 @@ dxil_nir_lower_constant_to_temp(nir_shader *nir)
    /* First pass: collect all UBO accesses that could be turned into
     * shader temp accesses.
     */
-   nir_foreach_function(func, nir) {
-      if (!func->is_entrypoint)
-         continue;
-      assert(func->impl);
-
-      nir_foreach_block(block, func->impl) {
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
          nir_foreach_instr_safe(instr, block) {
             if (instr->type != nir_instr_type_deref)
                continue;
@@ -246,16 +242,18 @@ dxil_nir_lower_constant_to_temp(nir_shader *nir)
       progress = true;
    }
 
+   if (!progress) {
+      nir_shader_preserve_all_metadata(nir);
+      return false;
+   }
+
    /* Second pass: patch all derefs that were accessing the converted UBOs
     * variables.
     */
-   nir_foreach_function(func, nir) {
-      if (!func->is_entrypoint)
-         continue;
-      assert(func->impl);
-
-      nir_builder b = nir_builder_create(func->impl);
-      nir_foreach_block(block, func->impl) {
+   nir_foreach_function_impl(impl, nir) {
+      nir_builder b = nir_builder_create(impl);
+      bool func_progress = false;
+      nir_foreach_block(block, impl) {
          nir_foreach_instr_safe(instr, block) {
             if (instr->type != nir_instr_type_deref)
                continue;
@@ -272,11 +270,13 @@ dxil_nir_lower_constant_to_temp(nir_shader *nir)
                   if (deref->deref_type == nir_deref_type_array) {
                      b.cursor = nir_before_instr(instr);
                      nir_src_rewrite(&deref->arr.index, nir_u2u32(&b, deref->arr.index.ssa));
+                     func_progress = true;
                   }
                }
             }
          }
       }
+      nir_progress(func_progress, impl, nir_metadata_control_flow);
    }
 
    return progress;
@@ -516,7 +516,7 @@ lower_var_bit_size_types(nir_variable *var, unsigned min_bit_size, unsigned max_
                var->constant_initializer->elements[i]->values[0].i16 = var->constant_initializer->elements[i]->values[0].i8;
             break;
          case GLSL_TYPE_UINT8: base_type = GLSL_TYPE_UINT16; break;
-         default: unreachable("Unexpected base type");
+         default: UNREACHABLE("Unexpected base type");
          }
          break;
       case 32:
@@ -543,10 +543,10 @@ lower_var_bit_size_types(nir_variable *var, unsigned min_bit_size, unsigned max_
             break;
          case GLSL_TYPE_UINT8: base_type = GLSL_TYPE_UINT; break;
          case GLSL_TYPE_UINT16: base_type = GLSL_TYPE_UINT; break;
-         default: unreachable("Unexpected base type");
+         default: UNREACHABLE("Unexpected base type");
          }
          break;
-      default: unreachable("Unexpected min bit size");
+      default: UNREACHABLE("Unexpected min bit size");
       }
       var->type = glsl_type_wrap_in_arrays(glsl_scalar_type(base_type), var->type);
       return true;
@@ -738,61 +738,37 @@ dxil_nir_lower_loads_stores_to_dxil(nir_shader *nir,
 }
 
 static bool
-lower_deref_ssbo(nir_builder *b, nir_deref_instr *deref)
+is_deref_ssbo(const nir_instr *instr, const void *state)
 {
+   if (instr->type != nir_instr_type_deref)
+      return false;
+   nir_deref_instr *deref = nir_instr_as_deref(instr);
+   return nir_deref_mode_is(deref, nir_var_mem_ssbo) &&
+      deref->deref_type == nir_deref_type_var;
+}
+
+static nir_def *
+lower_deref_ssbo(nir_builder *b, nir_instr *instr, void *state)
+{
+   nir_deref_instr *deref = nir_instr_as_deref(instr);
    assert(nir_deref_mode_is(deref, nir_var_mem_ssbo));
-   assert(deref->deref_type == nir_deref_type_var ||
-          deref->deref_type == nir_deref_type_cast);
+   assert(deref->deref_type == nir_deref_type_var);
    nir_variable *var = deref->var;
 
-   b->cursor = nir_before_instr(&deref->instr);
-
-   if (deref->deref_type == nir_deref_type_var) {
-      /* We turn all deref_var into deref_cast and build a pointer value based on
-       * the var binding which encodes the UAV id.
-       */
-      nir_def *ptr = nir_imm_int64(b, (uint64_t)var->data.binding << 32);
-      nir_deref_instr *deref_cast =
-         nir_build_deref_cast(b, ptr, nir_var_mem_ssbo, deref->type,
-                              glsl_get_explicit_stride(var->type));
-      nir_def_replace(&deref->def, &deref_cast->def);
-
-      deref = deref_cast;
-      return true;
-   }
-   return false;
+   /* We turn all deref_var into deref_cast and build a pointer value based on
+      * the var binding which encodes the UAV id.
+      */
+   nir_def *ptr = nir_imm_int64(b, (uint64_t)var->data.binding << 32);
+   nir_deref_instr *deref_cast =
+      nir_build_deref_cast(b, ptr, nir_var_mem_ssbo, deref->type,
+                           glsl_get_explicit_stride(var->type));
+   return &deref_cast->def;
 }
 
 bool
 dxil_nir_lower_deref_ssbo(nir_shader *nir)
 {
-   bool progress = false;
-
-   foreach_list_typed(nir_function, func, node, &nir->functions) {
-      if (!func->is_entrypoint)
-         continue;
-      assert(func->impl);
-
-      nir_builder b = nir_builder_create(func->impl);
-
-      nir_foreach_block(block, func->impl) {
-         nir_foreach_instr_safe(instr, block) {
-            if (instr->type != nir_instr_type_deref)
-               continue;
-
-            nir_deref_instr *deref = nir_instr_as_deref(instr);
-
-            if (!nir_deref_mode_is(deref, nir_var_mem_ssbo) ||
-                (deref->deref_type != nir_deref_type_var &&
-                 deref->deref_type != nir_deref_type_cast))
-               continue;
-
-            progress |= lower_deref_ssbo(&b, deref);
-         }
-      }
-   }
-
-   return progress;
+   return nir_shader_lower_instructions(nir, is_deref_ssbo, lower_deref_ssbo, NULL);
 }
 
 static bool
@@ -2040,10 +2016,10 @@ get_cast_type(unsigned bit_size)
    case 8:
       return glsl_int8_t_type();
    }
-   unreachable("Invalid bit_size");
+   UNREACHABLE("Invalid bit_size");
 }
 
-static void
+static nir_def *
 split_unaligned_load(nir_builder *b, nir_intrinsic_instr *intrin, unsigned alignment)
 {
    enum gl_access_qualifier access = nir_intrinsic_access(intrin);
@@ -2064,8 +2040,7 @@ split_unaligned_load(nir_builder *b, nir_intrinsic_instr *intrin, unsigned align
       srcs[i] = nir_load_deref_with_access(b, elem, access);
    }
 
-   nir_def *new_dest = nir_extract_bits(b, srcs, num_loads, 0, num_comps, intrin->def.bit_size);
-   nir_def_replace(&intrin->def, new_dest);
+   return nir_extract_bits(b, srcs, num_loads, 0, num_comps, intrin->def.bit_size);
 }
 
 static void
@@ -2090,70 +2065,73 @@ split_unaligned_store(nir_builder *b, nir_intrinsic_instr *intrin, unsigned alig
       nir_deref_instr *elem = nir_build_deref_ptr_as_array(b, cast, nir_imm_intN_t(b, i, cast->def.bit_size));
       nir_store_deref_with_access(b, elem, substore_val, ~0, access);
    }
+}
 
-   nir_instr_remove(&intrin->instr);
+static bool
+is_unaligned_load_store(const nir_instr *instr, const void *state)
+{
+   if (instr->type != nir_instr_type_intrinsic)
+      return false;
+   nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+   if (intrin->intrinsic != nir_intrinsic_load_deref &&
+       intrin->intrinsic != nir_intrinsic_store_deref)
+      return false;
+   nir_deref_instr *deref = nir_src_as_deref(intrin->src[0]);
+   nir_variable_mode modes = *(nir_variable_mode *)state;
+   if (!nir_deref_mode_may_be(deref, modes))
+      return false;
+
+   unsigned align_mul = 0, align_offset = 0;
+   nir_get_explicit_deref_align(deref, true, &align_mul, &align_offset);
+
+   unsigned alignment = align_offset ? 1 << (ffs(align_offset) - 1) : align_mul;
+
+   /* We can load anything at 4-byte alignment, except for
+      * UBOs (AKA CBs where the granularity is 16 bytes).
+      */
+   unsigned req_align = (nir_deref_mode_is_one_of(deref, nir_var_mem_ubo | nir_var_mem_push_const) ? 16 : 4);
+   if (alignment >= req_align)
+      return false;
+   
+   nir_def *val;
+   if (intrin->intrinsic == nir_intrinsic_load_deref) {
+      val = &intrin->def;
+   } else {
+      val = intrin->src[1].ssa;
+   }
+
+   unsigned scalar_byte_size = glsl_type_is_boolean(deref->type) ? 4 : glsl_get_bit_size(deref->type) / 8;
+   unsigned num_components =
+      /* If the vector stride is larger than the scalar size, lower_explicit_io will
+         * turn this into multiple scalar loads anyway, so we don't have to split it here. */
+      glsl_get_explicit_stride(deref->type) > scalar_byte_size ? 1 :
+      (val->num_components == 3 ? 4 : val->num_components);
+   unsigned natural_alignment = scalar_byte_size * num_components;
+
+   return alignment < natural_alignment;
+}
+
+static nir_def *
+lower_unaligned_load_store(nir_builder *b, nir_instr *instr, void *state)
+{
+   nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+   nir_deref_instr *deref = nir_src_as_deref(intrin->src[0]);
+   unsigned align_mul = 0, align_offset = 0;
+   nir_get_explicit_deref_align(deref, true, &align_mul, &align_offset);
+   unsigned alignment = align_offset ? 1 << (ffs(align_offset) - 1) : align_mul;
+
+   if (intrin->intrinsic == nir_intrinsic_load_deref)
+      return split_unaligned_load(b, intrin, alignment);
+   else {
+      split_unaligned_store(b, intrin, alignment);
+      return NIR_LOWER_INSTR_PROGRESS_REPLACE;
+   }
 }
 
 bool
 dxil_nir_split_unaligned_loads_stores(nir_shader *shader, nir_variable_mode modes)
 {
-   bool progress = false;
-
-   nir_foreach_function_impl(impl, shader) {
-      nir_builder b = nir_builder_create(impl);
-
-      nir_foreach_block(block, impl) {
-         nir_foreach_instr_safe(instr, block) {
-            if (instr->type != nir_instr_type_intrinsic)
-               continue;
-            nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
-            if (intrin->intrinsic != nir_intrinsic_load_deref &&
-                intrin->intrinsic != nir_intrinsic_store_deref)
-               continue;
-            nir_deref_instr *deref = nir_src_as_deref(intrin->src[0]);
-            if (!nir_deref_mode_may_be(deref, modes))
-               continue;
-
-            unsigned align_mul = 0, align_offset = 0;
-            nir_get_explicit_deref_align(deref, true, &align_mul, &align_offset);
-
-            unsigned alignment = align_offset ? 1 << (ffs(align_offset) - 1) : align_mul;
-
-            /* We can load anything at 4-byte alignment, except for
-             * UBOs (AKA CBs where the granularity is 16 bytes).
-             */
-            unsigned req_align = (nir_deref_mode_is_one_of(deref, nir_var_mem_ubo | nir_var_mem_push_const) ? 16 : 4);
-            if (alignment >= req_align)
-               continue;
-
-            nir_def *val;
-            if (intrin->intrinsic == nir_intrinsic_load_deref) {
-               val = &intrin->def;
-            } else {
-               val = intrin->src[1].ssa;
-            }
-
-            unsigned scalar_byte_size = glsl_type_is_boolean(deref->type) ? 4 : glsl_get_bit_size(deref->type) / 8;
-            unsigned num_components =
-               /* If the vector stride is larger than the scalar size, lower_explicit_io will
-                * turn this into multiple scalar loads anyway, so we don't have to split it here. */
-               glsl_get_explicit_stride(deref->type) > scalar_byte_size ? 1 :
-               (val->num_components == 3 ? 4 : val->num_components);
-            unsigned natural_alignment = scalar_byte_size * num_components;
-
-            if (alignment >= natural_alignment)
-               continue;
-
-            if (intrin->intrinsic == nir_intrinsic_load_deref)
-               split_unaligned_load(&b, intrin, alignment);
-            else
-               split_unaligned_store(&b, intrin, alignment);
-            progress = true;
-         }
-      }
-   }
-
-   return progress;
+   return nir_shader_lower_instructions(shader, is_unaligned_load_store, lower_unaligned_load_store, &modes);
 }
 
 static void
@@ -2442,7 +2420,7 @@ propagate_input_to_output_dependencies(struct dxil_module *mod, nir_intrinsic_in
             }
             break;
          default:
-            unreachable("Don't expect any other jumps");
+            UNREACHABLE("Don't expect any other jumps");
          }
          break;
       }
@@ -2533,7 +2511,7 @@ get_format_for_var(unsigned num_comps, enum glsl_base_type sampled_type)
       case 2: return PIPE_FORMAT_R32G32_SINT;
       case 3: return PIPE_FORMAT_R32G32B32_SINT;
       case 4: return PIPE_FORMAT_R32G32B32A32_SINT;
-      default: unreachable("Invalid num_comps");
+      default: UNREACHABLE("Invalid num_comps");
       }
    case GLSL_TYPE_UINT:
    case GLSL_TYPE_UINT64:
@@ -2543,7 +2521,7 @@ get_format_for_var(unsigned num_comps, enum glsl_base_type sampled_type)
       case 2: return PIPE_FORMAT_R32G32_UINT;
       case 3: return PIPE_FORMAT_R32G32B32_UINT;
       case 4: return PIPE_FORMAT_R32G32B32A32_UINT;
-      default: unreachable("Invalid num_comps");
+      default: UNREACHABLE("Invalid num_comps");
       }
    case GLSL_TYPE_FLOAT:
    case GLSL_TYPE_FLOAT16:
@@ -2553,9 +2531,9 @@ get_format_for_var(unsigned num_comps, enum glsl_base_type sampled_type)
       case 2: return PIPE_FORMAT_R32G32_FLOAT;
       case 3: return PIPE_FORMAT_R32G32B32_FLOAT;
       case 4: return PIPE_FORMAT_R32G32B32A32_FLOAT;
-      default: unreachable("Invalid num_comps");
+      default: UNREACHABLE("Invalid num_comps");
       }
-   default: unreachable("Invalid sampler return type");
+   default: UNREACHABLE("Invalid sampler return type");
    }
 }
 

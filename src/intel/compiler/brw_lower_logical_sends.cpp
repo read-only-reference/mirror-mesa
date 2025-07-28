@@ -661,7 +661,7 @@ sampler_msg_type(const intel_device_info *devinfo,
       assert(!has_min_lod);
       return GFX6_SAMPLER_MESSAGE_SAMPLE_SAMPLEINFO;
    default:
-      unreachable("not reached");
+      UNREACHABLE("not reached");
    }
 }
 
@@ -1455,10 +1455,9 @@ setup_lsc_surface_descriptors(const brw_builder &bld, brw_inst *inst,
          inst->src[1] = brw_imm_ud(lsc_bti_ex_desc(devinfo, surface.ud,
                                                    base_offset_bits));
       } else {
+         assert(base_offset == 0);
          const brw_builder ubld = bld.uniform();
-         brw_reg tmp = ubld.OR(
-            ubld.SHL(surface, brw_imm_ud(24)),
-            brw_imm_ud(base_offset << 12));
+         brw_reg tmp = ubld.SHL(surface, brw_imm_ud(24));
          inst->src[1] = component(tmp, 0);
       }
       break;
@@ -1468,7 +1467,7 @@ setup_lsc_surface_descriptors(const brw_builder &bld, brw_inst *inst,
       break;
 
    default:
-      unreachable("Invalid LSC surface address type");
+      UNREACHABLE("Invalid LSC surface address type");
    }
 }
 
@@ -1479,7 +1478,7 @@ lsc_addr_size_for_type(enum brw_reg_type type)
    case 2: return LSC_ADDR_SIZE_A16;
    case 4: return LSC_ADDR_SIZE_A32;
    case 8: return LSC_ADDR_SIZE_A64;
-   default: unreachable("invalid type size");
+   default: UNREACHABLE("invalid type size");
    }
 }
 
@@ -1962,7 +1961,7 @@ lower_hdc_memory_logical_send(const brw_builder &bld, brw_inst *inst)
       }
       break;
    default:
-      unreachable("Unknown surface type");
+      UNREACHABLE("Unknown surface type");
    }
 
    inst->desc = desc;
@@ -2169,7 +2168,7 @@ lower_interpolator_logical_send(const brw_builder &bld, brw_inst *inst,
       break;
 
    default:
-      unreachable("Invalid interpolator instruction");
+      UNREACHABLE("Invalid interpolator instruction");
    }
 
    const bool dynamic_mode =
@@ -2299,7 +2298,7 @@ lower_btd_logical_send(const brw_builder &bld, brw_inst *inst)
       break;
 
    default:
-      unreachable("Invalid BTD message");
+      UNREACHABLE("Invalid BTD message");
    }
 
    /* Stack IDs are always in R1 regardless of whether we're coming from a

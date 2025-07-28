@@ -162,7 +162,6 @@ v3dv_pipeline_get_nir_options(const struct v3d_device_info *devinfo)
       .lower_uadd_sat = true,
       .lower_usub_sat = true,
       .lower_iadd_sat = true,
-      .lower_all_io_to_temps = true,
       .lower_extract_byte = true,
       .lower_extract_word = true,
       .lower_insert_byte = true,
@@ -523,7 +522,7 @@ pipeline_get_descriptor_map(struct v3dv_pipeline *pipeline,
    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
       return &pipeline->shared_data->maps[broadcom_stage]->ssbo_map;
    default:
-      unreachable("Descriptor type unknown or not having a descriptor map");
+      UNREACHABLE("Descriptor type unknown or not having a descriptor map");
    }
 }
 
@@ -556,7 +555,7 @@ lower_vulkan_resource_index(nir_builder *b,
                                      b->shader->info.stage, false);
 
       if (!const_val)
-         unreachable("non-constant vulkan_resource_index array index");
+         UNREACHABLE("non-constant vulkan_resource_index array index");
 
       /* At compile-time we will need to know if we are processing a UBO load
        * for an inline or a regular UBO so we can handle inline loads like
@@ -583,7 +582,7 @@ lower_vulkan_resource_index(nir_builder *b,
    }
 
    default:
-      unreachable("unsupported descriptor type for vulkan_resource_index");
+      UNREACHABLE("unsupported descriptor type for vulkan_resource_index");
       break;
    }
 
@@ -1020,7 +1019,7 @@ pipeline_populate_v3d_key(struct v3d_key *key,
       key->is_last_geometry_stage = false;
       break;
    default:
-      unreachable("unsupported shader stage");
+      UNREACHABLE("unsupported shader stage");
    }
 
    const VkPipelineRobustnessBufferBehaviorEXT robust_buffer_enabled =
@@ -1297,7 +1296,7 @@ pipeline_populate_v3d_gs_key(struct v3d_gs_key *key,
    struct v3dv_pipeline *pipeline = p_stage->pipeline;
 
    key->per_vertex_point_size =
-      p_stage->nir->info.outputs_written & (1ull << VARYING_SLOT_PSIZ);
+      p_stage->nir->info.outputs_written & VARYING_BIT_PSIZ;
 
    key->is_coord = broadcom_shader_stage_is_binning(p_stage->stage);
 
@@ -1340,7 +1339,7 @@ pipeline_populate_v3d_vs_key(struct v3d_vs_key *key,
    struct v3dv_pipeline *pipeline = p_stage->pipeline;
 
    key->per_vertex_point_size =
-      p_stage->nir->info.outputs_written & (1ull << VARYING_SLOT_PSIZ);
+      p_stage->nir->info.outputs_written & VARYING_BIT_PSIZ;
 
    key->is_coord = broadcom_shader_stage_is_binning(p_stage->stage);
 
@@ -2254,7 +2253,7 @@ multiview_gs_input_primitive_from_pipeline(struct v3dv_pipeline *pipeline)
       /* Since we don't allow GS with multiview, we can only see non-adjacency
        * primitives.
        */
-      unreachable("Unexpected pipeline primitive type");
+      UNREACHABLE("Unexpected pipeline primitive type");
    }
 }
 
@@ -2275,7 +2274,7 @@ multiview_gs_output_primitive_from_pipeline(struct v3dv_pipeline *pipeline)
       /* Since we don't allow GS with multiview, we can only see non-adjacency
        * primitives.
        */
-      unreachable("Unexpected pipeline primitive type");
+      UNREACHABLE("Unexpected pipeline primitive type");
    }
 }
 
@@ -2295,8 +2294,7 @@ pipeline_add_multiview_gs(struct v3dv_pipeline *pipeline,
                                                   "multiview broadcast gs");
    nir_shader *nir = b.shader;
    nir->info.inputs_read = vs_nir->info.outputs_written;
-   nir->info.outputs_written = vs_nir->info.outputs_written |
-                               (1ull << VARYING_SLOT_LAYER);
+   nir->info.outputs_written = vs_nir->info.outputs_written | VARYING_BIT_LAYER;
 
    uint32_t vertex_count = mesa_vertices_per_prim(pipeline->topology);
    nir->info.gs.input_primitive =

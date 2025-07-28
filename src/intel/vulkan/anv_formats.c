@@ -1313,7 +1313,7 @@ anv_formats_are_compatible(
       isl_format_get_layout(img_view_isl_fmt0);
    const enum isl_format img_isl_fmt0 =
       anv_get_format_plane(physical_device,
-                           img_view_fmt->vk_format, 0, tiling).isl_format;
+                           img_fmt->vk_format, 0, tiling).isl_format;
    const struct isl_format_layout *img_fmt0_layout =
       isl_format_get_layout(img_isl_fmt0);
 
@@ -1592,7 +1592,7 @@ anv_get_image_format_properties(
 
    switch (info->type) {
    default:
-      unreachable("bad VkImageType");
+      UNREACHABLE("bad VkImageType");
    case VK_IMAGE_TYPE_1D:
       maxExtent.width = 16384;
       maxExtent.height = 1;
@@ -1872,7 +1872,7 @@ anv_get_image_format_properties(
 
       switch (info->tiling) {
       default:
-         unreachable("bad VkImageTiling");
+         UNREACHABLE("bad VkImageTiling");
       case VK_IMAGE_TILING_LINEAR:
          /* The app can query the image's memory layout with
           * vkGetImageSubresourceLayout.

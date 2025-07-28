@@ -392,7 +392,7 @@ get_blit_type(const struct wsi_device *wsi,
    }
 #endif
    default:
-      unreachable("Invalid image type");
+      UNREACHABLE("Invalid image type");
    }
 }
 
@@ -424,7 +424,7 @@ configure_image(const struct wsi_swapchain *chain,
    }
 #endif
    default:
-      unreachable("Invalid image type");
+      UNREACHABLE("Invalid image type");
    }
 }
 
@@ -1120,12 +1120,12 @@ wsi_ReleaseSwapchainImagesEXT(VkDevice _device,
    return VK_SUCCESS;
 }
 
-VkImage
-wsi_common_get_image(VkSwapchainKHR _swapchain, uint32_t index)
+VkDeviceMemory
+wsi_common_get_memory(VkSwapchainKHR _swapchain, uint32_t index)
 {
    VK_FROM_HANDLE(wsi_swapchain, swapchain, _swapchain);
    assert(index < swapchain->image_count);
-   return swapchain->get_wsi_image(swapchain, index)->image;
+   return swapchain->get_wsi_image(swapchain, index)->memory;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -1709,18 +1709,6 @@ wsi_common_create_swapchain_image(const struct wsi_device *wsi,
 }
 
 VkResult
-wsi_common_bind_swapchain_image(const struct wsi_device *wsi,
-                                VkImage vk_image,
-                                VkSwapchainKHR _swapchain,
-                                uint32_t image_idx)
-{
-   VK_FROM_HANDLE(wsi_swapchain, chain, _swapchain);
-   struct wsi_image *image = chain->get_wsi_image(chain, image_idx);
-
-   return wsi->BindImageMemory(chain->device, vk_image, image->memory, 0);
-}
-
-VkResult
 wsi_swapchain_wait_for_present_semaphore(const struct wsi_swapchain *chain,
                                          uint64_t present_id, uint64_t timeout)
 {
@@ -1772,7 +1760,7 @@ wsi_select_memory_type(const struct wsi_device *wsi,
       return wsi_select_memory_type(wsi, req_props, deny_props, type_bits);
    }
 
-   unreachable("No memory type found");
+   UNREACHABLE("No memory type found");
 }
 
 uint32_t
@@ -2161,7 +2149,7 @@ wsi_finish_create_blit_context(const struct wsi_swapchain *chain,
          wsi_cmd_blit_image_to_image(cmd_buffer, wsi, info, image);
          break;
       default:
-         unreachable("Invalid wsi_swapchain_blit_type");
+         UNREACHABLE("Invalid wsi_swapchain_blit_type");
       }
 
       result = wsi->EndCommandBuffer(cmd_buffer);

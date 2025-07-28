@@ -652,12 +652,7 @@ struct brw_stage_prog_data {
  * Convert a number of GRF registers used (grf_used in prog_data) into
  * a number of GRF register blocks supported by the hardware on PTL+.
  */
-static inline unsigned
-ptl_register_blocks(unsigned grf_used)
-{
-   const unsigned n = DIV_ROUND_UP(grf_used, 32) - 1;
-   return (n < 6 ? n : 7);
-}
+unsigned ptl_register_blocks(unsigned grf_used);
 
 static inline uint32_t *
 brw_stage_prog_data_add_params(struct brw_stage_prog_data *prog_data,
@@ -923,7 +918,7 @@ brw_fs_simd_width_for_ksp(unsigned ksp_idx, bool simd8_enabled,
    case 2:
       return (simd16_enabled && (simd32_enabled || simd8_enabled)) ? 16 : 0;
    default:
-      unreachable("Invalid KSP index");
+      UNREACHABLE("Invalid KSP index");
    }
 }
 

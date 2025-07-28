@@ -144,7 +144,7 @@ nir_op_matches_search_op(nir_op nop, uint16_t sop)
       MATCH_FCONV_CASE(b2f)
       MATCH_ICONV_CASE(b2i)
    default:
-      unreachable("Invalid nir_search_op");
+      UNREACHABLE("Invalid nir_search_op");
    }
 
 #undef MATCH_FCONV_CASE
@@ -201,7 +201,7 @@ nir_op_for_search_op(uint16_t sop, unsigned bit_size)
       case 64:                            \
          return nir_op_##op##64;          \
       default:                            \
-         unreachable("Invalid bit size"); \
+         UNREACHABLE("Invalid bit size"); \
       }
 
 #define RET_ICONV_CASE(op)                \
@@ -216,7 +216,7 @@ nir_op_for_search_op(uint16_t sop, unsigned bit_size)
       case 64:                            \
          return nir_op_##op##64;          \
       default:                            \
-         unreachable("Invalid bit size"); \
+         UNREACHABLE("Invalid bit size"); \
       }
 
    switch (sop) {
@@ -230,7 +230,7 @@ nir_op_for_search_op(uint16_t sop, unsigned bit_size)
       RET_FCONV_CASE(b2f)
       RET_ICONV_CASE(b2i)
    default:
-      unreachable("Invalid nir_search_op");
+      UNREACHABLE("Invalid nir_search_op");
    }
 
 #undef RET_FCONV_CASE
@@ -274,6 +274,18 @@ match_value(const nir_algebraic_table *table,
       nir_search_variable *var = nir_search_value_as_variable(value);
       assert(var->variable < NIR_SEARCH_MAX_VARIABLES);
 
+      if (var->is_constant &&
+          instr->src[src].src.ssa->parent_instr->type != nir_instr_type_load_const)
+         return false;
+
+      if (var->cond_index != -1 && !table->variable_cond[var->cond_index](state->range_ht, instr,
+                                                                          src, num_components, new_swizzle))
+         return false;
+
+      if (var->type != nir_type_invalid &&
+          !src_is_type(instr->src[src].src, var->type))
+         return false;
+
       if (state->variables_seen & (1 << var->variable)) {
          if (state->variables[var->variable].src.ssa != instr->src[src].src.ssa)
             return false;
@@ -285,18 +297,6 @@ match_value(const nir_algebraic_table *table,
 
          return true;
       } else {
-         if (var->is_constant &&
-             instr->src[src].src.ssa->parent_instr->type != nir_instr_type_load_const)
-            return false;
-
-         if (var->cond_index != -1 && !table->variable_cond[var->cond_index](state->range_ht, instr,
-                                                                             src, num_components, new_swizzle))
-            return false;
-
-         if (var->type != nir_type_invalid &&
-             !src_is_type(instr->src[src].src, var->type))
-            return false;
-
          state->variables_seen |= (1 << var->variable);
          state->variables[var->variable].src = instr->src[src].src;
 
@@ -353,12 +353,12 @@ match_value(const nir_algebraic_table *table,
       }
 
       default:
-         unreachable("Invalid alu source type");
+         UNREACHABLE("Invalid alu source type");
       }
    }
 
    default:
-      unreachable("Invalid search value type");
+      UNREACHABLE("Invalid search value type");
    }
 }
 
@@ -386,7 +386,7 @@ match_expression(const nir_algebraic_table *table, const nir_search_expression *
        instr->def.bit_size != expr->value.bit_size)
       return false;
 
-   state->inexact_match = expr->inexact || state->inexact_match;
+   state->inexact_match = expr->inexact || expr->contract || state->inexact_match;
    state->has_exact_alu = (instr->exact && !expr->ignore_exact) || state->has_exact_alu;
    if (state->inexact_match && state->has_exact_alu)
       return false;
@@ -500,7 +500,10 @@ construct_value(nir_builder *build,
 
       nir_alu_src val;
       val.src = nir_src_for_ssa(&alu->def);
-      memcpy(val.swizzle, identity_swizzle, sizeof val.swizzle);
+      if (expr->swizzle < 0)
+         memcpy(val.swizzle, identity_swizzle, sizeof(val.swizzle));
+      else
+         memset(val.swizzle, expr->swizzle, sizeof(val.swizzle));
 
       return val;
    }
@@ -539,7 +542,7 @@ construct_value(nir_builder *build,
          break;
 
       default:
-         unreachable("Invalid alu source type");
+         UNREACHABLE("Invalid alu source type");
       }
 
       assert(cval->index ==
@@ -556,7 +559,7 @@ construct_value(nir_builder *build,
    }
 
    default:
-      unreachable("Invalid search value type");
+      UNREACHABLE("Invalid search value type");
    }
 }
 
@@ -580,7 +583,7 @@ dump_value(const nir_algebraic_table *table, const nir_search_value *val)
          fprintf(stderr, "%s", sconst->data.u != 0 ? "True" : "False");
          break;
       default:
-         unreachable("bad const type");
+         UNREACHABLE("bad const type");
       }
       break;
    }

@@ -98,7 +98,7 @@ anv_shader_stage_to_nir(struct anv_device *device,
       }
    }
 
-   NIR_PASS_V(nir, nir_lower_io_vars_to_temporaries,
+   NIR_PASS(_, nir, nir_lower_io_vars_to_temporaries,
               nir_shader_get_entrypoint(nir), true, false);
 
    return nir;
@@ -225,7 +225,7 @@ void anv_DestroyPipeline(
    }
 
    default:
-      unreachable("invalid pipeline type");
+      UNREACHABLE("invalid pipeline type");
    }
 
    anv_pipeline_finish(pipeline, device);
@@ -813,16 +813,16 @@ lookup_ycbcr_conversion(const void *_sets_layout, uint32_t set,
    const struct anv_descriptor_set_binding_layout *bind_layout =
       &sets_layout->set[set].layout->binding[binding];
 
-   if (bind_layout->immutable_samplers == NULL)
+   if (bind_layout->samplers == NULL)
       return NULL;
 
    array_index = MIN2(array_index, bind_layout->array_size - 1);
 
-   const struct anv_sampler *sampler =
-      bind_layout->immutable_samplers[array_index];
+   const struct anv_descriptor_set_layout_sampler *sampler =
+      &bind_layout->samplers[array_index];
 
-   return sampler && sampler->vk.ycbcr_conversion ?
-          &sampler->vk.ycbcr_conversion->state : NULL;
+   return sampler->has_ycbcr_conversion ?
+          &sampler->ycbcr_conversion_state : NULL;
 }
 
 static void
@@ -1005,7 +1005,7 @@ anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
    if (nir->info.stage == MESA_SHADER_COMPUTE && nir->info.cs.has_cooperative_matrix) {
       anv_fixup_subgroup_size(pipeline->device, &nir->info);
       NIR_PASS(_, nir, brw_nir_lower_cmat, nir->info.subgroup_size);
-      NIR_PASS_V(nir, nir_lower_indirect_derefs, nir_var_function_temp, 16);
+      NIR_PASS(_, nir, nir_lower_indirect_derefs, nir_var_function_temp, 16);
    }
 
    /* The patch control points are delivered through a push constant when
@@ -1064,7 +1064,7 @@ anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
    struct anv_pipeline_push_map push_map = {};
 
    /* Apply the actual pipeline layout to UBOs, SSBOs, and textures */
-   NIR_PASS_V(nir, anv_nir_apply_pipeline_layout,
+   NIR_PASS(_, nir, anv_nir_apply_pipeline_layout,
               pdevice, stage->key.base.robust_flags,
               layout->independent_sets,
               layout, &stage->bind_map, &push_map, mem_ctx);
@@ -1127,16 +1127,16 @@ anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
       NIR_PASS(_, nir, nir_opt_dce);
    }
 
-   NIR_PASS_V(nir, anv_nir_update_resource_intel_block);
+   NIR_PASS(_, nir, anv_nir_update_resource_intel_block);
 
-   NIR_PASS_V(nir, anv_nir_compute_push_layout,
+   NIR_PASS(_, nir, anv_nir_compute_push_layout,
               pdevice, stage->key.base.robust_flags,
               anv_graphics_pipeline_stage_fragment_dynamic(stage),
               anv_graphics_pipeline_stage_mesh_dynamic(stage),
               prog_data, &stage->bind_map, &push_map,
               pipeline->layout.type, mem_ctx);
 
-   NIR_PASS_V(nir, anv_nir_lower_resource_intel, pdevice,
+   NIR_PASS(_, nir, anv_nir_lower_resource_intel, pdevice,
               pipeline->layout.type);
 
    if (gl_shader_stage_uses_workgroup(nir->info.stage)) {
@@ -1685,7 +1685,7 @@ anv_pipeline_add_executable(struct anv_pipeline *pipeline,
                break;
 
             case ANV_DESCRIPTOR_SET_COLOR_ATTACHMENTS:
-               unreachable("Color attachments can't be pushed");
+               UNREACHABLE("Color attachments can't be pushed");
 
             default:
                fprintf(stream, "UBO (set=%d binding=%d start=%dB)",
@@ -1899,7 +1899,7 @@ anv_graphics_pipeline_init_keys(struct anv_graphics_base_pipeline *pipeline,
       }
 
       default:
-         unreachable("Invalid graphics shader stage");
+         UNREACHABLE("Invalid graphics shader stage");
       }
 
       stages[s].feedback.duration += os_time_get_nano() - stage_start;
@@ -2374,7 +2374,7 @@ anv_graphics_pipeline_compile(struct anv_graphics_base_pipeline *pipeline,
          anv_pipeline_link_fs(compiler, stage, state->rp);
          break;
       default:
-         unreachable("Invalid graphics shader stage");
+         UNREACHABLE("Invalid graphics shader stage");
       }
 
       next_stage = stage;
@@ -2519,7 +2519,7 @@ anv_graphics_pipeline_compile(struct anv_graphics_base_pipeline *pipeline,
                                  &error_str);
          break;
       default:
-         unreachable("Invalid graphics shader stage");
+         UNREACHABLE("Invalid graphics shader stage");
       }
       if (stage->code == NULL) {
          if (error_str)
@@ -3408,12 +3408,12 @@ compile_upload_rt_shader(struct anv_ray_tracing_pipeline *pipeline,
       NIR_PASS(_, nir, nir_lower_shader_calls, &opts,
                &resume_shaders, &num_resume_shaders, mem_ctx);
       NIR_PASS(_, nir, brw_nir_lower_shader_calls, &lowering_state);
-      NIR_PASS_V(nir, brw_nir_lower_rt_intrinsics, &stage->key.base, devinfo);
+      NIR_PASS(_, nir, brw_nir_lower_rt_intrinsics, &stage->key.base, devinfo);
    }
 
    for (unsigned i = 0; i < num_resume_shaders; i++) {
       NIR_PASS(_,resume_shaders[i], brw_nir_lower_shader_calls, &lowering_state);
-      NIR_PASS_V(resume_shaders[i], brw_nir_lower_rt_intrinsics, &stage->key.base, devinfo);
+      NIR_PASS(_, resume_shaders[i], brw_nir_lower_rt_intrinsics, &stage->key.base, devinfo);
    }
 
    struct brw_compile_bs_params params = {
@@ -3762,14 +3762,14 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
          break;
 
       case MESA_SHADER_INTERSECTION:
-         unreachable("These are handled later");
+         UNREACHABLE("These are handled later");
 
       case MESA_SHADER_CALLABLE:
          brw_nir_lower_callable(nir, devinfo);
          break;
 
       default:
-         unreachable("Invalid ray-tracing shader stage");
+         UNREACHABLE("Invalid ray-tracing shader stage");
       }
 
       result = compile_upload_rt_shader(pipeline, cache, nir, &stages[i],
@@ -3839,7 +3839,7 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
       }
 
       default:
-         unreachable("Invalid ray tracing shader group type");
+         UNREACHABLE("Invalid ray tracing shader group type");
       }
    }
 
@@ -3864,8 +3864,6 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
 VkResult
 anv_device_init_rt_shaders(struct anv_device *device)
 {
-   device->bvh_build_method = ANV_BVH_BUILD_METHOD_NEW_SAH;
-
    if (!device->vk.enabled_extensions.KHR_ray_tracing_pipeline)
       return VK_SUCCESS;
 
@@ -3951,7 +3949,7 @@ anv_device_init_rt_shaders(struct anv_device *device)
       nir_shader *trivial_return_nir =
          brw_nir_create_trivial_return_shader(device->physical->compiler, tmp_ctx);
 
-      NIR_PASS_V(trivial_return_nir, brw_nir_lower_rt_intrinsics,
+      NIR_PASS(_, trivial_return_nir, brw_nir_lower_rt_intrinsics,
                  &return_key.key.base, device->info);
 
       struct brw_bs_prog_data return_prog_data = { 0, };
@@ -4009,7 +4007,7 @@ anv_device_init_rt_shaders(struct anv_device *device)
       nir_shader *null_ahs_nir =
          brw_nir_create_null_ahs_shader(device->physical->compiler, tmp_ctx);
 
-      NIR_PASS_V(null_ahs_nir, brw_nir_lower_rt_intrinsics,
+      NIR_PASS(_, null_ahs_nir, brw_nir_lower_rt_intrinsics,
                  &null_return_key.key.base, device->info);
 
       struct brw_bs_prog_data return_prog_data = { 0, };
@@ -4175,7 +4173,7 @@ anv_ray_tracing_pipeline_create(
          break;
 
       default:
-         unreachable("Invalid ray-tracing shader group type");
+         UNREACHABLE("Invalid ray-tracing shader group type");
       }
    }
 
@@ -4386,7 +4384,7 @@ VkResult anv_GetPipelineExecutableStatisticsKHR(
       break;
    }
    default:
-      unreachable("invalid pipeline type");
+      UNREACHABLE("invalid pipeline type");
    }
 
    vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
@@ -4625,7 +4623,7 @@ anv_GetRayTracingCaptureReplayShaderGroupHandlesKHR(
     void*                                       pData)
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
-   unreachable("Unimplemented");
+   UNREACHABLE("Unimplemented");
    return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
 }
 
@@ -4663,7 +4661,7 @@ anv_GetRayTracingShaderGroupStackSizeKHR(
       break;
 
    default:
-      unreachable("Invalid VkShaderGroupShader enum");
+      UNREACHABLE("Invalid VkShaderGroupShader enum");
    }
 
    if (bin == NULL)

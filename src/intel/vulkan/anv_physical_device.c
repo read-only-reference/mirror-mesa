@@ -2515,7 +2515,7 @@ anv_physical_device_get_parameters(struct anv_physical_device *device)
    case INTEL_KMD_TYPE_XE:
       return anv_xe_physical_device_get_parameters(device);
    default:
-      unreachable("Missing");
+      UNREACHABLE("Missing");
       return VK_ERROR_UNKNOWN;
    }
 }
@@ -2565,7 +2565,7 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
       /* If INTEL_FORCE_PROBE was used, then the user has opted-in for
        * unsupported device support. No need to print a warning message.
        */
-   } else if (devinfo.ver > 20) {
+   } else if (devinfo.ver > 30) {
       result = vk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
                          "Vulkan not yet supported on %s", devinfo.name);
       goto fail_fd;
@@ -3184,7 +3184,7 @@ convert_component_type(enum intel_cooperative_matrix_component_type t)
    case INTEL_CMAT_UINT8:    return VK_COMPONENT_TYPE_UINT8_KHR;
    case INTEL_CMAT_BFLOAT16: return VK_COMPONENT_TYPE_BFLOAT16_KHR;
    }
-   unreachable("invalid cooperative matrix component type in configuration");
+   UNREACHABLE("invalid cooperative matrix component type in configuration");
 }
 
 static VkScopeKHR
@@ -3193,7 +3193,7 @@ convert_scope(enum intel_cmat_scope scope)
    switch (scope) {
    case INTEL_CMAT_SCOPE_SUBGROUP: return VK_SCOPE_SUBGROUP_KHR;
    default:
-      unreachable("invalid cooperative matrix scope in configuration");
+      UNREACHABLE("invalid cooperative matrix scope in configuration");
    }
 }
 

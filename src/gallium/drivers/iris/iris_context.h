@@ -766,7 +766,7 @@ iris_vue_data(struct iris_compiled_shader *shader)
    case MESA_SHADER_TESS_EVAL: return &shader->tes.base;
    case MESA_SHADER_GEOMETRY:  return &shader->gs.base;
    default:
-      unreachable("invalid shader stage for vue prog data");
+      UNREACHABLE("invalid shader stage for vue prog data");
       return NULL;
    }
 }
@@ -1106,7 +1106,7 @@ struct iris_context {
        * Query BO with a MI_PREDICATE_RESULT snapshot calculated on the
        * render context that needs to be uploaded to the compute context.
        */
-      struct iris_bo *compute_predicate;
+      struct iris_address compute_predicate;
 
       /** Is a PIPE_QUERY_PRIMITIVES_GENERATED query active? */
       bool prims_generated_query_active;
@@ -1222,9 +1222,10 @@ struct iris_gen_indirect_params {
 };
 
 #define perf_debug(dbg, ...) do {                      \
+   void *__var = (void*)(dbg);                         \
    if (INTEL_DEBUG(DEBUG_PERF))                        \
       dbg_printf(__VA_ARGS__);                         \
-   if (unlikely(dbg))                                  \
+   if (unlikely(__var))                                \
       util_debug_message(dbg, PERF_INFO, __VA_ARGS__); \
 } while(0)
 
@@ -1293,7 +1294,7 @@ iris_blorp_batch_usage(struct iris_batch *batch, bool is_dest)
    case IRIS_BATCH_BLITTER:
       return is_dest ? ISL_SURF_USAGE_BLITTER_DST_BIT : ISL_SURF_USAGE_BLITTER_SRC_BIT;
    default:
-      unreachable("Unhandled batch type");
+      UNREACHABLE("Unhandled batch type");
    }
 }
 
@@ -1362,9 +1363,9 @@ iris_fs_barycentric_modes(const struct iris_compiled_shader *shader,
                           enum intel_msaa_flags pushed_msaa_flags);
 bool iris_use_tcs_multi_patch(struct iris_screen *screen);
 bool iris_indirect_ubos_use_sampler(struct iris_screen *screen);
-const void *iris_get_compiler_options(struct pipe_screen *pscreen,
-                                      enum pipe_shader_ir ir,
-                                      enum pipe_shader_type pstage);
+const struct nir_shader_compiler_options *
+iris_get_compiler_options(struct pipe_screen *pscreen,
+                          enum pipe_shader_type pstage);
 
 /* iris_disk_cache.c */
 

@@ -160,7 +160,7 @@ get_source(struct st_translate *t, GLenum src_type)
       return load_input(t, VARYING_SLOT_COL1);
    } else {
       /* frontend prevents this */
-      unreachable("unknown source");
+      UNREACHABLE("unknown source");
    }
 }
 
@@ -262,7 +262,7 @@ emit_arith_inst(struct st_translate *t,
       return nir_channel_vec4(t->b, nir_fdot4(t->b,src[0], src[1]), 0);
 
    default:
-      unreachable("Unknown ATI_fs opcode");
+      UNREACHABLE("Unknown ATI_fs opcode");
    }
 }
 
@@ -355,6 +355,7 @@ compile_setupinst(struct st_translate *t,
       tex->dest_type = nir_type_float32;
       tex->coord_components =
          glsl_get_sampler_dim_coordinate_components(tex->sampler_dim);
+      tex->can_speculate = true;
 
       tex->src[0] = nir_tex_src_for_ssa(nir_tex_src_texture_deref,
                                         &tex_deref->def);

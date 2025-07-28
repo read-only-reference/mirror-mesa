@@ -28,6 +28,7 @@
 #include "genxml/genX_rt_pack.h"
 
 #include "common/intel_compute_slm.h"
+#include "common/intel_common.h"
 #include "common/intel_genX_state_brw.h"
 #include "common/intel_l3_config.h"
 #include "common/intel_sample_positions.h"
@@ -123,7 +124,7 @@ vertex_element_comp_control(enum isl_format format, unsigned comp)
    case 1: bits = isl_format_layouts[format].channels.g.bits; break;
    case 2: bits = isl_format_layouts[format].channels.b.bits; break;
    case 3: bits = isl_format_layouts[format].channels.a.bits; break;
-   default: unreachable("Invalid component");
+   default: UNREACHABLE("Invalid component");
    }
 
    /*
@@ -796,10 +797,6 @@ emit_3dstate_sbe(struct anv_graphics_pipeline *pipeline)
 
 static void
 emit_rs_state(struct anv_graphics_pipeline *pipeline,
-              const struct vk_input_assembly_state *ia,
-              const struct vk_rasterization_state *rs,
-              const struct vk_multisample_state *ms,
-              const struct vk_render_pass_state *rp,
               enum intel_urb_deref_block_size urb_deref_block_size)
 {
    anv_pipeline_emit(pipeline, partial.sf, GENX(3DSTATE_SF), sf) {
@@ -1867,7 +1864,7 @@ emit_mesh_state(struct anv_graphics_pipeline *pipeline)
       index_format = INDEX_U888X;
       break;
    default:
-      unreachable("invalid index format");
+      UNREACHABLE("invalid index format");
    }
 
    anv_pipeline_emit(pipeline, final.mesh_shader,
@@ -1923,8 +1920,7 @@ genX(graphics_pipeline_emit)(struct anv_graphics_pipeline *pipeline,
    enum intel_urb_deref_block_size urb_deref_block_size;
    emit_urb_setup(pipeline, &urb_deref_block_size);
 
-   emit_rs_state(pipeline, state->ia, state->rs, state->ms, state->rp,
-                 urb_deref_block_size);
+   emit_rs_state(pipeline, urb_deref_block_size);
    compute_kill_pixel(pipeline, state->ms, state);
 
    emit_3dstate_clip(pipeline, state->ia, state->vp, state->rs);
@@ -2080,6 +2076,8 @@ genX(compute_pipeline_emit)(struct anv_compute_pipeline *pipeline)
             .BindingTableEntryCount            = devinfo->verx10 == 125 ?
             0 : 1 + MIN2(shader->bind_map.surface_count, 30),
             .NumberofThreadsinGPGPUThreadGroup = dispatch.threads,
+            .ThreadGroupDispatchSize =
+               intel_compute_threads_group_dispatch_size(dispatch.threads),
             .SharedLocalMemorySize             =
             intel_compute_slm_encode_size(GFX_VER, prog_data->base.total_shared),
             .PreferredSLMAllocationSize        =
@@ -2231,7 +2229,7 @@ genX(ray_tracing_pipeline_emit)(struct anv_ray_tracing_pipeline *pipeline)
       }
 
       default:
-         unreachable("Invalid shader group type");
+         UNREACHABLE("Invalid shader group type");
       }
    }
 }
@@ -2241,7 +2239,7 @@ genX(ray_tracing_pipeline_emit)(struct anv_ray_tracing_pipeline *pipeline)
 void
 genX(ray_tracing_pipeline_emit)(struct anv_ray_tracing_pipeline *pipeline)
 {
-   unreachable("Ray tracing not supported");
+   UNREACHABLE("Ray tracing not supported");
 }
 
 #endif /* GFX_VERx10 >= 125 */
