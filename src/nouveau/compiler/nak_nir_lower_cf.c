@@ -238,7 +238,7 @@ block_is_merge(const nir_block *block)
       return false;
 
    unsigned num_preds = 0;
-   set_foreach(block->predecessors, entry) {
+   set_foreach(&block->predecessors, entry) {
       const nir_block *pred = entry->key;
 
       /* We don't care about unreachable blocks */
@@ -412,7 +412,7 @@ recompute_phi_divergence_impl(nir_function_impl *impl)
                 * don't want to deal with inserting a r2ur somewhere.
                 */
                if (phi_src->pred->divergent || phi_src->src.ssa->divergent ||
-                   phi_src->src.ssa->parent_instr->block->divergent) {
+                   nir_def_block(phi_src->src.ssa)->divergent) {
                   divergent = true;
                   break;
                }
@@ -445,10 +445,14 @@ lower_cf_func(nir_function *func)
    nir_metadata_require(old_impl, nir_metadata_dominance | nir_metadata_divergence);
 
    /* First, we temporarily get rid of SSA.  This will make all our block
-    * motion way easier.
+    * motion way easier.  Ask the pass to place reg writes directly in the
+    * immediate predecessors of the phis instead of trying to be clever.
+    * This will ensure that we never get a write to a uniform register from
+    * non-uniform control flow and makes our divergence reconstruction for
+    * phis more reliable.
     */
    nir_foreach_block(block, old_impl)
-      nir_lower_phis_to_regs_block(block);
+      nir_lower_phis_to_regs_block(block, true);
 
    /* We create a whole new nir_function_impl and copy the contents over */
    func->impl = NULL;

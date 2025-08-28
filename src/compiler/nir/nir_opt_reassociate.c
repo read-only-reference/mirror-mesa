@@ -214,7 +214,7 @@ can_reassociate(nir_alu_instr *alu)
 static void
 build_chain(struct chain *c, nir_scalar def, unsigned reserved_count)
 {
-   nir_alu_instr *alu = nir_instr_as_alu(def.def->parent_instr);
+   nir_alu_instr *alu = nir_def_as_alu(def.def);
 
    /* Conservative fast math handling: if ANY instruction along the chain is
     * exact, treat the whole chain as exact. Likewise for float controls.
@@ -321,7 +321,7 @@ find_chains(nir_function_impl *impl, struct hash_table *pair_freq,
          for (unsigned i = 0; i < c.length; ++i) {
             lowest_rank = MIN2(rank(c.srcs[i]), lowest_rank);
             highest_rank = MAX2(rank(c.srcs[i]), highest_rank);
-            local &= c.srcs[i].def->parent_instr->block == block;
+            local &= nir_def_block(c.srcs[i].def) == block;
          }
 
          for (unsigned i = 0; i < c.length; ++i) {
@@ -549,4 +549,53 @@ nir_opt_reassociate(nir_shader *nir, nir_reassociate_options opts)
    ralloc_free(pair_freq);
    util_dynarray_fini(&chains);
    return progress;
+}
+
+/* Helper loop for doing reassociation.
+ *
+ * You need to do two passes per set of flags you run with, because in the first
+ * pass we may reassociate constants together, which can then be folded,
+ * resulting in a cleanup, then you need to rebalance again. If you do both
+ * heuristics, you want to do the full CSE path first, then finalize with just
+ * the scalar math once the CSE work has been done.
+ */
+bool
+nir_opt_reassociate_loop(nir_shader *nir, nir_reassociate_options in_opts)
+{
+   bool any_progress = false;
+
+   for (unsigned i = 0; i < 2; ++i) {
+      nir_reassociate_options opts = in_opts;
+      if (i >= 1) {
+         if (in_opts == (nir_reassociate_cse_heuristic | nir_reassociate_scalar_math))
+            opts = nir_reassociate_scalar_math;
+         else
+            break;
+      }
+
+      /* For this set of opt flags, reassociate, then clean up constant folding,
+       * then re-reassociate to rebalance.
+       */
+      for (unsigned j = 0; j < 2; j++) {
+         bool progress = false;
+         NIR_PASS(progress, nir, nir_opt_reassociate, opts);
+         if (!progress)
+            break;
+
+         any_progress = true;
+
+         do {
+            progress = false;
+
+            NIR_PASS(progress, nir, nir_opt_algebraic);
+            NIR_PASS(progress, nir, nir_opt_constant_folding);
+            NIR_PASS(progress, nir, nir_copy_prop);
+            NIR_PASS(progress, nir, nir_opt_cse);
+            NIR_PASS(progress, nir, nir_opt_dce);
+            any_progress |= progress;
+         } while (progress);
+      }
+   }
+
+   return any_progress;
 }

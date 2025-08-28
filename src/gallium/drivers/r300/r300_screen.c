@@ -20,6 +20,7 @@
 #include "r300_screen_buffer.h"
 #include "r300_state_inlines.h"
 #include "r300_public.h"
+#include "r300_meminfo.h"
 
 #include "draw/draw_context.h"
 
@@ -208,8 +209,8 @@ static const nir_shader_compiler_options gallivm_compiler_options = {
    .has_fused_comp_and_csel = true,
    .max_unroll_iterations = 32,
 
-   .support_indirect_inputs = (uint8_t)BITFIELD_MASK(PIPE_SHADER_TYPES),
-   .support_indirect_outputs = (uint8_t)BITFIELD_MASK(PIPE_SHADER_TYPES),
+   .support_indirect_inputs = (uint8_t)BITFIELD_MASK(MESA_SHADER_STAGES),
+   .support_indirect_outputs = (uint8_t)BITFIELD_MASK(MESA_SHADER_STAGES),
 };
 
 
@@ -423,7 +424,7 @@ static void r300_init_shader_caps(struct r300_screen* r300screen)
    bool is_r500 = r300screen->caps.is_r500;
 
    struct pipe_shader_caps *caps =
-      (struct pipe_shader_caps *)&r300screen->screen.shader_caps[PIPE_SHADER_VERTEX];
+      (struct pipe_shader_caps *)&r300screen->screen.shader_caps[MESA_SHADER_VERTEX];
 
    if (r300screen->caps.has_tcl) {
       caps->max_instructions =
@@ -465,7 +466,7 @@ static void r300_init_shader_caps(struct r300_screen* r300screen)
    }
    caps->supported_irs = (1 << PIPE_SHADER_IR_NIR) | (1 << PIPE_SHADER_IR_TGSI);
 
-   caps = (struct pipe_shader_caps *)&r300screen->screen.shader_caps[PIPE_SHADER_FRAGMENT];
+   caps = (struct pipe_shader_caps *)&r300screen->screen.shader_caps[MESA_SHADER_FRAGMENT];
 
    caps->max_instructions = is_r500 || is_r400 ? 512 : 96;
    caps->max_alu_instructions = is_r500 || is_r400 ? 512 : 64;
@@ -515,6 +516,7 @@ static void r300_init_screen_caps(struct r300_screen* r300screen)
    caps->clip_halfz = true;
    caps->allow_mapped_buffers_during_execution = true;
    caps->legacy_math_rules = true;
+   caps->query_memory_info = true;
 
    caps->texture_transfer_modes = PIPE_TEXTURE_TRANSFER_BLIT;
 
@@ -691,6 +693,7 @@ struct pipe_screen* r300_screen_create(struct radeon_winsys *rws,
     r300screen->screen.context_create = r300_create_context;
     r300screen->screen.fence_reference = r300_fence_reference;
     r300screen->screen.fence_finish = r300_fence_finish;
+    r300screen->screen.query_memory_info = r300_query_memory_info;
 
     r300screen->screen.nir_options[MESA_SHADER_VERTEX] =
         !r300screen->caps.has_tcl ? &gallivm_compiler_options :

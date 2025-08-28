@@ -49,7 +49,7 @@ struct PACKED fd6_bcolor_entry {
 
 struct fd6_sampler_stateobj {
    struct pipe_sampler_state base;
-   uint32_t texsamp0, texsamp1, texsamp2, texsamp3;
+   uint32_t descriptor[4];
    uint16_t seqno;
 };
 
@@ -61,10 +61,9 @@ fd6_sampler_stateobj(struct pipe_sampler_state *samp)
 
 struct fd6_pipe_sampler_view {
    struct pipe_sampler_view base;
-   struct fd_resource *ptr1, *ptr2;
    uint16_t seqno;
 
-   /* TEX_CONST descriptor, with just offsets from the BOs in the iova dwords. */
+   /* TEX_CONST descriptor */
    uint32_t descriptor[FDL6_TEX_CONST_DWORDS];
 
    /* For detecting when a resource has transitioned from UBWC compressed
@@ -110,7 +109,7 @@ struct fd6_texture_state {
 };
 
 struct fd6_texture_state *
-fd6_texture_state(struct fd_context *ctx, enum pipe_shader_type type) assert_dt;
+fd6_texture_state(struct fd_context *ctx, mesa_shader_stage type) assert_dt;
 
 
 static inline void

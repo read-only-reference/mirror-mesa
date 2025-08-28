@@ -148,6 +148,7 @@ can_sink_instr(nir_instr *instr, nir_move_options options, bool *can_mov_out_of_
          return false;
 
       if (intrin->intrinsic == nir_intrinsic_load_global ||
+          intrin->intrinsic == nir_intrinsic_load_global_amd ||
           intrin->intrinsic == nir_intrinsic_load_ubo ||
           intrin->intrinsic == nir_intrinsic_load_ssbo ||
           intrin->intrinsic == nir_intrinsic_load_smem_amd) {
@@ -200,9 +201,12 @@ can_sink_instr(nir_instr *instr, nir_move_options options, bool *can_mov_out_of_
          return options & nir_move_load_input;
 
       case nir_intrinsic_load_global:
+      case nir_intrinsic_load_global_amd:
       case nir_intrinsic_load_smem_amd: /* = global + convergent */
          return options & nir_move_load_global;
 
+      case nir_intrinsic_ldc_nv:
+      case nir_intrinsic_ldcx_nv:
       case nir_intrinsic_load_ubo:
       case nir_intrinsic_load_ubo_vec4:
       case nir_intrinsic_load_global_constant_offset:
@@ -268,7 +272,7 @@ get_innermost_loop(nir_cf_node *node)
    for (; node != NULL; node = node->parent) {
       if (node->type == nir_cf_node_loop) {
          nir_loop *loop = nir_cf_node_as_loop(node);
-         if (nir_loop_first_block(loop)->predecessors->entries > 1)
+         if (nir_loop_first_block(loop)->predecessors.entries > 1)
             return loop;
       }
    }
@@ -309,7 +313,7 @@ adjust_block_for_loops(nir_block *use_block, nir_block *def_block,
 
       nir_cf_node *next = nir_cf_node_next(&cur_block->cf_node);
       if (next && next->type == nir_cf_node_loop &&
-          nir_block_cf_tree_next(cur_block)->predecessors->entries > 1) {
+          nir_block_cf_tree_next(cur_block)->predecessors.entries > 1) {
          nir_loop *following_loop = nir_cf_node_as_loop(next);
          if (loop_contains_block(following_loop, use_block)) {
             use_block = cur_block;
@@ -344,9 +348,9 @@ get_preferred_block(nir_def *def, bool sink_out_of_loops)
     * This might occasionally increase register pressure, but seems overall
     * the better choice.
     */
-   lca = adjust_block_for_loops(lca, def->parent_instr->block,
+   lca = adjust_block_for_loops(lca, nir_def_block(def),
                                 sink_out_of_loops);
-   assert(nir_block_dominates(def->parent_instr->block, lca));
+   assert(nir_block_dominates(nir_def_block(def), lca));
 
    return lca;
 }

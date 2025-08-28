@@ -307,8 +307,51 @@ assert_memhandle_type(VkExternalMemoryHandleTypeFlags types)
    return types == 0;
 }
 
+static enum lvp_device_memory_type
+lvp_device_memory_type_for_handle_types(const struct lvp_physical_device *pdevice,
+                                        VkExternalMemoryHandleTypeFlags types)
+{
+   if (types == 0)
+      return LVP_DEVICE_MEMORY_TYPE_DEFAULT;
+
+#ifdef PIPE_MEMORY_FD
+   if (types & (VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT |
+                VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT)) {
+      assert(!(types & ~(VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT |
+                         VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT)));
+
+#ifdef HAVE_LIBDRM
+      int dmabuf_bits = DRM_PRIME_CAP_EXPORT | DRM_PRIME_CAP_IMPORT;
+      if ((pdevice->pscreen->caps.dmabuf & dmabuf_bits) == dmabuf_bits) {
+         /* If we have full dma-buf support, everything is a dma-buf */
+         return LVP_DEVICE_MEMORY_TYPE_DMA_BUF;
+      }
+
+      if (types & VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
+         /* dma-buf is only supported for import so if we see dma-buf it has
+          * to come by itself.
+          */
+         assert(types == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT);
+         return LVP_DEVICE_MEMORY_TYPE_DMA_BUF;
+      }
+#endif
+
+      assert(types == VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT);
+      return LVP_DEVICE_MEMORY_TYPE_OPAQUE_FD;
+   }
+#endif
+
+   if (types & VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT) {
+      /* These can only be used for import so it's a single bit */
+      assert(util_bitcount(types) == 1);
+      return LVP_DEVICE_MEMORY_TYPE_USER_PTR;
+   }
+
+   UNREACHABLE("Unsupported import/export type");
+}
+
 static unsigned min_shader_cap(struct pipe_screen *pscreen,
-                               enum pipe_shader_type shader,
+                               mesa_shader_stage shader,
                                unsigned cap_offset)
 {
    unsigned val = UINT_MAX;
@@ -1087,7 +1130,7 @@ lvp_get_properties(const struct lvp_physical_device *device, struct vk_propertie
       .maxTransformFeedbackBufferSize = UINT32_MAX,
       .maxTransformFeedbackStreamDataSize = 512,
       .maxTransformFeedbackBufferDataSize = 512,
-      .maxTransformFeedbackBufferDataStride = 512,
+      .maxTransformFeedbackBufferDataStride = 2048,
       .transformFeedbackQueries = true,
       .transformFeedbackStreamsLinesTriangles = false,
       .transformFeedbackRasterizationStreamSelect = false,
@@ -1626,12 +1669,6 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL lvp_GetInstanceProcAddr(
                                     pName);
 }
 
-/* Windows will use a dll definition file to avoid build errors. */
-#ifdef _WIN32
-#undef PUBLIC
-#define PUBLIC
-#endif
-
 /* The loader wants us to expose a second GetInstanceProcAddr function
  * to work around certain LD_PRELOAD issues seen in apps.
  */
@@ -1870,7 +1907,7 @@ VKAPI_ATTR void VKAPI_CALL lvp_DestroyDevice(
 
    if (device->queue.last_fence)
       device->pscreen->fence_reference(device->pscreen, &device->queue.last_fence, NULL);
-   ralloc_free(device->bda.table);
+   _mesa_hash_table_fini(&device->bda, NULL);
    simple_mtx_destroy(&device->bda_lock);
    pipe_resource_reference(&device->zero_buffer, NULL);
 
@@ -2012,8 +2049,9 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_AllocateMemory(
    else if (mem->vk.import_handle_type) {
       assert(import_info &&
              import_info->handleType == mem->vk.import_handle_type);
-      const bool dmabuf = mem->vk.import_handle_type ==
-                          VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+      const enum lvp_device_memory_type memory_type =
+         lvp_device_memory_type_for_handle_types(device->physical_device, mem->vk.import_handle_type);
+      const bool dmabuf = memory_type == LVP_DEVICE_MEMORY_TYPE_DMA_BUF;
       uint64_t size;
       if(!device->pscreen->import_memory_fd(device->pscreen, import_info->fd, &mem->pmem, &size, dmabuf)) {
          error = VK_ERROR_INVALID_EXTERNAL_HANDLE;
@@ -2033,18 +2071,19 @@ VKAPI_ATTR VkResult VKAPI_CALL lvp_AllocateMemory(
 
       mem->vk.size = size;
       mem->map = device->pscreen->map_memory(device->pscreen, mem->pmem);
-      mem->memory_type = dmabuf ? LVP_DEVICE_MEMORY_TYPE_DMA_BUF : LVP_DEVICE_MEMORY_TYPE_OPAQUE_FD;
+      mem->memory_type = memory_type;
    }
    else if (mem->vk.export_handle_types) {
-      const bool dmabuf = mem->vk.export_handle_types ==
-                          VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+      const enum lvp_device_memory_type memory_type =
+         lvp_device_memory_type_for_handle_types(device->physical_device, mem->vk.export_handle_types);
+      const bool dmabuf = memory_type == LVP_DEVICE_MEMORY_TYPE_DMA_BUF;
       mem->pmem = device->pscreen->allocate_memory_fd(device->pscreen, pAllocateInfo->allocationSize, &mem->backed_fd, dmabuf);
       if (!mem->pmem || mem->backed_fd < 0) {
           goto fail;
       }
 
       mem->map = device->pscreen->map_memory(device->pscreen, mem->pmem);
-      mem->memory_type = dmabuf ? LVP_DEVICE_MEMORY_TYPE_DMA_BUF : LVP_DEVICE_MEMORY_TYPE_OPAQUE_FD;
+      mem->memory_type = memory_type;
       /* XXX: this should be memset_s or memset_explicit but they are not supported */
       if (mem_flags && mem_flags->flags & VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT)
          memset(mem->map, 0, pAllocateInfo->allocationSize);

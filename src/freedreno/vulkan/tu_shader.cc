@@ -41,7 +41,7 @@ tu_spirv_to_nir(struct tu_device *dev,
                 VkPipelineCreateFlags2KHR pipeline_flags,
                 const VkPipelineShaderStageCreateInfo *stage_info,
                 const struct tu_shader_key *key,
-                gl_shader_stage stage)
+                mesa_shader_stage stage)
 {
    /* TODO these are made-up */
    const struct spirv_to_nir_options spirv_options = {
@@ -67,6 +67,9 @@ tu_spirv_to_nir(struct tu_device *dev,
 
       /* Accessed via stg/ldg (not used with Vulkan?) */
       .global_addr_format = nir_address_format_64bit_global,
+
+      .min_ubo_alignment = 64,
+      .min_ssbo_alignment = 4,
    };
 
    const nir_shader_compiler_options *nir_options =
@@ -599,8 +602,7 @@ lower_tex_ycbcr(const struct tu_pipeline_layout *layout,
                                               ycbcr_sampler->ycbcr_range,
                                               &tex->def,
                                               bpcs);
-   nir_def_rewrite_uses_after(&tex->def, result,
-                              result->parent_instr);
+   nir_def_rewrite_uses_after(&tex->def, result);
 
    builder->cursor = nir_before_instr(&tex->instr);
 }
@@ -866,7 +868,7 @@ tu_lower_io(nir_shader *shader, struct tu_device *dev,
       /* Disable pushing constants for this stage if none were loaded in the
        * shader.  If all stages don't load their declared push constants, as
        * is often the case under zink, then we could additionally skip
-       * emitting REG_A7XX_SP_SHARED_CONSTANT_GFX_0 entirely.
+       * emitting REG_A7XX_SP_SHARED_CONSTANT_GFX entirely.
        */
       if (!shader_uses_push_consts(shader))
          const_state->push_consts = (struct tu_push_constant_range) {};
@@ -1118,7 +1120,7 @@ lower_ssbo_descriptor_instr(nir_builder *b, nir_intrinsic_instr *intrin,
       nir_def *buffer = intrin->src[buffer_src].ssa;
       assert(buffer->parent_instr->type == nir_instr_type_intrinsic);
       nir_intrinsic_instr *bindless =
-         nir_instr_as_intrinsic(buffer->parent_instr);
+         nir_def_as_intrinsic(buffer);
       assert(bindless->intrinsic == nir_intrinsic_bindless_resource_ir3);
       nir_def *descriptor_idx = bindless->src[0].ssa;
       descriptor_idx = nir_iadd_imm(b, descriptor_idx, 1);
@@ -1360,7 +1362,7 @@ static const struct xs_config {
 
 void
 tu6_emit_xs(struct tu_cs *cs,
-            gl_shader_stage stage, /* xs->type, but xs may be NULL */
+            mesa_shader_stage stage, /* xs->type, but xs may be NULL */
             const struct ir3_shader_variant *xs,
             const struct tu_pvtmem_config *pvtmem,
             uint64_t binary_iova)
@@ -1895,7 +1897,7 @@ tu6_emit_fs_inputs(struct tu_cs *cs, const struct ir3_shader_variant *fs)
       }
    }
 
-   tu_cs_emit_pkt4(cs, REG_A6XX_VPC_VARYING_LM_TRANSFER_CNTL_0_DISABLE(0), 4);
+   tu_cs_emit_pkt4(cs, REG_A6XX_VPC_VARYING_LM_TRANSFER_CNTL_DISABLE(0), 4);
    tu_cs_emit(cs, ~varmask[0]);
    tu_cs_emit(cs, ~varmask[1]);
    tu_cs_emit(cs, ~varmask[2]);
@@ -2175,7 +2177,7 @@ tu6_emit_fs(struct tu_cs *cs,
    tu_cs_emit_regs(cs, A6XX_PC_PS_CNTL(.primitiveiden = fs && fs->reads_primid));
 
    if (CHIP >= A7XX) {
-      tu_cs_emit_regs(cs, A6XX_GRAS_UNKNOWN_8110(0x2));
+      tu_cs_emit_regs(cs, A6XX_GRAS_MODE_CNTL(0x2));
    }
 
    if (fs) {
@@ -2193,7 +2195,7 @@ TU_GENX(tu6_emit_fs);
 template <chip CHIP>
 static void
 tu6_emit_variant(struct tu_cs *cs,
-                 gl_shader_stage stage,
+                 mesa_shader_stage stage,
                  const struct ir3_shader_variant *xs,
                  struct tu_pvtmem_config *pvtmem_config,
                  uint32_t view_mask,
@@ -2831,16 +2833,17 @@ tu_shader_create(struct tu_device *dev,
       const struct ir3_shader_variant *fs = shader->variant;
       shader->fs.sample_shading = fs->sample_shading;
       shader->fs.has_fdm = key->fragment_density_map;
-      if (fs->has_kill)
+      if (fs->has_kill || fs->writes_smask)
          shader->fs.lrz.status |= TU_LRZ_FORCE_DISABLE_WRITE;
       if (fs->no_earlyz)
          shader->fs.lrz.status = TU_LRZ_FORCE_DISABLE_LRZ;
       /* FDM isn't compatible with LRZ, because the LRZ image uses the original
        * resolution and we would need to use the low resolution.
        *
-       * TODO: Use a patchpoint to only disable LRZ for scaled bins.
+       * TODO: Use a patchpoint to only disable LRZ for scaled bins. On a7xx
+       * we use GRAS_SC_BIN_CNTL::FORCE_LRZ_DIS instead.
        */
-      if (key->fragment_density_map)
+      if (key->fragment_density_map && dev->physical_device->info->chip < 7)
          shader->fs.lrz.status = TU_LRZ_FORCE_DISABLE_LRZ;
       if (!fs->fs.early_fragment_tests &&
           (fs->no_earlyz || fs->writes_stencilref)) {
@@ -2905,8 +2908,8 @@ static void
 tu_link_shaders(nir_shader **shaders, unsigned shaders_count)
 {
    nir_shader *consumer = NULL;
-   for (gl_shader_stage stage = (gl_shader_stage) (shaders_count - 1);
-        stage >= MESA_SHADER_VERTEX; stage = (gl_shader_stage) (stage - 1)) {
+   for (mesa_shader_stage stage = (mesa_shader_stage) (shaders_count - 1);
+        stage >= MESA_SHADER_VERTEX; stage = (mesa_shader_stage) (stage - 1)) {
       if (!shaders[stage])
          continue;
 
@@ -2954,8 +2957,8 @@ tu_link_shaders(nir_shader **shaders, unsigned shaders_count)
 
    /* Gather info after linking so that we can fill out the ir3 shader key.
     */
-   for (gl_shader_stage stage = MESA_SHADER_VERTEX;
-        stage <= MESA_SHADER_FRAGMENT; stage = (gl_shader_stage) (stage + 1)) {
+   for (mesa_shader_stage stage = MESA_SHADER_VERTEX;
+        stage <= MESA_SHADER_FRAGMENT; stage = (mesa_shader_stage) (stage + 1)) {
       if (shaders[stage])
          nir_shader_gather_info(shaders[stage],
                                 nir_shader_get_entrypoint(shaders[stage]));
@@ -2998,8 +3001,8 @@ tu_compile_shaders(struct tu_device *device,
    VkResult result = VK_SUCCESS;
    void *mem_ctx = ralloc_context(NULL);
 
-   for (gl_shader_stage stage = MESA_SHADER_VERTEX; stage < MESA_SHADER_STAGES;
-        stage = (gl_shader_stage) (stage + 1)) {
+   for (mesa_shader_stage stage = MESA_SHADER_VERTEX; stage < MESA_SHADER_STAGES;
+        stage = (mesa_shader_stage) (stage + 1)) {
       const VkPipelineShaderStageCreateInfo *stage_info = stage_infos[stage];
       if (!stage_info)
          continue;
@@ -3021,9 +3024,9 @@ tu_compile_shaders(struct tu_device *device,
       ir3_key.has_gs = true;
 
    if (nir_initial_disasm) {
-      for (gl_shader_stage stage = MESA_SHADER_VERTEX;
+      for (mesa_shader_stage stage = MESA_SHADER_VERTEX;
            stage < MESA_SHADER_STAGES;
-           stage = (gl_shader_stage) (stage + 1)) {
+           stage = (mesa_shader_stage) (stage + 1)) {
       if (!nir[stage])
          continue;
 
@@ -3035,8 +3038,8 @@ tu_compile_shaders(struct tu_device *device,
    tu_link_shaders(nir, MESA_SHADER_STAGES);
 
    if (nir_out) {
-      for (gl_shader_stage stage = MESA_SHADER_VERTEX;
-           stage < MESA_SHADER_STAGES; stage = (gl_shader_stage) (stage + 1)) {
+      for (mesa_shader_stage stage = MESA_SHADER_VERTEX;
+           stage < MESA_SHADER_STAGES; stage = (mesa_shader_stage) (stage + 1)) {
          if (!nir[stage])
             continue;
 
@@ -3072,8 +3075,8 @@ tu_compile_shaders(struct tu_device *device,
       ir3_key.tessellation = tu6_get_tessmode(tes);
    }
 
-   for (gl_shader_stage stage = MESA_SHADER_VERTEX; stage < MESA_SHADER_STAGES;
-        stage = (gl_shader_stage) (stage + 1)) {
+   for (mesa_shader_stage stage = MESA_SHADER_VERTEX; stage < MESA_SHADER_STAGES;
+        stage = (mesa_shader_stage) (stage + 1)) {
       if (!nir[stage])
          continue;
 
@@ -3094,8 +3097,8 @@ tu_compile_shaders(struct tu_device *device,
    if (nir[MESA_SHADER_TESS_CTRL] && !nir[MESA_SHADER_FRAGMENT])
       ir3_key.tcs_store_primid = true;
 
-   for (gl_shader_stage stage = MESA_SHADER_VERTEX; stage < MESA_SHADER_STAGES;
-        stage = (gl_shader_stage) (stage + 1)) {
+   for (mesa_shader_stage stage = MESA_SHADER_VERTEX; stage < MESA_SHADER_STAGES;
+        stage = (mesa_shader_stage) (stage + 1)) {
       if (!nir[stage] || shaders[stage])
          continue;
 
@@ -3123,8 +3126,8 @@ tu_compile_shaders(struct tu_device *device,
 fail:
    ralloc_free(mem_ctx);
 
-   for (gl_shader_stage stage = MESA_SHADER_VERTEX; stage < MESA_SHADER_STAGES;
-        stage = (gl_shader_stage) (stage + 1)) {
+   for (mesa_shader_stage stage = MESA_SHADER_VERTEX; stage < MESA_SHADER_STAGES;
+        stage = (mesa_shader_stage) (stage + 1)) {
       if (shaders[stage]) {
          tu_shader_destroy(device, shaders[stage]);
       }
@@ -3189,7 +3192,7 @@ tu_shader_key_robustness(struct tu_shader_key *key,
 static VkResult
 tu_empty_shader_create(struct tu_device *dev,
                        struct tu_shader **shader_out,
-                       gl_shader_stage stage)
+                       mesa_shader_stage stage)
 {
    struct tu_shader *shader = tu_shader_init(dev, NULL, 0);
 

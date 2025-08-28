@@ -43,7 +43,7 @@ struct table_state {
 };
 
 struct state {
-   gl_shader_stage stage, hw_stage;
+   mesa_shader_stage stage, hw_stage;
 
    /* Array of nir_intrinsic_instr's to fix up at the end */
    struct util_dynarray loads;
@@ -95,11 +95,11 @@ load_sysval_indirect(nir_builder *b, unsigned dim, unsigned bitsize,
 static unsigned
 stage_table(nir_builder *b)
 {
-   gl_shader_stage stage = b->shader->info.stage;
+   mesa_shader_stage stage = b->shader->info.stage;
    if (stage == MESA_SHADER_VERTEX && b->shader->info.vs.tes_agx)
       stage = MESA_SHADER_TESS_EVAL;
 
-   assert(stage < PIPE_SHADER_TYPES);
+   assert(stage < MESA_SHADER_STAGES);
    return AGX_SYSVAL_STAGE(stage);
 }
 
@@ -381,8 +381,8 @@ lay_out_uniforms(struct agx_compiled_shader *shader, struct state *state)
 {
    unsigned uniform = 0;
 
-   if (state->stage == PIPE_SHADER_VERTEX ||
-       state->stage == PIPE_SHADER_TESS_EVAL) {
+   if (state->stage == MESA_SHADER_VERTEX ||
+       state->stage == MESA_SHADER_TESS_EVAL) {
       unsigned count =
          DIV_ROUND_UP(BITSET_LAST_BIT(shader->attrib_components_read), 4);
 
@@ -411,7 +411,7 @@ lay_out_uniforms(struct agx_compiled_shader *shader, struct state *state)
          .length = 4,
       };
 
-      bool sw = state->hw_stage == PIPE_SHADER_COMPUTE;
+      bool sw = state->hw_stage == MESA_SHADER_COMPUTE;
       if (sw) {
          shader->push[shader->push_range_count++] = (struct agx_push_range){
             .uniform = AGX_ABI_VUNI_INPUT_ASSEMBLY(count),
@@ -422,7 +422,7 @@ lay_out_uniforms(struct agx_compiled_shader *shader, struct state *state)
       }
 
       uniform = AGX_ABI_VUNI_COUNT_GL(count, sw);
-   } else if (state->stage == PIPE_SHADER_FRAGMENT) {
+   } else if (state->stage == MESA_SHADER_FRAGMENT) {
       struct agx_draw_uniforms *u = NULL;
       struct agx_stage_uniforms *s = NULL;
       shader->push[shader->push_range_count++] = (struct agx_push_range){
@@ -487,13 +487,13 @@ lay_out_uniforms(struct agx_compiled_shader *shader, struct state *state)
 }
 
 bool
-agx_nir_lower_sysvals(nir_shader *shader, enum pipe_shader_type desc_stage,
+agx_nir_lower_sysvals(nir_shader *shader, mesa_shader_stage desc_stage,
                       bool lower_draw_params)
 {
    /* override stage for the duration on the pass. XXX: should refactor, but
     * it's annoying!
     */
-   enum pipe_shader_type phys_stage = shader->info.stage;
+   mesa_shader_stage phys_stage = shader->info.stage;
    shader->info.stage = desc_stage;
 
    bool progress = nir_shader_instructions_pass(

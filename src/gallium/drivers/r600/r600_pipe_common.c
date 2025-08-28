@@ -200,10 +200,9 @@ void r600_draw_rectangle(struct blitter_context *blitter,
 	vbuffer.buffer.resource = buf;
 	vbuffer.buffer_offset = offset;
 
-	util_set_vertex_buffers(&rctx->b, 1, false, &vbuffer);
+	rctx->b.set_vertex_buffers(&rctx->b, 1, &vbuffer);
 	util_draw_arrays_instanced(&rctx->b, R600_PRIM_RECTANGLE_LIST, 0, 3,
 				   0, num_instances);
-	pipe_resource_reference(&buf, NULL);
 }
 
 static void r600_dma_emit_wait_idle(struct r600_common_context *rctx)
@@ -543,7 +542,7 @@ static bool r600_resource_commit(struct pipe_context *pctx,
 				 bool commit)
 {
 	struct r600_common_context *ctx = (struct r600_common_context *)pctx;
-	struct r600_resource *res = r600_resource(resource);
+	struct r600_resource *res = r600_as_resource(resource);
 
 	/*
 	 * Since buffer commitment changes cannot be pipelined, we need to
@@ -939,7 +938,7 @@ static void r600_resource_destroy(struct pipe_screen *screen,
 				  struct pipe_resource *res)
 {
 	if (res->target == PIPE_BUFFER) {
-		if (r600_resource(res)->compute_global_bo)
+		if (r600_as_resource(res)->compute_global_bo)
 			r600_compute_global_buffer_destroy(screen, res);
 		else
 			r600_buffer_destroy(screen, res);
@@ -1211,8 +1210,8 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 	}
 
 	uint8_t indirect_supported_mask =
-		(uint8_t)BITFIELD_MASK(PIPE_SHADER_TYPES) &
-		~BITFIELD_BIT(PIPE_SHADER_FRAGMENT);
+		(uint8_t)BITFIELD_MASK(MESA_SHADER_STAGES) &
+		~BITFIELD_BIT(MESA_SHADER_FRAGMENT);
 	rscreen->nir_options.support_indirect_inputs = indirect_supported_mask;
 	rscreen->nir_options.support_indirect_outputs = indirect_supported_mask;
 

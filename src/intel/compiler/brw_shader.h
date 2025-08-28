@@ -59,31 +59,31 @@ enum brw_shader_phase {
    BRW_SHADER_PHASE_INVALID,
 };
 
+struct brw_shader_params
+{
+   const struct brw_compiler *compiler;
+   void *mem_ctx;
+
+   const nir_shader *nir;
+   const brw_base_prog_key *key;
+   brw_stage_prog_data *prog_data;
+
+   unsigned dispatch_width;
+
+   /* Fragment shader. */
+   unsigned num_polygons;
+   const int *per_primitive_offsets;
+
+   bool needs_register_pressure;
+   void *log_data;
+   bool debug_enabled;
+};
+
 struct brw_shader
 {
 public:
-   brw_shader(const struct brw_compiler *compiler,
-              const struct brw_compile_params *params,
-              const brw_base_prog_key *key,
-              struct brw_stage_prog_data *prog_data,
-              const nir_shader *shader,
-              unsigned dispatch_width,
-              bool needs_register_pressure,
-              bool debug_enabled);
-   brw_shader(const struct brw_compiler *compiler,
-              const struct brw_compile_params *params,
-              const brw_wm_prog_key *key,
-              struct brw_wm_prog_data *prog_data,
-              const nir_shader *shader,
-              unsigned dispatch_width,
-              unsigned num_polygons,
-              bool needs_register_pressure,
-              bool debug_enabled);
-   void init();
+   brw_shader(const brw_shader_params *params);
    ~brw_shader();
-
-   void import_uniforms(brw_shader *v);
-   void import_per_primitive_offsets(const int *per_primitive_offsets);
 
    void assign_curb_setup();
    void convert_attr_sources_to_hw_regs(brw_inst *inst);
@@ -117,7 +117,7 @@ public:
 
    cfg_t *cfg;
 
-   gl_shader_stage stage;
+   mesa_shader_stage stage;
    bool debug_enabled;
 
    /* VGRF allocation. */
@@ -180,7 +180,7 @@ public:
    DEFINE_PAYLOAD_ACCESSOR(brw_gs_thread_payload,  gs_payload,  stage == MESA_SHADER_GEOMETRY);
    DEFINE_PAYLOAD_ACCESSOR(brw_fs_thread_payload,  fs_payload,  stage == MESA_SHADER_FRAGMENT);
    DEFINE_PAYLOAD_ACCESSOR(brw_cs_thread_payload,  cs_payload,
-                           gl_shader_stage_uses_workgroup(stage));
+                           mesa_shader_stage_uses_workgroup(stage));
    DEFINE_PAYLOAD_ACCESSOR(brw_task_mesh_thread_payload, task_mesh_payload,
                            stage == MESA_SHADER_TASK || stage == MESA_SHADER_MESH);
    DEFINE_PAYLOAD_ACCESSOR(brw_bs_thread_payload, bs_payload,

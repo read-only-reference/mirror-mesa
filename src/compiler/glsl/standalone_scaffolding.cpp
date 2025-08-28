@@ -104,7 +104,7 @@ _mesa_shader_debug(struct gl_context *, GLenum, GLuint *,
 }
 
 struct gl_shader *
-_mesa_new_shader(GLuint name, gl_shader_stage stage)
+_mesa_new_shader(GLuint name, mesa_shader_stage stage)
 {
    struct gl_shader *shader;
 
@@ -151,7 +151,7 @@ void
 _mesa_clear_shader_program_data(struct gl_context *ctx,
                                 struct gl_shader_program *shProg)
 {
-   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
+   for (unsigned i = 0; i < MESA_SHADER_MESH_STAGES; i++) {
       if (shProg->_LinkedShaders[i] != NULL) {
          _mesa_delete_linked_shader(ctx, shProg->_LinkedShaders[i]);
          shProg->_LinkedShaders[i] = NULL;
@@ -181,7 +181,7 @@ _mesa_clear_shader_program_data(struct gl_context *ctx,
 
 
 static void
-init_gl_program(struct gl_program *prog, bool is_arb_asm, gl_shader_stage stage)
+init_gl_program(struct gl_program *prog, bool is_arb_asm, mesa_shader_stage stage)
 {
    prog->RefCount = 1;
    prog->Format = GL_PROGRAM_FORMAT_ASCII_ARB;
@@ -190,7 +190,7 @@ init_gl_program(struct gl_program *prog, bool is_arb_asm, gl_shader_stage stage)
 }
 
 static struct gl_program *
-standalone_new_program(UNUSED struct gl_context *ctx, gl_shader_stage stage,
+standalone_new_program(UNUSED struct gl_context *ctx, mesa_shader_stage stage,
                        UNUSED GLuint id, bool is_arb_asm)
 {
    struct gl_program *prog = rzalloc(NULL, struct gl_program);
@@ -284,14 +284,6 @@ void initialize_context_to_defaults(struct gl_context *ctx, gl_api api)
    ctx->Const.Program[MESA_SHADER_COMPUTE].MaxInputComponents = 0; /* not used */
    ctx->Const.Program[MESA_SHADER_COMPUTE].MaxOutputComponents = 0; /* not used */
 
-   /* Set up default shader compiler options. */
-   struct gl_shader_compiler_options options;
-   memset(&options, 0, sizeof(options));
-   options.MaxIfDepth = UINT_MAX;
-
-   for (int sh = 0; sh < MESA_SHADER_STAGES; ++sh)
-      memcpy(&ctx->Const.ShaderCompilerOptions[sh], &options, sizeof(options));
-
    ctx->Driver.NewProgram = standalone_new_program;
 }
 
@@ -323,7 +315,7 @@ standalone_destroy_shader_program(struct gl_shader_program *whole_program)
          ralloc_free(whole_program->Shaders[i]->nir);
    }
 
-   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
+   for (unsigned i = 0; i < MESA_SHADER_MESH_STAGES; i++) {
       if (whole_program->_LinkedShaders[i]) {
          if (whole_program->_LinkedShaders[i]->Program->Parameters)
             _mesa_free_parameter_list(whole_program->_LinkedShaders[i]->Program->Parameters);

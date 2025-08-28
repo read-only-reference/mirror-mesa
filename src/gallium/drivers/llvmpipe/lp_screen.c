@@ -127,16 +127,16 @@ llvmpipe_init_shader_caps(struct pipe_screen *screen)
       struct pipe_shader_caps *caps = (struct pipe_shader_caps *)&screen->shader_caps[i];
 
       switch (i) {
-      case PIPE_SHADER_FRAGMENT:
-      case PIPE_SHADER_COMPUTE:
-      case PIPE_SHADER_MESH:
-      case PIPE_SHADER_TASK:
+      case MESA_SHADER_FRAGMENT:
+      case MESA_SHADER_COMPUTE:
+      case MESA_SHADER_MESH:
+      case MESA_SHADER_TASK:
          gallivm_init_shader_caps(caps);
          break;
-      case PIPE_SHADER_TESS_CTRL:
-      case PIPE_SHADER_TESS_EVAL:
-      case PIPE_SHADER_VERTEX:
-      case PIPE_SHADER_GEOMETRY:
+      case MESA_SHADER_TESS_CTRL:
+      case MESA_SHADER_TESS_EVAL:
+      case MESA_SHADER_VERTEX:
+      case MESA_SHADER_GEOMETRY:
          draw_init_shader_caps(caps);
 
          if (debug_get_bool_option("DRAW_USE_LLVM", true)) {
@@ -468,8 +468,8 @@ static const struct nir_shader_compiler_options gallivm_nir_options = {
    .lower_fminmax_signed_zero = true,
    .driver_functions = true,
    .scalarize_ddx = true,
-   .support_indirect_inputs = (uint8_t)BITFIELD_MASK(PIPE_SHADER_TYPES),
-   .support_indirect_outputs = (uint8_t)BITFIELD_MASK(PIPE_SHADER_TYPES),
+   .support_indirect_inputs = (uint8_t)BITFIELD_MASK(MESA_SHADER_STAGES),
+   .support_indirect_outputs = (uint8_t)BITFIELD_MASK(MESA_SHADER_STAGES),
 };
 
 
@@ -598,8 +598,16 @@ llvmpipe_is_format_supported(struct pipe_screen *_screen,
           target == PIPE_TEXTURE_CUBE ||
           target == PIPE_TEXTURE_CUBE_ARRAY);
 
-   if (sample_count != 0 && sample_count != 1 && sample_count != 4)
+   static_assert(LP_MAX_SAMPLES == 8, "Code below assumes support up to 8x");
+   switch (sample_count) {
+   case 0:
+   case 1:
+   case 4:
+   case 8:
+      break;
+   default:
       return false;
+   }
 
    if (bind & (PIPE_BIND_RENDER_TARGET | PIPE_BIND_SHADER_IMAGE))
       if (!lp_storage_render_image_format_supported(format))
@@ -983,7 +991,7 @@ llvmpipe_create_screen(struct sw_winsys *winsys)
                                               screen->num_threads);
    screen->num_threads = MIN2(screen->num_threads, LP_MAX_THREADS);
 
-   for (unsigned i = 0; i < PIPE_SHADER_MESH_TYPES; i++)
+   for (unsigned i = 0; i < MESA_SHADER_MESH_STAGES; i++)
       screen->base.nir_options[i] = &gallivm_nir_options;
 
 #if defined(HAVE_LIBDRM) && defined(HAVE_LINUX_UDMABUF_H)

@@ -81,7 +81,7 @@ struct lower_distance_state {
    /**
     * Type of shader we are compiling (e.g. MESA_SHADER_VERTEX)
     */
-   gl_shader_stage shader_stage;
+   mesa_shader_stage shader_stage;
    const char *in_name;
    int total_size;
    int offset;
@@ -146,8 +146,8 @@ replace_var_declaration(struct lower_distance_state *state, nir_shader *sh,
    if (!(*new_var)) {
       unsigned new_size = (state->total_size + 3) / 4;
 
-      *new_var = rzalloc(sh, nir_variable);
-      (*new_var)->name = ralloc_strdup(*new_var, GLSL_CLIP_VAR_NAME);
+      *new_var = nir_variable_create_zeroed(sh);
+      nir_variable_set_name(sh, *new_var, GLSL_CLIP_VAR_NAME);
       (*new_var)->data.mode = var->data.mode;
       (*new_var)->data.location = VARYING_SLOT_CLIP_DIST0;
       (*new_var)->data.assigned = true;

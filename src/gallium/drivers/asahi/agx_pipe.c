@@ -1751,6 +1751,7 @@ agx_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
     */
 
    ctx->queue_id = agx_create_command_queue(agx_device(screen), priority);
+   ctx->virt_ring_idx = priority + 1;
 
    pctx->destroy = agx_destroy_context;
    pctx->flush = agx_flush;
@@ -1864,7 +1865,7 @@ agx_init_shader_caps(struct pipe_screen *pscreen)
 {
    bool is_no16 = agx_device(pscreen)->debug & AGX_DBG_NO16;
 
-   for (unsigned i = 0; i <= PIPE_SHADER_COMPUTE; i++) {
+   for (unsigned i = 0; i <= MESA_SHADER_COMPUTE; i++) {
       struct pipe_shader_caps *caps =
          (struct pipe_shader_caps *)&pscreen->shader_caps[i];
 
@@ -1873,14 +1874,14 @@ agx_init_shader_caps(struct pipe_screen *pscreen)
 
       caps->max_control_flow_depth = 1024;
 
-      caps->max_inputs = i == PIPE_SHADER_VERTEX ? 16 : 32;
+      caps->max_inputs = i == MESA_SHADER_VERTEX ? 16 : 32;
 
       /* For vertex, the spec min/max is 16. We need more to handle dmat3
        * correctly, though. The full 32 is undesirable since it would require
        * shenanigans to handle.
        */
-      caps->max_outputs = i == PIPE_SHADER_FRAGMENT ? 8
-                          : i == PIPE_SHADER_VERTEX ? 24
+      caps->max_outputs = i == MESA_SHADER_FRAGMENT ? 8
+                          : i == MESA_SHADER_VERTEX ? 24
                                                     : 32;
 
       caps->max_temps = 256; /* GL_MAX_PROGRAM_TEMPORARIES_ARB */
@@ -1954,8 +1955,8 @@ agx_init_compute_caps(struct pipe_screen *pscreen)
    caps->max_compute_units = agx_get_num_cores(dev);
 
    caps->subgroup_sizes = 32;
-
-   caps->max_variable_threads_per_block = 1024; // TODO
+   caps->max_variable_threads_per_block = 1024;
+   caps->max_subgroups = caps->max_variable_threads_per_block / 32;
 }
 
 static void
@@ -1998,6 +1999,12 @@ agx_init_screen_caps(struct pipe_screen *pscreen)
 
    /* Timer resolution is the length of a single tick in nanos */
    caps->timer_resolution = agx_gpu_timestamp_to_ns(agx_device(pscreen), 1);
+
+   caps->shader_subgroup_size = 32;
+   caps->shader_subgroup_supported_stages = BITFIELD_MASK(MESA_SHADER_STAGES);
+   caps->shader_subgroup_supported_features =
+      BITFIELD_MASK(PIPE_SHADER_SUBGROUP_NUM_FEATURES);
+   caps->shader_subgroup_quad_all_stages = true;
 
    caps->sampler_view_target = true;
    caps->texture_swizzle = true;

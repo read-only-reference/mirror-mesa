@@ -1737,7 +1737,8 @@ struct Export_instruction : public Instruction {
    bool done : 1;
    bool valid_mask : 1;
    bool row_en : 1;
-   uint8_t padding0 : 4;
+   bool disable_wqm : 1;
+   uint8_t padding0 : 3;
    uint8_t padding1;
 };
 static_assert(sizeof(Export_instruction) == sizeof(Instruction) + 4, "Unexpected padding");
@@ -1915,6 +1916,10 @@ bool can_swap_operands(aco_ptr<Instruction>& instr, aco_opcode* new_op, unsigned
                        unsigned idx1 = 1);
 
 uint32_t get_reduction_identity(ReduceOp op, unsigned idx);
+
+bool instr_disables_wqm(Instruction* instr);
+Operand& instr_exact_mask(Instruction* instr);
+Operand& instr_wqm_mask(Instruction* instr);
 
 unsigned get_mimg_nsa_dwords(const Instruction* instr);
 
@@ -2290,6 +2295,7 @@ void live_var_analysis(Program* program);
 std::vector<uint16_t> dead_code_analysis(Program* program);
 void dominator_tree(Program* program);
 void insert_exec_mask(Program* program);
+void disable_wqm(Program* program);
 void value_numbering(Program* program);
 void optimize(Program* program);
 void optimize_postRA(Program* program);

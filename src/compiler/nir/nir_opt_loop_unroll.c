@@ -56,7 +56,7 @@ loop_prepare_for_unroll(nir_loop *loop)
    /* Lower phis at the top level of the loop body */
    foreach_list_typed_safe(nir_cf_node, node, node, &loop->body) {
       if (nir_cf_node_block == node->type) {
-         nir_lower_phis_to_regs_block(nir_cf_node_as_block(node));
+         nir_lower_phis_to_regs_block(nir_cf_node_as_block(node), false);
       }
    }
 
@@ -64,7 +64,7 @@ loop_prepare_for_unroll(nir_loop *loop)
    nir_block *block_after_loop =
       nir_cf_node_as_block(nir_cf_node_next(&loop->cf_node));
 
-   nir_lower_phis_to_regs_block(block_after_loop);
+   nir_lower_phis_to_regs_block(block_after_loop, false);
 
    /* Remove jump if it's the last instruction in the loop */
    nir_instr *last_instr = nir_block_last_instr(nir_loop_last_block(loop));
@@ -642,7 +642,7 @@ comparison_contains_instr(nir_scalar cond_scalar, nir_instr *instr)
 {
    if (nir_is_terminator_condition_with_two_inputs(cond_scalar)) {
       nir_alu_instr *comparison =
-         nir_instr_as_alu(cond_scalar.def->parent_instr);
+         nir_def_as_alu(cond_scalar.def);
       return comparison->src[0].src.ssa->parent_instr == instr ||
              comparison->src[1].src.ssa->parent_instr == instr;
    }
@@ -691,7 +691,7 @@ remove_out_of_bounds_induction_use(nir_shader *shader, nir_loop *loop,
                                         trip_count)) {
                if (intrin->intrinsic == nir_intrinsic_load_deref) {
                   nir_alu_instr *term_alu =
-                     nir_instr_as_alu(term->nif->condition.ssa->parent_instr);
+                     nir_def_as_alu(term->nif->condition.ssa);
                   b.cursor = nir_before_instr(term->nif->condition.ssa->parent_instr);
 
                   /* If the out of bounds load is used in the comparison of the

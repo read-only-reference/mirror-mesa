@@ -9,7 +9,7 @@ set -exu
 
 # If CI vars are not set, assign an empty value, this prevents -u to fail
 : "${CI:=}"
-: "${CI_PROJECT_PATH:=}"
+: "${S3_PROJECT_PATH:=}"
 
 # Early check for required env variables, relies on `set -u`
 : "$ANDROID_NDK_VERSION"
@@ -26,13 +26,16 @@ if [ -n "$CI" ] && [ ! -s "${S3_JWT_FILE}" ]; then
   exit 1
 fi
 
-if curl -s -o /dev/null -I -L -f --retry 4 --retry-delay 15 "https://${S3_HOST}/${S3_ANDROID_BUCKET}/${CI_PROJECT_PATH}/${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst"; then
+# shellcheck disable=SC2034 # S3_BASE_PATH is used in find_s3_project_artifact
+S3_BASE_PATH="${S3_HOST}/${S3_ANDROID_BUCKET}"
+ARTIFACTS_PATH="${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst"
+
+if ARTIFACTS_URL="$(find_s3_project_artifact "${ARTIFACTS_PATH}")"; then
   echo "Artifact ${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst already exists, skip re-building."
 
   # Download prebuilt LLVM libraries for Android when they have not changed,
   # to save some time
-  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-    -o "/${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst" "https://${S3_HOST}/${S3_ANDROID_BUCKET}/${CI_PROJECT_PATH}/${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst"
+  curl-with-retry -o "/${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst" "${ARTIFACTS_URL}"
   tar -C / --zstd -xf "/${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst"
   rm "/${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst"
 
@@ -51,9 +54,8 @@ ANDROID_NDK="android-ndk-${ANDROID_NDK_VERSION}"
 ANDROID_NDK_ROOT="/${ANDROID_NDK}"
 if [ ! -d "$ANDROID_NDK_ROOT" ];
 then
-  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-    -o "${ANDROID_NDK}.zip" \
-    "https://dl.google.com/android/repository/${ANDROID_NDK}-linux.zip"
+  curl-with-retry -o "${ANDROID_NDK}.zip" \
+   "https://dl.google.com/android/repository/${ANDROID_NDK}-linux.zip"
   unzip -d / "${ANDROID_NDK}.zip" "$ANDROID_NDK/source.properties" "$ANDROID_NDK/build/cmake/*" "$ANDROID_NDK/toolchains/llvm/*"
   rm "${ANDROID_NDK}.zip"
 fi
@@ -114,7 +116,7 @@ tar --zstd -cf "${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst" "$LLVM_INSTALL_PREFIX"
 # version does not change, and delete it.
 # The file is not deleted for non-CI because it can be useful in local runs.
 if [ -n "$CI" ]; then
-  ci-fairy s3cp --token-file "${S3_JWT_FILE}" "${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst" "https://${S3_HOST}/${S3_ANDROID_BUCKET}/${CI_PROJECT_PATH}/${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst"
+  ci-fairy s3cp --token-file "${S3_JWT_FILE}" "${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst" "https://${S3_HOST}/${S3_ANDROID_BUCKET}/${S3_PROJECT_PATH}/${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst"
   rm "${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst"
 fi
 

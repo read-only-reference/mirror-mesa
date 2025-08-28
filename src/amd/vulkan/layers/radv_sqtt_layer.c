@@ -23,7 +23,7 @@ radv_sqtt_emit_relocated_shaders(struct radv_cmd_buffer *cmd_buffer, struct radv
    const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
    struct radv_sqtt_shaders_reloc *reloc = pipeline->sqtt_shaders_reloc;
-   struct radeon_cmdbuf *cs = cmd_buffer->cs;
+   struct radv_cmd_stream *cs = cmd_buffer->cs;
 
    radv_foreach_stage (s, RADV_GRAPHICS_STAGE_BITS & ~VK_SHADER_STAGE_TASK_BIT_EXT) {
       const struct radv_shader *shader = pipeline->base.shaders[s];
@@ -32,18 +32,32 @@ radv_sqtt_emit_relocated_shaders(struct radv_cmd_buffer *cmd_buffer, struct radv
          continue;
 
       /* Shaders are allocated in the 32-bit addr space and high bits are already configured. */
+      radeon_begin(cs);
       if (pdev->info.gfx_level >= GFX12) {
-         gfx12_push_sh_reg(cmd_buffer, shader->info.regs.pgm_lo, reloc->va[s] >> 8);
+         gfx12_push_sh_reg(shader->info.regs.pgm_lo, reloc->va[s] >> 8);
       } else {
-         radeon_begin(cs);
          radeon_set_sh_reg(shader->info.regs.pgm_lo, reloc->va[s] >> 8);
-         radeon_end();
       }
+      radeon_end();
+   }
+
+   struct radv_shader *task_shader = cmd_buffer->state.shaders[MESA_SHADER_TASK];
+   if (task_shader) {
+      struct radv_cmd_stream *ace_cs = cmd_buffer->gang.cs;
+      const uint64_t va = reloc->va[MESA_SHADER_TASK];
+
+      radeon_begin(ace_cs);
+      if (pdev->info.gfx_level >= GFX12) {
+         gfx12_push_sh_reg(task_shader->info.regs.pgm_lo, va >> 8);
+      } else {
+         radeon_set_sh_reg(task_shader->info.regs.pgm_lo, va >> 8);
+      }
+      radeon_end();
    }
 }
 
 static uint64_t
-radv_sqtt_shader_get_va_reloc(struct radv_pipeline *pipeline, gl_shader_stage stage)
+radv_sqtt_shader_get_va_reloc(struct radv_pipeline *pipeline, mesa_shader_stage stage)
 {
    if (pipeline->type == RADV_PIPELINE_GRAPHICS) {
       struct radv_graphics_pipeline *graphics_pipeline = radv_pipeline_to_graphics(pipeline);
@@ -306,7 +320,7 @@ radv_gfx12_write_draw_marker(struct radv_cmd_buffer *cmd_buffer, const struct ra
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const enum amd_gfx_level gfx_level = pdev->info.gfx_level;
    const enum amd_ip_type ring = radv_queue_family_to_ring(pdev, cmd_buffer->qf);
-   struct radeon_cmdbuf *cs = cmd_buffer->cs;
+   struct radv_cmd_stream *cs = cmd_buffer->cs;
 
    /* RGP doesn't need this marker for indirect draws. */
    if (draw_info->indirect_va)
@@ -330,8 +344,7 @@ radv_describe_draw(struct radv_cmd_buffer *cmd_buffer, const struct radv_draw_in
    const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
 
-   if (likely(!device->sqtt.bo))
-      return;
+   assert(device->sqtt.bo);
 
    radv_write_event_marker(cmd_buffer, cmd_buffer->state.current_event_type, UINT_MAX, UINT_MAX, UINT_MAX);
 
@@ -1023,7 +1036,7 @@ sqtt_CmdTraceRaysKHR(VkCommandBuffer commandBuffer, const VkStridedDeviceAddress
                      const VkStridedDeviceAddressRegionKHR *pCallableShaderBindingTable, uint32_t width,
                      uint32_t height, uint32_t depth)
 {
-   EVENT_RT_MARKER(TraceRaysKHR, ApiRayTracingSeparateCompiled, commandBuffer, pRaygenShaderBindingTable,
+   EVENT_RT_MARKER(TraceRaysKHR, EventRayTracingSeparateCompiled, commandBuffer, pRaygenShaderBindingTable,
                    pMissShaderBindingTable, pHitShaderBindingTable, pCallableShaderBindingTable, width, height, depth);
 }
 
@@ -1035,14 +1048,14 @@ sqtt_CmdTraceRaysIndirectKHR(VkCommandBuffer commandBuffer,
                              const VkStridedDeviceAddressRegionKHR *pCallableShaderBindingTable,
                              VkDeviceAddress indirectDeviceAddress)
 {
-   EVENT_RT_MARKER(TraceRaysIndirectKHR, ApiRayTracingSeparateCompiled, commandBuffer, pRaygenShaderBindingTable,
+   EVENT_RT_MARKER(TraceRaysIndirectKHR, EventRayTracingSeparateCompiled, commandBuffer, pRaygenShaderBindingTable,
                    pMissShaderBindingTable, pHitShaderBindingTable, pCallableShaderBindingTable, indirectDeviceAddress);
 }
 
 VKAPI_ATTR void VKAPI_CALL
 sqtt_CmdTraceRaysIndirect2KHR(VkCommandBuffer commandBuffer, VkDeviceAddress indirectDeviceAddress)
 {
-   EVENT_RT_MARKER_ALIAS(TraceRaysIndirect2KHR, TraceRaysIndirectKHR, ApiRayTracingSeparateCompiled, commandBuffer,
+   EVENT_RT_MARKER_ALIAS(TraceRaysIndirect2KHR, TraceRaysIndirectKHR, EventRayTracingSeparateCompiled, commandBuffer,
                          indirectDeviceAddress);
 }
 

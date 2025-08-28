@@ -66,6 +66,7 @@ METHOD_IS_FLOAT = [
     'SET_VIEWPORT_CLIP_MIN_Z',
     'SET_VIEWPORT_CLIP_MAX_Z',
     'SET_Z_CLEAR_VALUE',
+    'SET_POINT_SIZE',
 ]
 
 # generator chokes on these in later files
@@ -294,7 +295,7 @@ pub struct ${to_camel(mthd.name)} {
 % if not mthd.is_array:
 ## This trait lays out how the conversion to u32 happens
 impl Mthd for ${to_camel(mthd.name)} {
-    const ADDR: u16 = ${mthd.addr.replace('(', '').replace(')', '')};
+    const ADDR: u16 = ${mthd.addr_expr(None)};
     const CLASS: u16 = ${version[1].lower() if version is not None else nvcl.lower().replace("nv", "0x")};
 
 %else:
@@ -302,8 +303,7 @@ impl ArrayMthd for ${to_camel(mthd.name)} {
     const CLASS: u16 = ${version[1].lower() if version is not None else nvcl.lower().replace("nv", "0x")};
 
     fn addr(i: usize) -> u16 {
-        <% assert not ('i' in mthd.addr and 'j' in mthd.addr) %>
-        (${mthd.addr.replace('j', 'i').replace('(', '').replace(')', '')}).try_into().unwrap()
+        (${mthd.addr_expr('i')}).try_into().unwrap()
     }
 %endif
 
@@ -312,20 +312,20 @@ impl ArrayMthd for ${to_camel(mthd.name)} {
         let mut val = 0;
         %for field in mthd.fields:
             <% field_width = field.end - field.start + 1 %>
-            %if field_width == 32:
-                %if field.rs_type(mthd) == "u32":
-        val |= self.${field.rs_name};
-                %else:
-        val |= self.${field.rs_name} as u32;
-                %endif
+            %if field.rs_type(mthd) == "u32":
+        let field_u32 = self.${field.rs_name};
             %else:
-                %if field.rs_type(mthd) == "u32":
-        assert!(self.${field.rs_name} < (1 << ${field_width}));
-        val |= self.${field.rs_name} << ${field.start};
-                %else:
-        assert!((self.${field.rs_name} as u32) < (1 << ${field_width}));
-        val |= (self.${field.rs_name} as u32) << ${field.start};
-                %endif
+        let field_u32 = self.${field.rs_name} as u32;
+            %endif
+            %if field_width == 32:
+            <% assert field_width == 32 %>
+            %else:
+        assert!(field_u32 < (1 << ${field_width}));
+            %endif
+            %if field.start == 0:
+        val |= field_u32;
+            %else:
+        val |= field_u32 << ${field.start};
             %endif
         %endfor
 
@@ -341,6 +341,12 @@ impl ArrayMthd for ${to_camel(mthd.name)} {
 def to_camel(snake_str):
     result = ''.join(word.title() for word in snake_str.split('_'))
     return result if not result[0].isdigit() else '_' + result
+
+def strip_parens(s):
+    s = s.strip()
+    while s.startswith('(') and s.endswith(')'):
+        s = s[1:-1].strip()
+    return s
 
 def glob_match(glob, name):
     if glob.endswith('*'):
@@ -433,6 +439,25 @@ class Method(object):
                self.is_array == other.is_array and \
                self.fields == other.fields
 
+    def addr_expr(self, idx_var):
+        expr = self.addr
+        if self.is_array:
+            # We don't support multiple-indexing but the headers aren't
+            # consistent in choosing i vs. j.
+            assert idx_var is not None
+            assert not ('i' in self.addr and 'j' in self.addr)
+            expr = re.sub(r'[ij]', idx_var, expr)
+
+            # Rust doesn't like extra parens
+            expr = expr.replace('(' + idx_var + ')', idx_var)
+        else:
+            assert not 'i' in self.addr and not 'j' in self.addr
+
+        # Rust also doesn't like extra parens
+        expr = strip_parens(expr)
+
+        return expr
+
     @property
     def array_size(self):
         for (glob, value) in METHOD_ARRAY_SIZES.items():
@@ -469,11 +494,11 @@ def parse_header(nvcl, f):
             continue
 
         if line.startswith("#define"):
-            list = line.split();
+            list = [strip_parens(e) for e in line.split()]
             if "_cl_" in list[1]:
                 continue
 
-            if not list[1].startswith(nvcl):
+            if (not list[1].startswith(nvcl)) or list[1].endswith('VIDEO_DECODER'):
                 if len(list) > 2 and list[2].startswith("0x"):
                     assert version is None
                     version = (list[1], list[2])

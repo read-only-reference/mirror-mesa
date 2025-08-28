@@ -106,13 +106,14 @@ enum vpe_status {
  *         emitted must by synchronized with handler
  */
 enum vpe_event_id {
-    VPE_EVENT_CHECK_SUPPORT, /**< Event emitted by vpe_check_support.
-                                  Params:
-                                          UInt32 num_streams,
-                                          UInt32 target_rect.width,
-                                          UInt32 target_rect.height,
-                                          UInt32 target_rect.height
-                               */
+    VPE_EVENT_CHECK_SUPPORT,     /**< Event emitted by vpe_check_support.
+                                      Params:
+                                              UInt32 num_streams,
+                                              UInt32 target_rect.width,
+                                              UInt32 target_rect.height,
+                                              UInt32 target_rect.height */
+    VPE_EVENT_PLANE_DESC_INPUT,  /**< Event emitted by vpe_plane_desc_input */
+    VPE_EVENT_PLANE_DESC_OUTPUT, /**< Event emitted by vpe_plane_desc_output */
 
     VPE_EVENT_MAX_ID         /**< Max ID represents the number of event IDs supported */
 };
@@ -450,6 +451,7 @@ struct vpe_debug_options {
         uint32_t skip_optimal_tap_check   : 1; /**< Skip optimal tap check */
         uint32_t disable_lut_caching      : 1; /**< disable config caching for all luts */
         uint32_t disable_performance_mode : 1; /**< disable performance mode */
+        uint32_t reserved : 8;
     } flags;                                  /**< debug flags */
 
     // valid only if the corresponding flag is set

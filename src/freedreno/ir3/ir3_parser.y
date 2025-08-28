@@ -460,6 +460,8 @@ static void print_token(FILE *file, int type, YYSTYPE value)
 %token <num> T_RPT
 %token <tok> T_UL
 %token <tok> T_NOP
+%token <tok> T_EOLM
+%token <tok> T_EOGM
 
 /* category 0: */
 %token <tok> T_OP_NOP
@@ -773,6 +775,7 @@ static void print_token(FILE *file, int type, YYSTYPE value)
 %token <num> T_A0
 %token <num> T_A1
 %token <num> T_P0
+%token <num> T_UP0
 %token <num> T_W
 %token <str> T_CAT1_TYPE_TYPE
 
@@ -931,6 +934,8 @@ iflag:             T_SY   { iflags.flags |= IR3_INSTR_SY; }
 |                  T_RPT  { iflags.repeat = $1; }
 |                  T_UL   { iflags.flags |= IR3_INSTR_UL; }
 |                  T_NOP  { iflags.nop = $1; }
+|                  T_EOLM { iflags.flags |= IR3_INSTR_EOLM; }
+|                  T_EOGM { iflags.flags |= IR3_INSTR_EOGM; }
 
 iflags:
 |                  iflag iflags
@@ -1613,6 +1618,7 @@ dst:               T_REGISTER     { $$ = new_dst($1, 0); }
 |                  T_A0           { $$ = new_dst((61 << 3), IR3_REG_HALF); }
 |                  T_A1           { $$ = new_dst((61 << 3) + 1, IR3_REG_HALF); }
 |                  T_P0           { $$ = new_dst((62 << 3) + $1, IR3_REG_PREDICATE); }
+|                  T_UP0          { $$ = new_dst((62 << 3) + $1, IR3_REG_PREDICATE | IR3_REG_UNIFORM); }
 
 const:             T_CONSTANT     { $$ = new_src($1, IR3_REG_CONST); }
 

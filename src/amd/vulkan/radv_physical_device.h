@@ -16,6 +16,7 @@
 
 #include "ac_uvd_dec.h"
 #include "ac_vcn_enc.h"
+#include "radv_constants.h"
 #include "radv_instance.h"
 #include "radv_queue.h"
 #include "radv_radeon_winsys.h"
@@ -27,7 +28,6 @@
 #include "vk_physical_device.h"
 
 #ifndef _WIN32
-#include <amdgpu.h>
 #include <xf86drm.h>
 #endif
 
@@ -256,7 +256,7 @@ vk_queue_to_radv(const struct radv_physical_device *pdev, int queue_family_index
  * specific shader stage (developers only).
  */
 static inline bool
-radv_use_llvm_for_stage(const struct radv_physical_device *pdev, UNUSED gl_shader_stage stage)
+radv_use_llvm_for_stage(const struct radv_physical_device *pdev, UNUSED mesa_shader_stage stage)
 {
    return pdev->use_llvm;
 }
@@ -285,6 +285,20 @@ radv_get_sampled_image_desc_size(const struct radv_physical_device *pdev)
 {
    /* Main descriptor + FMASK desccriptor if needed. */
    return 32 + (pdev->use_fmask ? 32 : 0);
+}
+
+static inline uint32_t
+radv_get_combined_image_sampler_desc_size(const struct radv_physical_device *pdev)
+{
+   const uint32_t image_desc_size = radv_get_sampled_image_desc_size(pdev);
+
+   return align(image_desc_size + RADV_SAMPLER_DESC_SIZE, 32);
+}
+
+static inline uint32_t
+radv_get_combined_image_sampler_offset(const struct radv_physical_device *pdev)
+{
+   return radv_get_combined_image_sampler_desc_size(pdev) - RADV_SAMPLER_DESC_SIZE;
 }
 
 #endif /* RADV_PHYSICAL_DEVICE_H */

@@ -22,7 +22,6 @@
  */
 
 #include <list>
-#include <vector>
 #include "brw_compiler.h"
 #include "brw_shader.h"
 #include "brw_builder.h"
@@ -270,8 +269,7 @@ brw_nir_lower_mesh_primitive_count(nir_shader *nir)
          nir_create_variable_with_location(nir, nir_var_shader_out,
                                            VARYING_SLOT_PRIMITIVE_COUNT,
                                            glsl_uint_type());
-      final_primitive_count->name = ralloc_strdup(final_primitive_count,
-                                                  "gl_PrimitiveCountNV");
+      nir_variable_set_name(nir, final_primitive_count, "gl_PrimitiveCountNV");
       final_primitive_count->data.interpolation = INTERP_MODE_NONE;
 
       nir_store_var(b, final_primitive_count,
@@ -408,17 +406,18 @@ brw_compile_task(const struct brw_compiler *compiler,
       brw_postprocess_nir(shader, compiler, debug_enabled,
                           key->base.robust_flags);
 
-      v[simd] = std::make_unique<brw_shader>(compiler, &params->base,
-                                             &key->base,
-                                             &prog_data->base.base,
-                                             shader, dispatch_width,
-                                             params->base.stats != NULL,
-                                             debug_enabled);
-
-      if (prog_data->base.prog_mask) {
-         unsigned first = ffs(prog_data->base.prog_mask) - 1;
-         v[simd]->import_uniforms(v[first].get());
-      }
+      const brw_shader_params shader_params = {
+         .compiler                = compiler,
+         .mem_ctx                 = params->base.mem_ctx,
+         .nir                     = shader,
+         .key                     = &key->base,
+         .prog_data               = &prog_data->base.base,
+         .dispatch_width          = dispatch_width,
+         .needs_register_pressure = params->base.stats != NULL,
+         .log_data                = params->base.log_data,
+         .debug_enabled           = debug_enabled,
+      };
+      v[simd] = std::make_unique<brw_shader>(&shader_params);
 
       const bool allow_spilling = simd == 0 ||
          (!simd_state.compiled[simd - 1] && !brw_simd_should_compile(simd_state, simd - 1));
@@ -443,10 +442,10 @@ brw_compile_task(const struct brw_compiler *compiler,
       return NULL;
    }
 
-   brw_shader *selected = v[selected_simd].get();
+   brw_shader &selected = *v[selected_simd];
    prog_data->base.prog_mask = 1 << selected_simd;
    prog_data->base.base.grf_used = MAX2(prog_data->base.base.grf_used,
-                                        selected->grf_used);
+                                        selected.grf_used);
 
    if (unlikely(debug_enabled)) {
       fprintf(stderr, "Task Output ");
@@ -463,8 +462,7 @@ brw_compile_task(const struct brw_compiler *compiler,
                                      nir->info.name));
    }
 
-   g.generate_code(selected->cfg, selected->dispatch_width, selected->shader_stats,
-                   selected->performance_analysis.require(), params->base.stats);
+   g.generate_code(selected, params->base.stats);
    g.add_const_data(nir->constant_data, nir->constant_data_size);
    return g.get_assembly();
 }
@@ -1171,10 +1169,17 @@ brw_compile_mesh(const struct brw_compiler *compiler,
    prog_data->base.local_size[1] = nir->info.workgroup_size[1];
    prog_data->base.local_size[2] = nir->info.workgroup_size[2];
 
-   prog_data->clip_distance_mask = (1 << nir->info.clip_distance_array_size) - 1;
+   const bool has_clip_cull_dist =
+      nir->info.outputs_written & (VARYING_BIT_CLIP_DIST0 |
+                                   VARYING_BIT_CLIP_DIST1 |
+                                   VARYING_BIT_CULL_DIST0 |
+                                   VARYING_BIT_CULL_DIST1);
+   prog_data->clip_distance_mask = has_clip_cull_dist ?
+      (1 << nir->info.clip_distance_array_size) - 1 : 0;
    prog_data->cull_distance_mask =
-         ((1 << nir->info.cull_distance_array_size) - 1) <<
-          nir->info.clip_distance_array_size;
+      (has_clip_cull_dist ?
+       ((1 << nir->info.cull_distance_array_size) - 1) : 0) <<
+      nir->info.clip_distance_array_size;
    prog_data->primitive_type = nir->info.mesh.primitive_type;
 
    /* Apply this workaround before trying to pack indices because this can
@@ -1255,17 +1260,18 @@ brw_compile_mesh(const struct brw_compiler *compiler,
       brw_postprocess_nir(shader, compiler, debug_enabled,
                           key->base.robust_flags);
 
-      v[simd] = std::make_unique<brw_shader>(compiler, &params->base,
-                                             &key->base,
-                                             &prog_data->base.base,
-                                             shader, dispatch_width,
-                                             params->base.stats != NULL,
-                                             debug_enabled);
-
-      if (prog_data->base.prog_mask) {
-         unsigned first = ffs(prog_data->base.prog_mask) - 1;
-         v[simd]->import_uniforms(v[first].get());
-      }
+      const brw_shader_params shader_params = {
+         .compiler                = compiler,
+         .mem_ctx                 = params->base.mem_ctx,
+         .nir                     = shader,
+         .key                     = &key->base,
+         .prog_data               = &prog_data->base.base,
+         .dispatch_width          = dispatch_width,
+         .needs_register_pressure = params->base.stats != NULL,
+         .log_data                = params->base.log_data,
+         .debug_enabled           = debug_enabled,
+      };
+      v[simd] = std::make_unique<brw_shader>(&shader_params);
 
       const bool allow_spilling = simd == 0 ||
          (!simd_state.compiled[simd - 1] && !brw_simd_should_compile(simd_state, simd - 1));
@@ -1290,10 +1296,10 @@ brw_compile_mesh(const struct brw_compiler *compiler,
       return NULL;
    }
 
-   brw_shader *selected = v[selected_simd].get();
+   brw_shader &selected = *v[selected_simd];
    prog_data->base.prog_mask = 1 << selected_simd;
    prog_data->base.base.grf_used = MAX2(prog_data->base.base.grf_used,
-                                        selected->grf_used);
+                                        selected.grf_used);
 
    if (unlikely(debug_enabled)) {
       if (params->tue_map) {
@@ -1314,8 +1320,7 @@ brw_compile_mesh(const struct brw_compiler *compiler,
                                      nir->info.name));
    }
 
-   g.generate_code(selected->cfg, selected->dispatch_width, selected->shader_stats,
-                   selected->performance_analysis.require(), params->base.stats);
+   g.generate_code(selected, params->base.stats);
    if (prog_data->map.wa_18019110168_active) {
       int8_t remap_table[VARYING_SLOT_TESS_MAX];
       memset(remap_table, -1, sizeof(remap_table));

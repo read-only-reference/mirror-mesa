@@ -1306,13 +1306,13 @@ hk_upload_tess_params(struct hk_cmd_buffer *cmd, struct libagx_tess_args *out,
 
       uint32_t alloc = 0;
       uint32_t tcs_out_offs = alloc;
-      alloc += unrolled_patches * args.tcs_stride_el * 4 * 32;
+      alloc += unrolled_patches * args.tcs_stride_el * sizeof(uint32_t);
 
       uint32_t patch_coord_offs = alloc;
-      alloc += unrolled_patches * 4 * 32;
+      alloc += unrolled_patches * sizeof(uint32_t);
 
       uint32_t count_offs = alloc;
-      alloc += unrolled_patches * sizeof(uint32_t) * 32;
+      alloc += unrolled_patches * sizeof(uint32_t);
 
       /* Single API draw */
       uint32_t draw_offs = alloc;
@@ -1701,7 +1701,7 @@ hk_launch_tess(struct hk_cmd_buffer *cmd, struct hk_cs *cs,
 
 void
 hk_cmd_bind_graphics_shader(struct hk_cmd_buffer *cmd,
-                            const gl_shader_stage stage,
+                            const mesa_shader_stage stage,
                             struct hk_api_shader *shader)
 {
    struct hk_device *dev = hk_cmd_buffer_device(cmd);
@@ -1946,7 +1946,7 @@ hk_update_fast_linked(struct hk_cmd_buffer *cmd, struct hk_shader *shader,
 {
    struct hk_device *dev = hk_cmd_buffer_device(cmd);
    struct hk_linked_shader *new = hk_get_fast_linked(dev, shader, key);
-   gl_shader_stage stage = shader->info.stage;
+   mesa_shader_stage stage = shader->info.stage;
 
    if (cmd->state.gfx.linked[stage] != new) {
       cmd->state.gfx.linked[stage] = new;
@@ -2136,7 +2136,7 @@ hk_flush_vp_state(struct hk_cmd_buffer *cmd, struct hk_cs *cs, uint8_t **out)
    };
 
    size_t size = agx_ppp_update_size(&present);
-   struct agx_ptr T = hk_pool_alloc(cmd, size, 64);
+   struct agx_ptr T = hk_pool_alloc(cmd, size, AGX_PPP_HEADER_ALIGN);
    if (!T.cpu)
       return;
 
@@ -2374,6 +2374,8 @@ hk_flush_ppp_state(struct hk_cmd_buffer *cmd, struct hk_cs *cs, uint8_t **out)
       .viewport_count = 1, /* irrelevant */
    };
 
+   dirty.fragment_shader &= !linked_fs->b.no_op;
+
    /* Calculate the update size. If it equals the header, there is nothing to
     * update so early-exit.
     */
@@ -2384,7 +2386,7 @@ hk_flush_ppp_state(struct hk_cmd_buffer *cmd, struct hk_cs *cs, uint8_t **out)
    /* Otherwise, allocate enough space for the update and push it. */
    assert(size > AGX_PPP_HEADER_LENGTH);
 
-   struct agx_ptr T = hk_pool_alloc(cmd, size, 64);
+   struct agx_ptr T = hk_pool_alloc(cmd, size, AGX_PPP_HEADER_ALIGN);
    if (!T.cpu)
       return;
 

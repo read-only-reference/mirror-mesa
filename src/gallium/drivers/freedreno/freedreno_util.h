@@ -85,6 +85,7 @@ enum fd_debug_flag {
    FD_DBG_NOHW         = BITFIELD_BIT(28),
    FD_DBG_NOSBIN       = BITFIELD_BIT(29),
    FD_DBG_STOMP        = BITFIELD_BIT(30),
+   FD_DBG_ABORT        = BITFIELD_BIT(31),
 };
 /* clang-format on */
 
@@ -458,7 +459,7 @@ fd_clamp_buffer_size(enum pipe_format format, uint32_t size,
  */
 
 static inline enum a4xx_state_block
-fd4_stage2shadersb(gl_shader_stage type)
+fd4_stage2shadersb(mesa_shader_stage type)
 {
    switch (type) {
    case MESA_SHADER_VERTEX:

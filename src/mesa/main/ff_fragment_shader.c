@@ -365,7 +365,7 @@ register_state_var(struct texenv_fragment_program *p,
    free(name);
 
    var->num_state_slots = 1;
-   var->state_slots = ralloc_array(var, nir_state_slot, 1);
+   var->state_slots = ralloc_array(p->b->shader, nir_state_slot, 1);
    var->data.driver_location = loc;
    memcpy(var->state_slots[0].tokens, tokens,
           sizeof(var->state_slots[0].tokens));
@@ -392,7 +392,7 @@ load_input(struct texenv_fragment_program *p, gl_varying_slot slot)
    nir_def *baryc = nir_load_barycentric_pixel(p->b, 32);
 
    if (slot != VARYING_SLOT_COL0 && slot != VARYING_SLOT_COL1) {
-      nir_intrinsic_set_interp_mode(nir_instr_as_intrinsic(baryc->parent_instr),
+      nir_intrinsic_set_interp_mode(nir_def_as_intrinsic(baryc),
                                     INTERP_MODE_SMOOTH);
    }
 

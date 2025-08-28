@@ -17,7 +17,13 @@ nvk_ies_map(struct nvk_indirect_execution_set *ies, uint32_t index)
    return ies->mem->map + (index * (size_t)ies->stride_B);
 }
 
-void
+static uint32_t
+nvk_ies_stride_cs(const struct nvk_physical_device *pdev)
+{
+   return align(nak_qmd_size_B(&pdev->info), NAK_QMD_ALIGN_B);
+}
+
+static void
 nvk_ies_cs_qmd_init(const struct nvk_physical_device *pdev,
                     struct nvk_ies_cs_qmd *qmd,
                     struct nvk_shader *shader)
@@ -55,8 +61,9 @@ nvk_ies_cs_qmd_init(const struct nvk_physical_device *pdev,
       }
    }
 
-   nak_fill_qmd(&pdev->info, &shader->info, &qmd_info,
-                qmd->qmd, sizeof(qmd->qmd));
+   const uint32_t qmd_size = nak_qmd_size_B(&pdev->info);
+   assert(qmd_size <= sizeof(qmd->qmd));
+   nak_fill_qmd(&pdev->info, &shader->info, &qmd_info, qmd->qmd, qmd_size);
 }
 
 static void
@@ -65,27 +72,30 @@ nvk_ies_set_cs(struct nvk_device *dev,
                uint32_t index,
                struct nvk_shader *shader)
 {
-   struct nvk_ies_cs_qmd qmd = {};
-   nvk_ies_cs_qmd_init(nvk_device_physical(dev), &qmd, shader);
+   const struct nvk_physical_device *pdev = nvk_device_physical(dev);
+   const uint32_t qmd_size = nak_qmd_size_B(&pdev->info);
 
-   assert(sizeof(qmd) <= ies->stride_B);
-   memcpy(nvk_ies_map(ies, index), &qmd, sizeof(qmd));
+   struct nvk_ies_cs_qmd qmd = {};
+   nvk_ies_cs_qmd_init(pdev, &qmd, shader);
+
+   assert(qmd_size <= ies->stride_B);
+   memcpy(nvk_ies_map(ies, index), &qmd, qmd_size);
 }
 
 uint16_t
 nvk_ies_gfx_pipeline_max_dw_count(const struct nvk_physical_device *pdev,
                                   VkShaderStageFlags stages)
 {
-   gl_shader_stage last_vtgm = MESA_SHADER_VERTEX;
+   mesa_shader_stage last_vtgm = MESA_SHADER_VERTEX;
    u_foreach_bit(s, stages) {
-      gl_shader_stage stage = vk_to_mesa_shader_stage(1 << s);
+      mesa_shader_stage stage = vk_to_mesa_shader_stage(1 << s);
       if (stage != MESA_SHADER_FRAGMENT)
          last_vtgm = stage;
    }
 
    uint16_t push_dw = 0;
    u_foreach_bit(s, stages) {
-      gl_shader_stage stage = vk_to_mesa_shader_stage(1 << s);
+      mesa_shader_stage stage = vk_to_mesa_shader_stage(1 << s);
       push_dw += nvk_max_shader_push_dw(pdev, stage, stage == last_vtgm);
    }
 
@@ -106,10 +116,10 @@ nvk_ies_set_gfx_pipeline(struct nvk_device *dev,
                          uint32_t index,
                          struct vk_pipeline *pipeline)
 {
-   gl_shader_stage last_vtgm = MESA_SHADER_VERTEX;
+   mesa_shader_stage last_vtgm = MESA_SHADER_VERTEX;
    struct nvk_shader *type_shader[6] = {};
    u_foreach_bit(s, pipeline->stages) {
-      gl_shader_stage stage = vk_to_mesa_shader_stage(1 << s);
+      mesa_shader_stage stage = vk_to_mesa_shader_stage(1 << s);
       struct vk_shader *vk_shader = vk_pipeline_get_shader(pipeline, stage);
       struct nvk_shader *shader =
          container_of(vk_shader, struct nvk_shader, vk);
@@ -152,7 +162,7 @@ nvk_ies_gfx_shader_max_dw_count(const struct nvk_physical_device *pdev,
    /* Each entry is a single shader so take the max */
    uint16_t max_push_dw = 0;
    u_foreach_bit(s, stages) {
-      gl_shader_stage stage = vk_to_mesa_shader_stage(1 << s);
+      mesa_shader_stage stage = vk_to_mesa_shader_stage(1 << s);
       uint16_t push_dw = nvk_max_shader_push_dw(pdev, stage, last_vtgm);
       max_push_dw = MAX2(max_push_dw, push_dw);
    }
@@ -256,7 +266,7 @@ nvk_CreateIndirectExecutionSetEXT(VkDevice _device,
       if (pipeline->stages & VK_SHADER_STAGE_COMPUTE_BIT) {
          assert(pipeline->stages == VK_SHADER_STAGE_COMPUTE_BIT);
          ies->type = NVK_IES_TYPE_CS_QMD;
-         ies->stride_B = sizeof(struct nvk_ies_cs_qmd);
+         ies->stride_B = nvk_ies_stride_cs(pdev);
       } else if (pipeline->stages & NVK_SHADER_STAGE_GRAPHICS_BITS) {
          assert(!(pipeline->stages & ~NVK_SHADER_STAGE_GRAPHICS_BITS));
          ies->type = NVK_IES_TYPE_GFX_PIPELINE;
@@ -281,7 +291,7 @@ nvk_CreateIndirectExecutionSetEXT(VkDevice _device,
       if (stages & VK_SHADER_STAGE_COMPUTE_BIT) {
          assert(stages == VK_SHADER_STAGE_COMPUTE_BIT);
          ies->type = NVK_IES_TYPE_CS_QMD;
-         ies->stride_B = sizeof(struct nvk_ies_cs_qmd);
+         ies->stride_B = nvk_ies_stride_cs(pdev);
       } else if (stages & NVK_SHADER_STAGE_GRAPHICS_BITS) {
          assert(!(stages & ~NVK_SHADER_STAGE_GRAPHICS_BITS));
          ies->type = NVK_IES_TYPE_GFX_SHADER;

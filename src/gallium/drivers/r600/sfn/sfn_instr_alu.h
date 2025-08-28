@@ -102,6 +102,8 @@ public:
 
    int dest_chan() const { return m_dest ? m_dest->chan() : m_fallback_chan; }
 
+   void pin_dest_to_chan();
+
    const VirtualValue *psrc(unsigned i) const { return i < m_src.size() ? m_src[i] : nullptr; }
    PVirtualValue psrc(unsigned i) { return i < m_src.size() ? m_src[i] : nullptr; }
    VirtualValue& src(unsigned i)
@@ -117,7 +119,6 @@ public:
 
    void set_sources(SrcValues src);
    const SrcValues& sources() const { return m_src; }
-   void pin_sources_to_chan();
 
    int register_priority() const;
 
@@ -147,19 +148,19 @@ public:
 
    int alu_slots() const { return m_alu_slots; }
 
-   AluGroup *split(ValueFactory& vf);
+   bool split(ValueFactory& vf, AluGroup& dest_group);
 
    bool end_group() const override { return m_alu_flags.test(alu_last_instr); }
 
    static const std::set<AluModifiers> empty;
    static const std::set<AluModifiers> write;
-   static const std::set<AluModifiers> last;
-   static const std::set<AluModifiers> last_write;
 
    std::tuple<PRegister, bool, PRegister> indirect_addr() const;
    void update_indirect_addr(PRegister old_reg, PRegister reg) override;
 
    void add_extra_dependency(PVirtualValue reg);
+
+   int required_channels_mask() const;
 
    void set_required_slots(int nslots) { m_required_slots = nslots; }
    unsigned required_slots() const { return m_required_slots; }

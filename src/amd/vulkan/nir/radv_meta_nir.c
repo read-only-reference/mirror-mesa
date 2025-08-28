@@ -16,7 +16,7 @@
 #include "radv_physical_device.h"
 
 nir_builder PRINTFLIKE(3, 4)
-   radv_meta_nir_init_shader(struct radv_device *dev, gl_shader_stage stage, const char *name, ...)
+   radv_meta_nir_init_shader(struct radv_device *dev, mesa_shader_stage stage, const char *name, ...)
 {
    const struct radv_physical_device *pdev = radv_device_physical(dev);
    nir_builder b = nir_builder_init_simple_shader(stage, NULL, NULL);
@@ -1524,6 +1524,40 @@ radv_meta_nir_build_resolve_fs(struct radv_device *dev)
    f_color = nir_variable_create(b.shader, nir_var_shader_out, vec4, "f_color");
    f_color->data.location = FRAG_RESULT_DATA0;
    nir_store_var(&b, f_color, nir_imm_vec4(&b, 0.0, 0.0, 0.0, 1.0), 0xf);
+
+   return b.shader;
+}
+
+nir_shader *
+radv_meta_nir_build_clear_hiz_compute_shader(struct radv_device *dev, int samples)
+{
+   const enum glsl_sampler_dim dim = samples > 1 ? GLSL_SAMPLER_DIM_MS : GLSL_SAMPLER_DIM_2D;
+   const struct glsl_type *img_type = glsl_image_type(dim, false, GLSL_TYPE_FLOAT);
+   nir_builder b = radv_meta_nir_init_shader(dev, MESA_SHADER_COMPUTE, "meta_clear_hiz_cs-%d", samples);
+   b.shader->info.workgroup_size[0] = 8;
+   b.shader->info.workgroup_size[1] = 8;
+
+   nir_variable *output_img = nir_variable_create(b.shader, nir_var_image, img_type, "out_img");
+   output_img->data.descriptor_set = 0;
+   output_img->data.binding = 0;
+
+   nir_def *global_id = radv_meta_nir_get_global_ids(&b, 2);
+
+   nir_def *clear_val = nir_load_push_constant(&b, 1, 32, nir_imm_int(&b, 0), .range = 4);
+
+   nir_def *comps[4];
+   comps[0] = nir_channel(&b, global_id, 0);
+   comps[1] = nir_channel(&b, global_id, 1);
+   comps[2] = nir_imm_int(&b, 0);
+   comps[3] = nir_undef(&b, 1, 32);
+   global_id = nir_vec(&b, comps, 4);
+
+   nir_def *data = nir_vec4(&b, clear_val, nir_imm_int(&b, 0), nir_imm_int(&b, 0), nir_imm_int(&b, 0));
+
+   for (uint32_t i = 0; i < samples; i++) {
+      nir_image_deref_store(&b, &nir_build_deref_var(&b, output_img)->def, global_id, nir_imm_int(&b, i), data,
+                            nir_imm_int(&b, 0), .image_dim = dim);
+   }
 
    return b.shader;
 }

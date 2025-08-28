@@ -83,10 +83,10 @@ const struct nir_shader_compiler_options brw_scalar_nir_options = {
    .vectorize_tess_levels = true,
    .vertex_id_zero_based = true,
    .scalarize_ddx = true,
-   .support_indirect_inputs = BITFIELD_BIT(PIPE_SHADER_TESS_CTRL) |
-                              BITFIELD_BIT(PIPE_SHADER_TESS_EVAL) |
-                              BITFIELD_BIT(PIPE_SHADER_FRAGMENT),
-   .support_indirect_outputs = (uint8_t)BITFIELD_MASK(PIPE_SHADER_TYPES),
+   .support_indirect_inputs = BITFIELD_BIT(MESA_SHADER_TESS_CTRL) |
+                              BITFIELD_BIT(MESA_SHADER_TESS_EVAL) |
+                              BITFIELD_BIT(MESA_SHADER_FRAGMENT),
+   .support_indirect_outputs = (uint8_t)BITFIELD_MASK(MESA_SHADER_STAGES),
    .per_view_unique_driver_locations = true,
    .compact_view_index = true,
 };
@@ -286,7 +286,7 @@ brw_device_sha1(char *hex,
 }
 
 unsigned
-brw_prog_data_size(gl_shader_stage stage)
+brw_prog_data_size(mesa_shader_stage stage)
 {
    static const size_t stage_sizes[] = {
       [MESA_SHADER_VERTEX]       = sizeof(struct brw_vs_prog_data),
@@ -310,7 +310,7 @@ brw_prog_data_size(gl_shader_stage stage)
 }
 
 unsigned
-brw_prog_key_size(gl_shader_stage stage)
+brw_prog_key_size(mesa_shader_stage stage)
 {
    static const size_t stage_sizes[] = {
       [MESA_SHADER_VERTEX]       = sizeof(struct brw_vs_prog_key),

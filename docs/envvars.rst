@@ -1481,6 +1481,8 @@ RADV driver environment variables
       Dump shader disassembly for selected shader stages.
    ``bvh4``
       Use bvh4 encoding on GPUs that support bvh8 encoding.
+   ``validatevas``
+      Enable tracking of VA ranges for radv_build_is_valid_va.
 
 .. envvar:: RADV_FORCE_FAMILY
 
@@ -1753,6 +1755,16 @@ RadeonSI driver environment variables
       Enable CP register shadowing in kernel queue.
    ``userqnoshadowregs``
       Disable register shadowing in userqueue. This will also disable userqueue mcbp.
+   ``novideotiling``
+      Disable tiling for video.
+   ``nodectier1``
+      Disable tier1 for video decode.
+   ``nodectier2``
+      Disable tier2 for video decode.
+   ``nodectier3``
+      Disable tier3 for video decode.
+   ``noenctier2``
+      Disable tier2 for video encode.
 
 r600 driver environment variables
 ---------------------------------

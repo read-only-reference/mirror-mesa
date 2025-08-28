@@ -127,6 +127,10 @@ sync_timestamp(IntelRenderpassDataSource::TraceContext &ctx,
                struct intel_ds_device *device)
 {
    uint64_t cpu_ts, gpu_ts;
+   uint64_t boottime = perfetto::base::GetBootTimeNs().count();
+
+   if (boottime < device->next_clock_sync_ns)
+      return;
 
    if (!intel_gem_read_correlate_cpu_gpu_timestamp(device->fd,
                                                    device->info.kmd_type,
@@ -137,18 +141,17 @@ sync_timestamp(IntelRenderpassDataSource::TraceContext &ctx,
       intel_gem_read_render_timestamp(device->fd, device->info.kmd_type,
                                       &gpu_ts);
    }
-   gpu_ts = intel_device_info_timebase_scale(&device->info, gpu_ts);
 
-   if (cpu_ts < device->next_clock_sync_ns)
-      return;
+   uint32_t cpu_clock_id = perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME;
+   gpu_ts = intel_device_info_timebase_scale(&device->info, gpu_ts);
 
    PERFETTO_LOG("sending clocks gpu=0x%08x", device->gpu_clock_id);
 
    device->sync_gpu_ts = gpu_ts;
-   device->next_clock_sync_ns = cpu_ts + 1000000000ull;
+   device->next_clock_sync_ns = boottime + 1000000000ull;
 
    MesaRenderpassDataSource<IntelRenderpassDataSource, IntelRenderpassTraits>::EmitClockSync(ctx,
-      cpu_ts, gpu_ts, device->gpu_clock_id);
+      cpu_ts, gpu_ts, cpu_clock_id, device->gpu_clock_id);
 }
 
 static void
@@ -594,7 +597,6 @@ static void
 intel_driver_ds_init_once(void)
 {
 #ifdef HAVE_PERFETTO
-   util_perfetto_init();
    perfetto::DataSourceDescriptor dsd;
 #if DETECT_OS_ANDROID
    // Android tooling expects this data source name

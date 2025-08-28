@@ -160,7 +160,7 @@ fn op_reg_latency(op: &Op, reader: bool, op_reg_idx: usize) -> RegLatencySM100 {
         Op::Isberd(_) => DecoupledAgu,
         Op::LdTram(_) => DecoupledAgu,
         Op::Shfl(_) => DecoupledAgu,
-        //Op::LdSm(_) => DecoupledAgu
+        Op::Ldsm(_) => DecoupledAgu,
         x => {
             panic!("Illegal instuction in reg category {}", x);
         }
@@ -171,6 +171,7 @@ fn op_pred_latency(op: &Op) -> PredLatencySM100 {
     use PredLatencySM100::*;
     match op {
         Op::Atom(_) => Decoupled,
+        Op::Bra(_) => Decoupled,
         Op::DSetP(_) => RedirectedFp64,
         Op::FMnMx(_) | Op::FSetP(_) => Dualalu,
         Op::HFma2(_) => Fp16,
@@ -342,6 +343,7 @@ fn op_upred_latency(op: &Op) -> UpredLatencySM100 {
         | Op::LeaX(_)
         | Op::Lop3(_)
         | Op::Mov(_) => Udp,
+        Op::Bra(_) => BraJmp,
         Op::Ldc(_) => UldcMma,
         Op::PLop3(_) => {
             if uniform_op {
@@ -426,6 +428,10 @@ impl SM120Latency {
                     || read_latency == RegLatencySM100::Hmma
                 {
                     RegLatencySM100::raw(write_latency, read_latency, false) + 9
+                } else if write_latency == RegLatencySM100::Imma
+                    || read_latency == RegLatencySM100::Imma
+                {
+                    RegLatencySM100::raw(write_latency, read_latency, false) + 5
                 } else {
                     RegLatencySM100::raw(write_latency, read_latency, false) + 1
                 }

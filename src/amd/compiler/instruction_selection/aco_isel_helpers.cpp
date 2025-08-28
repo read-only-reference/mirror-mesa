@@ -498,7 +498,7 @@ emit_pack_v1(isel_context* ctx, const std::vector<Temp>& unpacked)
 
 MIMG_instruction*
 emit_mimg(Builder& bld, aco_opcode op, std::vector<Temp> dsts, Temp rsrc, Operand samp,
-          std::vector<Temp> coords, Operand vdata)
+          std::vector<Temp> coords, bool disable_wqm, Operand vdata)
 {
    bool is_vsample = !samp.isUndefined() || op == aco_opcode::image_msaa_load;
 
@@ -541,7 +541,8 @@ emit_mimg(Builder& bld, aco_opcode op, std::vector<Temp> dsts, Temp rsrc, Operan
       coords.resize(nsa_size + 1);
    }
 
-   aco_ptr<Instruction> mimg{create_instruction(op, Format::MIMG, 3 + coords.size(), dsts.size())};
+   aco_ptr<Instruction> mimg{
+      create_instruction(op, Format::MIMG, 3 + coords.size() + disable_wqm * 2, dsts.size())};
    for (unsigned i = 0; i < dsts.size(); ++i)
       mimg->definitions[i] = Definition(dsts[i]);
    mimg->operands[0] = Operand(rsrc);
@@ -549,6 +550,8 @@ emit_mimg(Builder& bld, aco_opcode op, std::vector<Temp> dsts, Temp rsrc, Operan
    mimg->operands[2] = vdata;
    for (unsigned i = 0; i < coords.size(); i++)
       mimg->operands[3 + i] = Operand(coords[i]);
+
+   init_disable_wqm(bld, mimg->mimg(), disable_wqm);
    mimg->mimg().strict_wqm = strict_wqm;
 
    return &bld.insert(std::move(mimg))->mimg();
@@ -581,11 +584,14 @@ create_fs_dual_src_export_gfx11(isel_context* ctx, const struct aco_export_mrt* 
    Builder bld(ctx->program, ctx->block);
 
    aco_ptr<Instruction> exp{
-      create_instruction(aco_opcode::p_dual_src_export_gfx11, Format::PSEUDO, 8, 6)};
+      create_instruction(aco_opcode::p_dual_src_export_gfx11, Format::PSEUDO, 10, 6)};
    for (unsigned i = 0; i < 4; i++) {
       exp->operands[i] = mrt0 ? mrt0->out[i] : Operand(v1);
       exp->operands[i + 4] = mrt1 ? mrt1->out[i] : Operand(v1);
    }
+
+   instr_exact_mask(exp.get()) = Operand();
+   instr_wqm_mask(exp.get()) = Operand();
 
    RegClass type = RegClass(RegType::vgpr, util_bitcount(mrt0->enabled_channels));
    exp->definitions[0] = bld.def(type); /* mrt0 */
@@ -792,7 +798,7 @@ finish_program(isel_context* ctx)
       while (it != instrs->end()) {
          aco_ptr<Instruction>& instr = *it;
          /* End WQM before: */
-         if (instr->isVMEM() || instr->isFlatLike() || instr->isDS() || instr->isEXP() ||
+         if (instr->isDS() || instr->isEXP() ||
              instr->opcode == aco_opcode::p_dual_src_export_gfx11 ||
              instr->opcode == aco_opcode::p_jump_to_epilog ||
              instr->opcode == aco_opcode::p_logical_start)

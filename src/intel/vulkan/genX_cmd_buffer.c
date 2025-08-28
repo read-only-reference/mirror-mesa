@@ -1937,7 +1937,7 @@ genX(cmd_buffer_apply_pipe_flushes)(struct anv_cmd_buffer *cmd_buffer)
 static inline struct anv_state
 emit_dynamic_buffer_binding_table_entry(struct anv_cmd_buffer *cmd_buffer,
                                         struct anv_cmd_pipeline_state *pipe_state,
-                                        struct anv_pipeline_binding *binding,
+                                        const struct anv_pipeline_binding *binding,
                                         const struct anv_descriptor *desc)
 {
    if (!desc->buffer)
@@ -1957,7 +1957,7 @@ emit_dynamic_buffer_binding_table_entry(struct anv_cmd_buffer *cmd_buffer,
     * VkPhysicalDeviceRobustness2PropertiesEXT::robustUniformBufferAccessSizeAlignment
     */
    if (desc->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC)
-      range = align(range, ANV_UBO_ALIGNMENT);
+      range = align(range, ANV_UBO_BOUNDS_CHECK_ALIGNMENT);
 
    struct anv_address address =
       anv_address_add(desc->buffer->address, offset);
@@ -1985,7 +1985,7 @@ emit_dynamic_buffer_binding_table_entry(struct anv_cmd_buffer *cmd_buffer,
 static uint32_t
 emit_indirect_descriptor_binding_table_entry(struct anv_cmd_buffer *cmd_buffer,
                                              struct anv_cmd_pipeline_state *pipe_state,
-                                             struct anv_pipeline_binding *binding,
+                                             const struct anv_pipeline_binding *binding,
                                              const struct anv_descriptor *desc)
 {
    struct anv_device *device = cmd_buffer->device;
@@ -2079,7 +2079,7 @@ static uint32_t
 emit_direct_descriptor_binding_table_entry(struct anv_cmd_buffer *cmd_buffer,
                                            struct anv_cmd_pipeline_state *pipe_state,
                                            const struct anv_descriptor_set *set,
-                                           struct anv_pipeline_binding *binding,
+                                           const struct anv_pipeline_binding *binding,
                                            const struct anv_descriptor *desc)
 {
    uint32_t desc_offset;
@@ -2120,12 +2120,12 @@ emit_direct_descriptor_binding_table_entry(struct anv_cmd_buffer *cmd_buffer,
 static VkResult
 emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
                    struct anv_cmd_pipeline_state *pipe_state,
-                   struct anv_shader_bin *shader,
+                   const struct anv_shader_bin *shader,
                    struct anv_state *bt_state)
 {
    uint32_t state_offset;
 
-   struct anv_pipeline_bind_map *map = &shader->bind_map;
+   const struct anv_pipeline_bind_map *map = &shader->bind_map;
    if (map->surface_count == 0) {
       *bt_state = (struct anv_state) { 0, };
       return VK_SUCCESS;
@@ -2140,7 +2140,8 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
    for (uint32_t s = 0; s < map->surface_count; s++) {
-      struct anv_pipeline_binding *binding = &map->surface_to_descriptor[s];
+      const struct anv_pipeline_binding *binding =
+         &map->surface_to_descriptor[s];
 
       struct anv_state surface_state;
 
@@ -2174,7 +2175,7 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
          /* If the shader doesn't access the set buffer, just put the null
           * surface.
           */
-         if (set->is_push && !shader->push_desc_info.used_set_buffer) {
+         if (set->is_push && shader->push_desc_info.push_set_buffer == 0) {
             bt_map[s] = 0;
             break;
          }
@@ -2198,7 +2199,7 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
 
       default: {
          assert(binding->set < MAX_SETS);
-         const struct anv_descriptor_set *set =
+         struct anv_descriptor_set *set =
             pipe_state->descriptors[binding->set];
 
          if (binding->index >= set->descriptor_count) {
@@ -2240,16 +2241,15 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
             continue;
          }
 
-         const struct anv_pipeline *pipeline = pipe_state->pipeline;
          uint32_t surface_state_offset;
-         if (pipeline->layout.type == ANV_PIPELINE_DESCRIPTOR_SET_LAYOUT_TYPE_INDIRECT) {
+         if (map->layout_type == ANV_PIPELINE_DESCRIPTOR_SET_LAYOUT_TYPE_INDIRECT) {
             surface_state_offset =
                emit_indirect_descriptor_binding_table_entry(cmd_buffer,
                                                             pipe_state,
                                                             binding, desc);
          } else {
-            assert(pipeline->layout.type == ANV_PIPELINE_DESCRIPTOR_SET_LAYOUT_TYPE_DIRECT ||
-                   pipeline->layout.type == ANV_PIPELINE_DESCRIPTOR_SET_LAYOUT_TYPE_BUFFER);
+            assert(map->layout_type == ANV_PIPELINE_DESCRIPTOR_SET_LAYOUT_TYPE_DIRECT ||
+                   map->layout_type == ANV_PIPELINE_DESCRIPTOR_SET_LAYOUT_TYPE_BUFFER);
             surface_state_offset =
                emit_direct_descriptor_binding_table_entry(cmd_buffer, pipe_state,
                                                           set, binding, desc);
@@ -2267,10 +2267,10 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
 static VkResult
 emit_samplers(struct anv_cmd_buffer *cmd_buffer,
               struct anv_cmd_pipeline_state *pipe_state,
-              struct anv_shader_bin *shader,
+              const struct anv_shader_bin *shader,
               struct anv_state *state)
 {
-   struct anv_pipeline_bind_map *map = &shader->bind_map;
+   const struct anv_pipeline_bind_map *map = &shader->bind_map;
    if (map->sampler_count == 0) {
       *state = (struct anv_state) { 0, };
       return VK_SUCCESS;
@@ -2283,7 +2283,8 @@ emit_samplers(struct anv_cmd_buffer *cmd_buffer,
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
    for (uint32_t s = 0; s < map->sampler_count; s++) {
-      struct anv_pipeline_binding *binding = &map->sampler_to_descriptor[s];
+      const struct anv_pipeline_binding *binding =
+         &map->sampler_to_descriptor[s];
       const struct anv_descriptor *desc =
          &pipe_state->descriptors[binding->set]->descriptors[binding->index];
 
@@ -2310,7 +2311,7 @@ uint32_t
 genX(cmd_buffer_flush_descriptor_sets)(struct anv_cmd_buffer *cmd_buffer,
                                        struct anv_cmd_pipeline_state *pipe_state,
                                        const VkShaderStageFlags dirty,
-                                       struct anv_shader_bin **shaders,
+                                       const struct anv_shader_bin **shaders,
                                        uint32_t num_shaders)
 {
    VkShaderStageFlags flushed = 0;
@@ -2320,7 +2321,7 @@ genX(cmd_buffer_flush_descriptor_sets)(struct anv_cmd_buffer *cmd_buffer,
       if (!shaders[i])
          continue;
 
-      gl_shader_stage stage = shaders[i]->stage;
+      mesa_shader_stage stage = shaders[i]->stage;
       VkShaderStageFlags vk_stage = mesa_to_vk_shader_stage(stage);
       if ((vk_stage & dirty) == 0)
          continue;
@@ -2359,7 +2360,7 @@ genX(cmd_buffer_flush_descriptor_sets)(struct anv_cmd_buffer *cmd_buffer,
          if (!shaders[i])
             continue;
 
-         gl_shader_stage stage = shaders[i]->stage;
+         mesa_shader_stage stage = shaders[i]->stage;
 
          result = emit_samplers(cmd_buffer, pipe_state, shaders[i],
                                 &cmd_buffer->state.samplers[stage]);
@@ -2772,7 +2773,8 @@ compute_descriptor_set_sampler_offset(const struct anv_cmd_buffer *cmd_buffer,
 
 void
 genX(flush_descriptor_buffers)(struct anv_cmd_buffer *cmd_buffer,
-                               struct anv_cmd_pipeline_state *pipe_state)
+                               struct anv_cmd_pipeline_state *pipe_state,
+                               VkShaderStageFlags active_stages)
 {
    /* On Gfx12.5+ the STATE_BASE_ADDRESS BindlessSurfaceStateBaseAddress &
     * DynamicStateBaseAddress are fixed. So as long as we stay in one
@@ -2791,8 +2793,7 @@ genX(flush_descriptor_buffers)(struct anv_cmd_buffer *cmd_buffer,
           ANV_CMD_DESCRIPTOR_BUFFER_MODE_UNKNOWN);
    if (cmd_buffer->state.current_db_mode == ANV_CMD_DESCRIPTOR_BUFFER_MODE_BUFFER &&
        (cmd_buffer->state.descriptor_buffers.dirty ||
-        (pipe_state->pipeline->active_stages &
-         cmd_buffer->state.descriptor_buffers.offsets_dirty) != 0)) {
+        (active_stages & cmd_buffer->state.descriptor_buffers.offsets_dirty) != 0)) {
       struct anv_push_constants *push_constants =
          &pipe_state->push_constants;
       for (uint32_t i = 0; i < ARRAY_SIZE(push_constants->desc_surface_offsets); i++) {
@@ -2814,11 +2815,9 @@ genX(flush_descriptor_buffers)(struct anv_cmd_buffer *cmd_buffer,
 #endif
 
       cmd_buffer->state.push_constants_dirty |=
-         (cmd_buffer->state.descriptor_buffers.offsets_dirty &
-          pipe_state->pipeline->active_stages);
+         (cmd_buffer->state.descriptor_buffers.offsets_dirty & active_stages);
       pipe_state->push_constants_data_dirty = true;
-      cmd_buffer->state.descriptor_buffers.offsets_dirty &=
-         ~pipe_state->pipeline->active_stages;
+      cmd_buffer->state.descriptor_buffers.offsets_dirty &= ~active_stages;
    }
 
    cmd_buffer->state.descriptor_buffers.dirty = false;
@@ -3689,9 +3688,9 @@ genX(CmdExecuteCommands)(
    memset(&container->state.gfx.urb_cfg, 0, sizeof(struct intel_urb_config));
 
    /* Reemit all GFX instructions in container */
-   memcpy(container->state.gfx.dyn_state.dirty,
-          device->gfx_dirty_state,
-          sizeof(container->state.gfx.dyn_state.dirty));
+   BITSET_OR(container->state.gfx.dyn_state.emit_dirty,
+             container->state.gfx.dyn_state.emit_dirty,
+             device->gfx_dirty_state);
    if (container->device->vk.enabled_extensions.KHR_fragment_shading_rate) {
       /* Also recompute the CPS_STATE offset */
       struct vk_dynamic_graphics_state *dyn =
@@ -3959,6 +3958,7 @@ anv_pipe_invalidate_bits_for_access_flags(struct anv_cmd_buffer *cmd_buffer,
          pipe_bits |= ANV_PIPE_TILE_CACHE_FLUSH_BIT;
          break;
       case VK_ACCESS_2_SHADER_STORAGE_READ_BIT:
+      case VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR:
          /* VK_ACCESS_2_SHADER_STORAGE_READ_BIT specifies read access to a
           * storage buffer, physical storage buffer, storage texel buffer, or
           * storage image in any shader pipeline stage.
@@ -4587,6 +4587,7 @@ cmd_buffer_accumulate_barrier_bits(struct anv_cmd_buffer *cmd_buffer,
       VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT |
       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
       VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+      VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_COPY_BIT_KHR |
       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
       VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
    if (anv_cmd_buffer_is_compute_queue(cmd_buffer)) {
@@ -5856,7 +5857,7 @@ void genX(CmdBeginRendering)(
     * with this edge case, we just dirty the pipeline at the start of every
     * subpass.
     */
-   gfx->dirty |= ANV_CMD_DIRTY_PIPELINE;
+   gfx->dirty |= ANV_CMD_DIRTY_ALL_SHADERS(cmd_buffer->device);
 
 #if GFX_VER >= 11
    if (render_target_change) {

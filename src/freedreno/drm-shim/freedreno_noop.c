@@ -15,8 +15,8 @@
 bool drm_shim_driver_prefers_first_render_node = true;
 
 struct msm_device_info {
+   uint64_t chip_id;
    uint32_t gpu_id;
-   uint32_t chip_id;
    uint32_t gmem_size;
 };
 
@@ -73,6 +73,8 @@ msm_ioctl_gem_info(int fd, unsigned long request, void *arg)
       break;
    case MSM_INFO_SET_IOVA:
    case MSM_INFO_SET_NAME:
+   case MSM_INFO_SET_METADATA:
+   case MSM_INFO_GET_METADATA:
       break;
    default:
       fprintf(stderr, "Unknown DRM_IOCTL_MSM_GEM_INFO %d\n", args->info);
@@ -103,8 +105,8 @@ msm_ioctl_get_param(int fd, unsigned long request, void *arg)
    case MSM_PARAM_CHIP_ID:
       gp->value = device_info->chip_id;
       return 0;
-   case MSM_PARAM_NR_RINGS:
-      gp->value = 1;
+   case MSM_PARAM_PRIORITIES:
+      gp->value = 3;
       return 0;
    case MSM_PARAM_MAX_FREQ:
       gp->value = 1000000;
@@ -136,6 +138,19 @@ msm_ioctl_get_param(int fd, unsigned long request, void *arg)
 }
 
 static int
+msm_ioctl_set_param(int fd, unsigned long request, void *arg)
+{
+   struct drm_msm_param *sp = arg;
+
+   switch (sp->param) {
+   case MSM_PARAM_EN_VM_BIND:
+      return -1;
+   default:
+      return 0;
+   }
+}
+
+static int
 msm_ioctl_gem_madvise(int fd, unsigned long request, void *arg)
 {
    struct drm_msm_gem_madvise *args = arg;
@@ -147,7 +162,7 @@ msm_ioctl_gem_madvise(int fd, unsigned long request, void *arg)
 
 static ioctl_fn_t driver_ioctls[] = {
    [DRM_MSM_GET_PARAM] = msm_ioctl_get_param,
-   [DRM_MSM_SET_PARAM] = msm_ioctl_noop,
+   [DRM_MSM_SET_PARAM] = msm_ioctl_set_param,
    [DRM_MSM_GEM_NEW] = msm_ioctl_gem_new,
    [DRM_MSM_GEM_INFO] = msm_ioctl_gem_info,
    [DRM_MSM_GEM_CPU_PREP] = msm_ioctl_noop,
@@ -239,6 +254,11 @@ static const struct msm_device_info device_infos[] = {
       .gpu_id = 660,
       .chip_id = CHIPID(6, 6, 0, 0xff),
       .gmem_size = 1024 * 1024 + 512 * 1024,
+   },
+   {
+      .gpu_id = 702,
+      .chip_id = 0x00b207002000,
+      .gmem_size = 128 * 1024,
    },
    {
       .gpu_id = 730,

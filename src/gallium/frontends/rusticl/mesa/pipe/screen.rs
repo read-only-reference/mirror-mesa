@@ -1,6 +1,10 @@
+// Copyright 2020 Red Hat.
+// SPDX-License-Identifier: MIT
+
 use crate::compiler::nir::NirShader;
 use crate::pipe::context::*;
 use crate::pipe::device::*;
+use crate::pipe::fence::PipeFence;
 use crate::pipe::resource::*;
 use crate::util::disk_cache::*;
 
@@ -8,6 +12,7 @@ use mesa_rust_gen::*;
 use mesa_rust_util::has_required_feature;
 use mesa_rust_util::ptr::ThreadSafeCPtr;
 
+use std::ffi::c_int;
 use std::ffi::CStr;
 use std::num::NonZeroU64;
 use std::os::raw::c_schar;
@@ -28,6 +33,7 @@ const LUID_SIZE: usize = PIPE_LUID_SIZE as usize;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ResourceType {
+    Immutable,
     Normal,
     Staging,
 }
@@ -41,6 +47,9 @@ impl ResourceType {
                 tmpl.bind |= PIPE_BIND_LINEAR;
             }
             Self::Normal => {}
+            Self::Immutable => {
+                tmpl.set_usage(pipe_resource_usage::PIPE_USAGE_IMMUTABLE);
+            }
         }
     }
 }
@@ -98,7 +107,7 @@ impl PipeScreen {
         )
     }
 
-    pub fn alloc_vm(&self, start: NonZeroU64, size: NonZeroU64) -> Option<ScreenVMAllocation> {
+    pub fn alloc_vm(&self, start: NonZeroU64, size: NonZeroU64) -> Option<ScreenVMAllocation<'_>> {
         let alloc =
             unsafe { self.screen().alloc_vm?(self.screen.as_ptr(), start.get(), size.get()) };
         Some(ScreenVMAllocation {
@@ -107,7 +116,7 @@ impl PipeScreen {
         })
     }
 
-    pub fn resource_assign_vma(&self, res: &PipeResource, address: u64) -> bool {
+    pub fn resource_assign_vma(&self, res: &PipeResourceOwned, address: u64) -> bool {
         if let Some(resource_assign_vma) = self.screen().resource_assign_vma {
             // Validate that we already acquired the vm range
             if cfg!(debug_assertions) {
@@ -123,8 +132,8 @@ impl PipeScreen {
         }
     }
 
-    fn resource_create(&self, tmpl: &pipe_resource) -> Option<PipeResource> {
-        PipeResource::new(
+    fn resource_create(&self, tmpl: &pipe_resource) -> Option<PipeResourceOwned> {
+        PipeResourceOwned::new(
             unsafe { self.screen().resource_create.unwrap()(self.screen.as_ptr(), tmpl) },
             false,
         )
@@ -134,8 +143,8 @@ impl PipeScreen {
         &self,
         tmpl: &pipe_resource,
         mem: *mut c_void,
-    ) -> Option<PipeResource> {
-        PipeResource::new(
+    ) -> Option<PipeResourceOwned> {
+        PipeResourceOwned::new(
             unsafe { self.screen().resource_from_user_memory?(self.screen.as_ptr(), tmpl, mem) },
             true,
         )
@@ -147,7 +156,7 @@ impl PipeScreen {
         res_type: ResourceType,
         pipe_bind: u32,
         pipe_flags: u32,
-    ) -> Option<PipeResource> {
+    ) -> Option<PipeResourceOwned> {
         let mut tmpl = pipe_resource::default();
 
         tmpl.set_target(pipe_texture_target::PIPE_BUFFER);
@@ -169,7 +178,7 @@ impl PipeScreen {
         mem: *mut c_void,
         pipe_bind: u32,
         pipe_flags: u32,
-    ) -> Option<PipeResource> {
+    ) -> Option<PipeResourceOwned> {
         let mut tmpl = pipe_resource::default();
 
         tmpl.set_target(pipe_texture_target::PIPE_BUFFER);
@@ -193,7 +202,7 @@ impl PipeScreen {
         format: pipe_format,
         res_type: ResourceType,
         support_image: bool,
-    ) -> Option<PipeResource> {
+    ) -> Option<PipeResourceOwned> {
         let mut tmpl = pipe_resource::default();
 
         tmpl.set_target(target);
@@ -223,7 +232,7 @@ impl PipeScreen {
         format: pipe_format,
         mem: *mut c_void,
         support_image: bool,
-    ) -> Option<PipeResource> {
+    ) -> Option<PipeResourceOwned> {
         let mut tmpl = pipe_resource::default();
 
         tmpl.set_target(target);
@@ -253,7 +262,7 @@ impl PipeScreen {
         depth: u16,
         array_size: u16,
         support_image: bool,
-    ) -> Option<PipeResource> {
+    ) -> Option<PipeResourceOwned> {
         let mut tmpl = pipe_resource::default();
         let mut handle = winsys_handle {
             type_: WINSYS_HANDLE_TYPE_FD,
@@ -281,7 +290,7 @@ impl PipeScreen {
         }
 
         unsafe {
-            PipeResource::new(
+            PipeResourceOwned::new(
                 self.screen().resource_from_handle.unwrap()(
                     self.screen.as_ptr(),
                     &tmpl,
@@ -293,7 +302,7 @@ impl PipeScreen {
         }
     }
 
-    pub fn shader_caps(&self, t: pipe_shader_type) -> &pipe_shader_caps {
+    pub fn shader_caps(&self, t: mesa_shader_stage) -> &pipe_shader_caps {
         &self.screen().shader_caps[t as usize]
     }
 
@@ -412,7 +421,7 @@ impl PipeScreen {
 
     pub fn nir_shader_compiler_options(
         &self,
-        shader: pipe_shader_type,
+        shader: mesa_shader_stage,
     ) -> *const nir_shader_compiler_options {
         self.screen().nir_options[shader as usize]
     }
@@ -433,6 +442,11 @@ impl PipeScreen {
         } else {
             false
         }
+    }
+
+    pub fn create_semaphore(self: &Arc<PipeScreen>) -> Option<PipeFence> {
+        let fence = unsafe { self.screen().semaphore_create.unwrap()(self.screen.as_ptr()) };
+        PipeFence::new(fence, self)
     }
 
     pub(super) fn unref_fence(&self, mut fence: *mut pipe_fence_handle) {
@@ -456,12 +470,24 @@ impl PipeScreen {
         }
     }
 
+    pub(super) fn fence_get_fd(&self, fence: *mut pipe_fence_handle) -> c_int {
+        unsafe { self.screen().fence_get_fd.unwrap()(self.screen.as_ptr(), fence) }
+    }
+
     pub fn query_memory_info(&self) -> Option<pipe_memory_info> {
         let mut info = pipe_memory_info::default();
         unsafe {
             self.screen().query_memory_info?(self.screen.as_ptr(), &mut info);
         }
         Some(info)
+    }
+
+    pub fn has_fence_get_fd(&self) -> bool {
+        self.screen().fence_get_fd.is_some()
+    }
+
+    pub fn has_semaphore_create(&self) -> bool {
+        self.screen().semaphore_create.is_some()
     }
 }
 

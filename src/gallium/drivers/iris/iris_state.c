@@ -897,7 +897,6 @@ genX(emit_urb_config)(struct iris_batch *batch,
                         has_tess_eval,
                         has_geometry,
                         &ice->shaders.urb.cfg,
-                        &ice->state.urb_deref_block_size,
                         &ice->shaders.urb.constrained);
 
    genX(urb_workaround)(batch, &ice->shaders.urb.cfg);
@@ -1407,6 +1406,13 @@ iris_init_render_context(struct iris_batch *batch)
    iris_emit_cmd(batch, GENX(3DSTATE_3D_MODE), p) {
       p.DX10OGLBorderModeforYCRCB = true;
       p.DX10OGLBorderModeforYCRCBMask = true;
+   }
+
+   if (intel_device_info_is_bmg_g31(devinfo)) {
+      iris_emit_reg(batch, GENX(CACHE_MODE_0), reg) {
+         reg.MsaaFastClearEnabled = true;
+         reg.MsaaFastClearEnabledMask = true;
+      }
    }
 #endif
 
@@ -2624,12 +2630,11 @@ iris_create_sampler_state(struct pipe_context *ctx,
  */
 static void
 iris_bind_sampler_states(struct pipe_context *ctx,
-                         enum pipe_shader_type p_stage,
+                         mesa_shader_stage stage,
                          unsigned start, unsigned count,
                          void **states)
 {
    struct iris_context *ice = (struct iris_context *) ctx;
-   gl_shader_stage stage = stage_from_pipe(p_stage);
    struct iris_shader_state *shs = &ice->state.shaders[stage];
 
    assert(start + count <= IRIS_MAX_SAMPLERS);
@@ -2655,7 +2660,7 @@ iris_bind_sampler_states(struct pipe_context *ctx,
  * Also fill out the border color state pointers.
  */
 static void
-iris_upload_sampler_states(struct iris_context *ice, gl_shader_stage stage)
+iris_upload_sampler_states(struct iris_context *ice, mesa_shader_stage stage)
 {
    struct iris_screen *screen = (struct iris_screen *) ice->ctx.screen;
    struct iris_compiled_shader *shader = ice->shaders.prog[stage];
@@ -3358,14 +3363,13 @@ fill_buffer_image_param(struct isl_image_param *param,
  */
 static void
 iris_set_shader_images(struct pipe_context *ctx,
-                       enum pipe_shader_type p_stage,
+                       mesa_shader_stage stage,
                        unsigned start_slot, unsigned count,
                        unsigned unbind_num_trailing_slots,
                        const struct pipe_image_view *p_images)
 {
    struct iris_context *ice = (struct iris_context *) ctx;
    struct iris_screen *screen = (struct iris_screen *)ctx->screen;
-   gl_shader_stage stage = stage_from_pipe(p_stage);
    struct iris_shader_state *shs = &ice->state.shaders[stage];
 #if GFX_VER == 8
    struct iris_genx_state *genx = ice->state.genx;
@@ -3490,7 +3494,7 @@ iris_set_shader_images(struct pipe_context *ctx,
    }
 
    if (unbind_num_trailing_slots) {
-      iris_set_shader_images(ctx, p_stage, start_slot + count,
+      iris_set_shader_images(ctx, stage, start_slot + count,
                              unbind_num_trailing_slots, 0, NULL);
    }
 }
@@ -3506,7 +3510,7 @@ is_sampler_view_3d(const struct iris_sampler_view *view)
  */
 static void
 iris_set_sampler_views(struct pipe_context *ctx,
-                       enum pipe_shader_type p_stage,
+                       mesa_shader_stage stage,
                        unsigned start, unsigned count,
                        unsigned unbind_num_trailing_slots,
                        struct pipe_sampler_view **views)
@@ -3514,7 +3518,6 @@ iris_set_sampler_views(struct pipe_context *ctx,
    struct iris_context *ice = (struct iris_context *) ctx;
    UNUSED struct iris_screen *screen = (void *) ctx->screen;
    UNUSED const struct intel_device_info *devinfo = screen->devinfo;
-   gl_shader_stage stage = stage_from_pipe(p_stage);
    struct iris_shader_state *shs = &ice->state.shaders[stage];
    unsigned i;
 
@@ -3796,7 +3799,8 @@ iris_set_framebuffer_state(struct pipe_context *ctx,
       ice->state.dirty |= IRIS_DIRTY_MULTISAMPLE;
 
       /* We need to toggle 3DSTATE_PS::32 Pixel Dispatch Enable */
-      if (GFX_VER >= 9 && (cso->samples == 16 || samples == 16))
+      if (GFX_VER >= 9 && GFX_VER < 30 &&
+          (cso->samples == 16 || samples == 16))
          ice->state.stage_dirty |= IRIS_STAGE_DIRTY_FS;
 
       /* We may need to emit blend state for Wa_14018912822. */
@@ -3949,12 +3953,11 @@ iris_set_framebuffer_state(struct pipe_context *ctx,
  */
 static void
 iris_set_constant_buffer(struct pipe_context *ctx,
-                         enum pipe_shader_type p_stage, unsigned index,
+                         mesa_shader_stage stage, unsigned index,
                          bool take_ownership,
                          const struct pipe_constant_buffer *input)
 {
    struct iris_context *ice = (struct iris_context *) ctx;
-   gl_shader_stage stage = stage_from_pipe(p_stage);
    struct iris_shader_state *shs = &ice->state.shaders[stage];
    struct pipe_shader_buffer *cbuf = &shs->constbuf[index];
 
@@ -3972,7 +3975,7 @@ iris_set_constant_buffer(struct pipe_context *ctx,
 
          if (!cbuf->buffer) {
             /* Allocation was unsuccessful - just unbind */
-            iris_set_constant_buffer(ctx, p_stage, index, false, NULL);
+            iris_set_constant_buffer(ctx, stage, index, false, NULL);
             return;
          }
 
@@ -4012,7 +4015,7 @@ iris_set_constant_buffer(struct pipe_context *ctx,
 
 static void
 upload_sysvals(struct iris_context *ice,
-               gl_shader_stage stage,
+               mesa_shader_stage stage,
                const struct pipe_grid_info *grid)
 {
    UNUSED struct iris_genx_state *genx = ice->state.genx;
@@ -4109,13 +4112,12 @@ upload_sysvals(struct iris_context *ice,
  */
 static void
 iris_set_shader_buffers(struct pipe_context *ctx,
-                        enum pipe_shader_type p_stage,
+                        mesa_shader_stage stage,
                         unsigned start_slot, unsigned count,
                         const struct pipe_shader_buffer *buffers,
                         unsigned writable_bitmask)
 {
    struct iris_context *ice = (struct iris_context *) ctx;
-   gl_shader_stage stage = stage_from_pipe(p_stage);
    struct iris_shader_state *shs = &ice->state.shaders[stage];
 
    unsigned modified_bits = u_bit_consecutive(start_slot, count);
@@ -4970,7 +4972,7 @@ iris_emit_sbe(struct iris_batch *batch, const struct iris_context *ice)
 static void
 iris_populate_vs_key(const struct iris_context *ice,
                      const struct shader_info *info,
-                     gl_shader_stage last_stage,
+                     mesa_shader_stage last_stage,
                      struct iris_vs_prog_key *key)
 {
    const struct iris_rasterizer_state *cso_rast = ice->state.cso_rast;
@@ -4996,7 +4998,7 @@ iris_populate_tcs_key(const struct iris_context *ice,
 static void
 iris_populate_tes_key(const struct iris_context *ice,
                       const struct shader_info *info,
-                      gl_shader_stage last_stage,
+                      mesa_shader_stage last_stage,
                       struct iris_tes_prog_key *key)
 {
    const struct iris_rasterizer_state *cso_rast = ice->state.cso_rast;
@@ -5013,7 +5015,7 @@ iris_populate_tes_key(const struct iris_context *ice,
 static void
 iris_populate_gs_key(const struct iris_context *ice,
                      const struct shader_info *info,
-                     gl_shader_stage last_stage,
+                     mesa_shader_stage last_stage,
                      struct iris_gs_prog_key *key)
 {
    const struct iris_rasterizer_state *cso_rast = ice->state.cso_rast;
@@ -5782,7 +5784,7 @@ use_image(struct iris_batch *batch, struct iris_context *ice,
 static void
 iris_populate_binding_table(struct iris_context *ice,
                             struct iris_batch *batch,
-                            gl_shader_stage stage,
+                            mesa_shader_stage stage,
                             bool pin_only)
 {
    const struct iris_binder *binder = &ice->state.binder;
@@ -5937,7 +5939,7 @@ static uint32_t
 pin_scratch_space(struct iris_context *ice,
                   struct iris_batch *batch,
                   const struct iris_compiled_shader *shader,
-                  gl_shader_stage stage)
+                  mesa_shader_stage stage)
 {
    uint32_t scratch_addr = 0;
 
@@ -6780,7 +6782,7 @@ static void
 shader_program_uses_primitive_id(struct iris_context *ice,
                                  struct iris_batch *batch,
                                  struct iris_compiled_shader *shader,
-                                 gl_shader_stage stage,
+                                 mesa_shader_stage stage,
                                  bool *uses_primitive_id)
 {
    switch (stage) {
@@ -7788,7 +7790,7 @@ iris_upload_dirty_render_state(struct iris_context *ice,
          sf.ViewportTransformEnable = !ice->state.window_space_position;
 
 #if GFX_VER >= 12
-         sf.DerefBlockSize = ice->state.urb_deref_block_size;
+         sf.DerefBlockSize = ice->shaders.urb.cfg.deref_block_size;
 #endif
       }
       iris_emit_merge(batch, cso->sf, dynamic_sf,
@@ -9616,7 +9618,6 @@ iris_rebind_buffer(struct iris_context *ice,
 
    for (int s = MESA_SHADER_VERTEX; s < MESA_SHADER_STAGES; s++) {
       struct iris_shader_state *shs = &ice->state.shaders[s];
-      enum pipe_shader_type p_stage = stage_to_pipe(s);
 
       if (!(res->bind_stages & (1 << s)))
          continue;
@@ -9651,7 +9652,7 @@ iris_rebind_buffer(struct iris_context *ice,
                   .buffer_offset = ssbo->buffer_offset,
                   .buffer_size = ssbo->buffer_size,
                };
-               iris_set_shader_buffers(ctx, p_stage, i, 1, &buf,
+               iris_set_shader_buffers(ctx, s, i, 1, &buf,
                                        (shs->writable_ssbos >> i) & 1);
             }
          }

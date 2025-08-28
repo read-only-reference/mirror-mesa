@@ -69,6 +69,7 @@ struct update_scratch_layout {
 enum radv_encode_key_bits {
    RADV_ENCODE_KEY_COMPACT = (1 << 0),
    RADV_ENCODE_KEY_WRITE_LEAF_NODE_OFFSETS = (1 << 1),
+   RADV_ENCODE_KEY_PAIR_COMPRESS_GFX12 = (1 << 2),
 };
 
 static void
@@ -83,7 +84,6 @@ radv_get_acceleration_structure_layout(struct radv_device *device,
    VkGeometryTypeKHR geometry_type = vk_get_as_geometry_type(state->build_info);
 
    uint32_t bvh_leaf_size;
-   uint32_t bvh_node_size_gcd;
    if (radv_use_bvh8(pdev)) {
       switch (geometry_type) {
       case VK_GEOMETRY_TYPE_TRIANGLES_KHR:
@@ -98,7 +98,6 @@ radv_get_acceleration_structure_layout(struct radv_device *device,
       default:
          UNREACHABLE("Unknown VkGeometryTypeKHR");
       }
-      bvh_node_size_gcd = RADV_GFX12_BVH_NODE_SIZE;
    } else {
       switch (geometry_type) {
       case VK_GEOMETRY_TYPE_TRIANGLES_KHR:
@@ -113,7 +112,6 @@ radv_get_acceleration_structure_layout(struct radv_device *device,
       default:
          UNREACHABLE("Unknown VkGeometryTypeKHR");
       }
-      bvh_node_size_gcd = 64;
    }
 
    uint32_t internal_node_size =
@@ -139,7 +137,8 @@ radv_get_acceleration_structure_layout(struct radv_device *device,
 
    /* Parent links, which have to go directly before bvh_offset as we index them using negative
     * offsets from there. */
-   offset += bvh_size / bvh_node_size_gcd * 4;
+   if (!radv_use_bvh8(pdev))
+      offset += bvh_size / 64 * 4;
 
    /* The BVH and hence bvh_offset needs 64 byte alignment for RT nodes. */
    offset = ALIGN(offset, 64);
@@ -262,6 +261,12 @@ radv_get_build_config(VkDevice _device, struct vk_acceleration_structure_build_s
       if ((state->build_info->flags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_DATA_ACCESS_KHR) ||
           state->build_info->type != VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
          encode_key |= RADV_ENCODE_KEY_WRITE_LEAF_NODE_OFFSETS;
+
+      VkGeometryTypeKHR geometry_type = vk_get_as_geometry_type(state->build_info);
+      if (!(state->build_info->flags & (VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR |
+                                        VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_DATA_ACCESS_KHR)) &&
+          geometry_type == VK_GEOMETRY_TYPE_TRIANGLES_KHR)
+         encode_key |= RADV_ENCODE_KEY_PAIR_COMPRESS_GFX12;
    }
 
    if (state->build_info->flags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR)
@@ -290,7 +295,7 @@ radv_bvh_build_bind_pipeline(VkCommandBuffer commandBuffer, enum radv_meta_objec
    VkPipeline pipeline;
    VkResult result = vk_get_bvh_build_pipeline_spv(
       &device->vk, &device->meta_state.device, (enum vk_meta_object_key_type)type, spirv, spirv_size,
-      push_constants_size, &device->meta_state.accel_struct_build.build_args, flags, &pipeline);
+      push_constants_size, &device->meta_state.accel_struct_build.build_args, flags, &pipeline, false);
 
    if (result != VK_SUCCESS) {
       vk_command_buffer_set_error(&cmd_buffer->vk, result);
@@ -343,6 +348,8 @@ radv_build_flags(VkCommandBuffer commandBuffer, uint32_t key)
    }
    if (key & RADV_ENCODE_KEY_WRITE_LEAF_NODE_OFFSETS)
       flags |= RADV_BUILD_FLAG_WRITE_LEAF_NODE_OFFSETS;
+   if (key & RADV_ENCODE_KEY_PAIR_COMPRESS_GFX12)
+      flags |= RADV_BUILD_FLAG_PAIR_COMPRESS_TRIANGLES;
 
    return flags;
 }

@@ -1207,7 +1207,7 @@ blorp_build_nir_shader(struct blorp_context *blorp,
    nir_builder b;
    const bool compute =
       key->base.shader_pipeline == BLORP_SHADER_PIPELINE_COMPUTE;
-   gl_shader_stage stage =
+   mesa_shader_stage stage =
       compute ? MESA_SHADER_COMPUTE : MESA_SHADER_FRAGMENT;
    blorp_nir_init_shader(&b, blorp, mem_ctx, stage, NULL);
 
@@ -2490,8 +2490,10 @@ blorp_copy_supports_blitter(struct blorp_context *blorp,
       /* XY_BLOCK_COPY_BLT mentions it doesn't support clear colors for 96bpp
        * formats, but none of them support CCS anyway, so it's a moot point.
        */
-      assert(src_aux_usage == ISL_AUX_USAGE_NONE);
-      assert(dst_aux_usage == ISL_AUX_USAGE_NONE);
+      if (devinfo->verx10 < 20) {
+         assert(src_aux_usage == ISL_AUX_USAGE_NONE);
+         assert(dst_aux_usage == ISL_AUX_USAGE_NONE);
+      }
 
       /* We can only support linear mode for 96bpp. */
       if (src_surf->tiling != ISL_TILING_LINEAR ||

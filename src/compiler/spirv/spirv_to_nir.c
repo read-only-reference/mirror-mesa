@@ -69,6 +69,7 @@ static const struct spirv_capabilities implemented_capabilities = {
    .ComputeDerivativeGroupQuadsKHR = true,
    .CooperativeMatrixKHR = true,
    .CooperativeMatrixConversionsNV = true,
+   .CoreBuiltinsARM = true,
    .CullDistance = true,
    .DemoteToHelperInvocation = true,
    .DenormFlushToZero = true,
@@ -2461,9 +2462,11 @@ vtn_null_constant(struct vtn_builder *b, struct vtn_type *type)
    case vtn_base_type_struct:
       c->is_null_constant = true;
       c->num_elements = type->length;
-      c->elements = ralloc_array(b, nir_constant *, c->num_elements);
-      for (unsigned i = 0; i < c->num_elements; i++)
-         c->elements[i] = vtn_null_constant(b, type->members[i]);
+      if (c->num_elements) {
+         c->elements = ralloc_array(b, nir_constant *, c->num_elements);
+         for (unsigned i = 0; i < c->num_elements; i++)
+            c->elements[i] = vtn_null_constant(b, type->members[i]);
+      }
       break;
 
    default:
@@ -2708,8 +2711,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
          } else {
             comp = vtn_value(b, w[5], vtn_value_type_constant);
             deref_start = 6;
-            val->constant = nir_constant_clone(comp->constant,
-                                               (nir_variable *)b);
+            val->constant = nir_constant_clone(comp->constant, b->shader);
             c = &val->constant;
          }
 
@@ -2913,7 +2915,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
    }
 
    /* Now that we have the value, update the workgroup size if needed */
-   if (gl_shader_stage_uses_workgroup(b->entry_point_stage))
+   if (mesa_shader_stage_uses_workgroup(b->entry_point_stage))
       vtn_foreach_decoration(b, val, handle_workgroup_size_decoration_cb,
                              NULL);
 }
@@ -2995,11 +2997,11 @@ vtn_split_barrier_semantics(struct vtn_builder *b,
       *after |= SpvMemorySemanticsAcquireMask | storage_semantics;
    }
 
-   if (av_vis_semantics & SpvMemorySemanticsMakeVisibleMask)
-      *before |= SpvMemorySemanticsMakeVisibleMask | storage_semantics;
-
    if (av_vis_semantics & SpvMemorySemanticsMakeAvailableMask)
-      *after |= SpvMemorySemanticsMakeAvailableMask | storage_semantics;
+      *before |= SpvMemorySemanticsMakeAvailableMask | storage_semantics;
+
+   if (av_vis_semantics & SpvMemorySemanticsMakeVisibleMask)
+      *after |= SpvMemorySemanticsMakeVisibleMask | storage_semantics;
 }
 
 static nir_memory_semantics
@@ -5080,7 +5082,7 @@ vertices_in_from_spv_execution_mode(struct vtn_builder *b,
    }
 }
 
-gl_shader_stage
+mesa_shader_stage
 vtn_stage_for_execution_model(SpvExecutionModel model)
 {
    switch (model) {
@@ -5131,7 +5133,7 @@ vtn_handle_entry_point(struct vtn_builder *b, const uint32_t *w,
    entry_point->name = vtn_string_literal(b, &w[3], count - 3, &name_words);
    entry_point->is_entrypoint = true;
 
-   gl_shader_stage stage = vtn_stage_for_execution_model(w[1]);
+   mesa_shader_stage stage = vtn_stage_for_execution_model(w[1]);
    vtn_fail_if(stage == MESA_SHADER_NONE,
                "Unsupported execution model: %s (%u)",
                spirv_executionmodel_to_string(w[1]), w[1]);
@@ -5415,7 +5417,7 @@ vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
       break;
 
    case SpvExecutionModeLocalSize:
-      if (gl_shader_stage_uses_workgroup(b->shader->info.stage)) {
+      if (mesa_shader_stage_uses_workgroup(b->shader->info.stage)) {
          b->shader->info.workgroup_size[0] = mode->operands[0];
          b->shader->info.workgroup_size[1] = mode->operands[1];
          b->shader->info.workgroup_size[2] = mode->operands[2];
@@ -5558,12 +5560,12 @@ vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
       break;
 
    case SpvExecutionModeDerivativeGroupQuadsKHR:
-      vtn_assert(gl_shader_stage_uses_workgroup(b->shader->info.stage));
+      vtn_assert(mesa_shader_stage_uses_workgroup(b->shader->info.stage));
       b->shader->info.derivative_group = DERIVATIVE_GROUP_QUADS;
       break;
 
    case SpvExecutionModeDerivativeGroupLinearKHR:
-      vtn_assert(gl_shader_stage_uses_workgroup(b->shader->info.stage));
+      vtn_assert(mesa_shader_stage_uses_workgroup(b->shader->info.stage));
       b->shader->info.derivative_group = DERIVATIVE_GROUP_LINEAR;
       break;
 
@@ -5749,7 +5751,7 @@ vtn_handle_execution_mode_id(struct vtn_builder *b, struct vtn_value *entry_poin
 
    switch (mode->exec_mode) {
    case SpvExecutionModeLocalSizeId:
-      if (gl_shader_stage_uses_workgroup(b->shader->info.stage)) {
+      if (mesa_shader_stage_uses_workgroup(b->shader->info.stage)) {
          b->shader->info.workgroup_size[0] = vtn_constant_uint(b, mode->operands[0]);
          b->shader->info.workgroup_size[1] = vtn_constant_uint(b, mode->operands[1]);
          b->shader->info.workgroup_size[2] = vtn_constant_uint(b, mode->operands[2]);
@@ -6817,9 +6819,13 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
 
    case SpvOpBeginInvocationInterlockEXT:
       nir_begin_invocation_interlock(&b->nb);
+      nir_scoped_memory_barrier(&b->nb, SCOPE_DEVICE, NIR_MEMORY_ACQUIRE,
+                                nir_var_image | nir_var_mem_ssbo | nir_var_mem_global);
       break;
 
    case SpvOpEndInvocationInterlockEXT:
+      nir_scoped_memory_barrier(&b->nb, SCOPE_DEVICE, NIR_MEMORY_RELEASE,
+                                nir_var_image | nir_var_mem_ssbo | nir_var_mem_global);
       nir_end_invocation_interlock(&b->nb);
       break;
 
@@ -6947,7 +6953,7 @@ is_glslang(const struct vtn_builder *b)
 
 struct vtn_builder*
 vtn_create_builder(const uint32_t *words, size_t word_count,
-                   gl_shader_stage stage, const char *entry_point_name,
+                   mesa_shader_stage stage, const char *entry_point_name,
                    const struct spirv_to_nir_options *options)
 {
    /* Initialize the vtn_builder object */
@@ -7125,7 +7131,7 @@ vtn_emit_kernel_entry_point_wrapper(struct vtn_builder *b,
          param_type->storage_class == SpvStorageClassFunction;
 
       /* input variable */
-      nir_variable *in_var = rzalloc(b->nb.shader, nir_variable);
+      nir_variable *in_var = nir_variable_create_zeroed(b->nb.shader);
 
       if (is_by_val) {
          in_var->data.mode = nir_var_uniform;
@@ -7192,7 +7198,7 @@ can_remove(nir_variable *var, void *data)
 nir_shader *
 spirv_to_nir(const uint32_t *words, size_t word_count,
              struct nir_spirv_specialization *spec, unsigned num_spec,
-             gl_shader_stage stage, const char *entry_point_name,
+             mesa_shader_stage stage, const char *entry_point_name,
              const struct spirv_to_nir_options *options,
              const nir_shader_compiler_options *nir_options)
 
@@ -7287,7 +7293,7 @@ spirv_to_nir(const uint32_t *words, size_t word_count,
                                  vtn_handle_execution_mode_id, NULL);
 
    if (b->workgroup_size_builtin) {
-      vtn_assert(gl_shader_stage_uses_workgroup(stage));
+      vtn_assert(mesa_shader_stage_uses_workgroup(stage));
       vtn_assert(b->workgroup_size_builtin->type->type ==
                  glsl_vector_type(GLSL_TYPE_UINT, 3));
 
@@ -7341,6 +7347,23 @@ spirv_to_nir(const uint32_t *words, size_t word_count,
    /* structurize the CFG */
    nir_lower_goto_ifs(b->shader);
 
+   /* Work around validation errors for RT raygen and miss shaders
+    * that define ray hit attribute variables. Per the SPV_KHR_ray_tracing
+    * spec, these variables are invalid for these stages:
+    *
+    * "Variables declared with this storage class are allowed only in
+    * IntersectionKHR, AnyHitKHR and ClosestHitKHR execution models."
+    *
+    * https://gitlab.freedesktop.org/mesa/mesa/-/issues/13677
+    */
+   if (b->shader->info.stage == MESA_SHADER_RAYGEN ||
+       b->shader->info.stage == MESA_SHADER_MISS) {
+      /* Can't use NIR_PASS macro because it calls `nir_validate_shader` and
+       * the shaders may require other workarounds to pass validation.
+       */
+      nir_remove_dead_variables(b->shader, nir_var_ray_hit_attrib, NULL);
+   }
+
    /* Work around applications that declare shader_call_data variables inside
     * ray generation shaders or multiple shader_call_data variables in callable
     * shaders. This needs to happen before validation.
@@ -7348,7 +7371,7 @@ spirv_to_nir(const uint32_t *words, size_t word_count,
     * https://gitlab.freedesktop.org/mesa/mesa/-/issues/5326
     * https://gitlab.freedesktop.org/mesa/mesa/-/issues/11585
     */
-   if (gl_shader_stage_is_rt(b->shader->info.stage)) {
+   if (mesa_shader_stage_is_rt(b->shader->info.stage)) {
       NIR_PASS(_, b->shader, nir_remove_dead_variables, nir_var_shader_call_data,
                NULL);
    }

@@ -143,7 +143,7 @@ fs_nir_setup_uniforms(elk_fs_visitor &s)
 
    s.uniforms = s.nir->num_uniforms / 4;
 
-   if (gl_shader_stage_is_compute(s.stage)) {
+   if (mesa_shader_stage_is_compute(s.stage)) {
       /* Add uniforms for builtins after regular NIR uniforms. */
       assert(s.uniforms == s.prog_data->nr_params);
 
@@ -163,7 +163,7 @@ emit_work_group_id_setup(nir_to_elk_state &ntb)
    elk_fs_visitor &s = ntb.s;
    const fs_builder &bld = ntb.bld;
 
-   assert(gl_shader_stage_is_compute(s.stage));
+   assert(mesa_shader_stage_is_compute(s.stage));
 
    elk_fs_reg id = bld.vgrf(ELK_REGISTER_TYPE_UD, 3);
 
@@ -240,7 +240,7 @@ emit_system_values_block(nir_to_elk_state &ntb, nir_block *block)
          break;
 
       case nir_intrinsic_load_workgroup_id:
-         assert(gl_shader_stage_is_compute(s.stage));
+         assert(mesa_shader_stage_is_compute(s.stage));
          reg = &ntb.system_values[SYSTEM_VALUE_WORKGROUP_ID];
          if (reg->file == BAD_FILE)
             *reg = emit_work_group_id_setup(ntb);
@@ -487,8 +487,7 @@ optimize_extract_to_float(nir_to_elk_state &ntb, nir_alu_instr *instr,
    if (instr->src[0].src.ssa->parent_instr->type != nir_instr_type_alu)
       return false;
 
-   nir_alu_instr *src0 =
-      nir_instr_as_alu(instr->src[0].src.ssa->parent_instr);
+   nir_alu_instr *src0 = nir_def_as_alu(instr->src[0].src.ssa);
 
    unsigned bytes;
    bool is_signed;
@@ -1875,7 +1874,7 @@ static bool
 is_resource_src(nir_src src)
 {
    return src.ssa->parent_instr->type == nir_instr_type_intrinsic &&
-          nir_instr_as_intrinsic(src.ssa->parent_instr)->intrinsic == nir_intrinsic_resource_intel;
+          nir_def_as_intrinsic(src.ssa)->intrinsic == nir_intrinsic_resource_intel;
 }
 
 static elk_fs_reg
@@ -2663,14 +2662,14 @@ emit_barrier(nir_to_elk_state &ntb)
    elk_fs_visitor &s = ntb.s;
 
    /* We are getting the barrier ID from the compute shader header */
-   assert(gl_shader_stage_uses_workgroup(s.stage));
+   assert(mesa_shader_stage_uses_workgroup(s.stage));
 
    elk_fs_reg payload = elk_fs_reg(VGRF, s.alloc.allocate(1), ELK_REGISTER_TYPE_UD);
 
    /* Clear the message payload */
    bld.exec_all().group(8, 0).MOV(payload, elk_imm_ud(0u));
 
-   assert(gl_shader_stage_is_compute(s.stage));
+   assert(mesa_shader_stage_is_compute(s.stage));
 
    uint32_t barrier_id_mask;
    switch (devinfo->ver) {
@@ -3932,8 +3931,7 @@ fs_nir_emit_fs_intrinsic(nir_to_elk_state &ntb,
    case nir_intrinsic_load_interpolated_input: {
       assert(instr->src[0].ssa &&
              instr->src[0].ssa->parent_instr->type == nir_instr_type_intrinsic);
-      nir_intrinsic_instr *bary_intrinsic =
-         nir_instr_as_intrinsic(instr->src[0].ssa->parent_instr);
+      nir_intrinsic_instr *bary_intrinsic = nir_def_as_intrinsic(instr->src[0].ssa);
       nir_intrinsic_op bary_intrin = bary_intrinsic->intrinsic;
       elk_fs_reg dst_xy;
 
@@ -3973,7 +3971,7 @@ fs_nir_emit_cs_intrinsic(nir_to_elk_state &ntb,
    const fs_builder &bld = ntb.bld;
    elk_fs_visitor &s = ntb.s;
 
-   assert(gl_shader_stage_uses_workgroup(s.stage));
+   assert(mesa_shader_stage_uses_workgroup(s.stage));
    struct elk_cs_prog_data *cs_prog_data = elk_cs_prog_data(s.prog_data);
 
    elk_fs_reg dest;
@@ -4257,13 +4255,13 @@ try_rebuild_resource(nir_to_elk_state &ntb, const elk::fs_builder &bld, nir_def 
 
       if (def->parent_instr->type == nir_instr_type_load_const) {
          nir_load_const_instr *load_const =
-            nir_instr_as_load_const(def->parent_instr);
+            nir_def_as_load_const(def);
          return elk_imm_ud(load_const->value[0].i32);
       } else {
          assert(def->parent_instr->type == nir_instr_type_intrinsic &&
-                (nir_instr_as_intrinsic(def->parent_instr)->intrinsic ==
+                (nir_def_as_intrinsic(def)->intrinsic ==
                  nir_intrinsic_load_uniform));
-         nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(def->parent_instr);
+         nir_intrinsic_instr *intrin = nir_def_as_intrinsic(def);
          unsigned base_offset = nir_intrinsic_base(intrin);
          unsigned load_offset = nir_src_as_uint(intrin->src[0]);
          elk_fs_reg src(UNIFORM, base_offset / 4, ELK_REGISTER_TYPE_UD);
@@ -4821,7 +4819,7 @@ fs_nir_emit_intrinsic(nir_to_elk_state &ntb,
          break;
 
       if (s.nir->info.shared_size > 0) {
-         assert(gl_shader_stage_uses_workgroup(s.stage));
+         assert(mesa_shader_stage_uses_workgroup(s.stage));
       } else {
          slm_fence = false;
       }

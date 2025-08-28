@@ -217,16 +217,9 @@ get_device_extensions(const struct tu_physical_device *device,
       .KHR_pipeline_executable_properties = true,
       .KHR_pipeline_library = true,
 #ifdef TU_USE_WSI_PLATFORM
-      /* Hide these behind dri configs for now since we cannot implement it reliably on
-       * all surfaces yet. There is no surface capability query for present wait/id,
-       * but the feature is useful enough to hide behind an opt-in mechanism for now.
-       * If the instance only enables surface extensions that unconditionally support present wait,
-       * we can also expose the extension that way. */
-      .KHR_present_id = (driQueryOptionb(&device->instance->dri_options, "vk_khr_present_wait") ||
-                         wsi_common_vk_instance_supports_present_wait(&device->instance->vk)),
+      .KHR_present_id = true,
       .KHR_present_id2 = true,
-      .KHR_present_wait = (driQueryOptionb(&device->instance->dri_options, "vk_khr_present_wait") ||
-                           wsi_common_vk_instance_supports_present_wait(&device->instance->vk)),
+      .KHR_present_wait = true,
       .KHR_present_wait2 = true,
 #endif
       .KHR_push_descriptor = true,
@@ -327,6 +320,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .EXT_sampler_filter_minmax = device->info->a6xx.has_sampler_minmax,
       .EXT_scalar_block_layout = true,
       .EXT_separate_stencil_usage = true,
+      .EXT_shader_atomic_float = true,
       .EXT_shader_demote_to_helper_invocation = true,
       .EXT_shader_module_identifier = true,
       .EXT_shader_replicated_composites = true,
@@ -413,7 +407,9 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->shaderFloat64 = false;
    features->shaderInt64 = true;
    features->shaderInt16 = true;
-   features->sparseBinding = false;
+   features->sparseBinding = pdevice->has_sparse;
+   features->sparseResidencyBuffer = pdevice->has_sparse_prr;
+   features->sparseResidencyAliased = pdevice->has_sparse_prr;
    features->variableMultisampleRate = true;
    features->inheritedQueries = true;
 
@@ -551,11 +547,13 @@ tu_get_features(struct tu_physical_device *pdevice,
    /* VK_KHR_pipeline_executable_properties */
    features->pipelineExecutableInfo = true;
 
+#ifdef TU_USE_WSI_PLATFORM
    /* VK_KHR_present_id */
-   features->presentId = pdevice->vk.supported_extensions.KHR_present_id;
+   features->presentId = true;
 
    /* VK_KHR_present_wait */
-   features->presentWait = pdevice->vk.supported_extensions.KHR_present_wait;
+   features->presentWait = true;
+#endif
 
    /* VK_KHR_shader_clock */
    features->shaderSubgroupClock = true;
@@ -744,6 +742,20 @@ tu_get_features(struct tu_physical_device *pdevice,
    features->robustImageAccess2 = true;
    features->nullDescriptor = true;
 
+   /* VK_EXT_shader_atomic_float */
+   features->shaderBufferFloat32Atomics = true;
+   features->shaderBufferFloat32AtomicAdd = false;
+   features->shaderBufferFloat64Atomics = false;
+   features->shaderBufferFloat64AtomicAdd = false;
+   features->shaderSharedFloat32Atomics = true;
+   features->shaderSharedFloat32AtomicAdd = false;
+   features->shaderSharedFloat64Atomics = false;
+   features->shaderSharedFloat64AtomicAdd = false;
+   features->shaderImageFloat32Atomics = true;
+   features->shaderImageFloat32AtomicAdd = false;
+   features->sparseImageFloat32Atomics = false;
+   features->sparseImageFloat32AtomicAdd = false;
+
    /* VK_EXT_shader_module_identifier */
    features->shaderModuleIdentifier = true;
 
@@ -753,6 +765,12 @@ tu_get_features(struct tu_physical_device *pdevice,
 #ifdef TU_USE_WSI_PLATFORM
    /* VK_EXT_swapchain_maintenance1 */
    features->swapchainMaintenance1 = true;
+
+   /* VK_KHR_present_id2 */
+   features->presentId2 = true;
+
+   /* VK_KHR_present_wait2 */
+   features->presentWait2 = true;
 #endif
 
    /* VK_EXT_texel_buffer_alignment */
@@ -1006,7 +1024,7 @@ tu_get_properties(struct tu_physical_device *pdevice,
    props->maxMemoryAllocationCount = UINT32_MAX;
    props->maxSamplerAllocationCount = 64 * 1024;
    props->bufferImageGranularity = 64;          /* A cache line */
-   props->sparseAddressSpaceSize = 0;
+   props->sparseAddressSpaceSize = pdevice->va_size;
    props->maxBoundDescriptorSets = pdevice->usable_sets;
    props->maxPerStageDescriptorSamplers = max_descriptor_set_size;
    props->maxPerStageDescriptorUniformBuffers = max_descriptor_set_size;
@@ -1142,7 +1160,7 @@ tu_get_properties(struct tu_physical_device *pdevice,
    props->sparseResidencyStandard2DMultisampleBlockShape = { 0 };
    props->sparseResidencyStandard3DBlockShape = { 0 };
    props->sparseResidencyAlignedMipSize = { 0 };
-   props->sparseResidencyNonResidentStrict = { 0 };
+   props->sparseResidencyNonResidentStrict = true;
 
    strcpy(props->deviceName, pdevice->name);
    memcpy(props->pipelineCacheUUID, pdevice->cache_uuid, VK_UUID_SIZE);
@@ -1284,7 +1302,7 @@ tu_get_properties(struct tu_physical_device *pdevice,
    props->maxEmbeddedImmutableSamplerBindings = pdevice->usable_sets;
    props->maxEmbeddedImmutableSamplers = max_descriptor_set_size;
    props->bufferCaptureReplayDescriptorDataSize = 0;
-   props->imageCaptureReplayDescriptorDataSize = 0;
+   props->imageCaptureReplayDescriptorDataSize = sizeof(uint64_t);
    props->imageViewCaptureReplayDescriptorDataSize = 0;
    props->samplerCaptureReplayDescriptorDataSize = 0;
    props->accelerationStructureCaptureReplayDescriptorDataSize = 0;
@@ -1449,6 +1467,25 @@ static const struct vk_pipeline_cache_object_ops *const cache_import_ops[] = {
    NULL,
 };
 
+/* Note if we introduce more queues in a family that we may need to reduce the max
+ * scope in our nir_opt_acquire_release_barriers() call.  See
+ * https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/33504#note_2807879
+ */
+static const VkQueueFamilyProperties tu_gfx_queue_family_properties = {
+   .queueFlags =
+      VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT,
+   .queueCount = 1,
+   .timestampValidBits = 48,
+   .minImageTransferGranularity = { 1, 1, 1 },
+};
+
+static const VkQueueFamilyProperties tu_sparse_queue_family_properties = {
+   .queueFlags = VK_QUEUE_SPARSE_BINDING_BIT,
+   .queueCount = 1,
+   .timestampValidBits = 48,
+   .minImageTransferGranularity = { 1, 1, 1 },
+};
+
 VkResult
 tu_physical_device_init(struct tu_physical_device *device,
                         struct tu_instance *instance)
@@ -1609,6 +1646,20 @@ tu_physical_device_init(struct tu_physical_device *device,
 
    device->vk.supported_sync_types = device->sync_types;
 
+   device->queue_families[device->num_queue_families++] =
+      (struct tu_queue_family) {
+         .type = TU_QUEUE_GFX,
+         .properties = &tu_gfx_queue_family_properties,
+      };
+
+   if (device->has_sparse) {
+      device->queue_families[device->num_queue_families++] =
+         (struct tu_queue_family) {
+            .type = TU_QUEUE_SPARSE,
+            .properties = &tu_sparse_queue_family_properties,
+         };
+   }
+
 #ifdef TU_USE_WSI_PLATFORM
    result = tu_wsi_init(device);
    if (result != VK_SUCCESS) {
@@ -1664,7 +1715,6 @@ tu_destroy_physical_device(struct vk_physical_device *device)
 static const driOptionDescription tu_dri_options[] = {
    DRI_CONF_SECTION_PERFORMANCE
       DRI_CONF_VK_X11_OVERRIDE_MIN_IMAGE_COUNT(0)
-      DRI_CONF_VK_KHR_PRESENT_WAIT(false)
       DRI_CONF_VK_X11_STRICT_IMAGE_COUNT(false)
       DRI_CONF_VK_X11_ENSURE_MIN_IMAGE_COUNT(false)
       DRI_CONF_VK_XWAYLAND_WAIT_READY(false)
@@ -1792,22 +1842,18 @@ tu_DestroyInstance(VkInstance _instance,
    vk_free(&instance->vk.alloc, instance);
 }
 
-/* Note if we introduce more queues in a family that we may need to reduce the max
- * scope in our nir_opt_acquire_release_barriers() call.  See
- * https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/33504#note_2807879
- */
-static const VkQueueFamilyProperties tu_queue_family_properties = {
-   .queueFlags =
-      VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT,
-   .queueCount = 1,
-   .timestampValidBits = 48,
-   .minImageTransferGranularity = { 1, 1, 1 },
-};
-
 void
 tu_physical_device_get_global_priority_properties(const struct tu_physical_device *pdevice,
+                                                  enum tu_queue_type type,
                                                   VkQueueFamilyGlobalPriorityPropertiesKHR *props)
 {
+   /* drm/msm only supports one priority for VM_BIND queues */
+   if (type == TU_QUEUE_SPARSE) {
+      props->priorityCount = 1;
+      props->priorities[0] = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR;
+      return;
+   }
+
    props->priorityCount = MIN2(pdevice->submitqueue_priority_count, 3);
    switch (props->priorityCount) {
    case 1:
@@ -1821,6 +1867,12 @@ tu_physical_device_get_global_priority_properties(const struct tu_physical_devic
       props->priorities[0] = VK_QUEUE_GLOBAL_PRIORITY_LOW_KHR;
       props->priorities[1] = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR;
       props->priorities[2] = VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR;
+      break;
+   case 4:
+      props->priorities[0] = VK_QUEUE_GLOBAL_PRIORITY_LOW_KHR;
+      props->priorities[1] = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR;
+      props->priorities[2] = VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR;
+      props->priorities[3] = VK_QUEUE_GLOBAL_PRIORITY_REALTIME_KHR;
       break;
    default:
       UNREACHABLE("unexpected priority count");
@@ -1839,20 +1891,24 @@ tu_GetPhysicalDeviceQueueFamilyProperties2(
    VK_OUTARRAY_MAKE_TYPED(VkQueueFamilyProperties2, out,
                           pQueueFamilyProperties, pQueueFamilyPropertyCount);
 
-   vk_outarray_append_typed(VkQueueFamilyProperties2, &out, p)
-   {
-      p->queueFamilyProperties = tu_queue_family_properties;
+   for (unsigned i = 0; i < pdevice->num_queue_families; i++) {
+      struct tu_queue_family *family = &pdevice->queue_families[i];
 
-      vk_foreach_struct(ext, p->pNext) {
-         switch (ext->sType) {
-         case VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES_KHR: {
-            VkQueueFamilyGlobalPriorityPropertiesKHR *props =
-               (VkQueueFamilyGlobalPriorityPropertiesKHR *) ext;
-            tu_physical_device_get_global_priority_properties(pdevice, props);
-            break;
-         }
-         default:
-            break;
+      vk_outarray_append_typed(VkQueueFamilyProperties2, &out, p) {
+         p->queueFamilyProperties = *family->properties;
+
+         vk_foreach_struct(ext, p->pNext) {
+            switch (ext->sType) {
+            case VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES_KHR: {
+               VkQueueFamilyGlobalPriorityPropertiesKHR *props =
+                  (VkQueueFamilyGlobalPriorityPropertiesKHR *) ext;
+               tu_physical_device_get_global_priority_properties(
+                  pdevice, family->type, props);
+               break;
+            }
+            default:
+               break;
+            }
          }
       }
    }
@@ -2591,7 +2647,9 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
    mtx_init(&device->event_mutex, mtx_plain);
    mtx_init(&device->trace_mutex, mtx_plain);
    u_rwlock_init(&device->dma_bo_lock);
+   u_rwlock_init(&device->vm_bind_fence_lock);
    pthread_mutex_init(&device->submit_mutex, NULL);
+   device->vm_bind_fence_fd = -1;
 
    if (physical_device->has_set_iova) {
       mtx_init(&device->vma_mutex, mtx_plain);
@@ -2617,6 +2675,7 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
       const VkDeviceQueueCreateInfo *queue_create =
          &pCreateInfo->pQueueCreateInfos[i];
       uint32_t qfi = queue_create->queueFamilyIndex;
+      enum tu_queue_type type = physical_device->queue_families[qfi].type;
       device->queues[qfi] = (struct tu_queue *) vk_alloc(
          &device->vk.alloc,
          queue_create->queueCount * sizeof(struct tu_queue), 8,
@@ -2634,7 +2693,8 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
       device->queue_count[qfi] = queue_create->queueCount;
 
       for (unsigned q = 0; q < queue_create->queueCount; q++) {
-         result = tu_queue_init(device, &device->queues[qfi][q], q, queue_create);
+         result = tu_queue_init(device, &device->queues[qfi][q], type, q,
+                                queue_create);
          if (result != VK_SUCCESS) {
             device->queue_count[qfi] = q;
             goto fail_queues;
@@ -2645,8 +2705,6 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
    result = vk_meta_device_init(&device->vk, &device->meta);
    if (result != VK_SUCCESS)
       goto fail_queues;
-
-   util_sparse_array_init(&device->accel_struct_ranges, sizeof(VkDeviceSize), 256);
 
    mtx_init(&device->radix_sort_mutex, mtx_plain);
 
@@ -2674,8 +2732,7 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
    /* Initialize sparse array for refcounting imported BOs */
    util_sparse_array_init(&device->bo_map, sizeof(struct tu_bo), 512);
 
-   if (physical_device->has_set_iova) {
-      STATIC_ASSERT(TU_MAX_QUEUE_FAMILIES == 1);
+   if (physical_device->has_set_iova && !physical_device->has_vm_bind) {
       if (!u_vector_init(&device->zombie_vmas, 64,
                          sizeof(struct tu_zombie_vma))) {
          result = vk_startup_errorf(physical_device->instance,
@@ -2936,7 +2993,6 @@ fail_free_zombie_vma:
    u_vector_finish(&device->zombie_vmas);
    ir3_compiler_destroy(device->compiler);
 fail_compiler:
-   util_sparse_array_finish(&device->accel_struct_ranges);
    vk_meta_device_finish(&device->vk, &device->meta);
 fail_queues:
    for (unsigned i = 0; i < TU_MAX_QUEUE_FAMILIES; i++) {
@@ -2989,8 +3045,6 @@ tu_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
 
    vk_meta_device_finish(&device->vk, &device->meta);
 
-   util_sparse_array_finish(&device->accel_struct_ranges);
-
    ir3_compiler_destroy(device->compiler);
 
    vk_pipeline_cache_destroy(device->mem_cache, &device->vk.alloc);
@@ -3020,6 +3074,9 @@ tu_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
 
    tu_bo_finish(device, device->global_bo);
 
+   if (device->vm_bind_fence_fd != -1)
+      close(device->vm_bind_fence_fd);
+
    if (device->null_accel_struct_bo)
       tu_bo_finish(device, device->null_accel_struct_bo);
 
@@ -3048,6 +3105,7 @@ tu_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
 
    util_sparse_array_finish(&device->bo_map);
    u_rwlock_destroy(&device->dma_bo_lock);
+   u_rwlock_destroy(&device->vm_bind_fence_lock);
 
    u_vector_finish(&device->zombie_vmas);
 
@@ -3229,6 +3287,10 @@ tu_AllocateMemory(VkDevice _device,
                            VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT)))
          alloc_flags |= TU_BO_ALLOC_SHAREABLE;
 
+      const struct wsi_memory_allocate_info *wsi_info =
+         vk_find_struct_const(pAllocateInfo->pNext, WSI_MEMORY_ALLOCATE_INFO_MESA);
+      if (wsi_info && wsi_info->implicit_sync)
+         alloc_flags |= TU_BO_ALLOC_IMPLICIT_SYNC;
 
       char name[64] = "vkAllocateMemory()";
       if (device->bo_sizes)
@@ -3254,20 +3316,6 @@ tu_AllocateMemory(VkDevice _device,
    if (result != VK_SUCCESS) {
       vk_device_memory_destroy(&device->vk, pAllocator, &mem->vk);
       return result;
-   }
-
-   /* Track in the device whether our BO list contains any implicit-sync BOs, so
-    * we can suppress implicit sync on non-WSI usage.
-    */
-   const struct wsi_memory_allocate_info *wsi_info =
-      vk_find_struct_const(pAllocateInfo->pNext, WSI_MEMORY_ALLOCATE_INFO_MESA);
-   if (wsi_info && wsi_info->implicit_sync) {
-      mtx_lock(&device->bo_mutex);
-      if (!mem->bo->implicit_sync) {
-         mem->bo->implicit_sync = true;
-         device->implicit_sync_bo_count++;
-      }
-      mtx_unlock(&device->bo_mutex);
    }
 
    const VkMemoryDedicatedAllocateInfo *dedicate_info =

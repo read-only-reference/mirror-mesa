@@ -52,7 +52,7 @@ struct ntv_context {
 
    SpvId GLSL_std_450;
 
-   gl_shader_stage stage;
+   mesa_shader_stage stage;
    const struct zink_shader_info *sinfo;
 
    SpvId ubos[PIPE_MAX_CONSTANT_BUFFERS][5]; //8, 16, 32, unused, 64
@@ -675,7 +675,7 @@ create_shared_block(struct ntv_context *ctx, unsigned bit_size)
    SpvId type = spirv_builder_type_uint(&ctx->builder, bit_size);
    SpvId array;
 
-   assert(gl_shader_stage_is_compute(ctx->nir->info.stage));
+   assert(mesa_shader_stage_is_compute(ctx->nir->info.stage));
    if (ctx->nir->info.cs.has_variable_shared_mem) {
       assert(ctx->shared_mem_size);
       SpvId const_shared_size = emit_uint_const(ctx, 32, ctx->nir->info.shared_size);
@@ -3795,7 +3795,7 @@ get_tex_srcs(struct ntv_context *ctx, nir_tex_instr *tex,
       nir_const_value *cv;
       switch (tex->src[i].src_type) {
       case nir_tex_src_texture_deref:
-         var = nir_deref_instr_get_variable(nir_instr_as_deref(tex->src[i].src.ssa->parent_instr));
+         var = nir_deref_instr_get_variable(nir_def_as_deref(tex->src[i].src.ssa));
          tex_src->src = get_src(ctx, &tex->src[i].src, &atype);
          break;
       case nir_tex_src_sampler_deref:
@@ -4617,9 +4617,10 @@ nir_to_spirv(struct nir_shader *s, const struct zink_shader_info *sinfo, const s
    ctx.glsl_types[1] = _mesa_pointer_hash_table_create(ctx.mem_ctx);
    ctx.bo_array_types = _mesa_pointer_hash_table_create(ctx.mem_ctx);
    ctx.bo_struct_types = _mesa_pointer_hash_table_create(ctx.mem_ctx);
-   if (!ctx.glsl_types[0] || !ctx.glsl_types[1] || !ctx.bo_array_types || !ctx.bo_struct_types ||
-       !_mesa_hash_table_init(&ctx.image_types, ctx.mem_ctx, _mesa_hash_pointer, _mesa_key_pointer_equal))
+   if (!ctx.glsl_types[0] || !ctx.glsl_types[1] || !ctx.bo_array_types || !ctx.bo_struct_types)
       goto fail;
+
+   _mesa_hash_table_init(&ctx.image_types, ctx.mem_ctx, _mesa_hash_pointer, _mesa_key_pointer_equal);
 
    spirv_builder_emit_cap(&ctx.builder, SpvCapabilityShader);
 
@@ -4715,7 +4716,7 @@ nir_to_spirv(struct nir_shader *s, const struct zink_shader_info *sinfo, const s
    spirv_builder_emit_source(&ctx.builder, SpvSourceLanguageUnknown, 0);
 
    SpvAddressingModel model = SpvAddressingModelLogical;
-   if (gl_shader_stage_is_compute(s->info.stage)) {
+   if (mesa_shader_stage_is_compute(s->info.stage)) {
       if (s->info.cs.ptr_size == 32)
          model = SpvAddressingModelPhysical32;
       else if (s->info.cs.ptr_size == 64) {

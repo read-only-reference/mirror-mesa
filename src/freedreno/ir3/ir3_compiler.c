@@ -11,6 +11,7 @@
 #include "freedreno_dev_info.h"
 
 #include "ir3_compiler.h"
+#include "ir3_nir.h"
 
 static const struct debug_named_value shader_debug_options[] = {
    /* clang-format off */
@@ -144,6 +145,8 @@ ir3_compiler_create(struct fd_device *dev, const struct fd_dev_id *dev_id,
       ir3_shader_debug |= IR3_DBG_NOCACHE;
    }
 
+   ir3_shader_bisect_init();
+
    compiler->dev = dev;
    compiler->dev_id = dev_id;
    compiler->gen = fd_dev_gen(dev_id);
@@ -244,6 +247,7 @@ ir3_compiler_create(struct fd_device *dev, const struct fd_dev_id *dev_id,
       compiler->predtf_nop_quirk = dev_info->a6xx.predtf_nop_quirk;
       compiler->prede_nop_quirk = dev_info->a6xx.prede_nop_quirk;
       compiler->has_scalar_alu = dev_info->a6xx.has_scalar_alu;
+      compiler->has_scalar_predicates = dev_info->a6xx.has_scalar_predicates;
       compiler->has_isam_v = dev_info->a6xx.has_isam_v;
       compiler->has_ssbo_imm_offsets = dev_info->a6xx.has_ssbo_imm_offsets;
       compiler->fs_must_have_non_zero_constlen_quirk = dev_info->a7xx.fs_must_have_non_zero_constlen_quirk;
@@ -376,7 +380,8 @@ ir3_compiler_create(struct fd_device *dev, const struct fd_dev_id *dev_id,
    compiler->nir_options.support_indirect_inputs =
       BITFIELD_BIT(MESA_SHADER_TESS_CTRL) |
       BITFIELD_BIT(MESA_SHADER_TESS_EVAL) | BITFIELD_BIT(MESA_SHADER_FRAGMENT);
-   compiler->nir_options.support_indirect_outputs = (uint8_t)BITFIELD_MASK(PIPE_SHADER_TYPES);
+   compiler->nir_options.support_indirect_outputs = (uint8_t)BITFIELD_MASK(MESA_SHADER_STAGES);
+   compiler->nir_options.max_offset_shift = ir3_nir_max_offset_shift;
 
    if (!options->disable_cache)
       ir3_disk_cache_init(compiler);

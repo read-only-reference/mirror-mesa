@@ -38,7 +38,7 @@
 #include "vk_util.h"
 #include "vulkan/wsi/wsi_common.h"
 
-#if DETECT_OS_ANDROID
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
 #include "vk_android.h"
 #include <vulkan/vulkan_android.h>
 #endif
@@ -100,7 +100,7 @@ vk_image_init(struct vk_device *device,
    image->drm_format_mod = ((1ULL << 56) - 1) /* DRM_FORMAT_MOD_INVALID */;
 #endif
 
-#if DETECT_OS_ANDROID
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
    if (image->external_handle_types &
              VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID)
       image->android_buffer_type = ANDROID_BUFFER_HARDWARE;
@@ -159,7 +159,7 @@ vk_image_destroy(struct vk_device *device,
                  const VkAllocationCallbacks *alloc,
                  struct vk_image *image)
 {
-#if DETECT_OS_ANDROID
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
    if (image->anb_memory) {
       device->dispatch_table.FreeMemory(
          (VkDevice)device, image->anb_memory, alloc);
@@ -282,6 +282,25 @@ vk_image_expand_aspect_mask(const struct vk_image *image,
       assert(aspect_mask && !(aspect_mask & ~image->aspects));
       return aspect_mask;
    }
+}
+
+uint32_t
+vk_image_subresource_slice_count(const struct vk_device *device,
+                                 const struct vk_image *image,
+                                 const VkImageSubresourceLayers *range)
+{
+   assert(image->image_type == VK_IMAGE_TYPE_3D);
+
+   bool layers_are_slices = device->enabled_features.maintenance9 &&
+      (image->create_flags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT);
+   uint32_t slices = u_minify(image->extent.depth, range->mipLevel);
+
+   if (!layers_are_slices) {
+      assert(range->baseArrayLayer == 0);
+      return slices;
+   }
+   return range->layerCount == VK_REMAINING_ARRAY_LAYERS ?
+          slices - range->baseArrayLayer : range->layerCount;
 }
 
 VkExtent3D

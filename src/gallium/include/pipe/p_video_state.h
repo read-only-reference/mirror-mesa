@@ -233,7 +233,6 @@ struct pipe_picture_desc
    uint8_t *decrypt_key;
    uint32_t key_size;
    enum pipe_format input_format;
-   bool input_full_range;
    enum pipe_format output_format;
    /* Flush flags for pipe_video_codec::end_frame */
    unsigned flush_flags;
@@ -2156,6 +2155,9 @@ struct pipe_vpp_desc
    struct u_rect dst_region;
    enum pipe_video_vpp_orientation orientation;
    struct pipe_vpp_blend blend;
+
+   /* Only used for encode/decode processing */
+   struct pipe_video_buffer *dst;
 
    uint32_t background_color;
    enum pipe_video_vpp_color_standard_type in_colors_standard;

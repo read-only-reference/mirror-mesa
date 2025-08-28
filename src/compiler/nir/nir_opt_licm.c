@@ -9,7 +9,7 @@ static bool
 defined_before_loop(nir_src *src, void *state)
 {
    unsigned *loop_preheader_idx = state;
-   return src->ssa->parent_instr->block->index <= *loop_preheader_idx;
+   return nir_def_block(src->ssa)->index <= *loop_preheader_idx;
 }
 
 static bool
@@ -57,7 +57,7 @@ static bool
 should_optimize_loop(nir_loop *loop)
 {
    /* Ignore loops without back-edge */
-   if (nir_loop_first_block(loop)->predecessors->entries == 1)
+   if (nir_loop_first_block(loop)->predecessors.entries == 1)
       return false;
 
    nir_foreach_block_in_cf_node(block, &loop->cf_node) {

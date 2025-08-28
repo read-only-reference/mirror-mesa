@@ -119,6 +119,47 @@ enum bi_swizzle {
    BI_SWIZZLE_B33 = BI_SWIZZLE_B3333,
 };
 
+static inline bool
+bi_swizzle_to_byte_channels(enum bi_swizzle swizzle, unsigned *channels)
+{
+#define B(b0, b1, b2, b3)                                                      \
+   case BI_SWIZZLE_B##b0##b1##b2##b3: {                                        \
+      channels[0] = b0;                                                        \
+      channels[1] = b1;                                                        \
+      channels[2] = b2;                                                        \
+      channels[3] = b3;                                                        \
+      return true;                                                             \
+   }
+   switch (swizzle) {
+      B(0, 1, 0, 1);
+      B(0, 1, 2, 3);
+      B(2, 3, 0, 1);
+      B(2, 3, 2, 3);
+      B(0, 0, 0, 0);
+      B(1, 1, 1, 1);
+      B(2, 2, 2, 2);
+      B(3, 3, 3, 3);
+      B(0, 0, 1, 1);
+      B(2, 2, 3, 3);
+      B(1, 0, 3, 2);
+      B(3, 2, 1, 0);
+      B(0, 0, 2, 2);
+      B(1, 1, 0, 0);
+      B(2, 2, 0, 0);
+      B(3, 3, 0, 0);
+      B(2, 2, 1, 1);
+      B(3, 3, 1, 1);
+      B(1, 1, 2, 2);
+      B(3, 3, 2, 2);
+      B(0, 0, 3, 3);
+      B(1, 1, 3, 3);
+      B(1, 1, 2, 3);
+   default:
+      return false;
+   }
+#undef B
+}
+
 /* Given a packed i16vec2/i8vec4 constant, apply a swizzle. Useful for constant
  * folding and Valhall constant optimization. */
 
@@ -297,11 +338,21 @@ bi_half(bi_index idx, bool upper)
    return bi_swz_16(idx, upper, upper);
 }
 
+static inline bool
+bi_valid_lane_for_byte_swizzle(enum bi_swizzle swizzle, unsigned lane)
+{
+   unsigned channels[4];
+   if (bi_swizzle_to_byte_channels(swizzle, channels)) {
+      return lane == channels[0] || lane == channels[1] ||
+             lane == channels[2] || lane == channels[3];
+   }
+   return false;
+}
+
 static inline bi_index
 bi_byte(bi_index idx, unsigned lane)
 {
-   assert(idx.swizzle == BI_SWIZZLE_B0123);
-   assert(lane < 4);
+   assert(bi_valid_lane_for_byte_swizzle(idx.swizzle, lane));
    idx.swizzle = (enum bi_swizzle)(BI_SWIZZLE_B0 + lane);
    return idx;
 }
@@ -671,6 +722,12 @@ bi_is_scheduling_barrier(const bi_instr *I)
    return I->op == BI_OPCODE_NOP && I->scheduling_barrier;
 }
 
+static inline bool
+bi_is_branch(const bi_instr *I)
+{
+   return I != NULL && bi_opcode_props[I->op].branch;
+}
+
 /*
  * Safe helpers to remove destinations/sources at the end of the
  * destination/source array when changing opcodes. Unlike adding
@@ -924,6 +981,7 @@ struct bi_shader_info {
    unsigned tls_size;
    unsigned work_reg_count;
    unsigned push_offset;
+   unsigned init_fau_consts_count;
    bool has_ld_gclk_instr;
 };
 
@@ -948,7 +1006,7 @@ typedef struct {
    const struct pan_compile_inputs *inputs;
    nir_shader *nir;
    struct bi_shader_info info;
-   gl_shader_stage stage;
+   mesa_shader_stage stage;
    struct list_head blocks; /* list of bi_block */
    uint32_t quirks;
    unsigned arch;
@@ -984,6 +1042,8 @@ typedef struct {
     * preloaded.
     */
    bi_index preloaded[BI_MAX_REGS];
+
+   uint32_t fau_consts_count;
 
    /* For creating temporaries */
    unsigned ssa_alloc;
@@ -1300,6 +1360,7 @@ void bi_analyze_helper_terminate(bi_context *ctx);
 void bi_mark_clauses_td(bi_context *ctx);
 
 void bi_analyze_helper_requirements(bi_context *ctx);
+void bi_opt_control_flow(bi_context *ctx);
 void bi_opt_copy_prop(bi_context *ctx);
 void bi_opt_dce(bi_context *ctx, bool partial);
 void bi_opt_cse(bi_context *ctx);
@@ -1319,6 +1380,7 @@ void va_lower_split_64bit(bi_context *ctx);
 
 void bi_lower_opt_instructions(bi_context *ctx);
 
+void bi_iterator_schedule(bi_context *ctx);
 void bi_pressure_schedule(bi_context *ctx);
 void bi_schedule(bi_context *ctx);
 bool bi_can_fma(bi_instr *ins);
@@ -1613,6 +1675,9 @@ bi_dontcare(bi_builder *b)
    else
       return bi_passthrough(BIFROST_SRC_FAU_HI);
 }
+
+bi_instr *bi_make_vec_to(bi_builder *b, bi_index dst, bi_index *src,
+                         unsigned *channel, unsigned count, unsigned bitsize);
 
 #define bi_worklist_init(ctx, w)        u_worklist_init(w, ctx->num_blocks, ctx)
 #define bi_worklist_push_head(w, block) u_worklist_push_head(w, block, index)

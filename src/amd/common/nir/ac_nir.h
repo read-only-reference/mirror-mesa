@@ -76,6 +76,10 @@ nir_def *
 ac_nir_unpack_arg(nir_builder *b, const struct ac_shader_args *ac_args, struct ac_arg arg,
                   unsigned rshift, unsigned bitwidth);
 
+nir_def *
+ac_nir_load_smem(nir_builder *b, unsigned num_components, nir_def *addr, nir_def *offset,
+                 unsigned align_mul, enum gl_access_qualifier access);
+
 bool ac_nir_lower_sin_cos(nir_shader *shader);
 
 bool ac_nir_lower_intrinsics_to_args(nir_shader *shader, const enum amd_gfx_level gfx_level,
@@ -186,7 +190,7 @@ typedef struct {
    bool write_pos_to_clipvertex;
    const uint8_t *vs_output_param_offset; /* GFX11+ */
    bool has_param_exports;
-   bool can_cull;
+   bool can_cull; /* if true, cull distances are not exported because the shader culls against them */
    bool disable_streamout;
    bool has_gen_prim_query;
    bool has_xfb_prim_query;
@@ -431,8 +435,8 @@ ac_nir_mem_vectorize_callback(unsigned align_mul, unsigned align_offset, unsigne
 bool
 ac_nir_scalarize_overfetching_loads_callback(const nir_instr *instr, const void *data);
 
-enum gl_access_qualifier
-ac_nir_get_mem_access_flags(const nir_intrinsic_instr *instr);
+bool
+ac_nir_store_may_be_subdword(const nir_intrinsic_instr *instr);
 
 uint8_t
 ac_nir_lower_phis_to_scalar_cb(const nir_instr *instr, const void *_);

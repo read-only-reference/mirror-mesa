@@ -45,7 +45,6 @@ struct ntt_insn {
    struct ureg_dst dst[2];
    struct ureg_src src[4];
    enum tgsi_texture_type tex_target;
-   enum tgsi_return_type tex_return_type;
    struct tgsi_texture_offset tex_offset[4];
 
    unsigned mem_qualifier;
@@ -449,7 +448,7 @@ ntt_live_regs(struct ntt_compile *c, nir_function_impl *impl)
                                ~bs->livein[i]);
          if (new_livein) {
             bs->livein[i] |= new_livein;
-            set_foreach(block->predecessors, entry) {
+            set_foreach(&block->predecessors, entry) {
                nir_block *pred = (void *)entry->key;
                nir_block_worklist_push_tail(&state.worklist, pred);
             }
@@ -554,7 +553,7 @@ ntt_extract_const_src_offset(nir_src *src)
    nir_scalar s = nir_get_scalar(src->ssa, 0);
 
    while (nir_scalar_is_alu(s)) {
-      nir_alu_instr *alu = nir_instr_as_alu(s.def->parent_instr);
+      nir_alu_instr *alu = nir_def_as_alu(s.def);
 
       if (alu->op == nir_op_iadd) {
          for (int i = 0; i < 2; i++) {
@@ -1225,7 +1224,7 @@ ntt_get_chased_src(struct ntt_compile *c, nir_legacy_src *src)
 {
    if (src->is_ssa) {
       if (src->ssa->parent_instr->type == nir_instr_type_load_const)
-         return ntt_get_load_const_src(c, nir_instr_as_load_const(src->ssa->parent_instr));
+         return ntt_get_load_const_src(c, nir_def_as_load_const(src->ssa));
 
       return c->ssa_temp[src->ssa->index];
    } else {
@@ -2276,7 +2275,7 @@ ntt_emit_load_input(struct ntt_compile *c, nir_intrinsic_instr *instr)
       input = ntt_ureg_src_indirect(c, input, instr->src[1], 0);
 
       nir_intrinsic_instr *bary_instr =
-         nir_instr_as_intrinsic(instr->src[0].ssa->parent_instr);
+         nir_def_as_intrinsic(instr->src[0].ssa);
 
       switch (bary_instr->intrinsic) {
       case nir_intrinsic_load_barycentric_pixel:
@@ -2434,7 +2433,7 @@ ntt_emit_load_sysval(struct ntt_compile *c, nir_intrinsic_instr *instr)
 static void
 ntt_emit_barrier(struct ntt_compile *c, nir_intrinsic_instr *intr)
 {
-   bool compute = gl_shader_stage_is_compute(c->s->info.stage);
+   bool compute = mesa_shader_stage_is_compute(c->s->info.stage);
 
    if (nir_intrinsic_memory_scope(intr) != SCOPE_NONE) {
       nir_variable_mode modes = nir_intrinsic_memory_modes(intr);
@@ -2852,21 +2851,6 @@ ntt_emit_texture(struct ntt_compile *c, nir_tex_instr *instr)
 
    s.srcs[s.i++] = sampler;
 
-   enum tgsi_return_type tex_type;
-   switch (instr->dest_type) {
-   case nir_type_float32:
-      tex_type = TGSI_RETURN_TYPE_FLOAT;
-      break;
-   case nir_type_int32:
-      tex_type = TGSI_RETURN_TYPE_SINT;
-      break;
-   case nir_type_uint32:
-      tex_type = TGSI_RETURN_TYPE_UINT;
-      break;
-   default:
-      UNREACHABLE("unknown texture type");
-   }
-
    struct ureg_dst tex_dst;
    if (instr->op == nir_texop_query_levels)
       tex_dst = ureg_writemask(ntt_temp(c), TGSI_WRITEMASK_W);
@@ -2878,7 +2862,6 @@ ntt_emit_texture(struct ntt_compile *c, nir_tex_instr *instr)
 
    struct ntt_insn *insn = ntt_insn(c, tex_opcode, tex_dst, s.srcs[0], s.srcs[1], s.srcs[2], s.srcs[3]);
    insn->tex_target = target;
-   insn->tex_return_type = tex_type;
    insn->is_tex = true;
 
    int tex_offset_src = nir_tex_instr_src_index(instr, nir_tex_src_offset);
@@ -3109,7 +3092,7 @@ ntt_emit_block_ureg(struct ntt_compile *c, struct nir_block *block)
             }
             ureg_tex_insn(c->ureg, insn->opcode,
                           insn->dst, opcode_info->num_dst,
-                          insn->tex_target, insn->tex_return_type,
+                          insn->tex_target,
                           insn->tex_offset,
                           num_offsets,
                           insn->src, opcode_info->num_src);
@@ -3296,7 +3279,7 @@ ntt_should_vectorize_io(unsigned align, unsigned bit_size,
 static nir_variable_mode
 ntt_no_indirects_mask(nir_shader *s, struct pipe_screen *screen)
 {
-   unsigned pipe_stage = pipe_shader_type_from_mesa(s->info.stage);
+   unsigned pipe_stage = s->info.stage;
    unsigned indirect_mask = 0;
 
    if (!(s->options->support_indirect_inputs & BITFIELD_BIT(pipe_stage))) {
@@ -3319,7 +3302,7 @@ ntt_optimize_nir(struct nir_shader *s, struct pipe_screen *screen,
                  const struct nir_to_tgsi_options *options)
 {
    bool progress;
-   unsigned pipe_stage = pipe_shader_type_from_mesa(s->info.stage);
+   unsigned pipe_stage = s->info.stage;
    unsigned control_flow_depth =
       screen->shader_caps[pipe_stage].max_control_flow_depth;
    do {
@@ -3683,7 +3666,7 @@ ntt_fix_nir_options(struct pipe_screen *screen, struct nir_shader *s,
 {
    const struct nir_shader_compiler_options *options = s->options;
    bool lower_fsqrt =
-      !screen->shader_caps[pipe_shader_type_from_mesa(s->info.stage)].tgsi_sqrt_supported;
+      !screen->shader_caps[s->info.stage].tgsi_sqrt_supported;
 
    bool force_indirect_unrolling_sampler =
       screen->caps.glsl_feature_level < 400;
@@ -3888,7 +3871,7 @@ const void *nir_to_tgsi_options(struct nir_shader *s,
    struct ntt_compile *c;
    const void *tgsi_tokens;
    nir_variable_mode no_indirects_mask = ntt_no_indirects_mask(s, screen);
-   bool native_integers = screen->shader_caps[pipe_shader_type_from_mesa(s->info.stage)].integers;
+   bool native_integers = screen->shader_caps[s->info.stage].integers;
    const struct nir_shader_compiler_options *original_options = s->options;
 
    ntt_fix_nir_options(screen, s, options);
@@ -3970,7 +3953,7 @@ const void *nir_to_tgsi_options(struct nir_shader *s,
 
    NIR_PASS(_, s, nir_opt_combine_barriers, NULL, NULL);
 
-   if (screen->shader_caps[pipe_shader_type_from_mesa(s->info.stage)].integers) {
+   if (screen->shader_caps[s->info.stage].integers) {
       NIR_PASS(_, s, nir_lower_bool_to_int32);
    } else {
       NIR_PASS(_, s, nir_lower_int_to_float);
@@ -4014,7 +3997,7 @@ const void *nir_to_tgsi_options(struct nir_shader *s,
 
    c->s = s;
    c->native_integers = native_integers;
-   c->ureg = ureg_create(pipe_shader_type_from_mesa(s->info.stage));
+   c->ureg = ureg_create(s->info.stage);
    ureg_setup_shader_info(c->ureg, &s->info);
    if (s->info.use_legacy_math_rules && screen->caps.legacy_math_rules)
       ureg_property(c->ureg, TGSI_PROPERTY_LEGACY_MATH_RULES, 1);

@@ -126,16 +126,20 @@ remap_var(clone_state *state, const nir_variable *var)
 }
 
 nir_constant *
-nir_constant_clone(const nir_constant *c, nir_variable *nvar)
+nir_constant_clone(const nir_constant *c, void *mem_ctx)
 {
-   nir_constant *nc = ralloc(nvar, nir_constant);
+   nir_constant *nc = ralloc(mem_ctx, nir_constant);
 
    memcpy(nc->values, c->values, sizeof(nc->values));
    nc->is_null_constant = c->is_null_constant;
    nc->num_elements = c->num_elements;
-   nc->elements = ralloc_array(nvar, nir_constant *, c->num_elements);
-   for (unsigned i = 0; i < c->num_elements; i++) {
-      nc->elements[i] = nir_constant_clone(c->elements[i], nvar);
+
+   if (c->num_elements) {
+      nc->elements = ralloc_array(nc, nir_constant *, c->num_elements);
+      for (unsigned i = 0; i < c->num_elements; i++)
+         nc->elements[i] = nir_constant_clone(c->elements[i], nc);
+   } else {
+      nc->elements = NULL;
    }
 
    return nc;
@@ -147,33 +151,33 @@ nir_constant_clone(const nir_constant *c, nir_variable *nvar)
 nir_variable *
 nir_variable_clone(const nir_variable *var, nir_shader *shader)
 {
-   nir_variable *nvar = rzalloc(shader, nir_variable);
+   nir_variable *nvar = nir_variable_create_zeroed(shader);
 
    nvar->type = var->type;
-   nvar->name = ralloc_strdup(nvar, var->name);
+   nir_variable_set_name(shader, nvar, var->name);
    nvar->data = var->data;
    nvar->num_state_slots = var->num_state_slots;
    if (var->num_state_slots) {
-      nvar->state_slots = ralloc_array(nvar, nir_state_slot, var->num_state_slots);
+      nvar->state_slots = ralloc_array(shader, nir_state_slot, var->num_state_slots);
       memcpy(nvar->state_slots, var->state_slots,
              var->num_state_slots * sizeof(nir_state_slot));
    }
    if (var->constant_initializer) {
       nvar->constant_initializer =
-         nir_constant_clone(var->constant_initializer, nvar);
+         nir_constant_clone(var->constant_initializer, shader);
    }
    nvar->interface_type = var->interface_type;
 
    if (var->max_ifc_array_access) {
       nvar->max_ifc_array_access =
-         rzalloc_array(nvar, int, var->interface_type->length);
+         rzalloc_array(shader, int, var->interface_type->length);
       memcpy(nvar->max_ifc_array_access, var->max_ifc_array_access,
              var->interface_type->length * sizeof(unsigned));
    }
 
    nvar->num_members = var->num_members;
    if (var->num_members) {
-      nvar->members = ralloc_array(nvar, struct nir_variable_data,
+      nvar->members = ralloc_array(shader, struct nir_variable_data,
                                    var->num_members);
       memcpy(nvar->members, var->members,
              var->num_members * sizeof(*var->members));
@@ -351,7 +355,8 @@ clone_intrinsic(clone_state *state, const nir_intrinsic_instr *itr)
 
    nitr->num_components = itr->num_components;
    memcpy(nitr->const_index, itr->const_index, sizeof(nitr->const_index));
-   nitr->name = ralloc_strdup(state->ns, itr->name);
+   if (itr->name)
+      nitr->name = ralloc_strdup(state->ns, itr->name);
 
    for (unsigned i = 0; i < num_srcs; i++)
       __clone_src(state, &nitr->instr, &nitr->src[i], &itr->src[i]);

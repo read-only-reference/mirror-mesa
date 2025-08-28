@@ -1322,7 +1322,7 @@ agx_emit_intrinsic(agx_builder *b, nir_intrinsic_instr *instr)
    agx_index dst = nir_intrinsic_infos[instr->intrinsic].has_dest
                       ? agx_def_index(&instr->def)
                       : agx_null();
-   gl_shader_stage stage = b->shader->stage;
+   mesa_shader_stage stage = b->shader->stage;
 
    switch (instr->intrinsic) {
    case nir_intrinsic_load_barycentric_pixel:
@@ -1545,7 +1545,7 @@ agx_emit_intrinsic(agx_builder *b, nir_intrinsic_instr *instr)
 
       /* Nothing to do for subgroup barriers */
       if (nir_intrinsic_execution_scope(instr) >= SCOPE_WORKGROUP) {
-         assert(gl_shader_stage_is_compute(b->shader->nir->info.stage));
+         assert(mesa_shader_stage_is_compute(b->shader->nir->info.stage));
 
          agx_threadgroup_barrier(b);
       }
@@ -1720,7 +1720,7 @@ agx_emit_intrinsic(agx_builder *b, nir_intrinsic_instr *instr)
       agx_emit_store_scratch(b, instr);
       return NULL;
 
-   case nir_intrinsic_load_core_id_agx:
+   case nir_intrinsic_load_core_id:
       return agx_get_sr_to(b, dst, AGX_SR_CORE_ID);
 
    case nir_intrinsic_load_helper_op_id_agx:
@@ -2560,6 +2560,9 @@ agx_create_block(agx_context *ctx)
 {
    agx_block *blk = rzalloc(ctx, agx_block);
 
+   /* This is conservative, TODO: divergence analysis */
+   blk->divergent = ctx->total_nesting > 0;
+
    util_dynarray_init(&blk->predecessors, blk);
 
    return blk;
@@ -2936,8 +2939,8 @@ set_speculate(nir_builder *b, nir_instr *instr, UNUSED void *_)
    if (instr->type == nir_instr_type_intrinsic &&
        nir_intrinsic_has_access(nir_instr_as_intrinsic(instr))) {
       nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-      nir_intrinsic_set_access(intr,
-                               ACCESS_CAN_SPECULATE | nir_intrinsic_access(intr));
+      nir_intrinsic_set_access(
+         intr, ACCESS_CAN_SPECULATE | nir_intrinsic_access(intr));
       return true;
    }
 
@@ -2947,119 +2950,6 @@ set_speculate(nir_builder *b, nir_instr *instr, UNUSED void *_)
    }
 
    return false;
-}
-
-static bool
-optimize_bounds(nir_builder *b, nir_intrinsic_instr *intr, void *data)
-{
-   if (intr->intrinsic != nir_intrinsic_load_constant_agx)
-      return false;
-
-   assert(intr->def.bit_size > 1 && "no if-uses");
-   nir_scalar srcs[2] = {{NULL}};
-   unsigned use_count = 0;
-
-   nir_alu_instr *first_use = NULL;
-
-   nir_foreach_use(use, &intr->def) {
-      /* All uses need to be bounds_agx */
-      nir_instr *parent = nir_src_parent_instr(use);
-      if (parent->type != nir_instr_type_alu)
-         return false;
-
-      nir_alu_instr *alu = nir_instr_as_alu(parent);
-      if ((alu->op != nir_op_bounds_agx) || (alu->src[0].src.ssa != &intr->def))
-         return false;
-
-      assert(alu->def.num_components == 1 && alu->def.bit_size == 32);
-
-      /* All bounds checks need a common offset and bounds */
-      for (unsigned s = 0; s < 2; ++s) {
-         nir_scalar this = nir_scalar_resolved(alu->src[1 + s].src.ssa,
-                                               alu->src[1 + s].swizzle[0]);
-
-         if (srcs[s].def == NULL)
-            srcs[s] = this;
-         else if (!nir_scalar_equal(srcs[s], this))
-            return false;
-
-         /* To avoid dominance problems, we must sink loads. */
-         if (this.def->parent_instr->block != intr->instr.block) {
-            return false;
-         }
-      }
-
-      if (!first_use || first_use->def.index > alu->def.index) {
-         first_use = alu;
-      }
-
-      ++use_count;
-   }
-
-   /* We've matched. Freeze the set of uses before chaning things. */
-   nir_alu_instr **uses = alloca(sizeof(nir_alu_instr *) * use_count);
-
-   unsigned i = 0;
-   nir_foreach_use(use, &intr->def) {
-      nir_instr *parent = nir_src_parent_instr(use);
-      uses[i++] = nir_instr_as_alu(parent);
-   }
-   assert(i == use_count && "should not have changed");
-
-   /* Sink the load */
-   nir_instr_remove(&intr->instr);
-   b->cursor = nir_before_instr(&first_use->instr);
-   nir_builder_instr_insert(b, &intr->instr);
-
-   /* Now start rewriting. Grab some common variables */
-   b->cursor = nir_before_instr(&intr->instr);
-   nir_def *offset = nir_mov_scalar(b, srcs[0]);
-   nir_def *bounds = nir_mov_scalar(b, srcs[1]);
-
-   nir_def *in_bounds = nir_uge(b, bounds, offset);
-   nir_def *zero = nir_imm_int(b, 0);
-
-   nir_src *base_src = &intr->src[0];
-   nir_src *offs_src = &intr->src[1];
-
-   nir_def *base_lo = nir_unpack_64_2x32_split_x(b, base_src->ssa);
-   nir_def *base_hi = nir_unpack_64_2x32_split_y(b, base_src->ssa);
-
-   /* Bounds check the base/offset instead. We currently reserve the bottom
-    * 2^36 of VA (this is driver/compiler ABI). With soft fault enabled, that
-    * means any read of the lower region will return zero as required.
-    *
-    * Therefore, when out-of-bounds, we clamp the index to zero and the high
-    * half of the address to zero. We don't need to clamp the low half of the
-    * address. The resulting sum is thus:
-    *
-    *    0*(2^32) + lo + (index << shift)
-    *
-    * ...which will be in the unmapped zero region provided shift < 4.
-    */
-   base_hi = nir_bcsel(b, in_bounds, base_hi, zero);
-
-   /* Clamp index if the shift is too large or sign-extension used */
-   if (nir_intrinsic_base(intr) >= 2 || nir_intrinsic_sign_extend(intr)) {
-      nir_src_rewrite(offs_src, nir_bcsel(b, in_bounds, offs_src->ssa, zero));
-   }
-
-   nir_src_rewrite(base_src, nir_pack_64_2x32_split(b, base_lo, base_hi));
-
-   /* Now that the load itself is bounds checked, all that's left is removing
-    * the bounds checks on the output. This requires a little care to avoid an
-    * infinite loop.
-    *
-    * Also note we cannot remove the uses here, because it would invalidate the
-    * iterator inside intrinsics_pass. I hate C, don't you?
-    */
-   for (unsigned i = 0; i < use_count; ++i) {
-      b->cursor = nir_after_instr(&uses[i]->instr);
-      nir_def *chan = nir_channel(b, &intr->def, uses[i]->src[0].swizzle[0]);
-      nir_def_rewrite_uses(&uses[i]->def, chan);
-   }
-
-   return true;
 }
 
 static void
@@ -3165,23 +3055,8 @@ agx_optimize_nir(nir_shader *nir, bool soft_fault, uint16_t *preamble_size,
    /* Reassociate before forming preambles because it makes preambles more
     * effective. Clean up after.
     */
-   for (unsigned i = 0; i < 4; ++i) {
-      nir_reassociate_options opts = nir_reassociate_scalar_math;
-      if (i < 2)
-         opts |= nir_reassociate_cse_heuristic;
-
-      NIR_PASS(_, nir, nir_opt_reassociate, opts);
-
-      do {
-         progress = false;
-
-         NIR_PASS(progress, nir, nir_opt_algebraic);
-         NIR_PASS(progress, nir, nir_opt_constant_folding);
-         NIR_PASS(progress, nir, nir_copy_prop);
-         NIR_PASS(progress, nir, nir_opt_cse);
-         NIR_PASS(progress, nir, nir_opt_dce);
-      } while (progress);
-   }
+   nir_opt_reassociate_loop(
+      nir, nir_reassociate_scalar_math | nir_reassociate_cse_heuristic);
 
    /* Lower fmin/fmax before optimizing preambles so we can see across uniform
     * expressions. Do it after nir_opt_reassociate because nir_opt_reassociate
@@ -3248,14 +3123,6 @@ agx_optimize_nir(nir_shader *nir, bool soft_fault, uint16_t *preamble_size,
 
    nir_foreach_function_impl(impl, nir) {
       nir_index_ssa_defs(impl);
-   }
-
-   /* TODO: Reenable this pass. It's breaking Fallout 4 in ways I don't
-    * understand yet.
-    */
-   if (soft_fault && 0) {
-      NIR_PASS(_, nir, nir_shader_intrinsics_pass, optimize_bounds,
-               nir_metadata_control_flow, NULL);
    }
 
    /* Do remaining lowering late, since this inserts &s for shifts so we want to
@@ -3330,38 +3197,6 @@ gather_texcoords(nir_builder *b, nir_instr *instr, void *data)
    nir_io_semantics sem = nir_intrinsic_io_semantics(intr);
    *mask |= BITFIELD64_BIT(sem.location);
    return false;
-}
-
-static bool
-gather_interp(nir_builder *b, nir_intrinsic_instr *intr, void *data)
-{
-   struct agx_interp_info *masks = data;
-
-   if (intr->intrinsic == nir_intrinsic_load_input) {
-      nir_io_semantics sem = nir_intrinsic_io_semantics(intr);
-      masks->flat |= BITFIELD64_RANGE(sem.location, sem.num_slots);
-   } else if (intr->intrinsic == nir_intrinsic_load_interpolated_input &&
-              nir_intrinsic_interp_mode(nir_src_as_intrinsic(intr->src[0])) ==
-                 INTERP_MODE_NOPERSPECTIVE) {
-      nir_io_semantics sem = nir_intrinsic_io_semantics(intr);
-      masks->linear |= BITFIELD64_RANGE(sem.location, sem.num_slots);
-   }
-
-   return false;
-}
-
-/*
- * Build a bit mask of varyings (by location) that are flatshaded and linear
- * shaded. This information is needed by the driver.
- */
-struct agx_interp_info
-agx_gather_interp_info(nir_shader *nir)
-{
-   assert(nir->info.stage == MESA_SHADER_FRAGMENT);
-
-   struct agx_interp_info masks = {0};
-   nir_shader_intrinsics_pass(nir, gather_interp, nir_metadata_all, &masks);
-   return masks;
 }
 
 /*
@@ -3704,6 +3539,9 @@ agx_compile_function_nir(nir_shader *nir, nir_function_impl *impl,
 
    agx_lower_pseudo(ctx);
 
+   /* Set last-use bits after lowering pseudo for best results. */
+   agx_opt_register_cache(ctx);
+
    if (agx_should_dump(nir, AGX_DBG_SHADERS))
       agx_print_shader(ctx, stdout);
 
@@ -3899,6 +3737,22 @@ agx_preprocess_nir(nir_shader *nir)
    NIR_PASS(_, nir, agx_nir_lower_shared_bitsize);
 }
 
+static bool
+lower_printf_buffer(nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *_)
+{
+   uint64_t value = 0;
+   if (intr->intrinsic == nir_intrinsic_load_printf_buffer_address)
+      value = LIBAGX_PRINTF_BUFFER_ADDRESS;
+   else if (intr->intrinsic == nir_intrinsic_load_printf_buffer_size)
+      value = LIBAGX_PRINTF_BUFFER_SIZE;
+   else
+      return false;
+
+   b->cursor = nir_before_instr(&intr->instr);
+   nir_def_replace(&intr->def, nir_imm_intN_t(b, value, intr->def.bit_size));
+   return true;
+}
+
 void
 agx_compile_shader_nir(nir_shader *nir, struct agx_shader_key *key,
                        struct agx_shader_part *out)
@@ -3919,8 +3773,8 @@ agx_compile_shader_nir(nir_shader *nir, struct agx_shader_key *key,
    if (nir->info.stage == MESA_SHADER_FRAGMENT)
       info->tag_write_disable = !nir->info.writes_memory;
 
-   NIR_PASS(_, nir, nir_lower_printf_buffer, LIBAGX_PRINTF_BUFFER_ADDRESS,
-            LIBAGX_PRINTF_BUFFER_SIZE - 8);
+   NIR_PASS(_, nir, nir_shader_intrinsics_pass, lower_printf_buffer,
+            nir_metadata_control_flow, NULL);
 
    NIR_PASS(_, nir, nir_lower_frag_coord_to_pixel_coord);
    NIR_PASS(_, nir, nir_lower_vars_to_ssa);
@@ -3934,12 +3788,14 @@ agx_compile_shader_nir(nir_shader *nir, struct agx_shader_key *key,
    };
    NIR_PASS(_, nir, nir_lower_mem_access_bit_sizes, &lower_mem_access_options);
 
-   /* Optimize scratch access */
-   NIR_PASS(_, nir, nir_lower_scratch_to_var);
-   NIR_PASS(_, nir, nir_lower_vars_to_scratch, nir_var_function_temp, 256,
-            glsl_get_natural_size_align_bytes,
-            glsl_get_natural_size_align_bytes);
-   NIR_PASS(_, nir, nir_lower_indirect_derefs, nir_var_function_temp, ~0);
+   /* Optimize scratch access for silly internal CL shaders */
+   if (nir->info.internal) {
+      NIR_PASS(_, nir, nir_lower_scratch_to_var);
+      NIR_PASS(_, nir, nir_lower_vars_to_scratch, nir_var_function_temp, 256,
+               glsl_get_natural_size_align_bytes,
+               glsl_get_natural_size_align_bytes);
+      NIR_PASS(_, nir, nir_lower_indirect_derefs, nir_var_function_temp, ~0);
+   }
 
    /* Cleanup 8-bit math before lowering */
    bool progress;

@@ -274,7 +274,7 @@ GENX(pan_emit_afbc_s_attachment)(const struct pan_fb_info *fb,
                           &body_offset, &hdr_row_stride);
    pan_cast_and_pack(payload, AFBC_S_TARGET, cfg) {
       cfg.msaa = mali_sampling_mode(s);
-      cfg.write_format = translate_zs_format(s->format);
+      cfg.write_format = translate_s_format(s->format);
       cfg.block_format = get_afbc_block_format(pref.image->props.modifier);
       cfg.header = header;
       cfg.body_offset = body_offset;
@@ -1020,13 +1020,16 @@ check_fb_attachments(const struct pan_fb_info *fb)
 {
 #ifndef NDEBUG
    for (unsigned i = 0; i < fb->rt_count; i++) {
-      if (fb->rts[i].view)
+      if (fb->rts[i].view) {
          pan_image_view_check(fb->rts[i].view);
+         assert(fb->rts[i].view->nr_samples == fb->nr_samples);
+      }
    }
 
-   if (fb->zs.view.zs)
+   if (fb->zs.view.zs) {
       pan_image_view_check(fb->zs.view.zs);
-
+      assert(fb->zs.view.zs->nr_samples == fb->nr_samples);
+   }
    if (fb->zs.view.s)
       pan_image_view_check(fb->zs.view.s);
 #endif

@@ -247,7 +247,7 @@ lower_bit_size_cb(const nir_instr *instr, void *data)
           * 32-bit and so the bit size of the instruction is given by the
           * source.
           */
-         return alu->src[0].src.ssa->bit_size == 32 ? 0 : 32;
+         return alu->src[0].src.ssa->bit_size >= 32 ? 0 : 32;
 
       case nir_op_fabs:
       case nir_op_fadd:
@@ -1032,8 +1032,14 @@ nak_postprocess_nir(nir_shader *nir,
 
    OPT(nir, nir_convert_to_lcssa, true, true);
    nir_divergence_analysis(nir);
-   if (nir->info.stage == MESA_SHADER_FRAGMENT)
-      OPT(nir, nir_opt_tex_skip_helpers, true);
+
+   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+      nir_opt_load_skip_helpers_options skip_helper_options = {
+         .no_add_divergence = true,
+      };
+      OPT(nir, nir_opt_load_skip_helpers, &skip_helper_options);
+   }
+
    OPT(nir, nak_nir_lower_scan_reduce, nak);
 
    nak_optimize_nir(nir, nak);
@@ -1054,7 +1060,7 @@ nak_postprocess_nir(nir_shader *nir,
     * relies on the workgroup size being the actual HW workgroup size in
     * nir_intrinsic_load_subgroup_id.
     */
-   if (gl_shader_stage_uses_workgroup(nir->info.stage) &&
+   if (mesa_shader_stage_uses_workgroup(nir->info.stage) &&
        nir->info.derivative_group == DERIVATIVE_GROUP_QUADS) {
       assert(nir->info.workgroup_size[0] % 2 == 0);
       assert(nir->info.workgroup_size[1] % 2 == 0);
@@ -1120,6 +1126,8 @@ nak_postprocess_nir(nir_shader *nir,
          OPT(nir, nir_opt_cse);
       }
    } while (progress);
+
+   OPT(nir, nir_opt_move, nir_move_comparisons | nir_move_load_ubo);
 
    if (nak->sm < 70) {
       const nir_split_conversions_options split_conv_opts = {

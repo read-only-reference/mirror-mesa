@@ -302,9 +302,12 @@ static void
 va_optimize_forward(bi_context *ctx)
 {
    unsigned count = ctx->ssa_alloc;
-   bi_instr **lut = calloc(count, sizeof(*lut));
-   bi_instr **uses = calloc(count, sizeof(*uses));
-   BITSET_WORD *multiple = calloc(BITSET_WORDS(count), sizeof(*multiple));
+   bi_instr **lut = rzalloc_array(ctx, bi_instr *, count);
+   bi_instr **uses = rzalloc_array(ctx, bi_instr *, count);
+   BITSET_WORD *multiple = rzalloc_array(ctx, BITSET_WORD, BITSET_WORDS(count));
+
+   if (!lut || !uses || !multiple)
+      goto out;
 
    /* Record usage across blocks */
    bi_foreach_block(ctx, block) {
@@ -323,8 +326,10 @@ va_optimize_forward(bi_context *ctx)
       va_fuse_cmp(ctx, lut, multiple, I);
    }
 
-   free(uses);
-   free(multiple);
+out:
+   ralloc_free(uses);
+   ralloc_free(lut);
+   ralloc_free(multiple);
 }
 
 void

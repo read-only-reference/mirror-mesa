@@ -249,7 +249,7 @@ impl RegLatencySM80 {
             Op::Isberd(_) => DecoupledAgu,
             Op::LdTram(_) => DecoupledAgu,
             Op::Shfl(_) => DecoupledAgu,
-            //Op::LdSm(_) => DecoupledAgu
+            Op::Ldsm(_) => DecoupledAgu,
             x => {
                 panic!("Illegal instuction in reg category {}", x);
             }
@@ -823,6 +823,7 @@ impl PredLatencySM80 {
     fn op_category(op: &Op) -> PredLatencySM80 {
         match op {
             Op::Atom(_) => PredLatencySM80::Decoupled,
+            Op::Bra(_) => PredLatencySM80::Decoupled,
             Op::DSetP(_) => PredLatencySM80::RedirectedFP64,
             Op::FMnMx(_) | Op::FSetP(_) => PredLatencySM80::Coupled,
             Op::HFma2(_) => PredLatencySM80::FP16,
@@ -1268,6 +1269,7 @@ impl UPredLatencySM80 {
             | Op::LeaX(_)
             | Op::Lop3(_)
             | Op::Mov(_) => Udp,
+            Op::Bra(_) => Bra_Jmp,
             Op::Ldc(_) => Uldc_Mma,
             Op::PLop3(_) => {
                 if uniform_op {

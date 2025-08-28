@@ -100,6 +100,7 @@ brw_inst::brw_inst(enum opcode opcode, uint8_t exec_width, const brw_reg &dst,
 brw_inst::brw_inst(const brw_inst &that)
 {
    memcpy((void*)this, &that, sizeof(that));
+   brw_exec_node_init(this);
    initialize_sources(this, that.src, that.sources);
 }
 
@@ -168,20 +169,13 @@ brw_inst::resize_sources(uint8_t num_sources)
 }
 
 bool
-brw_inst::is_send_from_grf() const
+brw_inst::is_send() const
 {
    switch (opcode) {
    case SHADER_OPCODE_SEND:
    case SHADER_OPCODE_SEND_GATHER:
-   case FS_OPCODE_INTERPOLATE_AT_SAMPLE:
-   case FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET:
-   case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
-   case SHADER_OPCODE_INTERLOCK:
-   case SHADER_OPCODE_MEMORY_FENCE:
    case SHADER_OPCODE_BARRIER:
       return true;
-   case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
-      return src[1].file == VGRF;
    default:
       return false;
    }
@@ -194,7 +188,6 @@ brw_inst::is_control_source(unsigned arg) const
    case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
       return arg == 0;
 
-   case SHADER_OPCODE_BROADCAST:
    case SHADER_OPCODE_SHUFFLE:
    case SHADER_OPCODE_QUAD_SWIZZLE:
       return arg == 1;
@@ -204,13 +197,14 @@ brw_inst::is_control_source(unsigned arg) const
    case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
       return arg == INTERP_SRC_MSG_DESC || arg == INTERP_SRC_NOPERSPECTIVE;
 
+   case SHADER_OPCODE_BROADCAST:
    case SHADER_OPCODE_MOV_INDIRECT:
    case SHADER_OPCODE_CLUSTER_BROADCAST:
       return arg == 1 || arg == 2;
 
    case SHADER_OPCODE_SEND:
    case SHADER_OPCODE_SEND_GATHER:
-      return arg == 0 || arg == 1;
+      return arg < SEND_SRC_PAYLOAD1;
 
    case SHADER_OPCODE_MEMORY_LOAD_LOGICAL:
    case SHADER_OPCODE_MEMORY_STORE_LOGICAL:
@@ -237,19 +231,14 @@ bool
 brw_inst::is_payload(unsigned arg) const
 {
    switch (opcode) {
-   case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
-   case FS_OPCODE_INTERPOLATE_AT_SAMPLE:
-   case FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET:
-   case SHADER_OPCODE_INTERLOCK:
-   case SHADER_OPCODE_MEMORY_FENCE:
    case SHADER_OPCODE_BARRIER:
       return arg == 0;
 
    case SHADER_OPCODE_SEND:
-      return arg == 2 || arg == 3;
+      return arg >= SEND_SRC_PAYLOAD1;
 
    case SHADER_OPCODE_SEND_GATHER:
-      return arg >= 2;
+      return arg >= SEND_GATHER_SRC_SCALAR;
 
    default:
       return false;
@@ -259,7 +248,7 @@ brw_inst::is_payload(unsigned arg) const
 bool
 brw_inst::can_do_source_mods(const struct intel_device_info *devinfo) const
 {
-   if (is_send_from_grf())
+   if (is_send())
       return false;
 
    /* From TGL PRM Vol 2a Pg. 1053 and Pg. 1069 MAD and MUL Instructions:
@@ -521,15 +510,15 @@ brw_inst::size_read(const struct intel_device_info *devinfo, int arg) const
 {
    switch (opcode) {
    case SHADER_OPCODE_SEND:
-      if (arg == 2) {
+      if (arg == SEND_SRC_PAYLOAD1) {
          return mlen * REG_SIZE;
-      } else if (arg == 3) {
+      } else if (arg == SEND_SRC_PAYLOAD2) {
          return ex_mlen * REG_SIZE;
       }
       break;
 
    case SHADER_OPCODE_SEND_GATHER:
-      if (arg >= 3) {
+      if (arg >= SEND_GATHER_SRC_PAYLOAD) {
          /* SEND_GATHER is Xe3+, so no need to pass devinfo around. */
          const unsigned reg_unit = 2;
          return REG_SIZE * reg_unit;
@@ -549,6 +538,7 @@ brw_inst::size_read(const struct intel_device_info *devinfo, int arg) const
    case SHADER_OPCODE_BARRIER:
       return REG_SIZE;
 
+   case SHADER_OPCODE_BROADCAST:
    case SHADER_OPCODE_MOV_INDIRECT:
       if (arg == 0) {
          assert(src[2].file == IMM);
@@ -956,10 +946,19 @@ brw_inst::has_side_effects() const
 bool
 brw_inst::is_volatile() const
 {
-   return opcode == SHADER_OPCODE_MEMORY_LOAD_LOGICAL ||
-          opcode == SHADER_OPCODE_LOAD_REG ||
-          ((opcode == SHADER_OPCODE_SEND ||
-            opcode == SHADER_OPCODE_SEND_GATHER) && send_is_volatile);
+   switch (opcode) {
+   case SHADER_OPCODE_MEMORY_LOAD_LOGICAL:
+   case SHADER_OPCODE_LOAD_REG:
+      return true;
+   case SHADER_OPCODE_MEMORY_STORE_LOGICAL:
+      assert(sources > MEMORY_LOGICAL_FLAGS);
+      return src[MEMORY_LOGICAL_FLAGS].ud & MEMORY_FLAG_VOLATILE_ACCESS;
+   case SHADER_OPCODE_SEND:
+   case SHADER_OPCODE_SEND_GATHER:
+      return send_is_volatile;
+   default:
+      return false;
+   }
 }
 
 void

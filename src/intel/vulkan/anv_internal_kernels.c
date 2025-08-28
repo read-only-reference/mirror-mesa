@@ -51,7 +51,7 @@ lower_base_workgroup_id(nir_builder *b, nir_intrinsic_instr *intrin,
 static struct anv_shader_bin *
 compile_shader(struct anv_device *device,
                enum anv_internal_kernel_name shader_name,
-               gl_shader_stage stage,
+               mesa_shader_stage stage,
                const char *name,
                const void *hash_key,
                uint32_t hash_key_size,
@@ -104,7 +104,7 @@ compile_shader(struct anv_device *device,
       nir_lower_compute_system_values_options options = {
          .has_base_workgroup_id = true,
          .lower_cs_local_id_to_index = true,
-         .lower_workgroup_id_to_index = gl_shader_stage_is_mesh(stage),
+         .lower_workgroup_id_to_index = mesa_shader_stage_is_mesh(stage),
       };
       NIR_PASS(_, nir, nir_lower_compute_system_values, &options);
       NIR_PASS(_, nir, nir_shader_intrinsics_pass, lower_base_workgroup_id,
@@ -144,11 +144,12 @@ compile_shader(struct anv_device *device,
 
    nir->num_uniforms = uniform_size;
 
+   void *temp_ctx = ralloc_context(NULL);
+
    prog_data.base.nr_params = nir->num_uniforms / 4;
+   prog_data.base.param = rzalloc_array(temp_ctx, uint32_t, prog_data.base.nr_params);
 
    brw_nir_analyze_ubo_ranges(compiler, nir, prog_data.base.ubo_ranges);
-
-   void *temp_ctx = ralloc_context(NULL);
 
    const unsigned *program;
    if (stage == MESA_SHADER_FRAGMENT) {
@@ -250,7 +251,7 @@ anv_device_get_internal_shader(struct anv_device *device,
          char name[40];
       } key;
 
-      gl_shader_stage stage;
+      mesa_shader_stage stage;
 
       uint32_t        send_count;
    } internal_kernels[] = {

@@ -2530,9 +2530,9 @@ elk_fs_visitor::opt_algebraic()
             inst->sources = 1;
             progress = true;
          } else if (inst->src[1].file == IMM) {
+            const unsigned comp = inst->src[1].ud & (inst->exec_size - 1);
             inst->opcode = ELK_OPCODE_MOV;
-            inst->src[0] = component(inst->src[0],
-                                     inst->src[1].ud);
+            inst->src[0] = component(inst->src[0], comp);
             inst->sources = 1;
             progress = true;
          }
@@ -5990,7 +5990,7 @@ elk_fs_visitor::allocate_registers(bool allow_spilling)
       prog_data->total_scratch = MAX2(elk_get_scratch_size(last_scratch),
                                       prog_data->total_scratch);
 
-      if (gl_shader_stage_is_compute(stage)) {
+      if (mesa_shader_stage_is_compute(stage)) {
          if (devinfo->platform == INTEL_PLATFORM_HSW) {
             /* According to the MEDIA_VFE_STATE's "Per Thread Scratch Space"
              * field documentation, Haswell supports a minimum of 2kB of
@@ -6328,7 +6328,7 @@ elk_fs_visitor::run_fs(bool allow_spilling, bool do_rep_send)
 bool
 elk_fs_visitor::run_cs(bool allow_spilling)
 {
-   assert(gl_shader_stage_is_compute(stage));
+   assert(mesa_shader_stage_is_compute(stage));
    assert(devinfo->ver >= 7);
    const fs_builder bld = fs_builder(this).at_end();
 
@@ -6501,7 +6501,7 @@ elk_nir_move_interpolation_to_top(nir_shader *nir)
             if (intrin->intrinsic != nir_intrinsic_load_interpolated_input)
                continue;
             nir_intrinsic_instr *bary_intrinsic =
-               nir_instr_as_intrinsic(intrin->src[0].ssa->parent_instr);
+               nir_def_as_intrinsic(intrin->src[0].ssa);
             nir_intrinsic_op op = bary_intrinsic->intrinsic;
 
             /* Leave interpolateAtSample/Offset() where they are. */
@@ -7178,7 +7178,7 @@ static UNUSED void
 elk_fs_test_dispatch_packing(const fs_builder &bld)
 {
    const elk_fs_visitor *shader = static_cast<const elk_fs_visitor *>(bld.shader);
-   const gl_shader_stage stage = shader->stage;
+   const mesa_shader_stage stage = shader->stage;
    const bool uses_vmask =
       stage == MESA_SHADER_FRAGMENT &&
       elk_wm_prog_data(shader->stage_prog_data)->uses_vmask;
@@ -7204,7 +7204,7 @@ elk_fs_test_dispatch_packing(const fs_builder &bld)
 unsigned
 elk_fs_visitor::workgroup_size() const
 {
-   assert(gl_shader_stage_uses_workgroup(stage));
+   assert(mesa_shader_stage_uses_workgroup(stage));
    const struct elk_cs_prog_data *cs = elk_cs_prog_data(prog_data);
    return cs->local_size[0] * cs->local_size[1] * cs->local_size[2];
 }

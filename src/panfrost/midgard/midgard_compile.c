@@ -210,12 +210,6 @@ attach_constants(compiler_context *ctx, midgard_instruction *ins,
    memcpy(&ins->constants, constants, 16);
 }
 
-static int
-glsl_type_size(const struct glsl_type *type, bool bindless)
-{
-   return glsl_count_attribute_slots(type, false);
-}
-
 static bool
 midgard_nir_lower_global_load_instr(nir_builder *b, nir_intrinsic_instr *intr,
                                     void *data)
@@ -371,10 +365,8 @@ lower_vec816_alu(const nir_instr *instr, const void *cb_data)
 }
 
 void
-midgard_preprocess_nir(nir_shader *nir, unsigned gpu_id)
+midgard_preprocess_nir(nir_shader *nir, UNUSED unsigned gpu_id)
 {
-   unsigned quirks = midgard_get_quirks(gpu_id);
-
    /* Ensure that halt are translated to returns and get ride of them */
    NIR_PASS(_, nir, nir_lower_halt_to_return);
    NIR_PASS(_, nir, nir_lower_returns);
@@ -398,10 +390,11 @@ midgard_preprocess_nir(nir_shader *nir, unsigned gpu_id)
    NIR_PASS(_, nir, nir_lower_global_vars_to_local);
    NIR_PASS(_, nir, nir_lower_var_copies);
    NIR_PASS(_, nir, nir_lower_vars_to_ssa);
+}
 
-   NIR_PASS(_, nir, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
-            glsl_type_size, nir_lower_io_use_interpolated_input_intrinsics);
-
+void
+midgard_postprocess_nir(nir_shader *nir, UNUSED unsigned gpu_id)
+{
    if (nir->info.stage == MESA_SHADER_VERTEX) {
       /* nir_lower[_explicit]_io is lazy and emits mul+add chains even
        * for offsets it could figure out are constant.  Do some
@@ -413,7 +406,7 @@ midgard_preprocess_nir(nir_shader *nir, unsigned gpu_id)
 
    /* Could be eventually useful for Vulkan, but we don't expect it to have
     * the support, so limit it to compute */
-   if (gl_shader_stage_is_compute(nir->info.stage)) {
+   if (mesa_shader_stage_is_compute(nir->info.stage)) {
       nir_lower_mem_access_bit_sizes_options mem_size_options = {
          .modes = nir_var_mem_ubo | nir_var_mem_ssbo |
                   nir_var_mem_constant | nir_var_mem_task_payload |
@@ -439,21 +432,20 @@ midgard_preprocess_nir(nir_shader *nir, unsigned gpu_id)
 
    NIR_PASS(_, nir, nir_lower_idiv, &idiv_options);
 
-   nir_lower_tex_options lower_tex_options = {
-      .lower_txs_lod = true,
-      .lower_txp = ~0,
-      .lower_tg4_broadcom_swizzle = true,
-      .lower_txd = true,
-      .lower_invalid_implicit_lod = true,
-   };
+   NIR_PASS(_, nir, midgard_nir_lower_algebraic_early);
+   NIR_PASS(_, nir, nir_lower_alu_to_scalar, mdg_should_scalarize, NULL);
+   NIR_PASS(_, nir, nir_lower_flrp, 16 | 32 | 64, false /* always_precise */);
+   NIR_PASS(_, nir, nir_lower_var_copies);
+}
 
-   NIR_PASS(_, nir, nir_lower_tex, &lower_tex_options);
+void midgard_lower_texture_nir(nir_shader *nir, unsigned gpu_id)
+{
    NIR_PASS(_, nir, nir_lower_image_atomics_to_global, NULL, NULL);
 
    /* TEX_GRAD fails to apply sampler descriptor settings on some
     * implementations, requiring a lowering.
     */
-   if (quirks & MIDGARD_BROKEN_LOD)
+   if (midgard_get_quirks(gpu_id) & MIDGARD_BROKEN_LOD)
       NIR_PASS(_, nir, midgard_nir_lod_errata);
 
    /* lower MSAA image operations to 3D load before coordinate lowering */
@@ -468,12 +460,8 @@ midgard_preprocess_nir(nir_shader *nir, unsigned gpu_id)
       NIR_PASS(_, nir, pan_lower_helper_invocation);
       NIR_PASS(_, nir, pan_lower_sample_pos);
    }
-
-   NIR_PASS(_, nir, midgard_nir_lower_algebraic_early);
-   NIR_PASS(_, nir, nir_lower_alu_to_scalar, mdg_should_scalarize, NULL);
-   NIR_PASS(_, nir, nir_lower_flrp, 16 | 32 | 64, false /* always_precise */);
-   NIR_PASS(_, nir, nir_lower_var_copies);
 }
+
 
 static void
 optimise_nir(nir_shader *nir, unsigned quirks, bool is_blend)
@@ -1642,7 +1630,8 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
 
       ins.dest_type = ins.src_types[1] = nir_type_uint | instr->def.bit_size;
 
-      ins.mask = BITFIELD_MASK(instr->def.num_components);
+      assert(instr->def.num_components <= 4);
+      ins.mask = (uint16_t)BITFIELD_MASK(instr->def.num_components);
       emit_mir_instruction(ctx, &ins);
       break;
    }

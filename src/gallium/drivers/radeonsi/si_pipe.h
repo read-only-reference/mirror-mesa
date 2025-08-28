@@ -110,7 +110,7 @@ struct ac_llvm_compiler;
 #define SI_RESOURCE_FLAG_32BIT             (PIPE_RESOURCE_FLAG_DRV_PRIV << 6)
 #define SI_RESOURCE_FLAG_CLEAR             (PIPE_RESOURCE_FLAG_DRV_PRIV << 7)
 
-#define SI_SQTT_STATE_DIRTY_BIT            BITFIELD_BIT(PIPE_SHADER_COMPUTE + 1)
+#define SI_SQTT_STATE_DIRTY_BIT            BITFIELD_BIT(MESA_SHADER_COMPUTE + 1)
 
 enum si_has_gs {
    GS_OFF,
@@ -186,10 +186,6 @@ enum
    DBG_NO_FAST_DISPLAY_LIST,
    DBG_NO_DMA_SHADERS,
 
-   /* Multimedia options: */
-   DBG_NO_EFC,
-   DBG_LOW_LATENCY_ENCODE,
-
    /* 3D engine options: */
    DBG_NO_NGG,
    DBG_ALWAYS_NGG_CULLING_ALL,
@@ -253,6 +249,18 @@ enum
    DBG_CHECK_IR,
    DBG_MONOLITHIC_SHADERS,
    DBG_NO_OPT_VARIANT,
+};
+
+/* Debug options for multimedia. */
+enum
+{
+   DBG_NO_EFC,
+   DBG_LOW_LATENCY_ENCODE,
+   DBG_NO_VIDEO_TILING,
+   DBG_NO_DECODE_TIER1,
+   DBG_NO_DECODE_TIER2,
+   DBG_NO_DECODE_TIER3,
+   DBG_NO_ENCODE_TIER2,
 };
 
 enum
@@ -525,6 +533,7 @@ struct si_screen {
    struct nir_shader_compiler_options *nir_options;
    uint64_t debug_flags;
    uint64_t shader_debug_flags;
+   uint64_t multimedia_debug_flags;
    char renderer_string[183];
 
    unsigned pa_sc_raster_config;
@@ -547,7 +556,7 @@ struct si_screen {
    /* Force a single shader to use ACO, debug usage. */
    blake3_hash *use_aco_shader_blakes;
    unsigned num_use_aco_shader_blakes;
-   enum pipe_shader_type use_aco_shader_type;
+   mesa_shader_stage use_aco_shader_type;
 
    struct {
 #define OPT_BOOL(name, dflt, description) bool name : 1;

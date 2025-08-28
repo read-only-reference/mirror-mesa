@@ -70,7 +70,7 @@ nir_builder_at(nir_cursor cursor)
 }
 
 nir_builder MUST_CHECK PRINTFLIKE(3, 4)
-   nir_builder_init_simple_shader(gl_shader_stage stage,
+   nir_builder_init_simple_shader(mesa_shader_stage stage,
                                   const nir_shader_compiler_options *options,
                                   const char *name, ...);
 
@@ -560,6 +560,32 @@ nir_imm_ivec4(nir_builder *build, int x, int y, int z, int w)
    return nir_imm_ivec4_intN(build, x, y, z, w, 32);
 }
 
+static inline nir_def *
+nir_imm_uvec8_intN(nir_builder *build, unsigned a, unsigned b, unsigned c,
+                   unsigned d, unsigned e, unsigned f, unsigned g, unsigned h,
+                   unsigned bit_size)
+{
+   nir_const_value v[8] = {
+      nir_const_value_for_uint(a, bit_size),
+      nir_const_value_for_uint(b, bit_size),
+      nir_const_value_for_uint(c, bit_size),
+      nir_const_value_for_uint(d, bit_size),
+      nir_const_value_for_uint(e, bit_size),
+      nir_const_value_for_uint(f, bit_size),
+      nir_const_value_for_uint(g, bit_size),
+      nir_const_value_for_uint(h, bit_size),
+   };
+
+   return nir_build_imm(build, 8, bit_size, v);
+}
+
+static inline nir_def *
+nir_imm_uvec8(nir_builder *build, unsigned a, unsigned b, unsigned c,
+              unsigned d, unsigned e, unsigned f, unsigned g, unsigned h)
+{
+   return nir_imm_uvec8_intN(build, a, b, c, d, e, f, g, h, 32);
+}
+
 nir_def *
 nir_builder_alu_instr_finish_and_insert(nir_builder *build, nir_alu_instr *instr);
 
@@ -999,7 +1025,7 @@ nir_iadd_imm_nuw(nir_builder *b, nir_def *x, uint64_t y)
 {
    nir_def *d = nir_iadd_imm(b, x, y);
    if (d != x && d->parent_instr->type == nir_instr_type_alu)
-      nir_instr_as_alu(d->parent_instr)->no_unsigned_wrap = true;
+      nir_def_as_alu(d)->no_unsigned_wrap = true;
    return d;
 }
 
@@ -1007,7 +1033,7 @@ static inline nir_def *
 nir_iadd_nuw(nir_builder *b, nir_def *x, nir_def *y)
 {
    nir_def *d = nir_iadd(b, x, y);
-   nir_instr_as_alu(d->parent_instr)->no_unsigned_wrap = true;
+   nir_def_as_alu(d)->no_unsigned_wrap = true;
    return d;
 }
 
@@ -2155,13 +2181,13 @@ nir_build_deriv(nir_builder *b, nir_def *x, nir_intrinsic_op intrin)
 
       for (unsigned i = 0; i < x->num_components; ++i) {
          res[i] = _nir_build_ddx(b, x->bit_size, nir_channel(b, x, i));
-         nir_instr_as_intrinsic(res[i]->parent_instr)->intrinsic = intrin;
+         nir_def_as_intrinsic(res[i])->intrinsic = intrin;
       }
 
       return nir_vec(b, res, x->num_components);
    } else {
       nir_def *res = _nir_build_ddx(b, x->bit_size, x);
-      nir_instr_as_intrinsic(res->parent_instr)->intrinsic = intrin;
+      nir_def_as_intrinsic(res)->intrinsic = intrin;
       return res;
    }
 }

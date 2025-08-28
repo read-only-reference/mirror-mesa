@@ -120,6 +120,15 @@ struct pan_compile_inputs {
     */
    uint32_t fixed_varying_mask;
 
+   /* Settings to move constants into the FAU. */
+   struct {
+      uint32_t *values;
+      /* In multiples of 32bit. */
+      uint32_t max_amount;
+      /* In multiples of 32bit. */
+      uint32_t offset;
+   } fau_consts;
+
    union {
       struct {
          uint32_t rt_conv[8];
@@ -194,7 +203,7 @@ struct midgard_shader_info {
 };
 
 struct pan_shader_info {
-   gl_shader_stage stage;
+   mesa_shader_stage stage;
    unsigned work_reg_count;
    unsigned tls_size;
    unsigned wls_size;
@@ -203,6 +212,9 @@ struct pan_shader_info {
 
    /* Bit mask of preloaded registers */
    uint64_t preload;
+
+   uint32_t fau_consts_count;
+   uint32_t fau_consts[128];
 
    union {
       struct {
@@ -350,8 +362,6 @@ bool pan_nir_lower_image_ms(nir_shader *shader);
 bool pan_nir_lower_frag_coord_zw(nir_shader *shader);
 bool pan_nir_lower_noperspective_vs(nir_shader *shader);
 bool pan_nir_lower_noperspective_fs(nir_shader *shader);
-bool pan_nir_lower_static_noperspective(nir_shader *shader,
-                                        uint32_t noperspective_varyings);
 
 bool pan_lower_helper_invocation(nir_shader *shader);
 bool pan_lower_sample_pos(nir_shader *shader);

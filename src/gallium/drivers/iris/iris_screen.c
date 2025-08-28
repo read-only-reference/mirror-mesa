@@ -182,14 +182,9 @@ iris_get_video_memory(struct iris_screen *screen)
       const unsigned gpu_mappable_megabytes =
          (devinfo->aperture_bytes * 3 / 4) / (1024 * 1024);
 
-      const long system_memory_pages = sysconf(_SC_PHYS_PAGES);
-      const long system_page_size = sysconf(_SC_PAGE_SIZE);
-
-      if (system_memory_pages <= 0 || system_page_size <= 0)
+      uint64_t system_memory_bytes;
+      if (!os_get_total_physical_memory(&system_memory_bytes))
          return -1;
-
-      const uint64_t system_memory_bytes =
-         (uint64_t) system_memory_pages * (uint64_t) system_page_size;
 
       const unsigned system_memory_megabytes =
          (unsigned) (system_memory_bytes / (1024 * 1024));
@@ -201,18 +196,18 @@ iris_get_video_memory(struct iris_screen *screen)
 static void
 iris_init_shader_caps(struct iris_screen *screen)
 {
-   for (unsigned i = 0; i <= PIPE_SHADER_COMPUTE; i++) {
+   for (unsigned i = 0; i <= MESA_SHADER_COMPUTE; i++) {
       struct pipe_shader_caps *caps =
          (struct pipe_shader_caps *)&screen->base.shader_caps[i];
 
-      caps->max_instructions = i == PIPE_SHADER_FRAGMENT ? 1024 : 16384;
+      caps->max_instructions = i == MESA_SHADER_FRAGMENT ? 1024 : 16384;
       caps->max_alu_instructions =
       caps->max_tex_instructions =
-      caps->max_tex_indirections = i == PIPE_SHADER_FRAGMENT ? 1024 : 0;
+      caps->max_tex_indirections = i == MESA_SHADER_FRAGMENT ? 1024 : 0;
 
       caps->max_control_flow_depth = UINT_MAX;
 
-      caps->max_inputs = i == PIPE_SHADER_VERTEX ? 16 : 32;
+      caps->max_inputs = i == MESA_SHADER_VERTEX ? 16 : 32;
       caps->max_outputs = 32;
       caps->max_const_buffer0_size = 16 * 1024 * sizeof(float);
       caps->max_const_buffers = 16;
@@ -290,6 +285,7 @@ iris_init_screen_caps(struct iris_screen *screen)
 
    const struct intel_device_info *devinfo = screen->devinfo;
 
+   caps->prefer_real_buffer_in_constbuf0 = true;
    caps->npot_textures = true;
    caps->anisotropic_filter = true;
    caps->occlusion_query = true;

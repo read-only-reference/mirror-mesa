@@ -352,7 +352,8 @@ ValueFactory::dest(const nir_def& ssa, int chan, Pin pin_channel, uint8_t chan_m
       sel = m_next_register_index++;
       sfn_log << SfnLog::reg << "Assign " << sel << " to index " << ssa.index << " in "
               << &m_ssa_index_to_sel << "\n";
-      m_ssa_index_to_sel[ssa.index] = sel;
+      if (pin_channel != pin_free)
+         m_ssa_index_to_sel[ssa.index] = sel;
    }
 
    if (pin_channel == pin_free)
@@ -777,6 +778,13 @@ ValueFactory::src_from_string(const std::string& s)
          }
          return array->element(offset, addr, chan - array->frac());
       } else {
+         auto old_pin = ireg->second->pin();
+         if (old_pin != p) {
+            if ((old_pin == pin_group && p == pin_chgr) ||
+                ((old_pin == pin_free || old_pin == pin_none) &&
+                 (p == pin_chan || p == pin_group)))
+               ireg->second->set_pin(p);
+         }
          return ireg->second;
       }
    } else {

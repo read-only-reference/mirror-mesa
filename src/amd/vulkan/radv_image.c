@@ -52,6 +52,9 @@ radv_choose_tiling(struct radv_device *device, const VkImageCreateInfo *pCreateI
        pCreateInfo->usage & (VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR))
       return RADEON_SURF_MODE_LINEAR_ALIGNED;
 
+   if (pCreateInfo->usage & VK_IMAGE_USAGE_VIDEO_ENCODE_QUANTIZATION_DELTA_MAP_BIT_KHR)
+      return RADEON_SURF_MODE_LINEAR_ALIGNED;
+
    /* MSAA resources must be 2D tiled. */
    if (pCreateInfo->samples > 1)
       return RADEON_SURF_MODE_2D;
@@ -889,6 +892,20 @@ radv_image_alloc_values(const struct radv_device *device, struct radv_image *ima
       image->tc_compat_zrange_offset = image->size;
       image->size += image->vk.mip_levels * 4;
    }
+
+   if (pdev->info.gfx_level == GFX12) {
+      const struct radeon_surf *surf = &image->planes[0].surface;
+
+      /* All production chips don't support HiS. */
+      assert(!surf->u.gfx9.zs.his.offset);
+
+      /* Allocate HiZ metadata when the image has depth/stencil aspects to implement a workaround. */
+      if (!pdev->use_gfx12_hiz_his_event_wa && surf->u.gfx9.zs.hiz.offset &&
+          (image->vk.aspects == (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))) {
+         image->hiz_valid_offset = image->size;
+         image->size += image->vk.mip_levels * 4;
+      }
+   }
 }
 
 /* Determine if the image is affected by the pipe misaligned metadata issue
@@ -1184,8 +1201,8 @@ radv_image_create_layout(struct radv_device *device, struct radv_image_create_in
       if (!device->vk.enabled_features.videoMaintenance1)
          assert(profile_list);
 
-      const bool is_linear =
-         image->vk.tiling == VK_IMAGE_TILING_LINEAR || image->planes[0].surface.modifier == DRM_FORMAT_MOD_LINEAR;
+      const bool is_linear = RADEON_SURF_GET(image->planes[0].surface.flags, MODE) == RADEON_SURF_MODE_LINEAR_ALIGNED ||
+                             image->planes[0].surface.modifier == DRM_FORMAT_MOD_LINEAR;
 
       /* Only linear decode target requires the custom alignment. */
       if (is_linear || !(image->vk.usage & VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR)) {

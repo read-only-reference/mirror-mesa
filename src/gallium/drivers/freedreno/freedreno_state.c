@@ -124,7 +124,7 @@ upload_user_buffer(struct pipe_context *pctx, struct pipe_constant_buffer *cb)
  * index>0 will be UBO's.. well, I'll worry about that later
  */
 static void
-fd_set_constant_buffer(struct pipe_context *pctx, enum pipe_shader_type shader,
+fd_set_constant_buffer(struct pipe_context *pctx, mesa_shader_stage shader,
                        uint index, bool take_ownership,
                        const struct pipe_constant_buffer *cb) in_dt
 {
@@ -154,7 +154,7 @@ fd_set_constant_buffer(struct pipe_context *pctx, enum pipe_shader_type shader,
 }
 
 void
-fd_set_shader_buffers(struct pipe_context *pctx, enum pipe_shader_type shader,
+fd_set_shader_buffers(struct pipe_context *pctx, mesa_shader_stage shader,
                       unsigned start, unsigned count,
                       const struct pipe_shader_buffer *buffers,
                       unsigned writable_bitmask) in_dt
@@ -200,7 +200,7 @@ fd_set_shader_buffers(struct pipe_context *pctx, enum pipe_shader_type shader,
 }
 
 void
-fd_set_shader_images(struct pipe_context *pctx, enum pipe_shader_type shader,
+fd_set_shader_images(struct pipe_context *pctx, mesa_shader_stage shader,
                      unsigned start, unsigned count,
                      unsigned unbind_num_trailing_slots,
                      const struct pipe_image_view *images) in_dt
@@ -714,7 +714,7 @@ fd_bind_compute_state(struct pipe_context *pctx, void *state) in_dt
 {
    struct fd_context *ctx = fd_context(pctx);
    ctx->compute = state;
-   fd_context_dirty_shader(ctx, PIPE_SHADER_COMPUTE, FD_DIRTY_SHADER_PROG);
+   fd_context_dirty_shader(ctx, MESA_SHADER_COMPUTE, FD_DIRTY_SHADER_PROG);
 }
 
 /* used by clover to bind global objects, returning the bo address

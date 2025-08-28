@@ -588,6 +588,8 @@ enum pipe_statistics_query_index {
    PIPE_STAT_QUERY_CS_INVOCATIONS,
    PIPE_STAT_QUERY_TS_INVOCATIONS,
    PIPE_STAT_QUERY_MS_INVOCATIONS,
+   PIPE_STAT_QUERY_MS_PRIMITIVES,
+   PIPE_STAT_QUERY_COUNT,
 };
 
 /**
@@ -808,6 +810,38 @@ struct pipe_compute_caps {
    uint64_t max_global_size;
 };
 
+struct pipe_mesh_caps {
+   unsigned max_task_work_group_total_count;
+   unsigned max_mesh_work_group_total_count;
+   unsigned max_mesh_work_group_invocations;
+   unsigned max_task_work_group_invocations;
+   unsigned max_task_payload_size;
+   unsigned max_task_shared_memory_size;
+   unsigned max_mesh_shared_memory_size;
+   unsigned max_task_payload_and_shared_memory_size;
+   unsigned max_mesh_payload_and_shared_memory_size;
+   unsigned max_mesh_output_memory_size;
+   unsigned max_mesh_payload_and_output_memory_size;
+   unsigned max_mesh_output_vertices;
+   unsigned max_mesh_output_primitives;
+   unsigned max_mesh_output_components;
+   unsigned max_mesh_output_layers;
+   unsigned max_mesh_multiview_view_count;
+   unsigned mesh_output_per_vertex_granularity;
+   unsigned mesh_output_per_primitive_granularity;
+   unsigned max_preferred_task_work_group_invocations;
+   unsigned max_preferred_mesh_work_group_invocations;
+   bool mesh_prefers_local_invocation_vertex_output;
+   bool mesh_prefers_local_invocation_primitive_output;
+   bool mesh_prefers_compact_vertex_output;
+   bool mesh_prefers_compact_primitive_output;
+   unsigned max_task_work_group_count[3];
+   unsigned max_mesh_work_group_count[3];
+   unsigned max_task_work_group_size[3];
+   unsigned max_mesh_work_group_size[3];
+   bool pipeline_statistic_queries;
+};
+
 struct pipe_caps {
    bool graphics;
    bool npot_textures;
@@ -1007,6 +1041,7 @@ struct pipe_caps {
    bool astc_decode_mode;
    bool shader_subgroup_quad_all_stages;
    bool call_finalize_nir_in_linker;
+   bool mesh_shader;
 
    int accelerated;
    int min_texel_offset;
@@ -1113,6 +1148,8 @@ struct pipe_caps {
    float min_conservative_raster_dilate;
    float max_conservative_raster_dilate;
    float conservative_raster_dilate_granularity;
+
+   struct pipe_mesh_caps mesh;
 };
 
 /**
@@ -1184,8 +1221,9 @@ struct pipe_query_data_pipeline_statistics
          uint64_t cs_invocations; /**< Num compute shader invocations. */
          uint64_t ts_invocations; /**< Num task shader invocations. */
          uint64_t ms_invocations; /**< Num mesh shader invocations. */
+         uint64_t ms_primitives;  /**< Num primitives sent to rasterizer by mesh shader */
       };
-      uint64_t counters[13];
+      uint64_t counters[PIPE_STAT_QUERY_COUNT];
    };
 };
 

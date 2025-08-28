@@ -61,13 +61,13 @@ static const unsigned known_desktop_gl_versions[] =
 
 
 _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
-					       gl_shader_stage stage,
+					       mesa_shader_stage stage,
                                                void *mem_ctx)
    : ctx(_ctx), exts(&_ctx->Extensions), consts(&_ctx->Const),
      api(_ctx->API), cs_input_local_size_specified(false), cs_input_local_size(),
      switch_state(), warnings_enabled(true)
 {
-   assert(stage < MESA_SHADER_STAGES);
+   assert(stage < MESA_SHADER_MESH_STAGES);
    this->stage = stage;
 
    this->scanner = NULL;
@@ -2181,22 +2181,21 @@ do_late_parsing_checks(struct _mesa_glsl_parse_state *state)
 }
 
 static void
-opt_shader(const struct gl_constants *consts,
+opt_shader(const struct pipe_screen *screen,
+           const struct gl_constants *consts,
            const struct gl_extensions *exts,
-           struct gl_shader *shader)
+           struct gl_shader *shader,
+           linear_ctx *linalloc)
 {
    assert(shader->CompileStatus != COMPILE_FAILURE &&
           !shader->ir->is_empty());
-
-   const struct gl_shader_compiler_options *options =
-      &consts->ShaderCompilerOptions[shader->Stage];
 
    /* Do some optimization at compile time to reduce shader IR size
     * and reduce later work if the same shader is linked multiple times.
     *
     * Run it just once, since NIR will do the real optimization.
     */
-   do_common_optimization(shader->ir, false, options, consts->NativeIntegers);
+   do_common_optimization(shader->ir, false, shader->Stage, screen);
 
    validate_ir_tree(shader->ir);
 
@@ -2218,7 +2217,7 @@ opt_shader(const struct gl_constants *consts,
 
    optimize_dead_builtin_variables(shader->ir, other);
 
-   lower_vector_derefs(shader);
+   lower_vector_derefs(shader, linalloc);
 
    lower_packing_builtins(shader->ir, exts->ARB_shading_language_packing,
                           exts->ARB_gpu_shader5,
@@ -2392,17 +2391,17 @@ _mesa_glsl_compile_shader(struct gl_context *ctx, struct gl_shader *shader,
       state->has_implicit_int_to_uint_conversion();
    shader->KHR_shader_subgroup_basic_enable = state->KHR_shader_subgroup_basic_enable;
 
-   struct gl_shader_compiler_options *options =
-      &ctx->Const.ShaderCompilerOptions[shader->Stage];
-
    if (!state->error && !shader->ir->is_empty()) {
       if (state->es_shader &&
-          (options->LowerPrecisionFloat16 || options->LowerPrecisionInt16))
-         lower_precision(options, shader->ir);
+          (ctx->screen->shader_caps[shader->Stage].fp16 ||
+           ctx->screen->shader_caps[shader->Stage].int16))
+         lower_precision(ctx->screen, shader->Stage, shader->ir);
+
       lower_builtins(shader->ir);
       assign_subroutine_indexes(state);
       lower_subroutine(shader->ir, state);
-      opt_shader(&ctx->Const, &ctx->Extensions, shader);
+      opt_shader(ctx->screen, &ctx->Const, &ctx->Extensions, shader,
+                 state->linalloc);
    }
 
    if (!force_recompile) {
@@ -2482,9 +2481,8 @@ _mesa_glsl_compile_shader(struct gl_context *ctx, struct gl_shader *shader,
  *                                    integers in floating point registers).
  */
 bool
-do_common_optimization(ir_exec_list *ir, bool linked,
-                       const struct gl_shader_compiler_options *options,
-                       bool native_integers)
+do_common_optimization(ir_exec_list *ir, bool linked, mesa_shader_stage stage,
+                       const struct pipe_screen *screen)
 {
    const bool debug = false;
    bool progress = false;
@@ -2511,8 +2509,8 @@ do_common_optimization(ir_exec_list *ir, bool linked,
    OPT(do_tree_grafting, ir);
    OPT(do_minmax_prune, ir);
    OPT(do_rebalance_tree, ir);
-   OPT(do_algebraic, ir, native_integers, options);
-   OPT(do_lower_jumps, ir, true, options->EmitNoCont);
+   OPT(do_algebraic, ir);
+   OPT(do_lower_jumps, ir, true, !screen->shader_caps[stage].cont_supported);
 
    /* If an optimization pass fails to preserve the invariant flag, calling
     * the pass only once earlier may result in incorrect code generation. Always call

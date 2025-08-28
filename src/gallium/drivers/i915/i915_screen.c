@@ -169,8 +169,8 @@ static const struct nir_shader_compiler_options gallivm_nir_options = {
    .lower_vector_cmp = true,
    .lower_device_index_to_zero = true,
    /* .support_16bit_alu = true, */
-   .support_indirect_inputs = (uint8_t)BITFIELD_MASK(PIPE_SHADER_TYPES),
-   .support_indirect_outputs = (uint8_t)BITFIELD_MASK(PIPE_SHADER_TYPES),
+   .support_indirect_inputs = (uint8_t)BITFIELD_MASK(MESA_SHADER_STAGES),
+   .support_indirect_outputs = (uint8_t)BITFIELD_MASK(MESA_SHADER_STAGES),
    .has_ddx_intrinsics = true,
    .no_integers = true,
 };
@@ -254,7 +254,7 @@ static void
 i915_init_shader_caps(struct i915_screen *is)
 {
    struct pipe_shader_caps *caps =
-      (struct pipe_shader_caps *)&is->base.shader_caps[PIPE_SHADER_VERTEX];
+      (struct pipe_shader_caps *)&is->base.shader_caps[MESA_SHADER_VERTEX];
 
    draw_init_shader_caps(caps);
 
@@ -281,7 +281,7 @@ i915_init_shader_caps(struct i915_screen *is)
    caps->max_shader_buffers = false;
    caps->max_shader_images = false;
 
-   caps = (struct pipe_shader_caps *)&is->base.shader_caps[PIPE_SHADER_FRAGMENT];
+   caps = (struct pipe_shader_caps *)&is->base.shader_caps[MESA_SHADER_FRAGMENT];
 
    caps->supported_irs = (1 << PIPE_SHADER_IR_NIR) | (1 << PIPE_SHADER_IR_TGSI);
    /* XXX: some of these are just shader model 2.0 values, fix this! */
@@ -557,8 +557,8 @@ i915_screen_create(struct i915_winsys *iws)
    is->base.fence_reference = i915_fence_reference;
    is->base.fence_finish = i915_fence_finish;
 
-   is->base.nir_options[PIPE_SHADER_VERTEX] = &gallivm_nir_options;
-   is->base.nir_options[PIPE_SHADER_FRAGMENT] = &i915_compiler_options;
+   is->base.nir_options[MESA_SHADER_VERTEX] = &gallivm_nir_options;
+   is->base.nir_options[MESA_SHADER_FRAGMENT] = &i915_compiler_options;
 
    i915_init_screen_resource_functions(is);
 

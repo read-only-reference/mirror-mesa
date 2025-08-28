@@ -14,15 +14,12 @@ public:
    brw_generator(const struct brw_compiler *compiler,
                 const struct brw_compile_params *params,
                 struct brw_stage_prog_data *prog_data,
-                gl_shader_stage stage);
+                mesa_shader_stage stage);
    ~brw_generator();
 
    void enable_debug(const char *shader_name);
-   int generate_code(const cfg_t *cfg, int dispatch_width,
-                     struct brw_shader_stats shader_stats,
-                     const brw_performance &perf,
-                     struct brw_compile_stats *stats,
-                     unsigned max_polygons = 0);
+   int generate_code(const brw_shader &s,
+                     struct brw_compile_stats *stats);
    void add_const_data(void *data, unsigned size);
    void add_resume_sbt(unsigned num_resume_shaders, uint64_t *sbt);
    const unsigned *get_assembly();
@@ -73,7 +70,7 @@ private:
    brw_exec_list discard_halt_patches;
    bool debug_flag;
    const char *shader_name;
-   gl_shader_stage stage;
+   mesa_shader_stage stage;
    void *mem_ctx;
 };
 

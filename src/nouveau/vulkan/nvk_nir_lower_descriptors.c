@@ -998,7 +998,7 @@ lower_edb_buffer_image_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
          nir_def *res = &intrin->def;
          res = fixup_edb_buffer_view_result(b, desc, in_bounds, res,
                                             nir_intrinsic_dest_type(intrin));
-         nir_def_rewrite_uses_after(&intrin->def, res, res->parent_instr);
+         nir_def_rewrite_uses_after(&intrin->def, res);
       }
 
       nir_rewrite_image_intrinsic(intrin, index, true);
@@ -1047,7 +1047,7 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
       nir_def *zero = nir_imm_zero(b, intrin->def.num_components,
                                       intrin->def.bit_size);
       nir_def *res = nir_bcsel(b, is_null, zero, &intrin->def);
-      nir_def_rewrite_uses_after(&intrin->def, res, res->parent_instr);
+      nir_def_rewrite_uses_after(&intrin->def, res);
    }
 
    return true;
@@ -1193,7 +1193,7 @@ lower_edb_buffer_tex_instr(nir_builder *b, nir_tex_instr *tex,
                                                        ACCESS_CAN_REORDER,
                                              .dest_type = tex->dest_type);
       if (tex->is_sparse) {
-         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(res->parent_instr);
+         nir_intrinsic_instr *intr = nir_def_as_intrinsic(res);
          intr->intrinsic = nir_intrinsic_bindless_image_sparse_load;
       }
 

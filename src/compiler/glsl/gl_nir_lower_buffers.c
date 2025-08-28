@@ -119,7 +119,7 @@ get_block_array_index(nir_builder *b, nir_deref_instr *deref,
 static void
 get_block_index_offset(nir_variable *var,
                        const struct gl_shader_program *shader_program,
-                       gl_shader_stage stage,
+                       mesa_shader_stage stage,
                        unsigned *index, unsigned *offset)
 {
 
@@ -262,9 +262,7 @@ lower_buffer_interface_derefs_impl(nir_function_impl *impl,
                   b.cursor = nir_after_instr(&intrin->instr);
                   intrin->def.bit_size = 32;
                   nir_def *bval = nir_i2b(&b, &intrin->def);
-                  nir_def_rewrite_uses_after(&intrin->def,
-                                                 bval,
-                                                 bval->parent_instr);
+                  nir_def_rewrite_uses_after(&intrin->def, bval);
                   progress = true;
                }
                break;

@@ -338,10 +338,7 @@ clc_lower_64bit_semantics(nir_shader *nir)
                b.cursor = nir_after_instr(instr);
 
                nir_def *i64 = nir_u2u64(&b, &intrinsic->def);
-               nir_def_rewrite_uses_after(
-                  &intrinsic->def,
-                  i64,
-                  i64->parent_instr);
+               nir_def_rewrite_uses_after(&intrinsic->def, i64);
             }
          }
       }
@@ -371,8 +368,7 @@ clc_lower_nonnormalized_samplers(nir_shader *nir,
 
             nir_src *sampler_src = &tex->src[sampler_src_idx].src;
             assert(sampler_src->ssa->parent_instr->type == nir_instr_type_deref);
-            nir_variable *sampler = nir_deref_instr_get_variable(
-               nir_instr_as_deref(sampler_src->ssa->parent_instr));
+            nir_variable *sampler = nir_deref_instr_get_variable(nir_def_as_deref(sampler_src->ssa));
 
             // If the sampler returns ints, we'll handle this in the int lowering pass
             if (nir_alu_type_get_base_type(tex->dest_type) != nir_type_float)

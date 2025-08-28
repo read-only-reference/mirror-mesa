@@ -276,6 +276,8 @@ public:
       spill_vgrf_ip = NULL;
       spill_vgrf_ip_alloc = 0;
       spill_node_count = 0;
+
+      eot_reg = -1;
    }
 
    ~brw_reg_alloc()
@@ -318,6 +320,8 @@ private:
    int live_instr_count;
 
    set *spill_insts;
+
+   int eot_reg;
 
    ra_graph *g;
    bool have_spill_costs;
@@ -597,8 +601,8 @@ brw_reg_alloc::setup_inst_interference(const brw_inst *inst)
        * We don't apply it to SIMD16 instructions because previous code avoids
        * any register overlap between sources and destination.
        */
-      if (inst->exec_size < 16 && inst->is_send_from_grf() &&
-          inst->dst.file == VGRF)
+      if (inst->opcode == SHADER_OPCODE_SEND && inst->dst.file == VGRF &&
+          inst->exec_size < 16)
          ra_add_node_interference(g, first_vgrf_node + inst->dst.nr,
                                      grf127_send_hack_node);
    }
@@ -615,10 +619,13 @@ brw_reg_alloc::setup_inst_interference(const brw_inst *inst)
     * interference here.
     */
    if (inst->opcode == SHADER_OPCODE_SEND && inst->ex_mlen > 0 &&
-       inst->src[2].file == VGRF && inst->src[3].file == VGRF &&
-       inst->src[2].nr != inst->src[3].nr)
-      ra_add_node_interference(g, first_vgrf_node + inst->src[2].nr,
-                                  first_vgrf_node + inst->src[3].nr);
+       inst->src[SEND_SRC_PAYLOAD1].file == VGRF &&
+       inst->src[SEND_SRC_PAYLOAD2].file == VGRF &&
+       inst->src[SEND_SRC_PAYLOAD1].nr != inst->src[SEND_SRC_PAYLOAD2].nr) {
+      ra_add_node_interference(g,
+         first_vgrf_node + inst->src[SEND_SRC_PAYLOAD1].nr,
+         first_vgrf_node + inst->src[SEND_SRC_PAYLOAD2].nr);
+   }
 
    /* When we do send-from-GRF for FB writes, we need to ensure that the last
     * write instruction sends from a high register.  This is because the
@@ -630,27 +637,44 @@ brw_reg_alloc::setup_inst_interference(const brw_inst *inst)
     * register that works.
     */
    if (inst->eot && devinfo->ver < 30) {
-      const int vgrf = inst->opcode == SHADER_OPCODE_SEND ?
-                       inst->src[2].nr : inst->src[0].nr;
-      const int size = DIV_ROUND_UP(fs->alloc.sizes[vgrf], reg_unit(devinfo));
-      int reg = BRW_MAX_GRF - size;
+      assert(inst->opcode == SHADER_OPCODE_SEND);
+      const brw_reg srcs[2] = {
+         inst->src[SEND_SRC_PAYLOAD1],
+         inst->ex_mlen > 0 ? inst->src[SEND_SRC_PAYLOAD2] : brw_reg(),
+      };
+      const unsigned sizes[2] = {
+         DIV_ROUND_UP(fs->alloc.sizes[srcs[0].nr], reg_unit(devinfo)),
+         DIV_ROUND_UP(srcs[1].file != BAD_FILE ?
+                      fs->alloc.sizes[srcs[1].nr] : 0, reg_unit(devinfo)),
+      };
+      int regs[2] = { BRW_MAX_GRF, BRW_MAX_GRF };
 
+      /* If we haven´t yet allocated a register for the EOT sources, allocate
+       * one large enough. Otherwise the assumption is that the backend
+       * generates EOT messages that consummes the same amount of source
+       * register so we can reuse the existing allocation.
+       */
+      regs[0] = BRW_MAX_GRF - sizes[0];
       if (grf127_send_hack_node >= 0) {
          /* Avoid r127 which might be unusable if the node was previously
           * written by a SIMD8 SEND message with source/destination overlap.
           */
-         reg--;
+         regs[0]--;
+      }
+      assert(regs[0] >= 112);
+
+      ra_set_node_reg(g, first_vgrf_node + srcs[0].nr, regs[0]);
+      if (sizes[1] > 0) {
+         regs[1] = regs[0] - sizes[1];
+         assert(regs[1] >= 112);
+         ra_set_node_reg(g, first_vgrf_node + srcs[1].nr, regs[1]);
       }
 
-      assert(reg >= 112);
-      ra_set_node_reg(g, first_vgrf_node + vgrf, reg);
-
-      if (inst->ex_mlen > 0) {
-         const int vgrf = inst->src[3].nr;
-         reg -= DIV_ROUND_UP(fs->alloc.sizes[vgrf], reg_unit(devinfo));
-         assert(reg >= 112);
-         ra_set_node_reg(g, first_vgrf_node + vgrf, reg);
-      }
+      /* All the EOT messages should have the same amount of payload as we
+       * only use this for last render target write on Gfx11.
+       */
+      assert(eot_reg == -1 || eot_reg == MIN2(regs[0], regs[1]));
+      eot_reg = MIN2(regs[0], regs[1]);
    }
 }
 
@@ -881,11 +905,11 @@ brw_reg_alloc::emit_unspill(const brw_builder &bld,
             offset = build_lane_offsets(ubld, spill_offset, ip);
          }
 
-         brw_reg srcs[] = {
-            brw_imm_ud(0), /* desc */
-            build_ex_desc(bld, reg_size, true),
-            offset,        /* payload */
-            brw_reg(),      /* payload2 */
+         brw_reg srcs[SEND_NUM_SRCS] = {
+            [SEND_SRC_DESC] = brw_imm_ud(0),
+            [SEND_SRC_EX_DESC] = build_ex_desc(bld, reg_size, true),
+            [SEND_SRC_PAYLOAD1] = offset,
+            [SEND_SRC_PAYLOAD2] = brw_reg(),
          };
 
          uint32_t desc = lsc_msg_desc(devinfo, LSC_OP_LOAD,
@@ -920,10 +944,11 @@ brw_reg_alloc::emit_unspill(const brw_builder &bld,
 
          const unsigned bti = GFX8_BTI_STATELESS_NON_COHERENT;
 
-         brw_reg srcs[] = {
-            brw_imm_ud(0), /* desc */
-            brw_imm_ud(0), /* ex_desc */
-            header
+         brw_reg srcs[SEND_NUM_SRCS] = {
+            [SEND_SRC_DESC]     = brw_imm_ud(0),
+            [SEND_SRC_EX_DESC]  = brw_imm_ud(0),
+            [SEND_SRC_PAYLOAD1] = header,
+            [SEND_SRC_PAYLOAD2] = brw_reg(),
          };
          unspill_inst = bld.emit(SHADER_OPCODE_SEND, dst,
                                  srcs, ARRAY_SIZE(srcs));
@@ -968,11 +993,11 @@ brw_reg_alloc::emit_spill(const brw_builder &bld,
       if (devinfo->verx10 >= 125) {
          brw_reg offset = build_lane_offsets(bld, spill_offset, ip);
 
-         brw_reg srcs[] = {
-            brw_imm_ud(0), /* desc */
-            build_ex_desc(bld, reg_size, false),
-            offset,        /* payload */
-            src,           /* payload2 */
+         brw_reg srcs[SEND_NUM_SRCS] = {
+            [SEND_SRC_DESC]     = brw_imm_ud(0),
+            [SEND_SRC_EX_DESC]  = build_ex_desc(bld, reg_size, false),
+            [SEND_SRC_PAYLOAD1] = offset,
+            [SEND_SRC_PAYLOAD2] = src,
          };
          spill_inst = bld.emit(SHADER_OPCODE_SEND, bld.null_reg_f(),
                                srcs, ARRAY_SIZE(srcs));
@@ -1002,11 +1027,11 @@ brw_reg_alloc::emit_spill(const brw_builder &bld,
          brw_reg header = build_legacy_scratch_header(bld, spill_offset, ip);
 
          const unsigned bti = GFX8_BTI_STATELESS_NON_COHERENT;
-         brw_reg srcs[] = {
-            brw_imm_ud(0), /* desc */
-            brw_imm_ud(0), /* ex_desc */
-            header,
-            src
+         brw_reg srcs[SEND_NUM_SRCS] = {
+            [SEND_SRC_DESC]     = brw_imm_ud(0),
+            [SEND_SRC_EX_DESC]  = brw_imm_ud(0),
+            [SEND_SRC_PAYLOAD1] = header,
+            [SEND_SRC_PAYLOAD2] = src
          };
          spill_inst = bld.emit(SHADER_OPCODE_SEND, bld.null_reg_f(),
                                srcs, ARRAY_SIZE(srcs));
@@ -1326,6 +1351,7 @@ brw_reg_alloc::assign_regs(bool allow_spilling, bool spill_all)
          int reg = choose_spill_reg();
          if (reg != -1) {
             spill_reg(reg);
+            spilled++;
             continue;
          }
       }

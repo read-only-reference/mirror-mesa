@@ -460,27 +460,9 @@ radv_physical_device_get_format_properties(struct radv_physical_device *pdev, Vk
       break;
    }
 
-   switch (format) {
-   case VK_FORMAT_R32G32_SFLOAT:
-   case VK_FORMAT_R32G32B32_SFLOAT:
-   case VK_FORMAT_R32G32B32A32_SFLOAT:
-   case VK_FORMAT_R16G16_SFLOAT:
-   case VK_FORMAT_R16G16B16_SFLOAT:
-   case VK_FORMAT_R16G16B16A16_SFLOAT:
-   case VK_FORMAT_R16G16_SNORM:
-   case VK_FORMAT_R16G16_UNORM:
-   case VK_FORMAT_R16G16B16A16_SNORM:
-   case VK_FORMAT_R16G16B16A16_UNORM:
-   case VK_FORMAT_R8G8_SNORM:
-   case VK_FORMAT_R8G8_UNORM:
-   case VK_FORMAT_R8G8B8A8_SNORM:
-   case VK_FORMAT_R8G8B8A8_UNORM:
-   case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+   if (vk_acceleration_struct_vtx_format_supported(format))
       buffer |= VK_FORMAT_FEATURE_2_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR;
-      break;
-   default:
-      break;
-   }
+
    /* addrlib does not support linear compressed textures. */
    if (vk_format_is_compressed(format))
       linear = 0;
@@ -508,6 +490,10 @@ radv_physical_device_get_format_properties(struct radv_physical_device *pdev, Vk
 
       if (tiled & VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT)
          tiled |= VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT_EXT;
+   }
+
+   if (pdev->video_encode_enabled && format == VK_FORMAT_R32_SINT) {
+      linear |= VK_FORMAT_FEATURE_2_VIDEO_ENCODE_QUANTIZATION_DELTA_MAP_BIT_KHR;
    }
 
    out_properties->linearTilingFeatures = linear;
@@ -839,6 +825,10 @@ radv_check_modifier_support(struct radv_physical_device *pdev, const VkPhysicalD
       if (info->usage & VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR && modifier == DRM_FORMAT_MOD_LINEAR)
          return VK_ERROR_FORMAT_NOT_SUPPORTED;
    }
+
+   /* QP map needs linear. */
+   if (info->usage & VK_IMAGE_USAGE_VIDEO_ENCODE_QUANTIZATION_DELTA_MAP_BIT_KHR && modifier != DRM_FORMAT_MOD_LINEAR)
+      return VK_ERROR_FORMAT_NOT_SUPPORTED;
 
    /* We can expand this as needed and implemented but there is not much demand
     * for more.

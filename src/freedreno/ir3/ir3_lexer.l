@@ -95,6 +95,9 @@ static int parse_reg(const char *str)
 		str++;
 		num++;
 	}
+	if (str[0] == 'u') {
+		str++;
+	}
 	str++;
 	if (str[0] == 't') {
 		str++;
@@ -168,6 +171,8 @@ static int parse_reg(const char *str)
 "(jp)"                            return TOKEN(T_JP);
 "(eq)"                            return TOKEN(T_EQ_FLAG);
 "(sat)"                           return TOKEN(T_SAT);
+"(eolm)"                          return TOKEN(T_EOLM);
+"(eogm)"                          return TOKEN(T_EOGM);
 "(rpt"[0-7]")"                    ir3_yylval.num = strtol(yytext+4, NULL, 10); return T_RPT;
 "(nop"[0-7]")"                    ir3_yylval.num = strtol(yytext+4, NULL, 10); return T_NOP;
 "("[x]?[y]?[z]?[w]?")"            ir3_yylval.num = parse_wrmask(yytext); return T_WRMASK;
@@ -178,6 +183,7 @@ static int parse_reg(const char *str)
 "a0.x"                            return T_A0;
 "a1.x"                            return T_A1;
 "p0."[xyzw]                       ir3_yylval.num = parse_reg(yytext); return T_P0;
+"up0."[xyzw]                      ir3_yylval.num = parse_reg(yytext); return T_UP0;
 "w"[0-9]+                         ir3_yylval.num = strtol(yytext+1, NULL, 10); return T_W;
 "s#"[0-9]+                        ir3_yylval.num = strtol(yytext+2, NULL, 10); return T_SAMP;
 "t#"[0-9]+                        ir3_yylval.num = strtol(yytext+2, NULL, 10); return T_TEX;

@@ -79,8 +79,10 @@ enum radv_ray_query_field {
    radv_ray_query_trav_stack_low_watermark,
    radv_ray_query_trav_current_node,
    radv_ray_query_trav_previous_node,
+   radv_ray_query_trav_parent_node,
    radv_ray_query_trav_instance_top_node,
    radv_ray_query_trav_instance_bottom_node,
+   radv_ray_query_trav_second_iteration,
    radv_ray_query_stack,
    radv_ray_query_break_flag,
    radv_ray_query_field_count,
@@ -116,8 +118,10 @@ radv_get_ray_query_type()
    FIELD(trav_stack_low_watermark, glsl_uint_type());
    FIELD(trav_current_node, glsl_uint_type());
    FIELD(trav_previous_node, glsl_uint_type());
+   FIELD(trav_parent_node, glsl_uint_type());
    FIELD(trav_instance_top_node, glsl_uint_type());
    FIELD(trav_instance_bottom_node, glsl_uint_type());
+   FIELD(trav_second_iteration, glsl_bool_type());
    FIELD(stack, glsl_array_type(glsl_uint_type(), MAX_SCRATCH_STACK_ENTRY_COUNT, 0));
    FIELD(break_flag, glsl_bool_type());
 
@@ -317,8 +321,10 @@ lower_rq_initialize(nir_builder *b, nir_intrinsic_instr *instr, struct ray_query
 
    rq_store(b, rq, trav_current_node, nir_imm_int(b, RADV_BVH_ROOT_NODE));
    rq_store(b, rq, trav_previous_node, nir_imm_int(b, RADV_BVH_INVALID_NODE));
+   rq_store(b, rq, trav_parent_node, nir_imm_int(b, RADV_BVH_INVALID_NODE));
    rq_store(b, rq, trav_instance_top_node, nir_imm_int(b, RADV_BVH_INVALID_NODE));
    rq_store(b, rq, trav_instance_bottom_node, nir_imm_int(b, RADV_BVH_NO_INSTANCE_ROOT));
+   rq_store(b, rq, trav_second_iteration, nir_imm_false(b));
 
    rq_store(b, rq, trav_top_stack, nir_imm_int(b, -1));
 
@@ -522,8 +528,10 @@ lower_rq_proceed(nir_builder *b, nir_intrinsic_instr *instr, struct ray_query_va
       .stack_low_watermark = rq_deref(b, rq, trav_stack_low_watermark),
       .current_node = rq_deref(b, rq, trav_current_node),
       .previous_node = rq_deref(b, rq, trav_previous_node),
+      .parent_node = rq_deref(b, rq, trav_parent_node),
       .instance_top_node = rq_deref(b, rq, trav_instance_top_node),
       .instance_bottom_node = rq_deref(b, rq, trav_instance_bottom_node),
+      .second_iteration = rq_deref(b, rq, trav_second_iteration),
       .instance_addr = isec_deref(b, candidate, instance_addr),
       .sbt_offset_and_flags = isec_deref(b, candidate, sbt_offset_and_flags),
       .break_flag = rq_deref(b, rq, break_flag),
@@ -639,7 +647,7 @@ radv_nir_lower_ray_queries(struct nir_shader *shader, struct radv_device *device
             if (!nir_intrinsic_is_ray_query(intrinsic->intrinsic))
                continue;
 
-            nir_deref_instr *ray_query_deref = nir_instr_as_deref(intrinsic->src[0].ssa->parent_instr);
+            nir_deref_instr *ray_query_deref = nir_def_as_deref(intrinsic->src[0].ssa);
 
             struct ray_query_vars *vars =
                (struct ray_query_vars *)_mesa_hash_table_search(query_ht, nir_deref_instr_get_variable(ray_query_deref))

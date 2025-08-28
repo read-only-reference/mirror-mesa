@@ -181,12 +181,12 @@ brw_opt_constant_fold_instruction(const intel_device_info *devinfo, brw_inst *in
       break;
 
    case BRW_OPCODE_MAD:
-      if (inst->src[1].file == IMM &&
+      if (inst->src[0].file == IMM &&
+          inst->src[1].file == IMM &&
           inst->src[2].file == IMM &&
-          inst->src[3].file == IMM &&
+          !brw_type_is_vector_imm(inst->src[0].type) &&
           !brw_type_is_vector_imm(inst->src[1].type) &&
-          !brw_type_is_vector_imm(inst->src[2].type) &&
-          !brw_type_is_vector_imm(inst->src[3].type)) {
+          !brw_type_is_vector_imm(inst->src[2].type)) {
          fold_multiplicands_of_MAD(inst);
          assert(inst->opcode == BRW_OPCODE_ADD);
 
@@ -741,9 +741,9 @@ brw_opt_algebraic(brw_shader &s)
             inst->resize_sources(1);
             progress = true;
          } else if (inst->src[1].file == IMM) {
+            const unsigned comp = inst->src[1].ud & (inst->exec_size - 1);
             inst->opcode = BRW_OPCODE_MOV;
-            inst->src[0] = component(inst->src[0],
-                                     inst->src[1].ud);
+            inst->src[0] = component(inst->src[0], comp);
             inst->resize_sources(1);
             progress = true;
          }

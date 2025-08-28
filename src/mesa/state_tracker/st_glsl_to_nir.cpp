@@ -270,6 +270,20 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
       bool revectorize = false;
 
       if (nir->options->lower_doubles_options) {
+         /* 64-bit subgroup ops like vote_feq and inclusive_scan are secretly
+          * fp64 operations, so lower them first to make the ALU operation
+          * appear for nir_lower_doubles to lower after.
+          */
+         nir_lower_subgroups_options subgroup_opts = {0};
+         subgroup_opts.subgroup_size = nir->options->subgroup_size;
+         subgroup_opts.ballot_bit_size = nir->options->ballot_bit_size;
+         subgroup_opts.ballot_components = nir->options->ballot_components;
+         subgroup_opts.lower_fp64 = true;
+
+         if (subgroup_opts.ballot_bit_size) {
+            NIR_PASS(lowered_64bit_ops, nir, nir_lower_subgroups, &subgroup_opts);
+         }
+
          /* nir_lower_doubles is not prepared for vector ops, so if the backend doesn't
           * request lower_alu_to_scalar until now, lower all 64 bit ops, and try to
           * vectorize them afterwards again */
@@ -386,7 +400,7 @@ st_link_glsl_to_nir(struct gl_context *ctx,
                     struct gl_shader_program *shader_program)
 {
    struct st_context *st = st_context(ctx);
-   struct gl_linked_shader *linked_shader[MESA_SHADER_STAGES];
+   struct gl_linked_shader *linked_shader[MESA_SHADER_MESH_STAGES];
    unsigned num_shaders = 0;
 
    /* Return early if we are loading the shader from on-disk cache */
@@ -403,7 +417,7 @@ st_link_glsl_to_nir(struct gl_context *ctx,
          return GL_FALSE;
    }
 
-   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
+   for (unsigned i = 0; i < MESA_SHADER_MESH_STAGES; i++) {
       if (shader_program->_LinkedShaders[i])
          linked_shader[num_shaders++] = shader_program->_LinkedShaders[i];
    }
@@ -466,9 +480,7 @@ st_link_glsl_to_nir(struct gl_context *ctx,
    for (unsigned i = 0; i < num_shaders; i++) {
       struct gl_linked_shader *shader = linked_shader[i];
       nir_shader *nir = shader->Program->nir;
-      gl_shader_stage stage = shader->Stage;
-      const struct gl_shader_compiler_options *options =
-            &ctx->Const.ShaderCompilerOptions[stage];
+      mesa_shader_stage stage = shader->Stage;
 
       /* Since IO is lowered, we won't need the IO variables from now on.
        * nir_build_program_resource_list was the last pass that needed them.
@@ -479,12 +491,13 @@ st_link_glsl_to_nir(struct gl_context *ctx,
       /* If there are forms of indirect addressing that the driver
        * cannot handle, perform the lowering pass.
        */
-      if (options->EmitNoIndirectTemp || options->EmitNoIndirectUniform) {
+      if (!ctx->screen->shader_caps[stage].indirect_temp_addr ||
+          !ctx->screen->shader_caps[stage].indirect_const_addr) {
          nir_variable_mode mode = (nir_variable_mode)0;
 
-         mode |= options->EmitNoIndirectTemp ?
+         mode |= !ctx->screen->shader_caps[stage].indirect_temp_addr ?
             nir_var_function_temp : (nir_variable_mode)0;
-         mode |= options->EmitNoIndirectUniform ?
+         mode |= !ctx->screen->shader_caps[stage].indirect_const_addr ?
             nir_var_uniform | nir_var_mem_ubo | nir_var_mem_ssbo :
             (nir_variable_mode)0;
 
@@ -591,15 +604,15 @@ st_link_glsl_to_nir(struct gl_context *ctx,
 
    struct pipe_context *pctx = st_context(ctx)->pipe;
    if (pctx->link_shader) {
-      void *driver_handles[PIPE_SHADER_TYPES];
+      void *driver_handles[MESA_SHADER_MESH_STAGES];
       memset(driver_handles, 0, sizeof(driver_handles));
 
-      for (uint32_t i = 0; i < MESA_SHADER_STAGES; ++i) {
+      for (uint32_t i = 0; i < MESA_SHADER_MESH_STAGES; ++i) {
          struct gl_linked_shader *shader = shader_program->_LinkedShaders[i];
          if (shader) {
             struct gl_program *p = shader->Program;
             if (p && p->variants) {
-               enum pipe_shader_type type = pipe_shader_type_from_mesa(shader->Stage);
+               mesa_shader_stage type = shader->Stage;
                driver_handles[type] = p->variants->driver_shader;
             }
          }

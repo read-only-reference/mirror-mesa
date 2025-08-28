@@ -413,7 +413,7 @@ replace_scalar_component_uses(nir_builder *b, nir_scalar old, nir_scalar rep)
    }
 
    nir_def *replacement = nir_vec(b, dst, old.def->num_components);
-   nir_def_rewrite_uses_after(old.def, replacement, replacement->parent_instr);
+   nir_def_rewrite_uses_after(old.def, replacement);
 }
 
 static bool
@@ -795,7 +795,7 @@ save_reusable_variables(nir_builder *b, lower_ngg_nogs_state *s)
                      : nir_after_instr(instr);
          nir_store_var(b, saved->var, saved->ssa, BITFIELD_MASK(ssa->num_components));
          nir_def *reloaded = nir_load_var(b, saved->var);
-         nir_def_rewrite_uses_after(ssa, reloaded, reloaded->parent_instr);
+         nir_def_rewrite_uses_after(ssa, reloaded);
       }
 
       /* Look at the next CF node. */
@@ -907,7 +907,7 @@ clipdist_culling_es_part(nir_builder *b, lower_ngg_nogs_state *s,
 }
 
 static unsigned
-ngg_nogs_get_culling_pervertex_lds_size(gl_shader_stage stage,
+ngg_nogs_get_culling_pervertex_lds_size(mesa_shader_stage stage,
                                         bool uses_instance_id,
                                         bool uses_primitive_id,
                                         unsigned *num_repacked_variables)
@@ -1404,7 +1404,7 @@ ngg_nogs_build_streamout(nir_builder *b, lower_ngg_nogs_state *s)
 
 static unsigned
 ngg_nogs_get_pervertex_lds_size(lower_ngg_nogs_state *s,
-                                gl_shader_stage stage,
+                                mesa_shader_stage stage,
                                 bool streamout_enabled,
                                 bool export_prim_id,
                                 bool has_user_edgeflags)
@@ -1455,7 +1455,7 @@ ngg_nogs_gather_outputs(nir_builder *b, struct exec_list *cf_list, lower_ngg_nog
 
 static unsigned
 ac_ngg_nogs_get_pervertex_lds_size(lower_ngg_nogs_state *s,
-                                   gl_shader_stage stage,
+                                   mesa_shader_stage stage,
                                    bool streamout_enabled,
                                    bool export_prim_id,
                                    bool has_user_edgeflags,
@@ -1795,7 +1795,7 @@ ac_nir_lower_ngg_nogs(nir_shader *shader, const ac_nir_lower_ngg_options *option
 }
 
 unsigned
-ac_ngg_get_scratch_lds_size(gl_shader_stage stage,
+ac_ngg_get_scratch_lds_size(mesa_shader_stage stage,
                             unsigned workgroup_size,
                             unsigned wave_size,
                             bool streamout_enabled,

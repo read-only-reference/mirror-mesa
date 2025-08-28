@@ -42,7 +42,7 @@ struct match_state {
    const nir_algebraic_table *table;
 
    nir_alu_src variables[NIR_SEARCH_MAX_VARIABLES];
-   struct hash_table *range_ht;
+   const nir_search_state *state;
 };
 
 static bool
@@ -83,7 +83,7 @@ src_is_type(nir_src src, nir_alu_type type)
    assert(type != nir_type_invalid);
 
    if (src.ssa->parent_instr->type == nir_instr_type_alu) {
-      nir_alu_instr *src_alu = nir_instr_as_alu(src.ssa->parent_instr);
+      nir_alu_instr *src_alu = nir_def_as_alu(src.ssa);
       nir_alu_type output_type = nir_op_infos[src_alu->op].output_type;
 
       if (type == nir_type_bool) {
@@ -102,7 +102,7 @@ src_is_type(nir_src src, nir_alu_type type)
 
       return nir_alu_type_get_base_type(output_type) == type;
    } else if (src.ssa->parent_instr->type == nir_instr_type_intrinsic) {
-      nir_intrinsic_instr *intr = nir_instr_as_intrinsic(src.ssa->parent_instr);
+      nir_intrinsic_instr *intr = nir_def_as_intrinsic(src.ssa);
 
       if (type == nir_type_bool) {
          return intr->intrinsic == nir_intrinsic_load_front_face ||
@@ -267,7 +267,7 @@ match_value(const nir_algebraic_table *table,
          return false;
 
       return match_expression(table, nir_search_value_as_expression(value),
-                              nir_instr_as_alu(instr->src[src].src.ssa->parent_instr),
+                              nir_def_as_alu(instr->src[src].src.ssa),
                               num_components, new_swizzle, state);
 
    case nir_search_value_variable: {
@@ -278,7 +278,7 @@ match_value(const nir_algebraic_table *table,
           instr->src[src].src.ssa->parent_instr->type != nir_instr_type_load_const)
          return false;
 
-      if (var->cond_index != -1 && !table->variable_cond[var->cond_index](state->range_ht, instr,
+      if (var->cond_index != -1 && !table->variable_cond[var->cond_index](state->state, instr,
                                                                           src, num_components, new_swizzle))
          return false;
 
@@ -320,7 +320,7 @@ match_value(const nir_algebraic_table *table,
       switch (const_val->type) {
       case nir_type_float: {
          nir_load_const_instr *const load =
-            nir_instr_as_load_const(instr->src[src].src.ssa->parent_instr);
+            nir_def_as_load_const(instr->src[src].src.ssa);
 
          /* There are 8-bit and 1-bit integer types, but there are no 8-bit or
           * 1-bit float types.  This prevents potential assertion failures in
@@ -426,11 +426,14 @@ match_expression(const nir_algebraic_table *table, const nir_search_expression *
 
    bool matched = true;
    for (unsigned i = 0; i < nir_op_infos[instr->op].num_inputs; i++) {
+      /* If src1 of the search expression is a constant, check that first since it's faster. */
+      unsigned src_idx = i < 2 ? i ^ expr->src1_is_const : i;
+
       /* 2src_commutative instructions that have 3 sources are only commutative
        * in the first two sources.  Source 2 is always source 2.
        */
-      if (!match_value(table, &state->table->values[expr->srcs[i]].value, instr,
-                       i < 2 ? i ^ comm_op_flip : i,
+      if (!match_value(table, &state->table->values[expr->srcs[src_idx]].value, instr,
+                       i < 2 ? src_idx ^ comm_op_flip : src_idx,
                        num_components, swizzle, state)) {
          matched = false;
          break;
@@ -659,25 +662,26 @@ nir_algebraic_update_automaton(nir_instr *new_instr,
                                const struct per_op_table *pass_op_table)
 {
 
-   nir_instr_worklist *automaton_worklist = nir_instr_worklist_create();
+   nir_instr_worklist automaton_worklist;
+   nir_instr_worklist_init(&automaton_worklist);
 
    /* Walk through the tree of uses of our new instruction's SSA value,
     * recursively updating the automaton state until it stabilizes.
     */
-   add_uses_to_worklist(new_instr, automaton_worklist, states, pass_op_table);
+   add_uses_to_worklist(new_instr, &automaton_worklist, states, pass_op_table);
 
    nir_instr *instr;
-   while ((instr = nir_instr_worklist_pop_head(automaton_worklist))) {
+   while ((instr = nir_instr_worklist_pop_head(&automaton_worklist))) {
       nir_instr_worklist_push_tail(algebraic_worklist, instr);
-      add_uses_to_worklist(instr, automaton_worklist, states, pass_op_table);
+      add_uses_to_worklist(instr, &automaton_worklist, states, pass_op_table);
    }
 
-   nir_instr_worklist_destroy(automaton_worklist);
+   nir_instr_worklist_fini(&automaton_worklist);
 }
 
 static nir_def *
 nir_replace_instr(nir_builder *build, nir_alu_instr *instr,
-                  struct hash_table *range_ht,
+                  const nir_search_state *search_state,
                   struct util_dynarray *states,
                   const nir_algebraic_table *table,
                   const nir_search_expression *search,
@@ -693,7 +697,7 @@ nir_replace_instr(nir_builder *build, nir_alu_instr *instr,
    struct match_state state;
    state.inexact_match = false;
    state.has_exact_alu = false;
-   state.range_ht = range_ht;
+   state.state = search_state;
    state.pass_op_table = table->pass_op_table;
    state.table = table;
 
@@ -853,7 +857,7 @@ nir_algebraic_automaton(nir_instr *instr, struct util_dynarray *states,
 
 static bool
 nir_algebraic_instr(nir_builder *build, nir_instr *instr,
-                    struct hash_table *range_ht,
+                    const nir_search_state *state,
                     const bool *condition_flags,
                     const nir_algebraic_table *table,
                     struct util_dynarray *states,
@@ -880,10 +884,13 @@ nir_algebraic_instr(nir_builder *build, nir_instr *instr,
         xform++) {
       if (condition_flags[xform->condition_offset] &&
           !(table->values[xform->search].expression.inexact && ignore_inexact) &&
-          nir_replace_instr(build, alu, range_ht, states, table,
+          nir_replace_instr(build, alu, state, states, table,
                             &table->values[xform->search].expression,
                             &table->values[xform->replace].value, worklist, dead_instrs)) {
-         _mesa_hash_table_clear(range_ht, NULL);
+         if (state->range_ht->entries)
+            _mesa_hash_table_clear(state->range_ht, NULL);
+         if (state->numlsb_ht->entries)
+            _mesa_hash_table_clear(state->numlsb_ht, NULL);
          return true;
       }
    }
@@ -910,9 +917,18 @@ nir_algebraic_impl(nir_function_impl *impl,
    }
    memset(states.data, 0, states.size);
 
-   struct hash_table *range_ht = _mesa_pointer_hash_table_create(NULL);
+   struct hash_table range_ht;
+   _mesa_pointer_hash_table_init(&range_ht, NULL);
 
-   nir_instr_worklist *worklist = nir_instr_worklist_create();
+   struct hash_table numlsb_ht;
+   _mesa_pointer_hash_table_init(&numlsb_ht, NULL);
+
+   nir_search_state state;
+   state.range_ht = &range_ht;
+   state.numlsb_ht = &numlsb_ht;
+
+   nir_instr_worklist worklist;
+   nir_instr_worklist_init(&worklist);
 
    /* Walk top-to-bottom setting up the automaton state. */
    nir_foreach_block(block, impl) {
@@ -929,7 +945,7 @@ nir_algebraic_impl(nir_function_impl *impl,
       nir_foreach_instr_reverse(instr, block) {
          instr->pass_flags = 0;
          if (instr->type == nir_instr_type_alu)
-            nir_instr_worklist_push_tail(worklist, instr);
+            nir_instr_worklist_push_tail(&worklist, instr);
       }
    }
 
@@ -937,7 +953,7 @@ nir_algebraic_impl(nir_function_impl *impl,
    exec_list_make_empty(&dead_instrs);
 
    nir_instr *instr;
-   while ((instr = nir_instr_worklist_pop_head(worklist))) {
+   while ((instr = nir_instr_worklist_pop_head(&worklist))) {
       /* The worklist can have an instr pushed to it multiple times if it was
        * the src of multiple instrs that also got optimized, so make sure that
        * we don't try to re-optimize an instr we already handled.
@@ -946,14 +962,15 @@ nir_algebraic_impl(nir_function_impl *impl,
          continue;
 
       progress |= nir_algebraic_instr(&build, instr,
-                                      range_ht, condition_flags,
-                                      table, &states, worklist, &dead_instrs);
+                                      &state, condition_flags,
+                                      table, &states, &worklist, &dead_instrs);
    }
 
    nir_instr_free_list(&dead_instrs);
 
-   nir_instr_worklist_destroy(worklist);
-   ralloc_free(range_ht);
+   nir_instr_worklist_fini(&worklist);
+   _mesa_hash_table_fini(&numlsb_ht, NULL);
+   _mesa_hash_table_fini(&range_ht, NULL);
    util_dynarray_fini(&states);
 
    return nir_progress(progress, impl, nir_metadata_control_flow);

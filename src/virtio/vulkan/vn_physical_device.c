@@ -410,7 +410,14 @@ vn_physical_device_init_features(struct vn_physical_device *physical_dev)
     * See vn_physical_device_get_native_extensions.
     */
    feats->deviceMemoryReport = true;
+
+#ifdef VN_USE_WSI_PLATFORM
+   feats->presentId = true;
+   feats->presentId2 = true;
+   feats->presentWait = true;
+   feats->presentWait2 = true;
    feats->swapchainMaintenance1 = true;
+#endif
 
    /* Host commands require custom protocol level support. Disable it
     * since it'd be non-trivial to make it performant.
@@ -838,11 +845,9 @@ vn_physical_device_init_properties(struct vn_physical_device *physical_dev)
    if (renderer_info->pci.has_bus_info)
       VN_SET_VK_PROPS(props, &renderer_info->pci.props);
 
-#if DETECT_OS_ANDROID
    /* VK_ANDROID_native_buffer */
    if (vk_android_get_front_buffer_usage())
       props->sharedImage = true;
-#endif
 
    /* TODO: Fix sparse binding on lavapipe. */
    if (props->driverID == VK_DRIVER_ID_MESA_LLVMPIPE)
@@ -887,7 +892,7 @@ vn_physical_device_init_queue_family_properties(
    vn_call_vkGetPhysicalDeviceQueueFamilyProperties2(
       ring, vn_physical_device_to_handle(physical_dev), &count, props);
 
-#if DETECT_OS_ANDROID && ANDROID_API_LEVEL >= 34
+#if defined(VK_USE_PLATFORM_ANDROID_KHR) && ANDROID_API_LEVEL >= 34
    /* Starting from Android 14 (Android U), framework HWUI has required a
     * second graphics queue to avoid racing between webview and skiavk.
     */
@@ -1013,14 +1018,14 @@ vn_physical_device_init_external_memory(
       physical_dev->external_memory.renderer_handle_type =
          VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
 
-#if DETECT_OS_ANDROID
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
       physical_dev->external_memory.supported_handle_types |=
          VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
-#else  /* DETECT_OS_ANDROID */
+#else
       physical_dev->external_memory.supported_handle_types =
          VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT |
          VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
-#endif /* DETECT_OS_ANDROID */
+#endif
    }
 }
 
@@ -1139,7 +1144,7 @@ vn_physical_device_get_native_extensions(
        physical_dev->renderer_sync_fd.semaphore_exportable)
       exts->KHR_external_semaphore_fd = true;
 
-#if DETECT_OS_ANDROID
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
    if (physical_dev->external_memory.renderer_handle_type &&
        renderer_exts->EXT_image_drm_format_modifier &&
        renderer_exts->EXT_queue_family_foreign) {
@@ -1159,16 +1164,20 @@ vn_physical_device_get_native_extensions(
           physical_dev->renderer_sync_fd.fence_exportable)
          exts->ANDROID_native_buffer = true;
    }
-#else  /* DETECT_OS_ANDROID */
+#else  /* VK_USE_PLATFORM_ANDROID_KHR */
    if (physical_dev->external_memory.renderer_handle_type) {
       exts->KHR_external_memory_fd = true;
       exts->EXT_external_memory_dma_buf = true;
    }
-#endif /* DETECT_OS_ANDROID */
+#endif /* VK_USE_PLATFORM_ANDROID_KHR */
 
 #ifdef VN_USE_WSI_PLATFORM
    if (physical_dev->renderer_sync_fd.semaphore_importable) {
       exts->KHR_incremental_present = true;
+      exts->KHR_present_id = true;
+      exts->KHR_present_id2 = true;
+      exts->KHR_present_wait = true;
+      exts->KHR_present_wait2 = true;
       exts->KHR_swapchain = true;
       exts->KHR_swapchain_mutable_format = true;
       exts->EXT_hdr_metadata = true;
@@ -1207,7 +1216,7 @@ vn_physical_device_get_passthrough_extensions(
 {
    struct vn_renderer *renderer = physical_dev->instance->renderer;
 
-#if DETECT_OS_ANDROID || defined(VN_USE_WSI_PLATFORM)
+#if defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(VN_USE_WSI_PLATFORM)
    /* WSI support currently requires semaphore sync fd import for
     * VK_KHR_synchronization2 for code simplicity. This requirement can be
     * dropped by implementing external semaphore purely on the driver side

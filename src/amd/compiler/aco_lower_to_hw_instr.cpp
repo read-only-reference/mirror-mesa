@@ -2157,9 +2157,18 @@ lower_image_sample(lower_context* ctx, aco_ptr<Instruction>& instr)
 {
    Operand linear_vgpr = instr->operands[3];
 
+   bool disable_wqm = instr->mimg().disable_wqm;
+   Operand exact_mask;
+   Operand wqm_mask;
+   if (disable_wqm) {
+      exact_mask = instr_exact_mask(instr.get());
+      wqm_mask = instr_wqm_mask(instr.get());
+   }
+
    unsigned nsa_size = ctx->program->dev.max_nsa_vgprs;
    unsigned vaddr_size = linear_vgpr.size();
-   unsigned num_copied_vgprs = instr->operands.size() - 4;
+   unsigned non_mask_operands = instr->operands.size() - (2 * disable_wqm);
+   unsigned num_copied_vgprs = non_mask_operands - 4;
    nsa_size = num_copied_vgprs > 0 && (ctx->program->gfx_level >= GFX11 || vaddr_size <= nsa_size)
                  ? nsa_size
                  : 0;
@@ -2180,7 +2189,7 @@ lower_image_sample(lower_context* ctx, aco_ptr<Instruction>& instr)
    } else {
       PhysReg reg = linear_vgpr.physReg();
       std::map<PhysReg, copy_operation> copy_operations;
-      for (unsigned i = 4; i < instr->operands.size(); i++) {
+      for (unsigned i = 4; i < non_mask_operands; i++) {
          Operand arg = instr->operands[i];
          Definition def(reg, RegClass::get(RegType::vgpr, arg.bytes()));
          copy_operations[def.physReg()] = {arg, def, def.bytes()};
@@ -2193,10 +2202,11 @@ lower_image_sample(lower_context* ctx, aco_ptr<Instruction>& instr)
    }
 
    instr->mimg().strict_wqm = false;
+   unsigned new_op_count = 3 + num_vaddr + (2 * disable_wqm);
 
-   if ((3 + num_vaddr) > instr->operands.size()) {
+   if (new_op_count > instr->operands.size()) {
       Instruction* new_instr =
-         create_instruction(instr->opcode, Format::MIMG, 3 + num_vaddr, instr->definitions.size());
+         create_instruction(instr->opcode, Format::MIMG, new_op_count, instr->definitions.size());
       std::copy(instr->definitions.cbegin(), instr->definitions.cend(),
                 new_instr->definitions.begin());
       new_instr->operands[0] = instr->operands[0];
@@ -2206,10 +2216,15 @@ lower_image_sample(lower_context* ctx, aco_ptr<Instruction>& instr)
              sizeof(MIMG_instruction) - sizeof(Instruction));
       instr.reset(new_instr);
    } else {
-      while (instr->operands.size() > (3 + num_vaddr))
+      while (instr->operands.size() > new_op_count)
          instr->operands.pop_back();
    }
    std::copy(vaddr, vaddr + num_vaddr, std::next(instr->operands.begin(), 3));
+
+   if (disable_wqm) {
+      instr_exact_mask(instr.get()) = exact_mask;
+      instr_wqm_mask(instr.get()) = wqm_mask;
+   }
 }
 
 } /* end namespace */
@@ -2805,10 +2820,16 @@ lower_to_hw_instr(Program* program)
                assert(clobber_vcc.regClass() == bld.lm && clobber_vcc.physReg() == vcc);
                assert(clobber_scc.isFixed() && clobber_scc.physReg() == scc);
 
-               bld.sop1(Builder::s_mov, Definition(exec_tmp.physReg(), bld.lm),
-                        Operand(exec, bld.lm));
-               bld.sop1(Builder::s_wqm, Definition(exec, bld.lm), clobber_scc,
-                        Operand(exec, bld.lm));
+               bool disable_wqm = instr_disables_wqm(instr.get());
+               assert(instr->operands.size() == (disable_wqm ? 10 : 8));
+
+               /* If WQM was already ended, manually re-enable it. */
+               if (!disable_wqm) {
+                  bld.sop1(Builder::s_mov, Definition(exec_tmp.physReg(), bld.lm),
+                           Operand(exec, bld.lm));
+                  bld.sop1(Builder::s_wqm, Definition(exec, bld.lm), clobber_scc,
+                           Operand(exec, bld.lm));
+               }
 
                uint8_t enabled_channels = 0;
                Operand mrt0[4], mrt1[4];
@@ -2849,17 +2870,31 @@ lower_to_hw_instr(Program* program)
                   dst1 = dst1.advance(4);
                }
 
-               bld.sop1(Builder::s_mov, Definition(exec, bld.lm),
-                        Operand(exec_tmp.physReg(), bld.lm));
+               if (!disable_wqm) {
+                  bld.sop1(Builder::s_mov, Definition(exec, bld.lm),
+                           Operand(exec_tmp.physReg(), bld.lm));
+               }
 
                /* Force export all channels when everything is undefined. */
                if (!enabled_channels)
                   enabled_channels = 0xf;
 
-               bld.exp(aco_opcode::exp, mrt0[0], mrt0[1], mrt0[2], mrt0[3], enabled_channels,
-                       V_008DFC_SQ_EXP_MRT + 21, false);
-               bld.exp(aco_opcode::exp, mrt1[0], mrt1[1], mrt1[2], mrt1[3], enabled_channels,
-                       V_008DFC_SQ_EXP_MRT + 22, false);
+               Instruction* exp[2];
+
+               exp[0] =
+                  bld.exp(aco_opcode::exp, mrt0[0], mrt0[1], mrt0[2], mrt0[3], enabled_channels,
+                          V_008DFC_SQ_EXP_MRT + 21, false, false, false, disable_wqm);
+               exp[1] =
+                  bld.exp(aco_opcode::exp, mrt1[0], mrt1[1], mrt1[2], mrt1[3], enabled_channels,
+                          V_008DFC_SQ_EXP_MRT + 22, false, false, false, disable_wqm);
+
+               if (disable_wqm) {
+                  for (unsigned i = 0; i < 2; i++) {
+                     instr_exact_mask(exp[i]) = instr_exact_mask(instr.get());
+                     instr_wqm_mask(exp[i]) = instr_wqm_mask(instr.get());
+                  }
+               }
+
                break;
             }
             case aco_opcode::p_end_with_regs: {

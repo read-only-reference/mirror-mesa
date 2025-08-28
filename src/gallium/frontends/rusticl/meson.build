@@ -25,6 +25,7 @@ libmesa_rust_files = files(
   'mesa/pipe/transfer.rs',
   'mesa/util.rs',
   'mesa/util/disk_cache.rs',
+  'mesa/util/queue.rs',
   'mesa/util/vm.rs',
 )
 
@@ -44,6 +45,7 @@ rusticl_files = files(
   'api/platform.rs',
   'api/program.rs',
   'api/queue.rs',
+  'api/semaphore.rs',
   'api/types.rs',
   'api/util.rs',
   'core.rs',
@@ -55,14 +57,18 @@ rusticl_files = files(
   'core/platform.rs',
   'core/program.rs',
   'core/queue.rs',
+  'core/semaphore.rs',
   'core/util.rs',
   'core/version.rs',
   'core/gl.rs',
 )
 
 rusticl_args = [
-  # we want unsafe blocks inside unsafe functions
-  '-Dunsafe_op_in_unsafe_fn',
+  rust_2024_lint_args,
+
+  # Should be ran manually before moving to the 2024 edition
+  # '-Dtail_expr_drop_order',
+
   # we error on all clippy warnings unless they are disabled
   '-Dclippy::all',
   # we want to add asserts in control flow
@@ -75,6 +81,12 @@ rusticl_args = [
   '-Aclippy::too_many_arguments',
   '-Aclippy::type_complexity',
 ]
+
+# Disable warnings from future rustc versions.
+# TODO: replace with rustc.get_supported_arguments when requiring meson-1.8+
+if rustc.version().version_compare('>= 1.89')
+  rusticl_args += ['-Amismatched_lifetime_syntaxes']
+endif
 
 rusticl_drivers_enable = get_option('gallium-rusticl-enable-drivers')
 foreach driver : rusticl_drivers_enable
@@ -91,6 +103,7 @@ endif
 
 rusticl_bindgen_args = [
   bindgen_output_args,
+  '--raw-line', '#![allow(warnings)]',
   '--no-convert-floats',
   '--default-enum-style', 'rust',
   '--with-derive-partialeq',
@@ -261,8 +274,12 @@ rusticl_mesa_bindings = rust.bindgen(
     '--allowlist-var',          'SHA1_.*',
     '--allowlist-function',     'u_.*',
     '--allowlist-function',     'util_format_.*',
+    '--allowlist-function',     'util_queue_.*',
     '--allowlist-function',     'util_vma_.*',
+    '--allowlist-function',     'util_get_cpu_caps',
     '--no-copy',                'util_vma_heap', # it's a linked list
+    '--no-copy',                'util_queue',
+    '--no-copy',                'util_queue_fence',
 
     # CL API
     '--allowlist-type',         'cl_sampler_.*_mode',

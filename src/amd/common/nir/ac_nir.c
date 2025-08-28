@@ -163,7 +163,7 @@ ac_nir_load_arg_upper_bound(nir_builder *b, const struct ac_shader_args *ac_args
                             unsigned upper_bound)
 {
    nir_def *value = ac_nir_load_arg_at_offset(b, ac_args, arg, 0);
-   nir_intrinsic_set_arg_upper_bound_u32_amd(nir_instr_as_intrinsic(value->parent_instr),
+   nir_intrinsic_set_arg_upper_bound_u32_amd(nir_def_as_intrinsic(value),
                                              upper_bound);
    return value;
 }
@@ -307,6 +307,19 @@ ac_get_global_ids(nir_builder *b, unsigned num_components, unsigned bit_size)
    }
 
    return nir_iadd(b, nir_imul(b, block_ids, block_size), local_ids);
+}
+
+nir_def *
+ac_nir_load_smem(nir_builder *b, unsigned num_components, nir_def *addr, nir_def *offset,
+                 unsigned align_mul, enum gl_access_qualifier access)
+{
+   /* Only 1 flag is allowed. */
+   assert(!(access & ~ACCESS_CAN_SPECULATE));
+   assert(align_mul >= 4 && util_is_power_of_two_nonzero(align_mul));
+
+   return nir_load_smem_amd(b, num_components, addr, offset,
+                            .align_mul = align_mul,
+                            .access = access | ACCESS_CAN_REORDER | ACCESS_NON_WRITEABLE);
 }
 
 unsigned
@@ -594,11 +607,7 @@ ac_nir_mem_vectorize_callback(unsigned align_mul, unsigned align_offset, unsigne
          return false;
    }
 
-   uint32_t align;
-   if (align_offset)
-      align = 1 << (ffs(align_offset) - 1);
-   else
-      align = align_mul;
+   uint32_t align = nir_combined_align(align_mul, align_offset);
 
    /* Don't cross swizzle elements. stack/scratch intrinsics use scratch_* instructions, which
     * seem to work fine.
@@ -620,10 +629,9 @@ ac_nir_mem_vectorize_callback(unsigned align_mul, unsigned align_offset, unsigne
          /* AMD hardware can't do 3-component loads except for 96-bit loads. */
          return bit_size == 32 && align % 16 == 0;
       }
-      unsigned req = bit_size >= 32 ? bit_size * num_components : bit_size;
-      if (req == 64 || req == 128) /* 64-bit and 128-bit loads can use ds_read2_b{32,64} */
-         req /= 2u;
-      return align % (req / 8u) == 0;
+
+      /* DS loads and stores require the alignment of the size. */
+      return align % (aligned_new_size / 8u) == 0;
    }
    return false;
 }
@@ -660,37 +668,24 @@ bool ac_nir_scalarize_overfetching_loads_callback(const nir_instr *instr, const 
    return used_load_size < align_load_store_size(gfx_level, load_size, uses_smem, is_shared);
 }
 
-/* Get chip-agnostic memory instruction access flags (as opposed to chip-specific GLC/DLC/SLC)
- * from a NIR memory intrinsic.
- */
-enum gl_access_qualifier ac_nir_get_mem_access_flags(const nir_intrinsic_instr *instr)
+/* Determine if the store can be subdword (for the GFX6 TC L1 bug workaround) */
+bool ac_nir_store_may_be_subdword(const nir_intrinsic_instr *instr)
 {
-   enum gl_access_qualifier access =
-      nir_intrinsic_has_access(instr) ? nir_intrinsic_access(instr) : 0;
+   assert(!nir_intrinsic_infos[instr->intrinsic].has_dest);
+   switch (instr->intrinsic) {
+   case nir_intrinsic_store_ssbo:
+   case nir_intrinsic_store_buffer_amd:
+   case nir_intrinsic_store_global:
+   case nir_intrinsic_store_global_amd:
+      return (nir_intrinsic_has_align_offset(instr) && nir_intrinsic_align(instr) % 4 != 0) ||
+             ((instr->src[0].ssa->bit_size / 8) * instr->src[0].ssa->num_components) % 4 != 0;
 
-   /* Determine ACCESS_MAY_STORE_SUBDWORD. (for the GFX6 TC L1 bug workaround) */
-   if (!nir_intrinsic_infos[instr->intrinsic].has_dest) {
-      switch (instr->intrinsic) {
-      case nir_intrinsic_bindless_image_store:
-         access |= ACCESS_MAY_STORE_SUBDWORD;
-         break;
 
-      case nir_intrinsic_store_ssbo:
-      case nir_intrinsic_store_buffer_amd:
-      case nir_intrinsic_store_global:
-      case nir_intrinsic_store_global_amd:
-         if (access & ACCESS_USES_FORMAT_AMD ||
-             (nir_intrinsic_has_align_offset(instr) && nir_intrinsic_align(instr) % 4 != 0) ||
-             ((instr->src[0].ssa->bit_size / 8) * instr->src[0].ssa->num_components) % 4 != 0)
-            access |= ACCESS_MAY_STORE_SUBDWORD;
-         break;
-
-      default:
-         UNREACHABLE("unexpected store instruction");
-      }
+   default:
+      UNREACHABLE("unexpected store instruction");
    }
 
-   return access;
+   return false;
 }
 
 /**

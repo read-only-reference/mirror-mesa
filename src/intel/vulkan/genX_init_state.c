@@ -200,7 +200,14 @@ init_common_queue_state(struct anv_queue *queue, struct anv_batch *batch)
     */
    const struct intel_l3_config *cfg = intel_get_default_l3_config(device->info);
    genX(emit_l3_config)(batch, device, cfg);
-   device->l3_config = cfg;
+   device->l3_config = device->l3_slm_config = cfg;
+#else
+   device->l3_config = intel_get_l3_config(
+      device->info,
+      intel_get_default_l3_weights(device->info, true, false /* slm */));
+   device->l3_slm_config = intel_get_l3_config(
+      device->info,
+      intel_get_default_l3_weights(device->info, true, true /* slm */));
 #endif
 
 #if GFX_VERx10 == 125
@@ -514,6 +521,15 @@ init_render_queue_state(struct anv_queue *queue, bool is_companion_rcs_batch)
       cc1.DisablePreemptionandHighPriorityPausingdueto3DPRIMITIVECommandMask = true;
 #endif
    }
+
+#if GFX_VER == 20
+   if (intel_device_info_is_bmg_g31(devinfo)) {
+      anv_batch_write_reg(batch, GENX(CACHE_MODE_0), cm0) {
+         cm0.MsaaFastClearEnabled = true;
+         cm0.MsaaFastClearEnabledMask = true;
+      }
+   }
+#endif
 
 #if INTEL_NEEDS_WA_1806527549
    /* Wa_1806527549 says to disable the following HiZ optimization when the
@@ -924,7 +940,7 @@ genX(init_physical_device_state)(ASSERTED struct anv_physical_device *pdevice)
 VkResult
 genX(init_device_state)(struct anv_device *device)
 {
-   VkResult res;
+   VkResult res = VK_SUCCESS;
 
    device->slice_hash = (struct anv_state) { 0 };
    for (uint32_t i = 0; i < device->queue_count; i++) {

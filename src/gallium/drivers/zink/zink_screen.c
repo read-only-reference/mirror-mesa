@@ -117,6 +117,7 @@ zink_debug_options[] = {
    { "quiet", ZINK_DEBUG_QUIET, "Suppress warnings" },
    { "nopc", ZINK_DEBUG_NOPC, "No precompilation" },
    { "msaaopt", ZINK_DEBUG_MSAAOPT, "Optimize out loads/stores of MSAA attachments" },
+   { "rploads", ZINK_DEBUG_RPLOADS, "Zap renderpass loads for DONT_CARE" },
    DEBUG_NAMED_VALUE_END
 };
 
@@ -247,7 +248,7 @@ zink_set_max_shader_compiler_threads(struct pipe_screen *pscreen, unsigned max_t
 }
 
 static bool
-zink_is_parallel_shader_compilation_finished(struct pipe_screen *screen, void *shader, enum pipe_shader_type shader_type)
+zink_is_parallel_shader_compilation_finished(struct pipe_screen *screen, void *shader, mesa_shader_stage shader_type)
 {
    if (shader_type == MESA_SHADER_COMPUTE) {
       struct zink_program *pg = shader;
@@ -495,7 +496,7 @@ have_fp32_filter_linear(struct zink_screen *screen)
 static void
 zink_init_shader_caps(struct zink_screen *screen)
 {
-   for (unsigned i = 0; i <= PIPE_SHADER_COMPUTE; i++) {
+   for (unsigned i = 0; i <= MESA_SHADER_COMPUTE; i++) {
       struct pipe_shader_caps *caps =
          (struct pipe_shader_caps *)&screen->base.shader_caps[i];
 
@@ -744,7 +745,7 @@ zink_init_screen_caps(struct zink_screen *screen)
    caps->compressed_surface_reinterpret_blocks_layered = caps->surface_reinterpret_blocks &&
                                                          screen->info.maint6_props.blockTexelViewCompatibleMultipleLayers;
 
-   caps->validate_all_dirty_states = true;
+   caps->can_bind_const_buffer_as_vertex = true;
    caps->allow_mapped_buffers_during_execution = true;
    caps->map_unsynchronized_thread_safe = true;
    caps->shareable_shaders = true;
@@ -1538,8 +1539,7 @@ zink_destroy_screen(struct pipe_screen *pscreen)
          }
       }
       if (!device_table.entries) {
-         ralloc_free(device_table.table);
-         device_table.table = NULL;
+         _mesa_set_fini(&device_table, NULL);
       }
       simple_mtx_unlock(&device_lock);
    }
@@ -2419,6 +2419,7 @@ zink_screen_import_dmabuf_semaphore(struct zink_screen *screen, struct zink_reso
 bool
 zink_screen_timeline_wait(struct zink_screen *screen, uint64_t batch_id, uint64_t timeout)
 {
+   MESA_TRACE_FUNC();
    VkSemaphoreWaitInfo wi = {0};
 
    if (zink_screen_check_last_finished(screen, batch_id))

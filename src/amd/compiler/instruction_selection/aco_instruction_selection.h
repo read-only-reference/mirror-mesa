@@ -7,6 +7,7 @@
 #ifndef ACO_INSTRUCTION_SELECTION_H
 #define ACO_INSTRUCTION_SELECTION_H
 
+#include "aco_builder.h"
 #include "aco_ir.h"
 
 #include "nir.h"
@@ -178,6 +179,18 @@ should_declare_array(ac_image_dim dim)
           dim == ac_image_2darraymsaa;
 }
 
+template <typename T>
+inline void
+init_disable_wqm(Builder& bld, T& instr, bool disable_wqm)
+{
+   if (disable_wqm) {
+      instr_exact_mask(&instr) = Operand();
+      instr_wqm_mask(&instr) = Operand();
+      instr.disable_wqm = true;
+      bld.program->needs_exact = true;
+   }
+}
+
 /* aco_isel_setup.cpp */
 void init_context(isel_context* ctx, nir_shader* shader);
 void cleanup_context(isel_context* ctx);
@@ -228,7 +241,8 @@ void emit_interp_mov_instr(isel_context* ctx, unsigned idx, unsigned component, 
                            Temp dst, Temp prim_mask, bool high_16bits);
 std::vector<Temp> emit_pack_v1(isel_context* ctx, const std::vector<Temp>& unpacked);
 MIMG_instruction* emit_mimg(Builder& bld, aco_opcode op, std::vector<Temp> dsts, Temp rsrc,
-                            Operand samp, std::vector<Temp> coords, Operand vdata = Operand(v1));
+                            Operand samp, std::vector<Temp> coords, bool disable_wqm,
+                            Operand vdata = Operand(v1));
 Operand emit_tfe_init(Builder& bld, Temp dst);
 struct aco_export_mrt {
    Operand out[4];

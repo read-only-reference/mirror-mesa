@@ -268,8 +268,7 @@ remap_tess_levels(nir_builder *b, nir_intrinsic_instr *intr,
          nir_src_rewrite(&intr->src[0], src);
       }
    } else if (dest) {
-      nir_def_rewrite_uses_after(&intr->def, dest,
-                                     dest->parent_instr);
+      nir_def_rewrite_uses_after(&intr->def, dest);
    }
 
    return true;
@@ -369,7 +368,7 @@ lower_per_view_outputs(nir_builder *b,
    else {
       nir_def *new_def = nir_load_output(b, intrin->def.num_components,
                                          intrin->def.bit_size, new_offset);
-      new = nir_instr_as_intrinsic(new_def->parent_instr);
+      new = nir_def_as_intrinsic(new_def);
    }
 
    nir_intrinsic_set_base(new, nir_intrinsic_base(intrin));
@@ -1948,7 +1947,6 @@ brw_vectorize_lower_mem_access(nir_shader *nir,
          .buffer_max        = UINT32_MAX,
          .shared_max        = UINT32_MAX,
          .shared_atomic_max = UINT32_MAX,
-         .uniform_max       = UINT32_MAX,
       };
       OPT(nir_opt_offsets, &offset_options);
 
@@ -2012,7 +2010,11 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
    if (OPT(nir_lower_tex, &tex_options))
       OPT(nir_lower_tex, &tex_options);
 
-   OPT(brw_nir_lower_texture, devinfo);
+   const struct brw_nir_lower_texture_opts brw_tex_options = {
+      .combined_lod_and_array_index = compiler->devinfo->ver >= 20,
+      .combined_lod_or_bias_and_offset = compiler->devinfo->ver >= 20,
+   };
+   OPT(brw_nir_lower_texture, &brw_tex_options);
 
    OPT(intel_nir_lower_sparse_intrinsics);
 
@@ -2037,7 +2039,7 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
    if (devinfo->ver >= 30)
       NIR_PASS(_, nir, brw_nir_lower_sample_index_in_coord);
 
-   if (gl_shader_stage_can_set_fragment_shading_rate(nir->info.stage))
+   if (mesa_shader_stage_can_set_fragment_shading_rate(nir->info.stage))
       NIR_PASS(_, nir, intel_nir_lower_shading_rate_output);
 
    OPT(brw_nir_tag_speculative_access);
@@ -2698,7 +2700,7 @@ brw_nir_move_interpolation_to_top(nir_shader *nir)
             if (intrin->intrinsic != nir_intrinsic_load_interpolated_input)
                continue;
             nir_intrinsic_instr *bary_intrinsic =
-               nir_instr_as_intrinsic(intrin->src[0].ssa->parent_instr);
+               nir_def_as_intrinsic(intrin->src[0].ssa);
             nir_intrinsic_op op = bary_intrinsic->intrinsic;
 
             /* Leave interpolateAtSample/Offset() where they are. */

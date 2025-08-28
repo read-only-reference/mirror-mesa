@@ -829,9 +829,9 @@ ntq_emit_pack_unorm_4x8(struct vc4_compile *c, nir_alu_instr *instr)
          * peek back at what generated its sources.
          */
         if (instr->src[0].src.ssa->parent_instr->type == nir_instr_type_alu &&
-            nir_instr_as_alu(instr->src[0].src.ssa->parent_instr)->op ==
+            nir_def_as_alu(instr->src[0].src.ssa)->op ==
             nir_op_vec4) {
-                vec4 = nir_instr_as_alu(instr->src[0].src.ssa->parent_instr);
+                vec4 = nir_def_as_alu(instr->src[0].src.ssa);
         }
 
         /* If the pack is replicating the same channel 4 times, use the 8888
@@ -1000,7 +1000,7 @@ static struct qreg ntq_emit_bcsel(struct vc4_compile *c, nir_alu_instr *instr,
         if (instr->src[0].src.ssa->parent_instr->type != nir_instr_type_alu)
                 goto out;
         nir_alu_instr *compare =
-                nir_instr_as_alu(instr->src[0].src.ssa->parent_instr);
+                nir_def_as_alu(instr->src[0].src.ssa);
         if (!compare)
                 goto out;
 
@@ -2187,7 +2187,7 @@ static const nir_shader_compiler_options nir_options = {
 
 const struct nir_shader_compiler_options *
 vc4_screen_get_compiler_options(struct pipe_screen *pscreen,
-                                enum pipe_shader_type shader)
+                                mesa_shader_stage shader)
 {
         return &nir_options;
 }
@@ -2538,7 +2538,7 @@ vc4_shader_state_create(struct pipe_context *pctx,
 
         if (VC4_DBG(NIR)) {
                 fprintf(stderr, "%s prog %d NIR:\n",
-                        gl_shader_stage_name(s->info.stage),
+                        mesa_shader_stage_name(s->info.stage),
                         so->program_id);
                 nir_print_shader(s, stderr);
                 fprintf(stderr, "\n");
@@ -2801,7 +2801,7 @@ vc4_update_compiled_fs(struct vc4_context *vc4, uint8_t prim_mode)
                          PIPE_SPRITE_COORD_UPPER_LEFT);
         }
 
-        key->ubo_1_size = vc4->constbuf[PIPE_SHADER_FRAGMENT].cb[1].buffer_size;
+        key->ubo_1_size = vc4->constbuf[MESA_SHADER_FRAGMENT].cb[1].buffer_size;
 
         struct vc4_compiled_shader *old_fs = vc4->prog.fs;
         vc4->prog.fs = vc4_get_compiled_shader(vc4, QSTAGE_FRAG, &key->base);

@@ -1030,14 +1030,14 @@ ir3_nir_lower_gs(nir_shader *shader)
       exec_list_push_tail(&state.new_outputs, &output->node);
 
       /* Rewrite the original output to be a shadow variable. */
-      var->name = ralloc_asprintf(var, "%s@gs-temp", output->name);
+      nir_variable_set_namef(shader, var, "%s@gs-temp", output->name);
       var->data.mode = nir_var_shader_temp;
 
       /* Clone the shadow variable to create the emit shadow variable that
        * we'll assign in the emit conditionals.
        */
       nir_variable *emit_output = nir_variable_clone(var, shader);
-      emit_output->name = ralloc_asprintf(var, "%s@emit-temp", output->name);
+      nir_variable_set_namef(shader, emit_output, "%s@emit-temp", output->name);
       exec_list_push_tail(&state.emit_outputs, &emit_output->node);
    }
 
@@ -1065,7 +1065,7 @@ ir3_nir_lower_gs(nir_shader *shader)
     * them to this new if statement, rather than emitting this code at every
     * return statement.
     */
-   assert(impl->end_block->predecessors->entries == 1);
+   assert(impl->end_block->predecessors.entries == 1);
    nir_block *block = nir_impl_last_block(impl);
    b.cursor = nir_after_block_before_jump(block);
 

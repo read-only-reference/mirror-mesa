@@ -341,11 +341,13 @@ public:
       case BRW_OPCODE_BFE:
       case BRW_OPCODE_BFI2:
       case BRW_OPCODE_MAD:
-      case BRW_OPCODE_LRP:
+      case BRW_OPCODE_LRP: {
+         brw_reg fixed0 = fix_3src_operand(src0);
+         brw_reg fixed1 = fix_3src_operand(src1);
+         brw_reg fixed2 = fix_3src_operand(src2);
          return emit(brw_inst(opcode, dispatch_width(), dst,
-                                 fix_3src_operand(src0),
-                                 fix_3src_operand(src1),
-                                 fix_3src_operand(src2)));
+                              fixed0, fixed1, fixed2));
+      }
 
       default:
          return emit(brw_inst(opcode, dispatch_width(), dst,
@@ -877,8 +879,8 @@ public:
       /* BROADCAST will only write a single component after lowering. Munge
        * size_written here to match the allocated size of dst.
        */
-      exec_all().emit(SHADER_OPCODE_BROADCAST, dst, value, index)
-         ->size_written = dst.component_size(xbld.dispatch_width());
+      xbld.emit(SHADER_OPCODE_BROADCAST, dst, value, index,
+                brw_imm_ud(value.component_size(_dispatch_width)));
 
       return component(dst, 0);
    }

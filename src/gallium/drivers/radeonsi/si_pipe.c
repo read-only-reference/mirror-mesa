@@ -58,10 +58,6 @@ static const struct debug_named_value radeonsi_debug_options[] = {
    {"nofastdlist", DBG(NO_FAST_DISPLAY_LIST), "Disable fast display lists"},
    {"nodmashaders", DBG(NO_DMA_SHADERS), "Disable uploading shaders via CP DMA and map them directly."},
 
-   /* Multimedia options: */
-   { "noefc", DBG(NO_EFC), "Disable hardware based encoder colour format conversion."},
-   {"lowlatencyenc", DBG(LOW_LATENCY_ENCODE), "Enable low latency encoding."},
-
    /* 3D engine options: */
    {"nongg", DBG(NO_NGG), "Disable NGG and use the legacy pipeline."},
    {"nggc", DBG(ALWAYS_NGG_CULLING_ALL), "Always use NGG culling even when it can hurt."},
@@ -124,6 +120,19 @@ static const struct debug_named_value radeonsi_shader_debug_options[] = {
    {"nooptvariant", DBG(NO_OPT_VARIANT), "Disable compiling optimized shader variants."},
    {"useaco", DBG(USE_ACO), "Use ACO as shader compiler when possible"},
    {"usellvm", DBG(USE_LLVM), "Use LLVM as shader compiler when possible"},
+
+   DEBUG_NAMED_VALUE_END /* must be last */
+};
+
+static const struct debug_named_value radeonsi_multimedia_debug_options[] = {
+   /* Multimedia options: */
+   {"noefc", DBG(NO_EFC), "Disable hardware based encoder colour format conversion."},
+   {"lowlatencyenc", DBG(LOW_LATENCY_ENCODE), "Enable low latency encoding."},
+   {"novideotiling", DBG(NO_VIDEO_TILING), "Disable tiling for video."},
+   {"nodectier1", DBG(NO_DECODE_TIER1), "Disable tier1 for video decode."},
+   {"nodectier2", DBG(NO_DECODE_TIER2), "Disable tier2 for video decode."},
+   {"nodectier3", DBG(NO_DECODE_TIER3), "Disable tier3 for video decode."},
+   {"noenctier2", DBG(NO_ENCODE_TIER2), "Disable tier2 for video encode."},
 
    DEBUG_NAMED_VALUE_END /* must be last */
 };
@@ -761,7 +770,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
       }
       sctx->null_const_buf.buffer_size = sctx->null_const_buf.buffer->width0;
 
-      unsigned start_shader = sctx->is_gfx_queue ? 0 : PIPE_SHADER_COMPUTE;
+      unsigned start_shader = sctx->is_gfx_queue ? 0 : MESA_SHADER_COMPUTE;
       for (shader = start_shader; shader < SI_NUM_SHADERS; shader++) {
          for (i = 0; i < SI_NUM_CONST_BUFFERS; i++) {
             sctx->b.set_constant_buffer(&sctx->b, shader, i, false, &sctx->null_const_buf);
@@ -1186,7 +1195,7 @@ static void si_set_max_shader_compiler_threads(struct pipe_screen *screen, unsig
 }
 
 static bool si_is_parallel_shader_compilation_finished(struct pipe_screen *screen, void *shader,
-                                                       enum pipe_shader_type shader_type)
+                                                       mesa_shader_stage shader_type)
 {
    struct si_shader_selector *sel = (struct si_shader_selector *)shader;
 
@@ -1299,6 +1308,7 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
    sscreen->debug_flags = debug_get_flags_option("R600_DEBUG", radeonsi_debug_options, 0);
    sscreen->debug_flags |= debug_get_flags_option("AMD_DEBUG", radeonsi_debug_options, 0);
    sscreen->shader_debug_flags = debug_get_flags_option("AMD_DEBUG", radeonsi_shader_debug_options, 0);
+   sscreen->multimedia_debug_flags = debug_get_flags_option("AMD_DEBUG", radeonsi_multimedia_debug_options, 0);
    test_flags = debug_get_flags_option("AMD_TEST", test_options, 0);
 
    if (sscreen->debug_flags & DBG(NO_DISPLAY_DCC)) {

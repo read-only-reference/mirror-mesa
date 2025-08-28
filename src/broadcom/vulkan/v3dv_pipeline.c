@@ -373,7 +373,7 @@ shader_module_compile_to_nir(struct v3dv_device *device,
    const nir_shader_compiler_options *nir_options =
       v3dv_pipeline_get_nir_options(&device->devinfo);
 
-   gl_shader_stage gl_stage = broadcom_shader_stage_to_gl(stage->stage);
+   mesa_shader_stage gl_stage = broadcom_shader_stage_to_gl(stage->stage);
 
    const VkPipelineShaderStageCreateInfo stage_info = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -492,11 +492,11 @@ lower_load_push_constant(nir_builder *b, nir_intrinsic_instr *instr,
 static struct v3dv_descriptor_map*
 pipeline_get_descriptor_map(struct v3dv_pipeline *pipeline,
                             VkDescriptorType desc_type,
-                            gl_shader_stage gl_stage,
+                            mesa_shader_stage gl_stage,
                             bool is_sampler)
 {
    enum broadcom_shader_stage broadcom_stage =
-      gl_shader_stage_to_broadcom(gl_stage);
+      mesa_shader_stage_to_broadcom(gl_stage);
 
    assert(pipeline->shared_data &&
           pipeline->shared_data->maps[broadcom_stage]);
@@ -623,10 +623,10 @@ lower_tex_src(nir_builder *b,
    uint8_t plane = tex_instr_get_and_remove_plane_src(instr);
 
    /* We compute first the offsets */
-   nir_deref_instr *deref = nir_instr_as_deref(src->src.ssa->parent_instr);
+   nir_deref_instr *deref = nir_def_as_deref(src->src.ssa);
    while (deref->deref_type != nir_deref_type_var) {
       nir_deref_instr *parent =
-         nir_instr_as_deref(deref->parent.ssa->parent_instr);
+         nir_def_as_deref(deref->parent.ssa);
 
       assert(deref->deref_type == nir_deref_type_array);
 
@@ -757,7 +757,7 @@ lower_image_deref(nir_builder *b,
 
    while (deref->deref_type != nir_deref_type_var) {
       nir_deref_instr *parent =
-         nir_instr_as_deref(deref->parent.ssa->parent_instr);
+         nir_def_as_deref(deref->parent.ssa);
 
       assert(deref->deref_type == nir_deref_type_array);
 
@@ -915,8 +915,7 @@ lower_point_coord_cb(nir_builder *b, nir_intrinsic_instr *intr, void *_state)
    result =
       nir_vector_insert_imm(b, result,
                             nir_fsub_imm(b, 1.0, nir_channel(b, result, 1)), 1);
-   nir_def_rewrite_uses_after(&intr->def,
-                                  result, result->parent_instr);
+   nir_def_rewrite_uses_after(&intr->def, result);
    return true;
 }
 
@@ -1689,7 +1688,7 @@ pipeline_compile_shader_variant(struct v3dv_pipeline_stage *p_stage,
    struct v3dv_pipeline *pipeline = p_stage->pipeline;
    struct v3dv_physical_device *physical_device = pipeline->device->pdevice;
    const struct v3d_compiler *compiler = physical_device->compiler;
-   gl_shader_stage gl_stage = broadcom_shader_stage_to_gl(p_stage->stage);
+   mesa_shader_stage gl_stage = broadcom_shader_stage_to_gl(p_stage->stage);
 
    if (V3D_DBG(NIR) || v3d_debug_flag_for_shader_stage(gl_stage)) {
       fprintf(stderr, "Just before v3d_compile: %s prog %d NIR:\n",
@@ -2215,8 +2214,8 @@ write_creation_feedback(struct v3dv_pipeline *pipeline,
       assert(feedback_stage_count <= stage_count);
 
       for (uint32_t i = 0; i < feedback_stage_count; i++) {
-         gl_shader_stage s = vk_to_mesa_shader_stage(stages[i].stage);
-         enum broadcom_shader_stage bs = gl_shader_stage_to_broadcom(s);
+         mesa_shader_stage s = vk_to_mesa_shader_stage(stages[i].stage);
+         enum broadcom_shader_stage bs = mesa_shader_stage_to_broadcom(s);
 
          create_feedback->pPipelineStageCreationFeedbacks[i] =
             pipeline->stages[bs]->feedback;
@@ -2440,7 +2439,7 @@ pipeline_compile_graphics(struct v3dv_pipeline *pipeline,
     */
    for (uint32_t i = 0; i < pCreateInfo->stageCount; i++) {
       const VkPipelineShaderStageCreateInfo *sinfo = &pCreateInfo->pStages[i];
-      gl_shader_stage stage = vk_to_mesa_shader_stage(sinfo->stage);
+      mesa_shader_stage stage = vk_to_mesa_shader_stage(sinfo->stage);
 
       struct v3dv_pipeline_stage *p_stage =
          vk_zalloc2(&device->vk.alloc, pAllocator, sizeof(*p_stage), 8,
@@ -2453,7 +2452,7 @@ pipeline_compile_graphics(struct v3dv_pipeline *pipeline,
          p_atomic_inc_return(&physical_device->next_program_id);
 
       enum broadcom_shader_stage broadcom_stage =
-         gl_shader_stage_to_broadcom(stage);
+         mesa_shader_stage_to_broadcom(stage);
 
       p_stage->pipeline = pipeline;
       p_stage->stage = broadcom_stage;
@@ -3188,7 +3187,7 @@ pipeline_compile_compute(struct v3dv_pipeline *pipeline,
    struct v3dv_physical_device *physical_device = device->pdevice;
 
    const VkPipelineShaderStageCreateInfo *sinfo = &info->stage;
-   gl_shader_stage stage = vk_to_mesa_shader_stage(sinfo->stage);
+   mesa_shader_stage stage = vk_to_mesa_shader_stage(sinfo->stage);
 
    struct v3dv_pipeline_stage *p_stage =
       vk_zalloc2(&device->vk.alloc, alloc, sizeof(*p_stage), 8,
@@ -3198,7 +3197,7 @@ pipeline_compile_compute(struct v3dv_pipeline *pipeline,
 
    p_stage->program_id = p_atomic_inc_return(&physical_device->next_program_id);
    p_stage->pipeline = pipeline;
-   p_stage->stage = gl_shader_stage_to_broadcom(stage);
+   p_stage->stage = mesa_shader_stage_to_broadcom(stage);
    p_stage->entrypoint = sinfo->pName;
    p_stage->module = vk_shader_module_from_handle(sinfo->module);
    p_stage->spec_info = sinfo->pSpecializationInfo;
@@ -3595,7 +3594,7 @@ v3dv_GetPipelineExecutablePropertiesKHR(
    util_dynarray_foreach(&pipeline->executables.data,
                          struct v3dv_pipeline_executable_data, exe) {
       vk_outarray_append_typed(VkPipelineExecutablePropertiesKHR, &out, props) {
-         gl_shader_stage mesa_stage = broadcom_shader_stage_to_gl(exe->stage);
+         mesa_shader_stage mesa_stage = broadcom_shader_stage_to_gl(exe->stage);
          props->stages = mesa_to_vk_shader_stage(mesa_stage);
 
          VK_PRINT_STR(props->name, "%s (%s)",

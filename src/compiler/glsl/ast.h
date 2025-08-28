@@ -50,7 +50,7 @@ struct YYLTYPE;
  */
 class ast_node {
 public:
-   DECLARE_LINEAR_ZALLOC_CXX_OPERATORS(ast_node);
+   DECLARE_LINEAR_ZALLOC_CXX_OPERATORS(ast_node,,);
 
    /**
     * Print an AST node in something approximating the original GLSL code
@@ -1392,8 +1392,7 @@ _mesa_ast_field_selection_to_hir(const ast_expression *expr,
 				 struct _mesa_glsl_parse_state *state);
 
 extern ir_rvalue *
-_mesa_ast_array_index_to_hir(void *mem_ctx,
-			     struct _mesa_glsl_parse_state *state,
+_mesa_ast_array_index_to_hir(struct _mesa_glsl_parse_state *state,
 			     ir_rvalue *array, ir_rvalue *idx,
 			     YYLTYPE &loc, YYLTYPE &idx_loc);
 

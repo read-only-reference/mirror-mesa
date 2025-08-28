@@ -787,6 +787,14 @@ typedef struct nir_shader_compiler_options {
     */
    unsigned skip_lower_packing_ops;
 
+   /* In case the exact subgroup size is not known, subgroup_size should be
+    * set to 0. In that case, the maximum subgroup size will be calculated by
+    * ballot_components * ballot_bit_size.
+    */
+   uint8_t subgroup_size;
+   uint8_t ballot_bit_size;
+   uint8_t ballot_components;
+
    /** Driver callback where drivers can define how to lower mediump.
     *  Used by nir_lower_io_passes.
     */
@@ -832,6 +840,17 @@ typedef struct nir_shader_compiler_options {
     * the next shader according to default_varying_estimate_instr_cost.
     */
    unsigned max_varying_expression_cost;
+
+   /**
+    * Used by nir_lower_explicit_io to determine the maximum offset_shift to
+    * use when lowering the deref address of the given intrinsic.
+    */
+   unsigned (*max_offset_shift)(nir_intrinsic_instr *, const void *);
+
+   /**
+    * Passed to the callbacks that accept a data pointer.
+    */
+   const void *cb_data;
 } nir_shader_compiler_options;
 
 #ifdef __cplusplus

@@ -59,6 +59,7 @@ reset_obj_list(struct zink_screen *screen, struct zink_batch_state *bs, struct z
 void
 zink_reset_batch_state(struct zink_context *ctx, struct zink_batch_state *bs)
 {
+   MESA_TRACE_FUNC();
    struct zink_screen *screen = zink_screen(ctx->base.screen);
 
    VkResult result = VKSCR(ResetCommandPool)(screen->dev, bs->cmdpool, 0);
@@ -359,15 +360,14 @@ create_batch_state(struct zink_context *ctx)
    zink_label_cmd_buffer(ctx, screen->dev, cmdbufs[0], "zink cmdbuf");
    zink_label_cmd_buffer(ctx, screen->dev, cmdbufs[1], "zink barrier cmdbuf");
 
-#define SET_CREATE_OR_FAIL(ptr) \
-   if (!_mesa_set_init(ptr, bs, _mesa_hash_pointer, _mesa_key_pointer_equal)) \
-      goto fail
+#define SET_CREATE(ptr) \
+   _mesa_set_init(ptr, bs, _mesa_hash_pointer, _mesa_key_pointer_equal)
 
    bs->ctx = ctx;
 
-   SET_CREATE_OR_FAIL(&bs->programs);
-   SET_CREATE_OR_FAIL(&bs->active_queries);
-   SET_CREATE_OR_FAIL(&bs->dmabuf_exports);
+   SET_CREATE(&bs->programs);
+   SET_CREATE(&bs->active_queries);
+   SET_CREATE(&bs->dmabuf_exports);
    util_dynarray_init(&bs->signal_semaphores, NULL);
    util_dynarray_init(&bs->user_signal_semaphores, NULL);
    util_dynarray_init(&bs->user_signal_semaphore_values, NULL);
@@ -421,6 +421,7 @@ find_unused_state(struct zink_batch_state *bs)
 static struct zink_batch_state *
 get_batch_state(struct zink_context *ctx)
 {
+   MESA_TRACE_FUNC();
    struct zink_screen *screen = zink_screen(ctx->base.screen);
    struct zink_batch_state *bs = NULL;
 
@@ -510,6 +511,7 @@ zink_batch_bind_db(struct zink_context *ctx)
 void
 zink_start_batch(struct zink_context *ctx)
 {
+   MESA_TRACE_FUNC();
    struct zink_screen *screen = zink_screen(ctx->base.screen);
    zink_reset_batch(ctx);
    struct zink_batch_state *bs = ctx->bs;
@@ -573,6 +575,7 @@ zink_start_batch(struct zink_context *ctx)
 static void
 post_submit(void *data, void *gdata, int thread_index)
 {
+   MESA_TRACE_FUNC();
    struct zink_batch_state *bs = data;
    struct zink_screen *screen = zink_screen(bs->ctx->base.screen);
 
@@ -608,6 +611,7 @@ typedef enum {
 static void
 submit_queue(void *data, void *gdata, int thread_index)
 {
+   MESA_TRACE_FUNC();
    struct zink_batch_state *bs = data;
    struct zink_context *ctx = bs->ctx;
    struct zink_screen *screen = zink_screen(ctx->base.screen);
@@ -625,7 +629,7 @@ submit_queue(void *data, void *gdata, int thread_index)
    for (unsigned i = 0; i < ARRAY_SIZE(si); i++)
       si[i].sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
    if (bs->sparse_semaphore)
-      util_dynarray_append(&ctx->bs->acquires, VkSemaphore, bs->sparse_semaphore);
+      util_dynarray_append(&bs->acquires, VkSemaphore, bs->sparse_semaphore);
    si[ZINK_SUBMIT_WAIT_ACQUIRE].waitSemaphoreCount = util_dynarray_num_elements(&bs->acquires, VkSemaphore);
    si[ZINK_SUBMIT_WAIT_ACQUIRE].pWaitSemaphores = bs->acquires.data;
    while (util_dynarray_num_elements(&bs->acquire_flags, VkPipelineStageFlags) < si[ZINK_SUBMIT_WAIT_ACQUIRE].waitSemaphoreCount) {
@@ -784,7 +788,7 @@ submit_queue(void *data, void *gdata, int thread_index)
    _mesa_set_clear(&bs->dmabuf_exports, NULL);
 
    if (bs->sparse_semaphore)
-      (void)util_dynarray_pop(&ctx->bs->acquires, VkSemaphore);
+      (void)util_dynarray_pop(&bs->acquires, VkSemaphore);
 
    bs->usage.submit_count++;
 end:
@@ -798,6 +802,7 @@ end:
 void
 zink_end_batch(struct zink_context *ctx)
 {
+   MESA_TRACE_FUNC();
    if (!ctx->queries_disabled)
       zink_suspend_queries(ctx);
 
@@ -1051,6 +1056,7 @@ batch_reference_resource_move_internal(struct zink_batch_state *bs, struct zink_
 bool
 zink_batch_reference_resource_move(struct zink_context *ctx, struct zink_resource *res)
 {
+   MESA_TRACE_FUNC();
    struct zink_batch_state *bs = ctx->bs;
 
    /* swapchains are special */
@@ -1157,18 +1163,20 @@ zink_batch_usage_check_completion(struct zink_context *ctx, const struct zink_ba
    return zink_check_batch_completion(ctx, u->usage);
 }
 
-static void
-batch_usage_wait(struct zink_context *ctx, struct zink_batch_usage *u, unsigned submit_count, bool trywait)
+ALWAYS_INLINE bool
+zink_batch_usage_unflushed_wait(struct zink_context *ctx, struct zink_batch_usage *u, unsigned submit_count, bool trywait)
 {
+   MESA_TRACE_FUNC();
    if (!zink_batch_usage_exists(u))
-      return;
+      return true;
    /* this batch state was already completed and reset */
    if (u->submit_count - submit_count > 1)
-      return;
+      return true;
    if (zink_batch_usage_is_unflushed(u)) {
-      if (likely(u == &ctx->bs->usage))
+      if (likely(u == &ctx->bs->usage)) {
          ctx->base.flush(&ctx->base, NULL, PIPE_FLUSH_HINT_FINISH);
-      else { //multi-context
+         return true;
+      } else { //multi-context
          mtx_lock(&u->mtx);
          if (trywait) {
             struct timespec ts = {0, 10000};
@@ -1178,7 +1186,20 @@ batch_usage_wait(struct zink_context *ctx, struct zink_batch_usage *u, unsigned 
          mtx_unlock(&u->mtx);
       }
    }
-   zink_wait_on_batch(ctx, u->usage);
+   return !u->unflushed;
+}
+
+static void
+batch_usage_wait(struct zink_context *ctx, struct zink_batch_usage *u, unsigned submit_count, bool trywait)
+{
+   MESA_TRACE_FUNC();
+   if (!zink_batch_usage_exists(u))
+      return;
+   /* this batch state was already completed and reset */
+   if (u->submit_count - submit_count > 1)
+      return;
+   if (zink_batch_usage_unflushed_wait(ctx, u, submit_count, trywait))
+      zink_wait_on_batch(ctx, u->usage);
 }
 
 void

@@ -337,12 +337,12 @@ impl<T> PerRegFile<T> {
     }
 
     /// Iterates over the values in this container.
-    pub fn values(&self) -> slice::Iter<T> {
+    pub fn values(&self) -> slice::Iter<'_, T> {
         self.per_file.iter()
     }
 
     /// Iterates over the mutable values in this container.
-    pub fn values_mut(&mut self) -> slice::IterMut<T> {
+    pub fn values_mut(&mut self) -> slice::IterMut<'_, T> {
         self.per_file.iter_mut()
     }
 }
@@ -744,6 +744,16 @@ impl<T: Into<SSARef>> From<T> for SrcRef {
     }
 }
 
+impl From<PredRef> for SrcRef {
+    fn from(value: PredRef) -> Self {
+        match value {
+            PredRef::None => SrcRef::True,
+            PredRef::Reg(reg) => SrcRef::Reg(reg),
+            PredRef::SSA(ssa) => SrcRef::SSA(ssa.into()),
+        }
+    }
+}
+
 impl fmt::Display for SrcRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1095,6 +1105,14 @@ impl Src {
         self.src_ref.is_bindless_cbuf()
     }
 
+    pub fn is_upred_reg(&self) -> bool {
+        match &self.src_ref {
+            SrcRef::SSA(ssa) => ssa.file() == Some(RegFile::UPred),
+            SrcRef::Reg(reg) => reg.file() == RegFile::UPred,
+            _ => false,
+        }
+    }
+
     pub fn is_predicate(&self) -> bool {
         self.src_ref.is_predicate()
     }
@@ -1115,6 +1133,10 @@ impl Src {
     pub fn is_nonzero(&self) -> bool {
         assert!(self.is_unmodified());
         matches!(self.src_ref, SrcRef::Imm32(x) if x != 0)
+    }
+
+    pub fn is_true(&self) -> bool {
+        self.as_bool() == Some(true)
     }
 
     pub fn is_fneg_zero(&self, src_type: SrcType) -> bool {
@@ -1195,6 +1217,20 @@ impl<T: Into<SrcRef>> From<T> for Src {
         Src {
             src_ref: value.into(),
             src_mod: SrcMod::None,
+            src_swizzle: SrcSwizzle::None,
+        }
+    }
+}
+
+impl From<Pred> for Src {
+    fn from(value: Pred) -> Self {
+        Src {
+            src_ref: value.pred_ref.into(),
+            src_mod: if value.pred_inv {
+                SrcMod::BNot
+            } else {
+                SrcMod::None
+            },
             src_swizzle: SrcSwizzle::None,
         }
     }
@@ -1368,6 +1404,7 @@ pub struct OpFoldData<'a> {
 }
 
 impl OpFoldData<'_> {
+    #[allow(dead_code)]
     pub fn get_pred_src(&self, op: &impl SrcsAsSlice, src: &Src) -> bool {
         let i = op.src_idx(src);
         let b = match src.src_ref {
@@ -1401,6 +1438,7 @@ impl OpFoldData<'_> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_u32_bnot_src(&self, op: &impl SrcsAsSlice, src: &Src) -> u32 {
         let x = self.get_u32_src(op, src);
         if src.src_mod.is_bnot() {
@@ -1410,6 +1448,7 @@ impl OpFoldData<'_> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_carry_src(&self, op: &impl SrcsAsSlice, src: &Src) -> bool {
         assert!(src.src_ref.as_ssa().is_some());
         let i = op.src_idx(src);
@@ -1443,10 +1482,12 @@ impl OpFoldData<'_> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn set_pred_dst(&mut self, op: &impl DstsAsSlice, dst: &Dst, b: bool) {
         self.dsts[op.dst_idx(dst)] = FoldData::Pred(b);
     }
 
+    #[allow(dead_code)]
     pub fn set_carry_dst(&mut self, op: &impl DstsAsSlice, dst: &Dst, b: bool) {
         self.dsts[op.dst_idx(dst)] = FoldData::Carry(b);
     }
@@ -1520,6 +1561,7 @@ pub enum PredSetOp {
 }
 
 impl PredSetOp {
+    #[allow(dead_code)]
     pub fn eval(&self, a: bool, b: bool) -> bool {
         match self {
             PredSetOp::And => a & b,
@@ -5622,6 +5664,7 @@ impl SuClampRound {
         }
     }
 
+    #[allow(dead_code)]
     pub fn to_mask(&self) -> u32 {
         !(self.to_int() as u32 - 1)
     }
@@ -6038,6 +6081,7 @@ impl IMadSpSrcType {
         }
     }
 
+    #[allow(dead_code)]
     fn cast(&self, v: u32) -> i64 {
         use IMadSpSrcType::*;
         match self {
@@ -6329,6 +6373,53 @@ impl DisplayOp for OpLdc {
     }
 }
 impl_display_for_op!(OpLdc);
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+#[allow(dead_code)]
+pub enum LdsmSize {
+    M8N8,
+    MT8N8,
+}
+
+impl fmt::Display for LdsmSize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LdsmSize::M8N8 => write!(f, "m8n8"),
+            LdsmSize::MT8N8 => write!(f, "m8n8.trans"),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(SrcsAsSlice, DstsAsSlice)]
+pub struct OpLdsm {
+    #[dst_type(Vec)]
+    pub dst: Dst,
+
+    pub mat_size: LdsmSize,
+    pub mat_count: u8,
+
+    #[src_type(SSA)]
+    pub addr: Src,
+
+    pub offset: i32,
+}
+
+impl DisplayOp for OpLdsm {
+    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ldsm.16.{}.x{} [{}",
+            self.mat_size, self.mat_count, self.addr,
+        )?;
+        if self.offset > 0 {
+            write!(f, "+{:#x}", self.offset)?;
+        }
+        write!(f, "]")
+    }
+}
+
+impl_display_for_op!(OpLdsm);
 
 /// Used for Kepler to implement shared atomics.
 /// In addition to the load, it tries to lock the address,
@@ -6810,15 +6901,21 @@ impl DisplayOp for OpBSync {
 }
 impl_display_for_op!(OpBSync);
 
+/// Takes the branch when the guard predicate and all sources evaluate to true.
 #[repr(C)]
 #[derive(Clone, SrcsAsSlice, DstsAsSlice)]
 pub struct OpBra {
     pub target: Label,
+
+    /// Can be a UPred if uniform
+    // TODO: actually .u has another form with an additional UPred input.
+    #[src_type(Pred)]
+    pub cond: Src,
 }
 
 impl DisplayOp for OpBra {
     fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "bra {}", self.target)
+        write!(f, "bra {} {}", self.cond, self.target)
     }
 }
 impl_display_for_op!(OpBra);
@@ -7751,6 +7848,7 @@ pub enum Op {
     HSetP2(OpHSetP2),
     Imma(OpImma),
     Hmma(OpHmma),
+    Ldsm(OpLdsm),
     HMnMx2(OpHMnMx2),
     BMsk(OpBMsk),
     BRev(OpBRev),
@@ -7918,7 +8016,7 @@ impl Op {
             | Op::DSetP(_) => false,
 
             // Matrix Multiply Add
-            Op::Imma(_) | Op::Hmma(_) => false,
+            Op::Imma(_) | Op::Hmma(_) | Op::Ldsm(_) => false,
 
             // Integer ALU
             Op::BRev(_) | Op::Flo(_) | Op::PopC(_) => false,
@@ -8367,6 +8465,19 @@ impl Instr {
         self.op.is_branch()
     }
 
+    /// Returns true if `self`` is a branch instruction that is always taken.
+    /// It returns false for non branch instructions.
+    pub fn is_branch_always_taken(&self) -> bool {
+        if self.pred.is_true() {
+            match &self.op {
+                Op::Bra(bra) => bra.cond.is_true(),
+                _ => self.is_branch(),
+            }
+        } else {
+            false
+        }
+    }
+
     pub fn uses_global_mem(&self) -> bool {
         match &self.op {
             Op::Atom(op) => op.mem_space != MemSpace::Local,
@@ -8580,7 +8691,7 @@ impl BasicBlock {
 
     pub fn falls_through(&self) -> bool {
         if let Some(i) = self.branch() {
-            !i.pred.is_true()
+            !i.is_branch_always_taken()
         } else {
             true
         }
@@ -8907,7 +9018,7 @@ pub struct ShaderInfo {
     pub num_gprs: u8,
     pub num_control_barriers: u8,
     pub num_instrs: u32,
-    pub num_static_cycles: u32,
+    pub num_static_cycles: u64,
     pub num_spills_to_mem: u32,
     pub num_fills_from_mem: u32,
     pub num_spills_to_reg: u32,

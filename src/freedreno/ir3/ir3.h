@@ -191,6 +191,12 @@ typedef enum ir3_register_flags {
     * dummy src and dst of prefetch sam/ldc/resinfo.
     */
    IR3_REG_DUMMY = BIT(23),
+
+   /* Used to mark predicate registers as uniform. Uniform predicate registers
+    * can be written by the scalar ALU but can only be read as a vector, needing
+    * (ss) to synchronize like any scalar ALU result.
+    */
+   IR3_REG_UNIFORM = BIT(24),
 } ir3_register_flags;
 
 struct ir3_register {
@@ -396,6 +402,12 @@ typedef enum ir3_instruction_flags {
     * their sources.
     */
    IR3_INSTR_IMM_OFFSET = BIT(21),
+
+   /* a7xx, set on a nop after all cat6 */
+   IR3_INSTR_EOLM = BIT(22),
+
+   /* a7xx, set on a nop after all cat5/cat6 */
+   IR3_INSTR_EOGM = BIT(23),
 } ir3_instruction_flags;
 
 struct ir3_instruction {
@@ -619,7 +631,7 @@ struct ir3_instruction_rpt {
 
 struct ir3 {
    struct ir3_compiler *compiler;
-   gl_shader_stage type;
+   mesa_shader_stage type;
 
    DECLARE_ARRAY(struct ir3_instruction *, inputs);
 
@@ -2189,7 +2201,7 @@ static inline bool
 is_ss_producer(struct ir3_instruction *instr)
 {
    foreach_dst (dst, instr) {
-      if (dst->flags & IR3_REG_SHARED)
+      if (dst->flags & (IR3_REG_SHARED | IR3_REG_UNIFORM))
          return true;
    }
 

@@ -119,16 +119,16 @@ v3d_has_feature(struct v3d_screen *screen, enum drm_v3d_param feature)
 static void
 v3d_init_shader_caps(struct v3d_screen *screen)
 {
-        for (unsigned i = 0; i <= PIPE_SHADER_COMPUTE; i++) {
+        for (unsigned i = 0; i <= MESA_SHADER_COMPUTE; i++) {
                 struct pipe_shader_caps *caps =
                         (struct pipe_shader_caps *)&screen->base.shader_caps[i];
 
                 switch (i) {
-                case PIPE_SHADER_VERTEX:
-                case PIPE_SHADER_FRAGMENT:
-                case PIPE_SHADER_GEOMETRY:
+                case MESA_SHADER_VERTEX:
+                case MESA_SHADER_FRAGMENT:
+                case MESA_SHADER_GEOMETRY:
                         break;
-                case PIPE_SHADER_COMPUTE:
+                case MESA_SHADER_COMPUTE:
                         if (!screen->has_csd)
                                 continue;
                         break;
@@ -143,13 +143,13 @@ v3d_init_shader_caps(struct v3d_screen *screen)
                 caps->max_control_flow_depth = UINT_MAX;
 
                 switch (i) {
-                case PIPE_SHADER_VERTEX:
+                case MESA_SHADER_VERTEX:
                         caps->max_inputs = V3D_MAX_VS_INPUTS / 4;
                         break;
-                case PIPE_SHADER_GEOMETRY:
+                case MESA_SHADER_GEOMETRY:
                         caps->max_inputs = V3D_MAX_GS_INPUTS / 4;
                         break;
-                case PIPE_SHADER_FRAGMENT:
+                case MESA_SHADER_FRAGMENT:
                         caps->max_inputs = V3D_MAX_FS_INPUTS / 4;
                         break;
                 default:
@@ -157,7 +157,7 @@ v3d_init_shader_caps(struct v3d_screen *screen)
                 }
 
                 caps->max_outputs =
-                        i == PIPE_SHADER_FRAGMENT ? 4 : V3D_MAX_FS_INPUTS / 4;
+                        i == MESA_SHADER_FRAGMENT ? 4 : V3D_MAX_FS_INPUTS / 4;
 
                 caps->max_temps = 256; /* GL_MAX_PROGRAM_TEMPORARIES_ARB */
                 /* Note: Limited by the offset size in
@@ -173,7 +173,7 @@ v3d_init_shader_caps(struct v3d_screen *screen)
 
                 caps->max_shader_buffers =
                         screen->has_cache_flush &&
-                        (i != PIPE_SHADER_VERTEX && i != PIPE_SHADER_GEOMETRY) ?
+                        (i != MESA_SHADER_VERTEX && i != MESA_SHADER_GEOMETRY) ?
                         PIPE_MAX_SHADER_BUFFERS : 0;
 
                 caps->max_shader_images =
@@ -537,7 +537,7 @@ v3d_screen_is_format_supported(struct pipe_screen *pscreen,
 
 static const struct nir_shader_compiler_options *
 v3d_screen_get_compiler_options(struct pipe_screen *pscreen,
-                                enum pipe_shader_type shader)
+                                mesa_shader_stage shader)
 {
         struct v3d_screen *screen = v3d_screen(pscreen);
         const struct v3d_device_info *devinfo = &screen->devinfo;
@@ -766,8 +766,6 @@ v3d_screen_create(int fd, const struct pipe_screen_config *config,
 {
         struct v3d_screen *screen = rzalloc(NULL, struct v3d_screen);
         struct pipe_screen *pscreen;
-
-        util_cpu_trace_init();
 
         pscreen = &screen->base;
 

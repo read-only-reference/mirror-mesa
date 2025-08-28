@@ -93,9 +93,9 @@ struct pipe_screen {
    void *winsys_priv;
 
    const struct pipe_caps caps;
-   const struct pipe_shader_caps shader_caps[PIPE_SHADER_MESH_TYPES];
+   const struct pipe_shader_caps shader_caps[MESA_SHADER_MESH_STAGES];
    const struct pipe_compute_caps compute_caps;
-   const struct nir_shader_compiler_options *nir_options[PIPE_SHADER_MESH_TYPES];
+   const struct nir_shader_compiler_options *nir_options[MESA_SHADER_MESH_STAGES];
 
    /**
     * Get the fd associated with the screen
@@ -389,6 +389,14 @@ struct pipe_screen {
                            struct pipe_fence_handle *fence);
 
    /**
+    * Creates a semaphore that can be signaled and waited on through
+    * fence_server_sync and fence_server_signal.
+    *
+    * Drivers are required to not flush or wait on anything in this call.
+    */
+   struct pipe_fence_handle* (*semaphore_create)(struct pipe_screen *screen);
+
+   /**
     * Wait for the fence to finish.
     *
     * If the fence was created with PIPE_FLUSH_DEFERRED, and the context is
@@ -583,7 +591,7 @@ struct pipe_screen {
     */
    bool (*is_parallel_shader_compilation_finished)(struct pipe_screen *screen,
                                                    void *shader,
-                                                   enum pipe_shader_type shader_type);
+                                                   mesa_shader_stage shader_type);
 
    void (*driver_thread_add_job)(struct pipe_screen *screen,
                                  void *job,
@@ -797,24 +805,6 @@ struct pipe_screen {
    void (*query_compression_modifiers)(struct pipe_screen *screen,
                                        enum pipe_format format, uint32_t rate,
                                        int max, uint64_t *modifiers, int *count);
-
-   /**
-    * Check if the given \p target buffer is supported as output (or input for
-    * encode) for this \p profile and \p entrypoint.
-    *
-    * If \p format is different from target->buffer_format this function
-    * checks if the \p target buffer can be converted to \p format as part
-    * of the given operation (eg. encoder accepts RGB input and converts
-    * it to YUV).
-    *
-    * \return true if the buffer is supported for given operation, false
-    *         otherwise.
-    */
-   bool (*is_video_target_buffer_supported)(struct pipe_screen *screen,
-                                            enum pipe_format format,
-                                            struct pipe_video_buffer *target,
-                                            enum pipe_video_profile profile,
-                                            enum pipe_video_entrypoint entrypoint);
 
    /**
     * Allocates a cut-out in the GPU's VM space.

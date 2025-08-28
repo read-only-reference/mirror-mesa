@@ -248,64 +248,6 @@ static const uint32_t copy_spv[] = {
 #include COPY_SPV_PATH
 };
 
-static VkResult
-get_pipeline_spv(struct anv_device *device,
-                 const char *name, const uint32_t *spv, uint32_t spv_size,
-                 unsigned push_constant_size, VkPipeline *pipeline,
-                 VkPipelineLayout *layout)
-{
-
-   size_t key_size = strlen(name);
-
-   const VkPushConstantRange pc_range = {
-      .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-      .offset = 0,
-      .size = push_constant_size,
-   };
-
-   VkResult result = vk_meta_get_pipeline_layout(&device->vk,
-                                                 &device->meta_device, NULL,
-                                                 &pc_range, name, key_size,
-                                                 layout);
-
-   if (result != VK_SUCCESS)
-      return result;
-
-   VkPipeline pipeline_from_cache =
-      vk_meta_lookup_pipeline(&device->meta_device, name, key_size);
-   if (pipeline_from_cache != VK_NULL_HANDLE) {
-      *pipeline = pipeline_from_cache;
-      return VK_SUCCESS;
-   }
-
-   VkShaderModuleCreateInfo module_info = {
-      .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-      .pNext = NULL,
-      .flags = 0,
-      .codeSize = spv_size,
-      .pCode = spv,
-   };
-
-   VkPipelineShaderStageCreateInfo shader_stage = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-      .pNext = &module_info,
-      .flags = 0,
-      .stage = VK_SHADER_STAGE_COMPUTE_BIT,
-      .pName = "main",
-      .pSpecializationInfo = NULL,
-   };
-
-   VkComputePipelineCreateInfo pipeline_info = {
-      .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-      .flags = 0,
-      .stage = shader_stage,
-      .layout = *layout,
-   };
-
-   return vk_meta_create_compute_pipeline(&device->vk, &device->meta_device,
-                                          &pipeline_info, name, key_size, pipeline);
-}
-
 static void
 get_bvh_layout(VkGeometryTypeKHR geometry_type, uint32_t leaf_count,
                struct bvh_layout *layout)
@@ -360,24 +302,60 @@ anv_get_build_config(VkDevice device, struct vk_acceleration_structure_build_sta
    state->config.encode_key[1] = (state->build_info->flags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR) ? 1 : 0;
 }
 
-static VkResult
-anv_encode_bind_pipeline(VkCommandBuffer commandBuffer, const struct vk_acceleration_structure_build_state *state)
+static void
+anv_bvh_build_bind_pipeline(VkCommandBuffer commandBuffer,
+                            enum anv_object_key_bvh_type type,
+                            const uint32_t *spirv, uint32_t spirv_size,
+                            uint32_t push_constant_size, uint32_t flags)
 {
    VK_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    struct anv_device *device = cmd_buffer->device;
 
    VkPipeline pipeline;
+   VkResult result = vk_get_bvh_build_pipeline_spv(&device->vk,
+                                                   &device->meta_device,
+                                                   (enum anv_object_key_bvh_type)type,
+                                                   spirv, spirv_size, push_constant_size,
+                                                   &device->accel_struct_build.build_args,
+                                                   flags, &pipeline, false);
+   if (result != VK_SUCCESS) {
+      vk_command_buffer_set_error(&cmd_buffer->vk, result);
+      return;
+   }
+
+   device->vk.dispatch_table.CmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                             pipeline);
+}
+
+static void
+anv_bvh_build_set_args(VkCommandBuffer commandBuffer, const void *args,
+                       uint32_t size)
+{
+   VK_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
+   struct anv_device *device = cmd_buffer->device;
    VkPipelineLayout layout;
-   VkResult result = get_pipeline_spv(device, "encode", encode_spv,
-                                      sizeof(encode_spv),
-                                      sizeof(struct encode_args), &pipeline,
-                                      &layout);
-   if (result != VK_SUCCESS)
-      return result;
+   vk_get_bvh_build_pipeline_layout(&device->vk, &device->meta_device, size,
+                                    &layout);
 
-   anv_CmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                       pipeline);
+   VkPushConstantsInfoKHR push_info = {
+      .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR,
+      .layout = layout,
+      .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+      .offset = 0,
+      .size = size,
+      .pValues = args,
+   };
 
+   anv_CmdPushConstants2KHR(commandBuffer, &push_info);
+}
+
+static VkResult
+anv_encode_bind_pipeline(VkCommandBuffer commandBuffer, const struct vk_acceleration_structure_build_state *state)
+{
+   anv_bvh_build_bind_pipeline(commandBuffer,
+                               ANV_OBJECT_KEY_BVH_ENCODE,
+                               encode_spv, sizeof(encode_spv),
+                               sizeof(struct encode_args), 0);
    return VK_SUCCESS;
 }
 
@@ -389,17 +367,11 @@ anv_encode_as(VkCommandBuffer commandBuffer, const struct vk_acceleration_struct
 
    VK_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    VK_FROM_HANDLE(vk_acceleration_structure, dst, state->build_info->dstAccelerationStructure);
-   struct anv_device *device = cmd_buffer->device;
 
    uint64_t intermediate_header_addr = state->build_info->scratchData.deviceAddress + state->scratch.header_offset;
    uint64_t intermediate_bvh_addr = state->build_info->scratchData.deviceAddress + state->scratch.ir_offset;
 
    VkGeometryTypeKHR geometry_type = vk_get_as_geometry_type(state->build_info);
-
-   VkPipeline pipeline;
-   VkPipelineLayout layout;
-   get_pipeline_spv(device, "encode", encode_spv, sizeof(encode_spv),
-                    sizeof(struct encode_args), &pipeline, &layout);
 
    STATIC_ASSERT(sizeof(struct anv_accel_struct_header) == ANV_RT_BVH_HEADER_SIZE);
    STATIC_ASSERT(sizeof(struct anv_instance_leaf) == ANV_RT_INSTANCE_LEAF_SIZE);
@@ -419,17 +391,16 @@ anv_encode_as(VkCommandBuffer commandBuffer, const struct vk_acceleration_struct
       .leaf_node_count = state->leaf_node_count,
       .geometry_type = geometry_type,
    };
+   anv_bvh_build_set_args(commandBuffer, &args, sizeof(args));
 
-   VkPushConstantsInfoKHR push_info = {
-      .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR,
-      .layout = layout,
-      .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-      .offset = 0,
-      .size = sizeof(args),
-      .pValues = &args,
-   };
-
-   anv_CmdPushConstants2KHR(commandBuffer, &push_info);
+   /* L1/L2 caches flushes should have been dealt with by pipeline barriers.
+    * Unfortunately some platforms require L3 flush because CS (reading the
+    * ir_internal_node_count paramters from vk_ir_header) is not L3 coherent.
+    */
+   if (!ANV_DEVINFO_HAS_COHERENT_L3_CS(cmd_buffer->device->info)) {
+      anv_add_pending_pipe_bits(cmd_buffer, ANV_PIPE_DATA_CACHE_FLUSH_BIT,
+                                "ir internal node count for dispatch");
+   }
 
    struct anv_address indirect_addr =
       anv_address_from_u64(intermediate_header_addr +
@@ -441,20 +412,11 @@ anv_encode_as(VkCommandBuffer commandBuffer, const struct vk_acceleration_struct
 static VkResult
 anv_init_header_bind_pipeline(VkCommandBuffer commandBuffer, const struct vk_acceleration_structure_build_state *state)
 {
-   VK_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-
    if (state->config.encode_key[1] == 1) {
-      VkPipeline pipeline;
-      VkPipelineLayout layout;
-      VkResult result = get_pipeline_spv(cmd_buffer->device, "header",
-                                         header_spv, sizeof(header_spv),
-                                         sizeof(struct header_args), &pipeline,
-                                         &layout);
-      if (result != VK_SUCCESS)
-         return result;
-
-      anv_CmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                          pipeline);
+      anv_bvh_build_bind_pipeline(commandBuffer,
+                                  ANV_OBJECT_KEY_BVH_HEADER,
+                                  header_spv, sizeof(header_spv),
+                                  sizeof(struct header_args), 0);
    }
 
    return VK_SUCCESS;
@@ -465,7 +427,6 @@ anv_init_header(VkCommandBuffer commandBuffer, const struct vk_acceleration_stru
 {
    VK_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    VK_FROM_HANDLE(vk_acceleration_structure, dst, state->build_info->dstAccelerationStructure);
-   struct anv_device *device = cmd_buffer->device;
 
    uint64_t intermediate_header_addr = state->build_info->scratchData.deviceAddress + state->scratch.header_offset;
    uint64_t intermediate_bvh_addr = state->build_info->scratchData.deviceAddress + state->scratch.ir_offset;
@@ -477,9 +438,6 @@ anv_init_header(VkCommandBuffer commandBuffer, const struct vk_acceleration_stru
 
    VkDeviceAddress header_addr = vk_acceleration_structure_get_va(dst);
 
-   UNUSED size_t base = offsetof(struct anv_accel_struct_header,
-                                 copy_dispatch_size);
-
    uint32_t instance_count = geometry_type == VK_GEOMETRY_TYPE_INSTANCES_KHR ?
                              state->leaf_node_count : 0;
 
@@ -489,18 +447,6 @@ anv_init_header(VkCommandBuffer commandBuffer, const struct vk_acceleration_stru
        */
       vk_barrier_compute_w_to_compute_r(commandBuffer);
 
-      /* VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR is set, so we
-       * want to populate header.compacted_size with the compacted size, which
-       * needs to be calculated by using ir_header.dst_node_offset, which we'll
-       * access in the header.comp.
-       */
-      base = offsetof(struct anv_accel_struct_header, instance_count);
-
-      VkPipeline pipeline;
-      VkPipelineLayout layout;
-      get_pipeline_spv(device, "header", header_spv, sizeof(header_spv),
-                       sizeof(struct header_args), &pipeline, &layout);
-
       struct header_args args = {
          .src = intermediate_header_addr,
          .dst = vk_acceleration_structure_get_va(dst),
@@ -508,19 +454,23 @@ anv_init_header(VkCommandBuffer commandBuffer, const struct vk_acceleration_stru
          .instance_count = instance_count,
       };
 
-      VkPushConstantsInfoKHR push_info = {
-         .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR,
-         .layout = layout,
-         .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-         .offset = 0,
-         .size = sizeof(args),
-         .pValues = &args,
-      };
-
-      anv_CmdPushConstants2KHR(commandBuffer, &push_info);
+      anv_bvh_build_set_args(commandBuffer, &args, sizeof(args));
       vk_common_CmdDispatch(commandBuffer, 1, 1, 1);
    } else {
       vk_barrier_compute_w_to_host_r(commandBuffer);
+
+      /* L1/L2 caches flushes should have been dealt with by pipeline barriers.
+       * Unfortunately some platforms require L3 flush because CS (reading the
+       * dispatch size paramters) is not L3 coherent.
+       */
+      if (!ANV_DEVINFO_HAS_COHERENT_L3_CS(cmd_buffer->device->info)) {
+         anv_add_pending_pipe_bits(cmd_buffer, ANV_PIPE_DATA_CACHE_FLUSH_BIT,
+                                   "copy dispatch size for dispatch");
+         genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
+      }
+
+      size_t base = offsetof(struct anv_accel_struct_header,
+                             copy_dispatch_size);
 
       struct anv_accel_struct_header header = {};
 
@@ -697,6 +647,16 @@ genX(CmdBuildAccelerationStructuresKHR)(
                              ANV_CMD_SAVED_STATE_DESCRIPTOR_SET_ALL |
                              ANV_CMD_SAVED_STATE_PUSH_CONSTANTS, &saved);
 
+   /* Apply any outstanding accumulated PC bits before we proceed on building
+    * Acceleration Structure.
+    *
+    * 2 reasons for this :
+    *    - some of the data accessed by the build might need to be flushed as a
+    *    result of a previous barrier
+    *    - the scratch buffer might get reused between builds
+    */
+   genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
+
    vk_cmd_build_acceleration_structures(commandBuffer, &device->vk,
                                         &device->meta_device, infoCount,
                                         pInfos, ppBuildRangeInfos,
@@ -716,41 +676,21 @@ genX(CmdCopyAccelerationStructureKHR)(
 
    trace_intel_begin_as_copy(&cmd_buffer->trace);
 
-   VkPipeline pipeline;
-   VkPipelineLayout layout;
-   VkResult result = get_pipeline_spv(cmd_buffer->device, "copy", copy_spv,
-                                      sizeof(copy_spv), sizeof(struct copy_args),
-                                      &pipeline, &layout);
-   if (result != VK_SUCCESS) {
-      vk_command_buffer_set_error(&cmd_buffer->vk, result);
-      return;
-   }
-
    struct anv_cmd_saved_state saved;
    anv_cmd_buffer_save_state(cmd_buffer,
                              ANV_CMD_SAVED_STATE_COMPUTE_PIPELINE |
                              ANV_CMD_SAVED_STATE_DESCRIPTOR_SET_ALL |
                              ANV_CMD_SAVED_STATE_PUSH_CONSTANTS, &saved);
 
-   anv_CmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                       pipeline);
-
+   anv_bvh_build_bind_pipeline(commandBuffer, ANV_OBJECT_KEY_BVH_COPY,
+                               copy_spv, sizeof(copy_spv),
+                               sizeof(struct copy_args), 0);
    struct copy_args consts = {
       .src_addr = vk_acceleration_structure_get_va(src),
       .dst_addr = vk_acceleration_structure_get_va(dst),
       .mode = ANV_COPY_MODE_COPY,
    };
-
-   VkPushConstantsInfoKHR push_info = {
-      .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR,
-      .layout = layout,
-      .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-      .offset = 0,
-      .size = sizeof(consts),
-      .pValues = &consts,
-   };
-
-   anv_CmdPushConstants2KHR(commandBuffer, &push_info);
+   anv_bvh_build_set_args(commandBuffer, &consts, sizeof(consts));
 
    /* L1/L2 caches flushes should have been dealt with by pipeline barriers.
     * Unfortunately some platforms require L3 flush because CS (reading the
@@ -782,26 +722,15 @@ genX(CmdCopyAccelerationStructureToMemoryKHR)(
 
    trace_intel_begin_as_copy(&cmd_buffer->trace);
 
-   VkPipeline pipeline;
-   VkPipelineLayout layout;
-   VkResult result = get_pipeline_spv(device, "copy", copy_spv,
-                                      sizeof(copy_spv),
-                                      sizeof(struct copy_args), &pipeline,
-                                      &layout);
-   if (result != VK_SUCCESS) {
-      vk_command_buffer_set_error(&cmd_buffer->vk, result);
-      return;
-   }
-
    struct anv_cmd_saved_state saved;
    anv_cmd_buffer_save_state(cmd_buffer,
                              ANV_CMD_SAVED_STATE_COMPUTE_PIPELINE |
                              ANV_CMD_SAVED_STATE_DESCRIPTOR_SET_ALL |
                              ANV_CMD_SAVED_STATE_PUSH_CONSTANTS, &saved);
 
-   anv_CmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                       pipeline);
-
+   anv_bvh_build_bind_pipeline(commandBuffer, ANV_OBJECT_KEY_BVH_COPY,
+                               copy_spv, sizeof(copy_spv),
+                               sizeof(struct copy_args), 0);
    struct copy_args consts = {
       .src_addr = vk_acceleration_structure_get_va(src),
       .dst_addr = pInfo->dst.deviceAddress,
@@ -810,17 +739,7 @@ genX(CmdCopyAccelerationStructureToMemoryKHR)(
 
    memcpy(consts.driver_uuid, device->physical->driver_uuid, VK_UUID_SIZE);
    memcpy(consts.accel_struct_compat, device->physical->rt_uuid, VK_UUID_SIZE);
-
-   VkPushConstantsInfoKHR push_info = {
-      .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR,
-      .layout = layout,
-      .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-      .offset = 0,
-      .size = sizeof(consts),
-      .pValues = &consts,
-   };
-
-   anv_CmdPushConstants2KHR(commandBuffer, &push_info);
+   anv_bvh_build_set_args(commandBuffer, &consts, sizeof(consts));
 
    /* L1/L2 caches flushes should have been dealt with by pipeline barriers.
     * Unfortunately some platforms require L3 flush because CS (reading the
@@ -852,42 +771,22 @@ genX(CmdCopyMemoryToAccelerationStructureKHR)(
 
    trace_intel_begin_as_copy(&cmd_buffer->trace);
 
-   VkPipeline pipeline;
-   VkPipelineLayout layout;
-   VkResult result = get_pipeline_spv(cmd_buffer->device, "copy", copy_spv,
-                                      sizeof(copy_spv),
-                                      sizeof(struct copy_args), &pipeline,
-                                      &layout);
-   if (result != VK_SUCCESS) {
-      vk_command_buffer_set_error(&cmd_buffer->vk, result);
-      return;
-   }
-
    struct anv_cmd_saved_state saved;
    anv_cmd_buffer_save_state(cmd_buffer,
                              ANV_CMD_SAVED_STATE_COMPUTE_PIPELINE |
                              ANV_CMD_SAVED_STATE_DESCRIPTOR_SET_ALL |
                              ANV_CMD_SAVED_STATE_PUSH_CONSTANTS, &saved);
 
-   anv_CmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                       pipeline);
+   anv_bvh_build_bind_pipeline(commandBuffer, ANV_OBJECT_KEY_BVH_COPY,
+                               copy_spv, sizeof(copy_spv),
+                               sizeof(struct copy_args), 0);
 
    const struct copy_args consts = {
       .src_addr = pInfo->src.deviceAddress,
       .dst_addr = vk_acceleration_structure_get_va(dst),
       .mode = ANV_COPY_MODE_DESERIALIZE,
    };
-
-   VkPushConstantsInfoKHR push_info = {
-      .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR,
-      .layout = layout,
-      .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-      .offset = 0,
-      .size = sizeof(consts),
-      .pValues = &consts,
-   };
-
-   anv_CmdPushConstants2KHR(commandBuffer, &push_info);
+   anv_bvh_build_set_args(commandBuffer, &consts, sizeof(consts));
 
    vk_common_CmdDispatch(commandBuffer, 512, 1, 1);
    anv_cmd_buffer_restore_state(cmd_buffer, &saved);

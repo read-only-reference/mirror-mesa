@@ -24,6 +24,7 @@
 
 #include "common/freedreno_gpu_event.h"
 #include "common/freedreno_lrz.h"
+#include "common/freedreno_vrs.h"
 
 enum tu_cmd_buffer_status {
    TU_CMD_BUFFER_STATUS_IDLE = 0,
@@ -399,17 +400,14 @@ emit_rb_ccu_cntl(struct tu_cs *cs, struct tu_device *dev, bool gmem)
 
       if (dev->physical_device->info->a7xx.has_gmem_vpc_attr_buf) {
          tu_cs_emit_regs(cs,
-            A7XX_VPC_ATTR_BUF_GMEM_SIZE(
-                  .size_gmem =
+            VPC_ATTR_BUF_GMEM_SIZE(CHIP,
                      gmem ? dev->physical_device->vpc_attr_buf_size_gmem
                           : dev->physical_device->vpc_attr_buf_size_bypass),
-            A7XX_VPC_ATTR_BUF_GMEM_BASE(
-                  .base_gmem =
+            VPC_ATTR_BUF_GMEM_BASE(CHIP,
                      gmem ? dev->physical_device->vpc_attr_buf_offset_gmem
                           : dev->physical_device->vpc_attr_buf_offset_bypass), );
          tu_cs_emit_regs(cs,
             A7XX_PC_ATTR_BUF_GMEM_SIZE(
-                  .size_gmem =
                      gmem ? dev->physical_device->vpc_attr_buf_size_gmem
                           : dev->physical_device->vpc_attr_buf_size_bypass), );
       }
@@ -650,6 +648,7 @@ struct tu_bin_size_params {
    bool force_lrz_write_dis;
    enum a6xx_buffers_location buffers_location;
    enum a6xx_lrz_feedback_mask lrz_feedback_zmode_mask;
+   bool force_lrz_dis;
 };
 
 template <chip CHIP>
@@ -674,7 +673,8 @@ tu6_emit_bin_size(struct tu_cs *cs,
                                             .render_mode = p.render_mode,
                                             .force_lrz_write_dis = p.force_lrz_write_dis,
                                             .lrz_feedback_zmode_mask =
-                                               p.lrz_feedback_zmode_mask, ));
+                                               p.lrz_feedback_zmode_mask,
+                                            .force_lrz_dis = p.force_lrz_dis));
    }
 
    tu_cs_emit_regs(cs, RB_CNTL(CHIP,
@@ -1240,6 +1240,7 @@ tu6_emit_tile_select(struct tu_cmd_buffer *cmd,
 {
    struct tu_physical_device *phys_dev = cmd->device->physical_device;
    const struct tu_tiling_config *tiling = cmd->state.tiling;
+   const struct tu_framebuffer *fb = cmd->state.framebuffer;
    const struct tu_vsc_config *vsc = tu_vsc_config(cmd, tiling);
    bool hw_binning = use_hw_binning(cmd);
 
@@ -1251,6 +1252,35 @@ tu6_emit_tile_select(struct tu_cmd_buffer *cmd,
       tu_emit_vsc<CHIP>(cmd, &cmd->cs);
    }
 
+   unsigned views = tu_fdm_num_layers(cmd);
+   bool bin_is_scaled = false;
+
+   if (fdm) {
+      for (unsigned i = 0; i < views; i++) {
+         if (tile->frag_areas[i].width != 1 ||
+             tile->frag_areas[i].height != 1) {
+            bin_is_scaled = true;
+            break;
+         }
+      }
+   }
+
+   bool bin_scale_en =
+      cmd->device->physical_device->info->a7xx.has_hw_bin_scaling &&
+      views <= MAX_HW_SCALED_VIEWS && !cmd->state.rp.shared_viewport &&
+      bin_is_scaled;
+
+   /* We cannot support LRZ if we cannot use HW bin scaling and the bin is
+    * scaled (i.e. less than full resolution)
+    */
+   bool disable_lrz = bin_is_scaled && !bin_scale_en;
+
+   /* We cannot support LRZ for the first row and column because the offset
+    * required wouldn't be aligned to HW requirements.
+    */
+   if (fdm_offsets && (tile->pos.x == 0 || tile->pos.y == 0))
+      disable_lrz = true;
+
    tu6_emit_bin_size<CHIP>(
       cs, tiling->tile0.width, tiling->tile0.height,
       {
@@ -1258,10 +1288,11 @@ tu6_emit_tile_select(struct tu_cmd_buffer *cmd,
          .force_lrz_write_dis = !phys_dev->info->a6xx.has_lrz_feedback,
          .buffers_location = BUFFERS_IN_GMEM,
          .lrz_feedback_zmode_mask =
-            phys_dev->info->a6xx.has_lrz_feedback
+            phys_dev->info->a6xx.has_lrz_feedback && !bin_is_scaled
                ? (hw_binning ? LRZ_FEEDBACK_EARLY_Z_OR_EARLY_Z_LATE_Z :
                   LRZ_FEEDBACK_EARLY_Z_LATE_Z)
                : LRZ_FEEDBACK_NONE,
+         .force_lrz_dis = CHIP >= A7XX && disable_lrz,
       });
 
    tu_cs_emit_regs(cs,
@@ -1272,7 +1303,22 @@ tu6_emit_tile_select(struct tu_cmd_buffer *cmd,
 
    const uint32_t x2 = MIN2(x1 + tiling->tile0.width, MAX_VIEWPORT_SIZE);
    const uint32_t y2 = MIN2(y1 + tiling->tile0.height, MAX_VIEWPORT_SIZE);
-   tu6_emit_window_scissor(cs, x1, y1, x2 - 1, y2 - 1);
+
+   if (bin_scale_en) {
+      /* It seems that the window scissor happens *before*
+       * GRAS_BIN_FOVEAT_OFFSET_* is applied to the fragment coordinates,
+       * unlike the window offset which happens after it is applied. This
+       * means that the window scissor cannot do its job and we have to
+       * disable it by setting it to the entire FB size (plus an extra tile
+       * size, in case GRAS_BIN_FOVEAT_OFFSET_* is not in use). With FDM it is
+       * effectively replaced by the user's scissor anyway.
+       */
+      uint32_t width = fb->width + tiling->tile0.width;
+      uint32_t height = fb->height + tiling->tile0.height;
+      tu6_emit_window_scissor(cs, 0, 0, width, height);
+   } else {
+      tu6_emit_window_scissor(cs, x1, y1, x2 - 1, y2 - 1);
+   }
    tu6_emit_window_offset<CHIP>(cs, x1, y1);
 
    unsigned slot = ffs(tile->slot_mask) - 1;
@@ -1308,13 +1354,15 @@ tu6_emit_tile_select(struct tu_cmd_buffer *cmd,
    tu_cs_emit(cs, 0x0);
 
    if (fdm) {
-      unsigned views = tu_fdm_num_layers(cmd);
       VkRect2D bin = {
          { x1, y1 },
          { (x2 - x1) * tile->extent.width, (y2 - y1) * tile->extent.height }
       };
       VkRect2D bins[views];
+      VkOffset2D frag_offsets[MAX_VIEWS];
       for (unsigned i = 0; i < views; i++) {
+         frag_offsets[i] = (VkOffset2D) { 0, 0 };
+
          if (!fdm_offsets || cmd->state.rp.shared_viewport) {
             bins[i] = bin;
             continue;
@@ -1330,12 +1378,67 @@ tu6_emit_tile_select(struct tu_cmd_buffer *cmd,
             MAX2(MIN2((int32_t)y1 + bin.extent.height - bin_offset.y, MAX_VIEWPORT_SIZE) - bins[i].offset.y, 0);
       }
 
+      if (cmd->device->physical_device->info->a7xx.has_hw_bin_scaling) {
+         if (bin_scale_en) {
+            VkExtent2D frag_areas[MAX_HW_SCALED_VIEWS];
+            for (unsigned i = 0; i < MAX_HW_SCALED_VIEWS; i++) {
+               if (i >= views) {
+                  /* Make sure unused views aren't garbage */
+                  frag_areas[i] = (VkExtent2D) {1, 1};
+                  frag_offsets[i] = (VkOffset2D) { 0, 0 };
+                  continue;
+               }
+
+               frag_areas[i] = tile->frag_areas[i];
+               frag_offsets[i].x = x1 - x1 / tile->frag_areas[i].width;
+               frag_offsets[i].y = y1 - y1 / tile->frag_areas[i].height;
+            }
+
+            tu_cs_emit_regs(cs, A7XX_GRAS_BIN_FOVEAT(
+                  .binscaleen = bin_scale_en,
+                  .xscale_0 = (enum a7xx_bin_scale)util_logbase2(frag_areas[0].width),
+                  .yscale_0 = (enum a7xx_bin_scale)util_logbase2(frag_areas[0].height),
+                  .xscale_1 = (enum a7xx_bin_scale)util_logbase2(frag_areas[1].width),
+                  .yscale_1 = (enum a7xx_bin_scale)util_logbase2(frag_areas[1].height),
+                  .xscale_2 = (enum a7xx_bin_scale)util_logbase2(frag_areas[2].width),
+                  .yscale_2 = (enum a7xx_bin_scale)util_logbase2(frag_areas[2].height),
+                  .xscale_3 = (enum a7xx_bin_scale)util_logbase2(frag_areas[3].width),
+                  .yscale_3 = (enum a7xx_bin_scale)util_logbase2(frag_areas[3].height),
+                  .xscale_4 = (enum a7xx_bin_scale)util_logbase2(frag_areas[4].width),
+                  .yscale_4 = (enum a7xx_bin_scale)util_logbase2(frag_areas[4].height),
+                  .xscale_5 = (enum a7xx_bin_scale)util_logbase2(frag_areas[5].width),
+                  .yscale_5 = (enum a7xx_bin_scale)util_logbase2(frag_areas[5].height)),
+               A7XX_GRAS_BIN_FOVEAT_OFFSET_0(
+                  .xoffset_0 = frag_offsets[0].x,
+                  .xoffset_1 = frag_offsets[1].x,
+                  .xoffset_2 = frag_offsets[2].x),
+               A7XX_GRAS_BIN_FOVEAT_OFFSET_1(
+                  .xoffset_3 = frag_offsets[3].x,
+                  .xoffset_4 = frag_offsets[4].x,
+                  .xoffset_5 = frag_offsets[5].x),
+               A7XX_GRAS_BIN_FOVEAT_OFFSET_2(
+                  .yoffset_0 = frag_offsets[0].y,
+                  .yoffset_1 = frag_offsets[1].y,
+                  .yoffset_2 = frag_offsets[2].y),
+               A7XX_GRAS_BIN_FOVEAT_OFFSET_3(
+                  .yoffset_3 = frag_offsets[3].y,
+                  .yoffset_4 = frag_offsets[4].y,
+                  .yoffset_5 = frag_offsets[5].y));
+
+            tu_cs_emit_regs(cs, A7XX_RB_BIN_FOVEAT(
+                  .binscaleen = bin_scale_en));
+         } else {
+            tu_cs_emit_regs(cs, A7XX_GRAS_BIN_FOVEAT());
+            tu_cs_emit_regs(cs, A7XX_RB_BIN_FOVEAT());
+         }
+      }
+
       util_dynarray_foreach (&cmd->fdm_bin_patchpoints,
                              struct tu_fdm_bin_patchpoint, patch) {
          tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 2 + patch->size);
          tu_cs_emit_qw(cs, patch->iova);
-         patch->apply(cmd, cs, patch->data, (VkOffset2D) { x1, y1 }, views,
-                      tile->frag_areas, bins);
+         patch->apply(cmd, cs, patch->data, (VkOffset2D) { x1, y1 },
+                      frag_offsets, views, tile->frag_areas, bins);
       }
 
       /* Make the CP wait until the CP_MEM_WRITE's to the command buffers
@@ -1607,6 +1710,13 @@ tu6_init_static_regs(struct tu_device *dev, struct tu_cs *cs)
       tu_cs_emit_write_reg(cs, magic_reg.reg, value);
    }
 
+   if (dev->physical_device->info->a6xx.has_attachment_shading_rate) {
+      tu_cs_emit_write_reg(cs, REG_A7XX_GRAS_LRZ_QUALITY_LOOKUP_TABLE(0),
+                           fd_gras_shading_rate_lut(0));
+      tu_cs_emit_write_reg(cs, REG_A7XX_GRAS_LRZ_QUALITY_LOOKUP_TABLE(1),
+                           fd_gras_shading_rate_lut(1));
+   }
+
    tu_cs_emit_write_reg(cs, REG_A6XX_RB_DBG_ECO_CNTL,
                         phys_dev->info->a6xx.magic.RB_DBG_ECO_CNTL);
    tu_cs_emit_write_reg(cs, REG_A6XX_SP_NC_MODE_CNTL_2, 0);
@@ -1652,7 +1762,7 @@ tu6_init_static_regs(struct tu_device *dev, struct tu_cs *cs)
    tu_cs_emit_write_reg(cs, REG_A6XX_PC_MODE_CNTL,
                         phys_dev->info->a6xx.magic.PC_MODE_CNTL);
 
-   tu_cs_emit_write_reg(cs, REG_A6XX_GRAS_UNKNOWN_8110, 0);
+   tu_cs_emit_write_reg(cs, REG_A6XX_GRAS_MODE_CNTL, 0);
 
    tu_cs_emit_write_reg(cs, REG_A6XX_RB_UNKNOWN_8818, 0);
 
@@ -1668,13 +1778,13 @@ tu6_init_static_regs(struct tu_device *dev, struct tu_cs *cs)
    tu_cs_emit_write_reg(cs, REG_A6XX_RB_UNKNOWN_88F0, 0);
 
    tu_cs_emit_regs(cs, A6XX_VPC_REPLACE_MODE_CNTL(false));
-   tu_cs_emit_write_reg(cs, REG_A6XX_VPC_UNKNOWN_9300, 0);
+   tu_cs_emit_write_reg(cs, REG_A6XX_VPC_ROTATION_CNTL, 0);
 
    tu_cs_emit_regs(cs, A6XX_VPC_SO_OVERRIDE(true));
 
    tu_cs_emit_write_reg(cs, REG_A6XX_SP_UNKNOWN_B183, 0);
 
-   tu_cs_emit_write_reg(cs, REG_A6XX_GRAS_UNKNOWN_80AF, 0);
+   tu_cs_emit_regs(cs, GRAS_SC_SCREEN_SCISSOR_CNTL(CHIP));
    if (CHIP == A6XX) {
       tu_cs_emit_write_reg(cs, REG_A6XX_GRAS_SU_CONSERVATIVE_RAS_CNTL, 0);
       tu_cs_emit_regs(cs, A6XX_PC_DGEN_SU_CONSERVATIVE_RAS_CNTL());
@@ -1706,11 +1816,11 @@ tu6_init_static_regs(struct tu_device *dev, struct tu_cs *cs)
                                                         .bo_offset = gb_offset(bcolor)));
 
    if (CHIP == A7XX) {
-      tu_cs_emit_regs(cs, TPL1_BICUBIC_WEIGHTS_TABLE_0(CHIP, 0),
-                      TPL1_BICUBIC_WEIGHTS_TABLE_1(CHIP, 0x3fe05ff4),
-                      TPL1_BICUBIC_WEIGHTS_TABLE_2(CHIP, 0x3fa0ebee),
-                      TPL1_BICUBIC_WEIGHTS_TABLE_3(CHIP, 0x3f5193ed),
-                      TPL1_BICUBIC_WEIGHTS_TABLE_4(CHIP, 0x3f0243f0), );
+      tu_cs_emit_regs(cs, TPL1_BICUBIC_WEIGHTS_TABLE_REG(CHIP, 0, 0),
+                      TPL1_BICUBIC_WEIGHTS_TABLE_REG(CHIP, 1, 0x3fe05ff4),
+                      TPL1_BICUBIC_WEIGHTS_TABLE_REG(CHIP, 2, 0x3fa0ebee),
+                      TPL1_BICUBIC_WEIGHTS_TABLE_REG(CHIP, 3, 0x3f5193ed),
+                      TPL1_BICUBIC_WEIGHTS_TABLE_REG(CHIP, 4, 0x3f0243f0), );
    }
 
    if (CHIP >= A7XX) {
@@ -1762,7 +1872,7 @@ tu7_emit_tile_render_begin_regs(struct tu_cs *cs)
 
    tu_cs_emit_regs(cs, A7XX_GRAS_UNKNOWN_8007(0x0));
 
-   tu_cs_emit_regs(cs, A6XX_GRAS_UNKNOWN_8110(0x2));
+   tu_cs_emit_regs(cs, A6XX_GRAS_MODE_CNTL(0x2));
    tu_cs_emit_regs(cs, A7XX_RB_UNKNOWN_8E09(0x4));
 
    tu_cs_emit_regs(cs, A7XX_RB_CLEAR_TARGET(.clear_mode = CLEAR_MODE_GMEM));
@@ -1837,7 +1947,7 @@ tu6_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
 
       tu_emit_event_write<CHIP>(cmd, cs, FD_CCU_INVALIDATE_COLOR);
       tu_emit_event_write<CHIP>(cmd, cs, FD_CCU_INVALIDATE_DEPTH);
-      tu_emit_raw_event_write<CHIP>(cmd, cs, UNK_40, false);
+      tu_emit_event_write<CHIP>(cmd, cs, FD_LRZ_INVALIDATE);
       tu_emit_event_write<CHIP>(cmd, cs, FD_CACHE_INVALIDATE);
       tu_cs_emit_wfi(cs);
    }
@@ -1959,8 +2069,8 @@ emit_vsc_overflow_test(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
       tu_cs_emit_pkt7(cs, CP_COND_WRITE5, 8);
       tu_cs_emit(cs, CP_COND_WRITE5_0_FUNCTION(WRITE_GE) |
             CP_COND_WRITE5_0_WRITE_MEMORY);
-      tu_cs_emit(cs, CP_COND_WRITE5_1_POLL_ADDR_LO(REG_A6XX_VSC_PIPE_DATA_DRAW_SIZE(i)));
-      tu_cs_emit(cs, CP_COND_WRITE5_2_POLL_ADDR_HI(0));
+      tu_cs_emit(cs, REG_A6XX_VSC_PIPE_DATA_DRAW_SIZE(i));
+      tu_cs_emit(cs, 0);
       tu_cs_emit(cs, CP_COND_WRITE5_3_REF(cmd->vsc_draw_strm_pitch - VSC_PAD));
       tu_cs_emit(cs, CP_COND_WRITE5_4_MASK(~0));
       tu_cs_emit_qw(cs, global_iova(cmd, vsc_draw_overflow));
@@ -1969,8 +2079,8 @@ emit_vsc_overflow_test(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
       tu_cs_emit_pkt7(cs, CP_COND_WRITE5, 8);
       tu_cs_emit(cs, CP_COND_WRITE5_0_FUNCTION(WRITE_GE) |
             CP_COND_WRITE5_0_WRITE_MEMORY);
-      tu_cs_emit(cs, CP_COND_WRITE5_1_POLL_ADDR_LO(REG_A6XX_VSC_PIPE_DATA_PRIM_SIZE(i)));
-      tu_cs_emit(cs, CP_COND_WRITE5_2_POLL_ADDR_HI(0));
+      tu_cs_emit(cs, REG_A6XX_VSC_PIPE_DATA_PRIM_SIZE(i));
+      tu_cs_emit(cs, 0);
       tu_cs_emit(cs, CP_COND_WRITE5_3_REF(cmd->vsc_prim_strm_pitch - VSC_PAD));
       tu_cs_emit(cs, CP_COND_WRITE5_4_MASK(~0));
       tu_cs_emit_qw(cs, global_iova(cmd, vsc_prim_overflow));
@@ -1989,6 +2099,12 @@ tu6_emit_binning_pass(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
    const struct tu_framebuffer *fb = cmd->state.framebuffer;
    const struct tu_tiling_config *tiling = cmd->state.tiling;
 
+   /* Reset bin scaling. */
+   if (phys_dev->info->a7xx.has_hw_bin_scaling) {
+      tu_cs_emit_regs(cs, A7XX_GRAS_BIN_FOVEAT());
+      tu_cs_emit_regs(cs, A7XX_RB_BIN_FOVEAT());
+   }
+
    /* If this command buffer may be executed multiple times, then
     * viewports/scissor states may have been changed by previous executions
     * and we need to reset them before executing the binning IB. With FDM
@@ -2000,8 +2116,10 @@ tu6_emit_binning_pass(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
       unsigned num_views = tu_fdm_num_layers(cmd);
       VkExtent2D unscaled_frag_areas[num_views];
       VkRect2D bins[num_views];
+      VkOffset2D frag_offsets[num_views];
       for (unsigned i = 0; i < num_views; i++) {
          unscaled_frag_areas[i] = (VkExtent2D) { 1, 1 };
+         frag_offsets[i] = (VkOffset2D) { 0, 0 };
          if (fdm_offsets && !cmd->state.rp.shared_viewport) {
             /* We need to shift over the viewport and scissor during the
              * binning pass to match the shift applied when rendering. The way
@@ -2034,8 +2152,8 @@ tu6_emit_binning_pass(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
             continue;
          tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 2 + patch->size);
          tu_cs_emit_qw(cs, patch->iova);
-         patch->apply(cmd, cs, patch->data, (VkOffset2D) {0, 0}, num_views,
-                      unscaled_frag_areas, bins);
+         patch->apply(cmd, cs, patch->data, (VkOffset2D) {0, 0}, frag_offsets,
+                      num_views, unscaled_frag_areas, bins);
       }
 
       tu_cs_emit_pkt7(cs, CP_WAIT_MEM_WRITES, 0);
@@ -2071,8 +2189,7 @@ tu6_emit_binning_pass(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
                      A6XX_VFD_POWER_CNTL(phys_dev->info->a6xx.magic.PC_POWER_CNTL));
    }
 
-   tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 1);
-   tu_cs_emit(cs, UNK_2C);
+   tu_emit_event_write<CHIP>(cmd, cs, FD_VSC_BINNING_START);
 
    tu_cs_emit_regs(cs,
                    A6XX_RB_WINDOW_OFFSET(.x = 0, .y = 0));
@@ -2101,8 +2218,7 @@ tu6_emit_binning_pass(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
    tu_cs_emit(cs, CP_SET_DRAW_STATE__1_ADDR_LO(0));
    tu_cs_emit(cs, CP_SET_DRAW_STATE__2_ADDR_HI(0));
 
-   tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 1);
-   tu_cs_emit(cs, UNK_2D);
+   tu_emit_event_write<CHIP>(cmd, cs, FD_VSC_BINNING_END);
 
    /* This flush is probably required because the VSC, which produces the
     * visibility stream, is a client of UCHE, whereas the CP needs to read the
@@ -2444,7 +2560,7 @@ tu6_sysmem_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
 
       tu_cs_emit_regs(cs, A7XX_GRAS_UNKNOWN_8007(0x0));
 
-      tu_cs_emit_regs(cs, A6XX_GRAS_UNKNOWN_8110(0x2));
+      tu_cs_emit_regs(cs, A6XX_GRAS_MODE_CNTL(0x2));
       tu_cs_emit_regs(cs, A7XX_RB_UNKNOWN_8E09(0x4));
 
       tu_cs_emit_regs(cs, A7XX_RB_CLEAR_TARGET(.clear_mode = CLEAR_MODE_SYSMEM));
@@ -2464,6 +2580,12 @@ tu6_sysmem_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
 
    tu_cs_emit_pkt7(cs, CP_SET_MODE, 1);
    tu_cs_emit(cs, 0x0);
+
+   /* Reset bin scaling. */
+   if (cmd->device->physical_device->info->a7xx.has_hw_bin_scaling) {
+      tu_cs_emit_regs(cs, A7XX_GRAS_BIN_FOVEAT());
+      tu_cs_emit_regs(cs, A7XX_RB_BIN_FOVEAT());
+   }
 
    tu_autotune_begin_renderpass<CHIP>(cmd, cs, autotune_result);
 
@@ -2792,6 +2914,13 @@ tu_calc_frag_area(struct tu_cmd_buffer *cmd,
       if (fdm_offsets) {
          width = MIN2(width, TU_FDM_OFFSET_GRANULARITY);
          height = MIN2(height, TU_FDM_OFFSET_GRANULARITY);
+      }
+
+      /* HW viewport scaling supports a maximum fragment width/height of 4.
+       */
+      if (views <= MAX_HW_SCALED_VIEWS) {
+         width = MIN2(width, 4);
+         height = MIN2(height, 4);
       }
 
       /* Make sure that the width/height divides the tile width/height so
@@ -4094,11 +4223,9 @@ tu_CmdBindTransformFeedbackBuffersEXT(VkCommandBuffer commandBuffer,
    for (uint32_t i = 0; i < bindingCount; i++) {
       VK_FROM_HANDLE(tu_buffer, buf, pBuffers[i]);
       uint64_t iova = vk_buffer_address(&buf->vk, pOffsets[i]);
-      uint32_t size = buf->bo->size - (iova - buf->bo->iova);
+      uint32_t size = vk_buffer_range(&buf->vk, pOffsets[i],
+                                      pSizes ? pSizes[i] : VK_WHOLE_SIZE);
       uint32_t idx = i + firstBinding;
-
-      if (pSizes && pSizes[i] != VK_WHOLE_SIZE)
-         size = pSizes[i];
 
       /* BUFFER_BASE is 32-byte aligned, add remaining offset to BUFFER_OFFSET */
       uint32_t offset = iova & 0x1f;
@@ -4581,6 +4708,7 @@ tu_flush_for_access(struct tu_cache_state *cache,
 
    SRC_INCOHERENT_FLUSH(CCU_COLOR, CCU_CLEAN_COLOR, CCU_INVALIDATE_COLOR)
    SRC_INCOHERENT_FLUSH(CCU_DEPTH, CCU_CLEAN_DEPTH, CCU_INVALIDATE_DEPTH)
+   SRC_INCOHERENT_FLUSH(UCHE, CACHE_CLEAN, CACHE_INVALIDATE)
 
 #undef SRC_INCOHERENT_FLUSH
 
@@ -4615,6 +4743,7 @@ tu_flush_for_access(struct tu_cache_state *cache,
 
    DST_INCOHERENT_FLUSH(CCU_COLOR, CCU_CLEAN_COLOR, CCU_INVALIDATE_COLOR)
    DST_INCOHERENT_FLUSH(CCU_DEPTH, CCU_CLEAN_DEPTH, CCU_INVALIDATE_DEPTH)
+   DST_INCOHERENT_FLUSH(UCHE, CACHE_CLEAN, CACHE_INVALIDATE)
 
    if (dst_mask & TU_ACCESS_BINDLESS_DESCRIPTOR_READ) {
       flush_bits |= TU_CMD_FLAG_BINDLESS_DESCRIPTOR_INVALIDATE;
@@ -4709,7 +4838,8 @@ gfx_write_access(VkAccessFlags2 flags, VkPipelineStageFlags2 stages,
 
 static enum tu_cmd_access_mask
 vk2tu_access(VkAccessFlags2 flags, VkAccessFlags3KHR flags2,
-             VkPipelineStageFlags2 stages, bool image_only, bool gmem)
+             VkPipelineStageFlags2 stages, bool image_only, bool gmem,
+             bool sparse_aliasing)
 {
    BITMASK_ENUM(tu_cmd_access_mask) mask = 0;
 
@@ -4759,8 +4889,13 @@ vk2tu_access(VkAccessFlags2 flags, VkAccessFlags3KHR flags2,
                        VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
                        VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
                        VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_COPY_BIT_KHR |
-                       SHADER_STAGES))
-       mask |= TU_ACCESS_UCHE_READ | TU_ACCESS_CCHE_READ;
+                       SHADER_STAGES)) {
+      if (sparse_aliasing)
+         mask |= TU_ACCESS_UCHE_INCOHERENT_READ;
+      else
+         mask |= TU_ACCESS_UCHE_READ;
+      mask |= TU_ACCESS_CCHE_READ;
+   }
 
    if (gfx_read_access(flags, stages,
                        VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR,
@@ -4780,13 +4915,20 @@ vk2tu_access(VkAccessFlags2 flags, VkAccessFlags3KHR flags2,
 
    if (gfx_read_access(flags, stages,
                        VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT,
-                       SHADER_STAGES))
+                       SHADER_STAGES)) {
        mask |= TU_ACCESS_UCHE_READ_GMEM;
+       if (sparse_aliasing)
+          mask |= TU_ACCESS_UCHE_INCOHERENT_READ;
+   }
 
    if (gfx_read_access(flags, stages,
                        VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT,
                        SHADER_STAGES)) {
-      mask |= TU_ACCESS_UCHE_READ | TU_ACCESS_BINDLESS_DESCRIPTOR_READ |
+      if (sparse_aliasing)
+         mask |= TU_ACCESS_UCHE_INCOHERENT_READ;
+      else
+         mask |= TU_ACCESS_UCHE_READ;
+      mask |= TU_ACCESS_BINDLESS_DESCRIPTOR_READ |
               TU_ACCESS_CCHE_READ;
    }
 
@@ -4795,8 +4937,12 @@ vk2tu_access(VkAccessFlags2 flags, VkAccessFlags3KHR flags2,
                         VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
                         VK_ACCESS_2_TRANSFORM_FEEDBACK_WRITE_BIT_EXT,
                         VK_PIPELINE_STAGE_2_TRANSFORM_FEEDBACK_BIT_EXT |
-                        SHADER_STAGES))
-       mask |= TU_ACCESS_UCHE_WRITE;
+                        SHADER_STAGES)) {
+      if (sparse_aliasing)
+         mask |= TU_ACCESS_UCHE_INCOHERENT_WRITE;
+      else
+         mask |= TU_ACCESS_UCHE_WRITE;
+   }
 
    if (gfx_write_access(flags, stages,
                         VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
@@ -4860,7 +5006,7 @@ vk2tu_access(VkAccessFlags2 flags, VkAccessFlags3KHR flags2,
                            VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT)) {
       if (gmem) {
          mask |= TU_ACCESS_SYSMEM_WRITE;
-      } else if (image_only) {
+      } else if (image_only && !sparse_aliasing) {
          /* Because we always split up blits/copies of images involving
           * multiple layers, we always access each layer in the same way, with
           * the same base address, same format, etc. This means we can avoid
@@ -4879,7 +5025,11 @@ vk2tu_access(VkAccessFlags2 flags, VkAccessFlags3KHR flags2,
                           VK_PIPELINE_STAGE_2_BLIT_BIT |
                           VK_PIPELINE_STAGE_2_RESOLVE_BIT |
                           VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT)) {
-      mask |= TU_ACCESS_UCHE_READ | TU_ACCESS_CCHE_READ;
+      if (sparse_aliasing)
+         mask |= TU_ACCESS_UCHE_INCOHERENT_READ;
+      else
+         mask |= TU_ACCESS_UCHE_READ;
+      mask |= TU_ACCESS_CCHE_READ;
    }
 
    return mask;
@@ -5334,10 +5484,12 @@ tu_subpass_barrier(struct tu_cmd_buffer *cmd_buffer,
       sanitize_dst_stage(barrier->dst_stage_mask);
    BITMASK_ENUM(tu_cmd_access_mask) src_flags =
       vk2tu_access(barrier->src_access_mask, barrier->src_access_mask2,
-                   src_stage_vk, false, false);
+                   src_stage_vk, false, false,
+                   cmd_buffer->device->vk.enabled_features.sparseResidencyAliased);
    BITMASK_ENUM(tu_cmd_access_mask) dst_flags =
       vk2tu_access(barrier->dst_access_mask, barrier->dst_access_mask2,
-                   dst_stage_vk, false, false);
+                   dst_stage_vk, false, false,
+                   cmd_buffer->device->vk.enabled_features.sparseResidencyAliased);
 
    if (barrier->incoherent_ccu_color)
       src_flags |= TU_ACCESS_CCU_COLOR_INCOHERENT_WRITE;
@@ -5942,7 +6094,7 @@ TU_GENX(tu_CmdNextSubpass2);
 static uint32_t
 tu6_user_consts_size(const struct tu_const_state *const_state,
                      bool ldgk,
-                     gl_shader_stage type)
+                     mesa_shader_stage type)
 {
    uint32_t dwords = 0;
 
@@ -5965,7 +6117,7 @@ static void
 tu6_emit_per_stage_push_consts(struct tu_cs *cs,
                                const struct tu_const_state *const_state,
                                const struct ir3_const_state *ir_const_state,
-                               gl_shader_stage type,
+                               mesa_shader_stage type,
                                uint32_t *push_constants)
 {
    if (const_state->push_consts.type == IR3_PUSH_CONSTS_PER_STAGE) {
@@ -5995,7 +6147,7 @@ static void
 tu6_emit_inline_ubo(struct tu_cs *cs,
                     const struct tu_const_state *const_state,
                     unsigned constlen,
-                    gl_shader_stage type,
+                    mesa_shader_stage type,
                     struct tu_descriptor_state *descriptors)
 {
    assert(const_state->num_inline_ubos == 0 || !cs->device->physical_device->info->a7xx.load_shader_consts_via_preamble);
@@ -6034,7 +6186,7 @@ tu7_emit_inline_ubo(struct tu_cs *cs,
                     const struct tu_const_state *const_state,
                     const struct ir3_const_state *ir_const_state,
                     unsigned constlen,
-                    gl_shader_stage type,
+                    mesa_shader_stage type,
                     struct tu_descriptor_state *descriptors)
 {
    uint64_t addresses[7] = {0};
@@ -6070,7 +6222,7 @@ tu_emit_inline_ubo(struct tu_cs *cs,
                    const struct tu_const_state *const_state,
                    const struct ir3_const_state *ir_const_state,
                    unsigned constlen,
-                   gl_shader_stage type,
+                   mesa_shader_stage type,
                    struct tu_descriptor_state *descriptors)
 {
    if (!const_state->num_inline_ubos)
@@ -6117,7 +6269,7 @@ tu7_emit_shared_preamble_consts(
    const struct tu_push_constant_range *shared_consts,
    uint32_t *push_constants)
 {
-   tu_cs_emit_pkt4(cs, REG_A7XX_SP_SHARED_CONSTANT_GFX_0(shared_consts->lo_dwords),
+   tu_cs_emit_pkt4(cs, REG_A7XX_SP_SHARED_CONSTANT_GFX(shared_consts->lo_dwords),
                    shared_consts->dwords);
    tu_cs_emit_array(cs, push_constants + shared_consts->lo_dwords,
                     shared_consts->dwords);
@@ -6142,7 +6294,7 @@ tu6_const_size(struct tu_cmd_buffer *cmd,
          tu6_user_consts_size(&cmd->state.shaders[MESA_SHADER_COMPUTE]->const_state, ldgk, MESA_SHADER_COMPUTE);
    } else {
       for (uint32_t type = MESA_SHADER_VERTEX; type <= MESA_SHADER_FRAGMENT; type++)
-         dwords += tu6_user_consts_size(&cmd->state.shaders[type]->const_state, ldgk, (gl_shader_stage) type);
+         dwords += tu6_user_consts_size(&cmd->state.shaders[type]->const_state, ldgk, (mesa_shader_stage) type);
    }
 
    return dwords;
@@ -6189,11 +6341,11 @@ tu_emit_consts(struct tu_cmd_buffer *cmd, bool compute)
             &cmd->state.program.link[type];
          tu6_emit_per_stage_push_consts(&cs, &link->tu_const_state,
                                         &link->const_state,
-                                        (gl_shader_stage) type,
+                                        (mesa_shader_stage) type,
                                         cmd->push_constants);
          tu_emit_inline_ubo(&cs, &link->tu_const_state,
                             &link->const_state, link->constlen,
-                            (gl_shader_stage) type, descriptors);
+                            (mesa_shader_stage) type, descriptors);
       }
    }
 
@@ -6225,6 +6377,31 @@ tu6_stencil_written_on_depth_fail(
    }
 }
 
+/* Returns true if the stencil write result may change based on the result of a
+ * depth test.
+ */
+static bool
+tu6_stencil_written_based_on_depth_test(
+   const struct vk_stencil_test_face_state *face)
+{
+   switch (face->op.compare) {
+   case VK_COMPARE_OP_ALWAYS:
+      /* The stencil op always passes, no need to worry about failOp. */
+      return face->op.depth_fail != VK_STENCIL_OP_KEEP ||
+             face->op.pass != VK_STENCIL_OP_KEEP;
+   case VK_COMPARE_OP_NEVER:
+      /* The stencil op always fails, so failOp will always be used. */
+      return face->op.fail != VK_STENCIL_OP_KEEP;
+   default:
+      /* If the stencil test fails, depth may fail as well, so we can write
+       * stencil when the depth fails if failOp is not VK_STENCIL_OP_KEEP.
+       */
+      return face->op.fail != VK_STENCIL_OP_KEEP ||
+             face->op.pass != VK_STENCIL_OP_KEEP ||
+             face->op.depth_fail != VK_STENCIL_OP_KEEP;
+   }
+}
+
 /* Various frontends (ANGLE, zink at least) will enable stencil testing with
  * what works out to be no-op writes.  Simplify what they give us into flags
  * that LRZ can use.
@@ -6240,6 +6417,7 @@ tu6_update_simplified_stencil_state(struct tu_cmd_buffer *cmd)
       cmd->state.stencil_front_write = false;
       cmd->state.stencil_back_write = false;
       cmd->state.stencil_written_on_depth_fail = false;
+      cmd->state.stencil_written_based_on_depth_test = false;
       return;
    }
 
@@ -6272,6 +6450,11 @@ tu6_update_simplified_stencil_state(struct tu_cmd_buffer *cmd)
        tu6_stencil_written_on_depth_fail(&ds->stencil.front)) ||
       (cmd->state.stencil_back_write &&
        tu6_stencil_written_on_depth_fail(&ds->stencil.back));
+   cmd->state.stencil_written_based_on_depth_test =
+      (cmd->state.stencil_front_write &&
+       tu6_stencil_written_based_on_depth_test(&ds->stencil.front)) ||
+      (cmd->state.stencil_back_write &&
+       tu6_stencil_written_based_on_depth_test(&ds->stencil.back));
 }
 
 static bool
@@ -6420,6 +6603,7 @@ fdm_apply_fs_params(struct tu_cmd_buffer *cmd,
                     struct tu_cs *cs,
                     void *data,
                     VkOffset2D common_bin_offset,
+                    const VkOffset2D *hw_viewport_offsets,
                     unsigned views,
                     const VkExtent2D *frag_areas,
                     const VkRect2D *bins)
@@ -6435,7 +6619,10 @@ fdm_apply_fs_params(struct tu_cmd_buffer *cmd,
        */
       VkExtent2D area = frag_areas[MIN2(i, views - 1)];
       VkRect2D bin = bins[MIN2(i, views - 1)];
+      VkOffset2D hw_viewport_offset = hw_viewport_offsets[MIN2(i, views - 1)];
       VkOffset2D offset = tu_fdm_per_bin_offset(area, bin, common_bin_offset);
+      offset.x -= hw_viewport_offset.x;
+      offset.y -= hw_viewport_offset.y;
 
       tu_cs_emit(cs, area.width);
       tu_cs_emit(cs, area.height);
@@ -7446,7 +7633,7 @@ tu_emit_compute_driver_params(struct tu_cmd_buffer *cmd,
                               struct tu_cs *cs,
                               const struct tu_dispatch_info *info)
 {
-   gl_shader_stage type = MESA_SHADER_COMPUTE;
+   mesa_shader_stage type = MESA_SHADER_COMPUTE;
    const struct tu_shader *shader = cmd->state.shaders[MESA_SHADER_COMPUTE];
    const struct ir3_shader_variant *variant = shader->variant;
    const struct ir3_const_state *const_state = variant->const_state;
@@ -8129,9 +8316,11 @@ tu_barrier(struct tu_cmd_buffer *cmd,
          }
 
          src_flags |= vk2tu_access(barrier->srcAccessMask, src_access_mask2,
-                                   sanitized_src_stage, false, gmem);
+                                   sanitized_src_stage, false, gmem,
+                                   cmd->device->vk.enabled_features.sparseResidencyAliased);
          dst_flags |= vk2tu_access(barrier->dstAccessMask, dst_access_mask2,
-                                   sanitized_dst_stage, false, gmem);
+                                   sanitized_dst_stage, false, gmem,
+                                   cmd->device->vk.enabled_features.sparseResidencyAliased);
          srcStage |= sanitized_src_stage;
          dstStage |= sanitized_dst_stage;
       }
@@ -8139,6 +8328,9 @@ tu_barrier(struct tu_cmd_buffer *cmd,
       for (uint32_t i = 0; i < dep_info->bufferMemoryBarrierCount; i++) {
          const VkBufferMemoryBarrier2 *barrier =
             &dep_info->pBufferMemoryBarriers[i];
+         VK_FROM_HANDLE(tu_buffer, buffer, barrier->buffer);
+         bool sparse_aliasing =
+            buffer->vk.create_flags & VK_BUFFER_CREATE_SPARSE_ALIASED_BIT;
          VkPipelineStageFlags2 sanitized_src_stage =
             sanitize_src_stage(barrier->srcStageMask);
          VkPipelineStageFlags2 sanitized_dst_stage =
@@ -8153,9 +8345,11 @@ tu_barrier(struct tu_cmd_buffer *cmd,
          }
 
          src_flags |= vk2tu_access(barrier->srcAccessMask, src_access_mask2,
-                                   sanitized_src_stage, false, gmem);
+                                   sanitized_src_stage, false, gmem,
+                                   sparse_aliasing);
          dst_flags |= vk2tu_access(barrier->dstAccessMask, dst_access_mask2,
-                                   sanitized_dst_stage, false, gmem);
+                                   sanitized_dst_stage, false, gmem,
+                                   sparse_aliasing);
          srcStage |= sanitized_src_stage;
          dstStage |= sanitized_dst_stage;
       }
@@ -8163,8 +8357,12 @@ tu_barrier(struct tu_cmd_buffer *cmd,
       for (uint32_t i = 0; i < dep_info->imageMemoryBarrierCount; i++) {
          const VkImageMemoryBarrier2 *barrier =
             &dep_info->pImageMemoryBarriers[i];
+         VK_FROM_HANDLE(tu_image, image, barrier->image);
 
          VkImageLayout old_layout = barrier->oldLayout;
+
+         bool sparse_aliasing =
+            image->vk.create_flags & VK_BUFFER_CREATE_SPARSE_ALIASED_BIT;
          if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
             /* The underlying memory for this image may have been used earlier
              * within the same queue submission for a different image, which
@@ -8173,8 +8371,6 @@ tu_barrier(struct tu_cmd_buffer *cmd,
              * to the image. We don't want these entries being flushed later and
              * overwriting the actual image, so we need to flush the CCU.
              */
-            VK_FROM_HANDLE(tu_image, image, barrier->image);
-
             if (vk_format_is_depth_or_stencil(image->vk.format)) {
                src_flags |= TU_ACCESS_CCU_DEPTH_INCOHERENT_WRITE;
             } else {
@@ -8195,9 +8391,11 @@ tu_barrier(struct tu_cmd_buffer *cmd,
          }
 
          src_flags |= vk2tu_access(barrier->srcAccessMask, src_access_mask2,
-                                   sanitized_src_stage, true, gmem);
+                                   sanitized_src_stage, true, gmem,
+                                   sparse_aliasing);
          dst_flags |= vk2tu_access(barrier->dstAccessMask, dst_access_mask2,
-                                   sanitized_dst_stage, true, gmem);
+                                   sanitized_dst_stage, true, gmem,
+                                   sparse_aliasing);
          srcStage |= sanitized_src_stage;
          dstStage |= sanitized_dst_stage;
       }

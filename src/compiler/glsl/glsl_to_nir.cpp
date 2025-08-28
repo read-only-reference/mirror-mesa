@@ -308,10 +308,10 @@ nir_visitor::constant_copy(ir_constant *ir, void *mem_ctx)
    case GLSL_TYPE_FLOAT16:
    case GLSL_TYPE_DOUBLE:
       if (cols > 1) {
-         ret->elements = ralloc_array(mem_ctx, nir_constant *, cols);
+         ret->elements = ralloc_array(ret, nir_constant *, cols);
          ret->num_elements = cols;
          for (unsigned c = 0; c < cols; c++) {
-            nir_constant *col_const = rzalloc(mem_ctx, nir_constant);
+            nir_constant *col_const = rzalloc(ret, nir_constant);
             col_const->num_elements = 0;
             switch (ir->type->base_type) {
             case GLSL_TYPE_FLOAT:
@@ -384,12 +384,14 @@ nir_visitor::constant_copy(ir_constant *ir, void *mem_ctx)
 
    case GLSL_TYPE_STRUCT:
    case GLSL_TYPE_ARRAY:
-      ret->elements = ralloc_array(mem_ctx, nir_constant *,
-                                   ir->type->length);
-      ret->num_elements = ir->type->length;
+      if (ir->type->length) {
+         ret->elements = ralloc_array(ret, nir_constant *,
+                                      ir->type->length);
+         ret->num_elements = ir->type->length;
 
-      for (i = 0; i < ir->type->length; i++)
-         ret->elements[i] = constant_copy(ir->const_elements[i], mem_ctx);
+         for (i = 0; i < ir->type->length; i++)
+            ret->elements[i] = constant_copy(ir->const_elements[i], ret);
+      }
       break;
 
    default:
@@ -443,9 +445,9 @@ nir_visitor::visit(ir_variable *ir)
    if (ir->data.mode == ir_var_function_out)
       return;
 
-   nir_variable *var = rzalloc(shader, nir_variable);
+   nir_variable *var = nir_variable_create_zeroed(shader);
    var->type = ir->type;
-   var->name = ralloc_strdup(var, ir->name);
+   nir_variable_set_name(shader, var, ir->name);
 
    var->data.assigned = ir->data.assigned;
    var->data.read_only = ir->data.read_only;
@@ -619,7 +621,7 @@ nir_visitor::visit(ir_variable *ir)
       int *max_ifc_array_access = ir->get_max_ifc_array_access();
       if (max_ifc_array_access) {
          var->max_ifc_array_access =
-            rzalloc_array(var, int, ir->get_interface_type()->length);
+            rzalloc_array(this->shader, int, ir->get_interface_type()->length);
          memcpy(var->max_ifc_array_access, max_ifc_array_access,
                 ir->get_interface_type()->length * sizeof(unsigned));
       }
@@ -627,7 +629,7 @@ nir_visitor::visit(ir_variable *ir)
 
    var->num_state_slots = ir->get_num_state_slots();
    if (var->num_state_slots > 0) {
-      var->state_slots = rzalloc_array(var, nir_state_slot,
+      var->state_slots = rzalloc_array(this->shader, nir_state_slot,
                                        var->num_state_slots);
 
       ir_state_slot *state_slots = ir->get_state_slots();
@@ -643,9 +645,9 @@ nir_visitor::visit(ir_variable *ir)
     * ir->constant_initializer.
     */
    if (ir->constant_initializer)
-      var->constant_initializer = constant_copy(ir->constant_initializer, var);
+      var->constant_initializer = constant_copy(ir->constant_initializer, shader);
    else
-      var->constant_initializer = constant_copy(ir->constant_value, var);
+      var->constant_initializer = constant_copy(ir->constant_value, shader);
 
    if (var->data.mode == nir_var_function_temp)
       nir_function_impl_add_variable(impl, var);
@@ -676,7 +678,9 @@ nir_visitor::create_function(ir_function_signature *ir)
 
    func->num_params = ir->parameters.length() +
                       (ir->return_type != &glsl_type_builtin_void);
-   func->params = rzalloc_array(shader, nir_parameter, func->num_params);
+   func->params = NULL;
+   if (func->num_params)
+      func->params = rzalloc_array(shader, nir_parameter, func->num_params);
 
    unsigned np = 0;
    if (ir->return_type != &glsl_type_builtin_void) {
@@ -705,10 +709,14 @@ nir_visitor::create_function(ir_function_signature *ir)
    func->is_subroutine = ir->function()->is_subroutine;
    func->num_subroutine_types = ir->function()->num_subroutine_types;
    func->subroutine_index = ir->function()->subroutine_index;
-   func->subroutine_types =
-      ralloc_array(func, const struct glsl_type *, func->num_subroutine_types);
-   for (int i = 0; i < func->num_subroutine_types; i++)
-     func->subroutine_types[i] = ir->function()->subroutine_types[i];
+   func->subroutine_types = NULL;
+
+   if (func->num_subroutine_types) {
+      func->subroutine_types =
+         ralloc_array(func, const struct glsl_type *, func->num_subroutine_types);
+      for (int i = 0; i < func->num_subroutine_types; i++)
+        func->subroutine_types[i] = ir->function()->subroutine_types[i];
+   }
 
    _mesa_hash_table_insert(this->overload_table, ir, func);
 }
@@ -1642,13 +1650,23 @@ nir_visitor::visit(ir_call *ir)
          nir_builder_instr_insert(&b, &instr->instr);
          break;
       }
+      case nir_intrinsic_begin_invocation_interlock: {
+         nir_builder_instr_insert(&b, &instr->instr);
+         nir_scoped_memory_barrier(&b, SCOPE_DEVICE, NIR_MEMORY_ACQUIRE,
+                                   nir_var_image | nir_var_mem_ssbo | nir_var_mem_global);
+         break;
+      }
+      case nir_intrinsic_end_invocation_interlock: {
+         nir_scoped_memory_barrier(&b, SCOPE_DEVICE, NIR_MEMORY_RELEASE,
+                                   nir_var_image | nir_var_mem_ssbo | nir_var_mem_global);
+         nir_builder_instr_insert(&b, &instr->instr);
+         break;
+      }
       case nir_intrinsic_shader_clock:
          nir_intrinsic_set_memory_scope(instr,
             ir->callee->intrinsic_id == ir_intrinsic_shader_clock ?
             SCOPE_SUBGROUP : SCOPE_DEVICE);
          FALLTHROUGH;
-      case nir_intrinsic_begin_invocation_interlock:
-      case nir_intrinsic_end_invocation_interlock:
       case nir_intrinsic_vote_ieq:
       case nir_intrinsic_vote_feq:
       case nir_intrinsic_vote_any:
@@ -2724,7 +2742,7 @@ nir_visitor::visit(ir_constant *ir)
    nir_variable *var =
       nir_local_variable_create(this->impl, ir->type, "const_temp");
    var->data.read_only = true;
-   var->constant_initializer = constant_copy(ir, var);
+   var->constant_initializer = constant_copy(ir, shader);
 
    this->deref = nir_build_deref_var(&b, var);
 }

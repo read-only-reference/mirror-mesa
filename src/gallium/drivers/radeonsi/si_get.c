@@ -654,61 +654,6 @@ static bool si_vid_is_format_supported(struct pipe_screen *screen, enum pipe_for
    return vl_video_buffer_is_format_supported(screen, format, profile, entrypoint);
 }
 
-static bool si_vid_is_target_buffer_supported(struct pipe_screen *screen,
-                                              enum pipe_format format,
-                                              struct pipe_video_buffer *target,
-                                              enum pipe_video_profile profile,
-                                              enum pipe_video_entrypoint entrypoint)
-{
-   struct si_screen *sscreen = (struct si_screen *)screen;
-   struct si_texture *tex = (struct si_texture *)((struct vl_video_buffer *)target)->resources[0];
-   const bool is_dcc = tex->surface.meta_offset;
-   const bool is_format_conversion = format != target->buffer_format;
-
-   switch (entrypoint) {
-   case PIPE_VIDEO_ENTRYPOINT_BITSTREAM:
-      if (is_dcc || is_format_conversion)
-         return false;
-      break;
-
-   case PIPE_VIDEO_ENTRYPOINT_ENCODE:
-      if (is_dcc)
-         return false;
-
-      /* EFC */
-      if (is_format_conversion) {
-         const bool input_8bit =
-            target->buffer_format == PIPE_FORMAT_B8G8R8A8_UNORM ||
-            target->buffer_format == PIPE_FORMAT_B8G8R8X8_UNORM ||
-            target->buffer_format == PIPE_FORMAT_R8G8B8A8_UNORM ||
-            target->buffer_format == PIPE_FORMAT_R8G8B8X8_UNORM;
-         const bool input_10bit =
-            target->buffer_format == PIPE_FORMAT_B10G10R10A2_UNORM ||
-            target->buffer_format == PIPE_FORMAT_B10G10R10X2_UNORM ||
-            target->buffer_format == PIPE_FORMAT_R10G10B10A2_UNORM ||
-            target->buffer_format == PIPE_FORMAT_R10G10B10X2_UNORM;
-
-         if (sscreen->info.vcn_ip_version < VCN_2_0_0 ||
-             sscreen->info.vcn_ip_version == VCN_2_2_0 ||
-             sscreen->debug_flags & DBG(NO_EFC))
-            return false;
-
-         if (input_8bit && format != PIPE_FORMAT_NV12)
-            return false;
-         if (input_10bit && format != PIPE_FORMAT_NV12 && format != PIPE_FORMAT_P010)
-            return false;
-      }
-      break;
-
-   default:
-      if (is_format_conversion)
-         return false;
-      break;
-   }
-
-   return si_vid_is_format_supported(screen, format, profile, entrypoint);
-}
-
 static uint64_t si_get_timestamp(struct pipe_screen *screen)
 {
    struct si_screen *sscreen = (struct si_screen *)screen;
@@ -841,7 +786,6 @@ void si_init_screen_get_functions(struct si_screen *sscreen)
        sscreen->info.ip[AMD_IP_VPE].num_queues) {
       sscreen->b.get_video_param = si_get_video_param;
       sscreen->b.is_video_format_supported = si_vid_is_format_supported;
-      sscreen->b.is_video_target_buffer_supported = si_vid_is_target_buffer_supported;
    }
 
    si_init_renderer_string(sscreen);
@@ -921,13 +865,13 @@ void si_init_screen_get_functions(struct si_screen *sscreen)
    options->support_indirect_outputs = BITFIELD_BIT(MESA_SHADER_TESS_CTRL);
    options->varying_expression_max_cost = si_varying_expression_max_cost;
 
-   for (unsigned i = 0; i < ARRAY_SIZE(sscreen->b.nir_options); i++)
+   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++)
       sscreen->b.nir_options[i] = options;
 }
 
 void si_init_shader_caps(struct si_screen *sscreen)
 {
-   for (unsigned i = 0; i <= PIPE_SHADER_COMPUTE; i++) {
+   for (unsigned i = 0; i <= MESA_SHADER_COMPUTE; i++) {
       struct pipe_shader_caps *caps =
          (struct pipe_shader_caps *)&sscreen->b.shader_caps[i];
 
@@ -937,8 +881,8 @@ void si_init_shader_caps(struct si_screen *sscreen)
       caps->max_tex_instructions =
       caps->max_tex_indirections =
       caps->max_control_flow_depth = 16384;
-      caps->max_inputs = i == PIPE_SHADER_VERTEX ? SI_MAX_ATTRIBS : 32;
-      caps->max_outputs = i == PIPE_SHADER_FRAGMENT ? 8 : 32;
+      caps->max_inputs = i == MESA_SHADER_VERTEX ? SI_MAX_ATTRIBS : 32;
+      caps->max_outputs = i == MESA_SHADER_FRAGMENT ? 8 : 32;
       caps->max_temps = 256; /* Max native temporaries. */
       caps->max_const_buffer0_size = 1 << 26; /* 64 MB */
       caps->max_const_buffers = SI_NUM_CONST_BUFFERS;
@@ -1325,7 +1269,7 @@ void si_init_screen_caps(struct si_screen *sscreen)
    caps->timer_resolution = DIV_ROUND_UP(1000000, sscreen->info.clock_crystal_freq);
 
    caps->shader_subgroup_size = 64;
-   caps->shader_subgroup_supported_stages = BITFIELD_MASK(PIPE_SHADER_TYPES);
+   caps->shader_subgroup_supported_stages = BITFIELD_MASK(MESA_SHADER_STAGES);
    caps->shader_subgroup_supported_features = BITFIELD_MASK(PIPE_SHADER_SUBGROUP_NUM_FEATURES);
    caps->shader_subgroup_quad_all_stages = true;
 

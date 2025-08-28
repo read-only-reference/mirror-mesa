@@ -412,7 +412,7 @@ void si_destroy_sqtt(struct si_context *sctx)
 
    ac_sqtt_finish(sctx->sqtt);
 
-   hash_table_foreach (sctx->sqtt->pipeline_bos->table, entry) {
+   hash_table_foreach (&sctx->sqtt->pipeline_bos->table, entry) {
       struct si_sqtt_fake_pipeline *pipeline =
          (struct si_sqtt_fake_pipeline *)entry->data;
       si_resource_reference(&pipeline->bo, NULL);
@@ -697,10 +697,10 @@ bool si_sqtt_pipeline_is_registered(struct ac_sqtt *sqtt,
 }
 
 static enum rgp_hardware_stages
-si_sqtt_pipe_to_rgp_shader_stage(union si_shader_key *key, enum pipe_shader_type stage)
+si_sqtt_pipe_to_rgp_shader_stage(union si_shader_key *key, mesa_shader_stage stage)
 {
    switch (stage) {
-      case PIPE_SHADER_VERTEX:
+      case MESA_SHADER_VERTEX:
          if (key->ge.as_ls)
             return RGP_HW_STAGE_LS;
          else if (key->ge.as_es)
@@ -709,20 +709,20 @@ si_sqtt_pipe_to_rgp_shader_stage(union si_shader_key *key, enum pipe_shader_type
             return RGP_HW_STAGE_GS;
          else
             return RGP_HW_STAGE_VS;
-      case PIPE_SHADER_TESS_CTRL:
+      case MESA_SHADER_TESS_CTRL:
          return RGP_HW_STAGE_HS;
-      case PIPE_SHADER_TESS_EVAL:
+      case MESA_SHADER_TESS_EVAL:
          if (key->ge.as_es)
             return RGP_HW_STAGE_ES;
          else if (key->ge.as_ngg)
             return RGP_HW_STAGE_GS;
          else
             return RGP_HW_STAGE_VS;
-      case PIPE_SHADER_GEOMETRY:
+      case MESA_SHADER_GEOMETRY:
          return RGP_HW_STAGE_GS;
-      case PIPE_SHADER_FRAGMENT:
+      case MESA_SHADER_FRAGMENT:
          return RGP_HW_STAGE_PS;
-      case PIPE_SHADER_COMPUTE:
+      case MESA_SHADER_COMPUTE:
          return RGP_HW_STAGE_CS;
       default:
          UNREACHABLE("invalid mesa shader stage");
@@ -752,11 +752,11 @@ si_sqtt_add_code_object(struct si_context *sctx,
       enum rgp_hardware_stages hw_stage;
 
       if (is_compute) {
-         if (i != PIPE_SHADER_COMPUTE)
+         if (i != MESA_SHADER_COMPUTE)
             continue;
          shader = &sctx->cs_shader_state.program->shader;
          hw_stage = RGP_HW_STAGE_CS;
-      } else if (i <= PIPE_SHADER_FRAGMENT) {
+      } else if (i <= MESA_SHADER_FRAGMENT) {
          if (!sctx->shaders[i].cso || !sctx->shaders[i].current)
             continue;
          shader = sctx->shaders[i].current;

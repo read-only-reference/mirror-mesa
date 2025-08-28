@@ -95,10 +95,16 @@ brw_compile_tes(const struct brw_compiler *compiler,
       return NULL;
    }
 
-   prog_data->base.clip_distance_mask =
-      ((1 << nir->info.clip_distance_array_size) - 1);
+   const bool has_clip_cull_dist =
+      nir->info.outputs_written & (VARYING_BIT_CLIP_DIST0 |
+                                   VARYING_BIT_CLIP_DIST1 |
+                                   VARYING_BIT_CULL_DIST0 |
+                                   VARYING_BIT_CULL_DIST1);
+   prog_data->base.clip_distance_mask = has_clip_cull_dist ?
+      ((1 << nir->info.clip_distance_array_size) - 1) : 0;
    prog_data->base.cull_distance_mask =
-      ((1 << nir->info.cull_distance_array_size) - 1) <<
+      (has_clip_cull_dist ?
+       ((1 << nir->info.cull_distance_array_size) - 1) : 0) <<
       nir->info.clip_distance_array_size;
 
    prog_data->include_primitive_id =
@@ -151,9 +157,18 @@ brw_compile_tes(const struct brw_compiler *compiler,
                         MESA_SHADER_TESS_EVAL);
    }
 
-    brw_shader v(compiler, &params->base, &key->base,
-                 &prog_data->base.base, nir, dispatch_width,
-                 params->base.stats != NULL, debug_enabled);
+   const brw_shader_params shader_params = {
+      .compiler                = compiler,
+      .mem_ctx                 = params->base.mem_ctx,
+      .nir                     = nir,
+      .key                     = &key->base,
+      .prog_data               = &prog_data->base.base,
+      .dispatch_width          = dispatch_width,
+      .needs_register_pressure = params->base.stats != NULL,
+      .log_data                = params->base.log_data,
+      .debug_enabled           = debug_enabled,
+   };
+   brw_shader v(&shader_params);
    if (!run_tes(v)) {
       params->base.error_str =
          ralloc_strdup(params->base.mem_ctx, v.fail_msg);
@@ -175,9 +190,7 @@ brw_compile_tes(const struct brw_compiler *compiler,
                                      nir->info.name));
    }
 
-   g.generate_code(v.cfg, dispatch_width, v.shader_stats,
-                   v.performance_analysis.require(), params->base.stats);
-
+   g.generate_code(v, params->base.stats);
    g.add_const_data(nir->constant_data, nir->constant_data_size);
 
    return g.get_assembly();

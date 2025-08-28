@@ -54,8 +54,6 @@ anv_init_wsi(struct anv_physical_device *physical_device)
       return result;
 
    physical_device->wsi_device.supports_modifiers = true;
-   physical_device->wsi_device.signal_semaphore_with_memory = true;
-   physical_device->wsi_device.signal_fence_with_memory = true;
 
    physical_device->vk.wsi_device = &physical_device->wsi_device;
 
@@ -107,14 +105,8 @@ VkResult anv_QueuePresentKHR(
 #endif
    }
 
-   result = vk_queue_wait_before_present(&queue->vk, pPresentInfo);
-   if (result != VK_SUCCESS)
-      return result;
-
    result = wsi_common_queue_present(&device->physical->wsi_device,
-                                     anv_device_to_handle(queue->device),
-                                     _queue, 0,
-                                     pPresentInfo);
+                                     &queue->vk, pPresentInfo);
 
    intel_ds_device_process(&device->ds, true);
 

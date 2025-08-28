@@ -32,6 +32,7 @@
 #include "os_file.h"
 #include "ralloc.h"
 #include "simple_mtx.h"
+#include "u_debug.h"
 
 #include <stdarg.h>
 
@@ -223,6 +224,18 @@ os_get_option(const char *name)
 
 #endif
 
+const char *
+os_get_option_secure(const char *name)
+{
+   const char *opt = secure_getenv(name);
+#if DETECT_OS_ANDROID
+   if (!opt) {
+      opt = os_get_android_option(name);
+   }
+#endif
+   return opt;
+}
+
 static struct hash_table *options_tbl;
 static bool options_tbl_exited = false;
 static simple_mtx_t options_tbl_mtx = SIMPLE_MTX_INITIALIZER;
@@ -284,9 +297,9 @@ exit_mutex:
 bool
 os_get_total_physical_memory(uint64_t *size)
 {
-#if DETECT_OS_LINUX || DETECT_OS_CYGWIN || DETECT_OS_SOLARIS || DETECT_OS_HURD || DETECT_OS_MANAGARM
+#if HAVE_SYSCONF
    const long phys_pages = sysconf(_SC_PHYS_PAGES);
-   const long page_size = sysconf(_SC_PAGE_SIZE);
+   const long page_size = sysconf(_SC_PAGESIZE);
 
    if (phys_pages <= 0 || page_size <= 0)
       return false;
@@ -412,8 +425,8 @@ os_get_available_system_memory(uint64_t *size)
 bool
 os_get_page_size(uint64_t *size)
 {
-#if DETECT_OS_POSIX_LITE && !DETECT_OS_APPLE && !DETECT_OS_HAIKU
-   const long page_size = sysconf(_SC_PAGE_SIZE);
+#if HAVE_SYSCONF
+   const long page_size = sysconf(_SC_PAGESIZE);
 
    if (page_size <= 0)
       return false;

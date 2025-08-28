@@ -285,6 +285,13 @@ main(int argc, const char **argv)
    }
 
    off_t spirv_len = lseek(fd, 0, SEEK_END);
+   if (spirv_len < 0) {
+      fprintf(stderr, "Failed to lseek to the end of the file: errno=%d, %s\n",
+              errno, strerror(errno));
+      close(fd);
+      goto input_spirv_open_failed;
+   }
+
    const void *spirv_map = mmap(NULL, spirv_len, PROT_READ, MAP_PRIVATE, fd, 0);
    close(fd);
 
@@ -410,6 +417,9 @@ main(int argc, const char **argv)
          } while (progress);
 
          pan_shader_preprocess(s, inputs.gpu_id);
+         pan_shader_lower_texture_early(s, inputs.gpu_id);
+         pan_shader_lower_texture(s, inputs.gpu_id);
+         pan_shader_postprocess(s, inputs.gpu_id);
 
          NIR_PASS(_, s, nir_opt_deref);
          NIR_PASS(_, s, nir_lower_vars_to_ssa);

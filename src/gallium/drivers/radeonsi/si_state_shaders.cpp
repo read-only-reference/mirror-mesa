@@ -27,7 +27,7 @@ static void si_update_tess_in_out_patch_vertices(struct si_context *sctx);
 unsigned si_determine_wave_size(struct si_screen *sscreen, struct si_shader *shader)
 {
    struct si_shader_info *info = &shader->selector->info;
-   gl_shader_stage stage = shader->selector->stage;
+   mesa_shader_stage stage = shader->selector->stage;
 
    struct si_shader_selector *prev_sel = NULL;
    if (stage == MESA_SHADER_TESS_CTRL)
@@ -988,7 +988,7 @@ static void si_shader_gs(struct si_screen *sscreen, struct si_shader *shader)
 
    if (sscreen->info.gfx_level >= GFX9) {
       unsigned input_prim = sel->info.base.gs.input_primitive;
-      gl_shader_stage es_stage = shader->key.ge.part.gs.es->stage;
+      mesa_shader_stage es_stage = shader->key.ge.part.gs.es->stage;
       unsigned es_vgpr_comp_cnt, gs_vgpr_comp_cnt;
 
       if (es_stage == MESA_SHADER_VERTEX) {
@@ -1397,11 +1397,11 @@ static void gfx10_shader_ngg(struct si_screen *sscreen, struct si_shader *shader
 {
    const struct si_shader_selector *gs_sel = shader->selector;
    const struct si_shader_info *gs_info = &gs_sel->info;
-   const gl_shader_stage gs_stage = shader->selector->stage;
+   const mesa_shader_stage gs_stage = shader->selector->stage;
    const struct si_shader_selector *es_sel =
       shader->previous_stage_sel ? shader->previous_stage_sel : shader->selector;
    const struct si_shader_info *es_info = &es_sel->info;
-   const gl_shader_stage es_stage = es_sel->stage;
+   const mesa_shader_stage es_stage = es_sel->stage;
    unsigned num_user_sgprs;
    unsigned es_vgpr_comp_cnt, gs_vgpr_comp_cnt;
    uint64_t va;
@@ -2379,8 +2379,8 @@ void si_update_ps_inputs_read_or_disabled(struct si_context *sctx)
    if (sctx->ps_inputs_read_or_disabled != ps_inputs_read_or_disabled) {
       sctx->ps_inputs_read_or_disabled = ps_inputs_read_or_disabled;
       sctx->dirty_shaders_mask |=
-         (sctx->shader.gs.cso ? BITFIELD_BIT(PIPE_SHADER_GEOMETRY) :
-            (sctx->shader.tes.cso ? BITFIELD_BIT(PIPE_SHADER_TESS_EVAL) : BITFIELD_BIT(PIPE_SHADER_VERTEX)));
+         (sctx->shader.gs.cso ? BITFIELD_BIT(MESA_SHADER_GEOMETRY) :
+            (sctx->shader.tes.cso ? BITFIELD_BIT(MESA_SHADER_TESS_EVAL) : BITFIELD_BIT(MESA_SHADER_VERTEX)));
    }
 }
 
@@ -2430,9 +2430,9 @@ void si_vs_ps_key_update_rast_prim_smooth_stipple(struct si_context *sctx)
 
    if (vs_key->ge.opt.kill_pointsize != old_kill_pointsize) {
       sctx->dirty_shaders_mask |=
-         BITFIELD_BIT(PIPE_SHADER_VERTEX) |
-         BITFIELD_BIT(PIPE_SHADER_TESS_EVAL) |
-         BITFIELD_BIT(PIPE_SHADER_GEOMETRY);
+         BITFIELD_BIT(MESA_SHADER_VERTEX) |
+         BITFIELD_BIT(MESA_SHADER_TESS_EVAL) |
+         BITFIELD_BIT(MESA_SHADER_GEOMETRY);
    }
 
    if (ps_key->ps.part.prolog.color_two_side != old_color_two_side ||
@@ -2440,7 +2440,7 @@ void si_vs_ps_key_update_rast_prim_smooth_stipple(struct si_context *sctx)
        ps_key->ps.mono.poly_line_smoothing != old_poly_line_smoothing ||
        ps_key->ps.mono.point_smoothing != old_point_smoothing ||
        ps_key->ps.opt.force_front_face_input != old_force_front_face_input)
-      sctx->dirty_shaders_mask |= BITFIELD_BIT(PIPE_SHADER_FRAGMENT);
+      sctx->dirty_shaders_mask |= BITFIELD_BIT(MESA_SHADER_FRAGMENT);
 }
 
 static void si_get_vs_key_outputs(struct si_context *sctx, struct si_shader_selector *vs,
@@ -2675,7 +2675,7 @@ void si_ps_key_update_framebuffer_blend_dsa_rasterizer(struct si_context *sctx)
    /* Update shaders only if the key changed. */
    if (memcmp(&key->ps.part.epilog, &old_epilog, sizeof(old_epilog)) ||
        key->ps.opt.prefer_mono != old_prefer_mono) {
-      sctx->dirty_shaders_mask |= BITFIELD_BIT(PIPE_SHADER_FRAGMENT);
+      sctx->dirty_shaders_mask |= BITFIELD_BIT(MESA_SHADER_FRAGMENT);
    } else {
       assert(memcmp(&key->ps, &old_key, sizeof(old_key)) == 0);
    }
@@ -2698,7 +2698,7 @@ void si_ps_key_update_rasterizer(struct si_context *sctx)
 
    if (key->ps.part.prolog.flatshade_colors != old_flatshade_colors ||
        key->ps.part.epilog.clamp_color != old_clamp_color)
-      sctx->dirty_shaders_mask |= BITFIELD_BIT(PIPE_SHADER_FRAGMENT);
+      sctx->dirty_shaders_mask |= BITFIELD_BIT(MESA_SHADER_FRAGMENT);
 }
 
 void si_ps_key_update_dsa(struct si_context *sctx)
@@ -2813,7 +2813,7 @@ void si_ps_key_update_framebuffer_rasterizer_sample_shading(struct si_context *s
    /* Update shaders only if the key changed. */
    if (memcmp(&key->ps.part.prolog, &old_prolog, sizeof(old_prolog)) ||
        key->ps.mono.interpolate_at_sample_force_center != old_interpolate_at_sample_force_center)
-      sctx->dirty_shaders_mask |= BITFIELD_BIT(PIPE_SHADER_FRAGMENT);
+      sctx->dirty_shaders_mask |= BITFIELD_BIT(MESA_SHADER_FRAGMENT);
 }
 
 /* Compute the key for the hw shader variant */
@@ -3266,7 +3266,7 @@ int si_shader_select(struct pipe_context *ctx, struct si_shader_ctx_state *state
 
 static void si_parse_next_shader_property(nir_shader *nir, union si_shader_key *key)
 {
-   gl_shader_stage next_shader = nir->info.next_stage;
+   mesa_shader_stage next_shader = nir->info.next_stage;
    bool writes_position = nir->info.outputs_written & VARYING_BIT_POS;
    assert(!nir->xfb_info || nir->xfb_info->buffers_written);
 
@@ -3393,7 +3393,7 @@ static void si_init_shader_selector_async(void *job, void *gdata, int thread_ind
             mesa_loge("can't compile a main shader part (type: %s).\n"
                       "This is probably a driver bug, please report "
                       "it to https://gitlab.freedesktop.org/mesa/mesa/-/issues.",
-                      gl_shader_stage_name(shader->selector->stage));
+                      mesa_shader_stage_name(shader->selector->stage));
             FREE(shader);
             return;
          }
@@ -3411,7 +3411,7 @@ static void si_init_shader_selector_async(void *job, void *gdata, int thread_ind
    sel->nir = NULL;
 }
 
-void si_schedule_initial_compile(struct si_context *sctx, gl_shader_stage stage,
+void si_schedule_initial_compile(struct si_context *sctx, mesa_shader_stage stage,
                                  struct util_queue_fence *ready_fence,
                                  struct si_compiler_ctx_state *compiler_ctx_state, void *job,
                                  util_queue_execute_func execute)
@@ -3663,7 +3663,7 @@ static void si_update_rasterized_prim(struct si_context *sctx)
 }
 
 void si_update_common_shader_state(struct si_context *sctx, struct si_shader_selector *sel,
-                                   enum pipe_shader_type type)
+                                   mesa_shader_stage type)
 {
    si_set_active_descriptors_for_shader(sctx, sel);
 
@@ -3677,7 +3677,7 @@ void si_update_common_shader_state(struct si_context *sctx, struct si_shader_sel
    else
       sctx->uses_bindless_images &= ~BITFIELD_BIT(type);
 
-   if (type == PIPE_SHADER_VERTEX || type == PIPE_SHADER_TESS_EVAL || type == PIPE_SHADER_GEOMETRY)
+   if (type == MESA_SHADER_VERTEX || type == MESA_SHADER_TESS_EVAL || type == MESA_SHADER_GEOMETRY)
       sctx->ngg_culling = 0; /* this will be enabled on the first draw if needed */
 
    si_invalidate_inlinable_uniforms(sctx, type);
@@ -3731,7 +3731,7 @@ static void si_bind_vs_shader(struct pipe_context *ctx, void *state)
    if (si_update_ngg(sctx))
       si_shader_change_notify(sctx);
 
-   si_update_common_shader_state(sctx, sel, PIPE_SHADER_VERTEX);
+   si_update_common_shader_state(sctx, sel, MESA_SHADER_VERTEX);
    si_select_draw_vbo(sctx);
    si_update_last_vgt_stage_state(sctx, old_hw_vs, old_hw_vs_variant);
    si_vs_key_update_inputs(sctx);
@@ -3816,7 +3816,7 @@ static void si_bind_gs_shader(struct pipe_context *ctx, void *state)
 #endif
    sctx->ia_multi_vgt_param_key.u.uses_gs = sel != NULL;
 
-   si_update_common_shader_state(sctx, sel, PIPE_SHADER_GEOMETRY);
+   si_update_common_shader_state(sctx, sel, MESA_SHADER_GEOMETRY);
    si_select_draw_vbo(sctx);
 
    ngg_changed = si_update_ngg(sctx);
@@ -3851,7 +3851,7 @@ static void si_bind_tcs_shader(struct pipe_context *ctx, void *state)
    si_update_tess_uses_prim_id(sctx);
    si_update_tess_in_out_patch_vertices(sctx);
 
-   si_update_common_shader_state(sctx, sel, PIPE_SHADER_TESS_CTRL);
+   si_update_common_shader_state(sctx, sel, MESA_SHADER_TESS_CTRL);
 
    if (enable_changed)
       sctx->last_tcs = NULL; /* invalidate derived tess state */
@@ -3891,7 +3891,7 @@ static void si_bind_tes_shader(struct pipe_context *ctx, void *state)
       si_mark_atom_dirty(sctx, &sctx->atoms.s.tess_io_layout);
    }
 
-   si_update_common_shader_state(sctx, sel, PIPE_SHADER_TESS_EVAL);
+   si_update_common_shader_state(sctx, sel, MESA_SHADER_TESS_EVAL);
    si_select_draw_vbo(sctx);
 
    bool ngg_changed = si_update_ngg(sctx);
@@ -3932,7 +3932,7 @@ static void si_bind_ps_shader(struct pipe_context *ctx, void *state)
    sctx->shader.ps.cso = sel;
    sctx->shader.ps.current = (sel && sel->variants_count) ? sel->variants[0] : NULL;
 
-   si_update_common_shader_state(sctx, sel, PIPE_SHADER_FRAGMENT);
+   si_update_common_shader_state(sctx, sel, MESA_SHADER_FRAGMENT);
    if (sel) {
       if (sctx->ia_multi_vgt_param_key.u.uses_tess)
          si_update_tess_uses_prim_id(sctx);
@@ -4573,7 +4573,7 @@ static void si_update_tess_in_out_patch_vertices(struct si_context *sctx)
 
       if (sctx->shader.tcs.key.ge.opt.same_patch_vertices != same_patch_vertices) {
          sctx->shader.tcs.key.ge.opt.same_patch_vertices = same_patch_vertices;
-         sctx->dirty_shaders_mask |= BITFIELD_BIT(PIPE_SHADER_TESS_CTRL);
+         sctx->dirty_shaders_mask |= BITFIELD_BIT(MESA_SHADER_TESS_CTRL);
       }
    } else {
       /* These fields are static for fixed function TCS. So no need to set
@@ -4585,7 +4585,7 @@ static void si_update_tess_in_out_patch_vertices(struct si_context *sctx)
       /* User may only change patch vertices, needs to update fixed func TCS. */
       if (sctx->shader.tcs.cso &&
           sctx->shader.tcs.cso->info.base.tess.tcs_vertices_out != sctx->patch_vertices)
-         sctx->dirty_shaders_mask |= BITFIELD_BIT(PIPE_SHADER_TESS_CTRL);
+         sctx->dirty_shaders_mask |= BITFIELD_BIT(MESA_SHADER_TESS_CTRL);
    }
 }
 
@@ -4603,7 +4603,7 @@ static void si_set_patch_vertices(struct pipe_context *ctx, uint8_t patch_vertic
          if (sctx->has_tessellation)
             si_update_tess_io_layout_state(sctx);
          else
-            sctx->dirty_shaders_mask |= BITFIELD_BIT(PIPE_SHADER_TESS_CTRL);
+            sctx->dirty_shaders_mask |= BITFIELD_BIT(MESA_SHADER_TESS_CTRL);
       }
 
       /* Gfx12 programs patch_vertices in VGT_PRIMITIVE_TYPE.NUM_INPUT_CP. Make sure
@@ -4668,7 +4668,7 @@ void si_update_tess_io_layout_state(struct si_context *sctx)
    struct si_shader_selector *tcs = sctx->shader.tcs.cso;
    bool tess_uses_primid = sctx->ia_multi_vgt_param_key.u.tess_uses_prim_id;
    bool has_primid_instancing_bug = sctx->gfx_level == GFX6 && sctx->screen->info.max_se == 1;
-   unsigned tes_sh_base = sctx->shader_pointers.sh_base[PIPE_SHADER_TESS_EVAL];
+   unsigned tes_sh_base = sctx->shader_pointers.sh_base[MESA_SHADER_TESS_EVAL];
    uint8_t num_tcs_input_cp = sctx->patch_vertices;
 
    assert(sctx->shader.tcs.current);
@@ -4680,7 +4680,7 @@ void si_update_tess_io_layout_state(struct si_context *sctx)
       ls_current = sctx->shader.vs.current;
 
       if (!ls_current) {
-         sctx->dirty_shaders_mask |= BITFIELD_BIT(PIPE_SHADER_VERTEX);
+         sctx->dirty_shaders_mask |= BITFIELD_BIT(MESA_SHADER_VERTEX);
          return;
       }
    }
@@ -4821,7 +4821,7 @@ static void gfx6_emit_tess_io_layout_state(struct si_context *sctx, unsigned ind
    }
 
    /* Set userdata SGPRs for TES. */
-   unsigned tes_sh_base = sctx->shader_pointers.sh_base[PIPE_SHADER_TESS_EVAL];
+   unsigned tes_sh_base = sctx->shader_pointers.sh_base[MESA_SHADER_TESS_EVAL];
    assert(tes_sh_base);
 
    /* TES (as ES or VS) reuses the BaseVertex and DrawID user SGPRs that are used when
@@ -4877,7 +4877,7 @@ static void gfx12_emit_tess_io_layout_state(struct si_context *sctx, unsigned in
                              sctx->tes_offchip_ring_va_sgpr);
 
    /* Set userdata SGPRs for TES. */
-   unsigned tes_sh_base = sctx->shader_pointers.sh_base[PIPE_SHADER_TESS_EVAL];
+   unsigned tes_sh_base = sctx->shader_pointers.sh_base[MESA_SHADER_TESS_EVAL];
    assert(tes_sh_base);
 
    /* TES (as ES or VS) reuses the BaseVertex and DrawID user SGPRs that are used when

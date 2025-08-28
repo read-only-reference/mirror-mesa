@@ -37,9 +37,9 @@ extract_8_16_bit_sgpr_element(isel_context* ctx, Temp dst, nir_alu_src* src, sgp
    unsigned swizzle = src->swizzle[0];
 
    if (vec.size() > 1) {
-      assert(src_size == 16);
-      vec = emit_extract_vector(ctx, vec, swizzle / 2, s1);
-      swizzle = swizzle & 1;
+      unsigned factor = 32 / src_size;
+      vec = emit_extract_vector(ctx, vec, swizzle / factor, s1);
+      swizzle = swizzle & (factor - 1);
    }
 
    Builder bld(ctx->program, ctx->block);
@@ -322,9 +322,9 @@ emit_pk_shift(isel_context* ctx, nir_alu_instr* instr, aco_opcode op, Temp dst)
          } else if (nir_scalar_is_alu(s) &&
                     (nir_scalar_alu_op(s) == nir_op_u2u32 ||
                      nir_scalar_alu_op(s) == nir_op_i2i32) &&
-                    nir_instr_as_alu(s.def->parent_instr)->src[0].src.ssa->bit_size == 16) {
+                    nir_def_as_alu(s.def)->src[0].src.ssa->bit_size == 16) {
             assert(s.def->num_components == 1);
-            Temp comp = get_alu_src(ctx, nir_instr_as_alu(s.def->parent_instr)->src[0]);
+            Temp comp = get_alu_src(ctx, nir_def_as_alu(s.def)->src[0]);
             comps[i] = Operand(emit_extract_vector(ctx, comp, 0, v2b));
          } else {
             Temp vec = get_ssa_temp(ctx, instr->src[1].src.ssa);
@@ -2992,7 +2992,7 @@ visit_alu_instr(isel_context* ctx, nir_alu_instr* instr)
 
          Temp src = get_ssa_temp(ctx, instr->src[0].src.ssa);
          if (src.bytes() >= 4)
-            src = emit_extract_vector(ctx, src, instr->src[0].swizzle[0] & ~0x3, v1);
+            src = emit_extract_vector(ctx, src, instr->src[0].swizzle[0] >> 2, v1);
 
          emit_pk_int16_from_8bit(ctx, dst, src, instr->src[0].swizzle[0] & 0x3,
                                  instr->src[0].swizzle[1] & 0x3, sext);

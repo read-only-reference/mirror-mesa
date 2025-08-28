@@ -382,7 +382,7 @@ public:
    };
 
    elk_cs_thread_payload &cs_payload() {
-      assert(gl_shader_stage_uses_workgroup(stage));
+      assert(mesa_shader_stage_uses_workgroup(stage));
       return *static_cast<elk_cs_thread_payload *>(this->payload_);
    }
 
@@ -445,7 +445,7 @@ public:
                 const struct elk_compile_params *params,
                 struct elk_stage_prog_data *prog_data,
                 bool runtime_check_aads_emit,
-                gl_shader_stage stage);
+                mesa_shader_stage stage);
    ~elk_fs_generator();
 
    void enable_debug(const char *shader_name);
@@ -525,7 +525,7 @@ private:
    bool runtime_check_aads_emit;
    bool debug_flag;
    const char *shader_name;
-   gl_shader_stage stage;
+   mesa_shader_stage stage;
    void *mem_ctx;
 };
 

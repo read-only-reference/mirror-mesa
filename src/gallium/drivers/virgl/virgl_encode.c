@@ -749,7 +749,7 @@ static void virgl_emit_shader_streamout(struct virgl_context *ctx,
 
 int virgl_encode_shader_state(struct virgl_context *ctx,
                               uint32_t handle,
-                              enum pipe_shader_type type,
+                              mesa_shader_stage type,
                               const struct pipe_stream_output_info *so_info,
                               uint32_t cs_req_local_mem,
                               const struct tgsi_token *tokens)
@@ -821,7 +821,7 @@ int virgl_encode_shader_state(struct virgl_context *ctx,
 
       virgl_emit_shader_header(ctx, handle, len, virgl_shader_stage_convert(type), offlen, num_tokens);
 
-      if (type == PIPE_SHADER_COMPUTE)
+      if (type == MESA_SHADER_COMPUTE)
          virgl_encoder_write_dword(ctx->cbuf, cs_req_local_mem);
       else
          virgl_emit_shader_streamout(ctx, first_pass ? so_info : NULL);
@@ -1192,7 +1192,7 @@ int virgl_encode_sampler_view(struct virgl_context *ctx,
 }
 
 int virgl_encode_set_sampler_views(struct virgl_context *ctx,
-                                  enum pipe_shader_type shader_type,
+                                  mesa_shader_stage shader_type,
                                   uint32_t start_slot,
                                   uint32_t num_views,
                                   struct virgl_sampler_view **views)
@@ -1209,7 +1209,7 @@ int virgl_encode_set_sampler_views(struct virgl_context *ctx,
 }
 
 int virgl_encode_bind_sampler_states(struct virgl_context *ctx,
-                                    enum pipe_shader_type shader_type,
+                                    mesa_shader_stage shader_type,
                                     uint32_t start_slot,
                                     uint32_t num_handles,
                                     uint32_t *handles)
@@ -1224,7 +1224,7 @@ int virgl_encode_bind_sampler_states(struct virgl_context *ctx,
 }
 
 int virgl_encoder_write_constant_buffer(struct virgl_context *ctx,
-                                       enum pipe_shader_type shader,
+                                       mesa_shader_stage shader,
                                        uint32_t index,
                                        uint32_t size,
                                        const void *data)
@@ -1238,7 +1238,7 @@ int virgl_encoder_write_constant_buffer(struct virgl_context *ctx,
 }
 
 int virgl_encoder_set_uniform_buffer(struct virgl_context *ctx,
-                                     enum pipe_shader_type shader,
+                                     mesa_shader_stage shader,
                                      uint32_t index,
                                      uint32_t offset,
                                      uint32_t length,
@@ -1478,18 +1478,18 @@ int virgl_encoder_destroy_sub_ctx(struct virgl_context *ctx, uint32_t sub_ctx_id
 int virgl_encode_link_shader(struct virgl_context *ctx, uint32_t *handles)
 {
    virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_LINK_SHADER, 0, VIRGL_LINK_SHADER_SIZE));
-   virgl_encoder_write_dword(ctx->cbuf, handles[PIPE_SHADER_VERTEX]);
-   virgl_encoder_write_dword(ctx->cbuf, handles[PIPE_SHADER_FRAGMENT]);
-   virgl_encoder_write_dword(ctx->cbuf, handles[PIPE_SHADER_GEOMETRY]);
-   virgl_encoder_write_dword(ctx->cbuf, handles[PIPE_SHADER_TESS_CTRL]);
-   virgl_encoder_write_dword(ctx->cbuf, handles[PIPE_SHADER_TESS_EVAL]);
-   virgl_encoder_write_dword(ctx->cbuf, handles[PIPE_SHADER_COMPUTE]);
+   virgl_encoder_write_dword(ctx->cbuf, handles[MESA_SHADER_VERTEX]);
+   virgl_encoder_write_dword(ctx->cbuf, handles[MESA_SHADER_FRAGMENT]);
+   virgl_encoder_write_dword(ctx->cbuf, handles[MESA_SHADER_GEOMETRY]);
+   virgl_encoder_write_dword(ctx->cbuf, handles[MESA_SHADER_TESS_CTRL]);
+   virgl_encoder_write_dword(ctx->cbuf, handles[MESA_SHADER_TESS_EVAL]);
+   virgl_encoder_write_dword(ctx->cbuf, handles[MESA_SHADER_COMPUTE]);
    return 0;
 }
 
 int virgl_encode_bind_shader(struct virgl_context *ctx,
                              uint32_t handle,
-                             enum pipe_shader_type type)
+                             mesa_shader_stage type)
 {
    virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_BIND_SHADER, 0, 2));
    virgl_encoder_write_dword(ctx->cbuf, handle);
@@ -1511,7 +1511,7 @@ int virgl_encode_set_tess_state(struct virgl_context *ctx,
 }
 
 int virgl_encode_set_shader_buffers(struct virgl_context *ctx,
-                                    enum pipe_shader_type shader,
+                                    mesa_shader_stage shader,
                                     unsigned start_slot, unsigned count,
                                     const struct pipe_shader_buffer *buffers)
 {
@@ -1567,7 +1567,7 @@ int virgl_encode_set_hw_atomic_buffers(struct virgl_context *ctx,
 }
 
 int virgl_encode_set_shader_images(struct virgl_context *ctx,
-                                   enum pipe_shader_type shader,
+                                   mesa_shader_stage shader,
                                    unsigned start_slot, unsigned count,
                                    const struct pipe_image_view *images)
 {

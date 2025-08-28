@@ -157,8 +157,7 @@ remap_tess_levels(nir_builder *b, nir_intrinsic_instr *intr,
          nir_src_rewrite(&intr->src[0], src);
       }
    } else if (dest) {
-      nir_def_rewrite_uses_after(&intr->def, dest,
-                                     dest->parent_instr);
+      nir_def_rewrite_uses_after(&intr->def, dest);
    }
 
    return true;
@@ -194,7 +193,7 @@ remap_patch_urb_offsets(nir_block *block, nir_builder *b,
 
       nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
 
-      gl_shader_stage stage = b->shader->info.stage;
+      mesa_shader_stage stage = b->shader->info.stage;
 
       if ((stage == MESA_SHADER_TESS_CTRL && is_output(intrin)) ||
           (stage == MESA_SHADER_TESS_EVAL && is_input(intrin))) {
@@ -494,7 +493,7 @@ elk_nir_lower_fs_smooth_interp_gfx4_instr(nir_builder *b, nir_intrinsic_instr *i
    if (intr->intrinsic != nir_intrinsic_load_deref)
       return false;
 
-   nir_deref_instr *deref = nir_instr_as_deref(intr->src[0].ssa->parent_instr);
+   nir_deref_instr *deref = nir_def_as_deref(intr->src[0].ssa);
    nir_variable *var = nir_deref_instr_get_variable(deref);
 
    if (var->data.interpolation != INTERP_MODE_SMOOTH)
@@ -516,7 +515,7 @@ elk_nir_lower_fs_smooth_interp_gfx4_instr(nir_builder *b, nir_intrinsic_instr *i
    b->cursor = nir_after_instr(&intr->instr);
    nir_def *result = nir_fmul(b, &intr->def, *pixel_w);
 
-   nir_def_rewrite_uses_after(&intr->def, result, result->parent_instr);
+   nir_def_rewrite_uses_after(&intr->def, result);
    return true;
 }
 
@@ -1715,7 +1714,7 @@ get_subgroup_size(const struct shader_info *info, unsigned max_subgroup_size)
    case SUBGROUP_SIZE_REQUIRE_8:
    case SUBGROUP_SIZE_REQUIRE_16:
    case SUBGROUP_SIZE_REQUIRE_32:
-      assert(gl_shader_stage_uses_workgroup(info->stage) ||
+      assert(mesa_shader_stage_uses_workgroup(info->stage) ||
              (info->stage >= MESA_SHADER_RAYGEN && info->stage <= MESA_SHADER_CALLABLE));
       /* These enum values are expressly chosen to be equal to the subgroup
        * size that they require.

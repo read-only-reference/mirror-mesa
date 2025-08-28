@@ -237,8 +237,8 @@ static bool si_lower_intrinsics(nir_shader *nir)
                                         NULL);
 }
 
-static bool can_lower_mediump_io(gl_shader_stage prev_stage, bool prev_stage_has_xfb,
-                                 gl_shader_stage next_stage, bool config_option)
+static bool can_lower_mediump_io(mesa_shader_stage prev_stage, bool prev_stage_has_xfb,
+                                 mesa_shader_stage next_stage, bool config_option)
 {
    /* This is the filter that determines when mediump IO is lowered.
     *
@@ -337,7 +337,7 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
       NIR_PASS(_, nir, nir_lower_gs_intrinsics, flags);
    }
 
-   if (gl_shader_stage_is_compute(nir->info.stage)) {
+   if (mesa_shader_stage_is_compute(nir->info.stage)) {
       nir_lower_compute_system_values_options options = {0};
 
       /* gl_LocalInvocationIndex must be derived from gl_LocalInvocationID.xyz to make it correct

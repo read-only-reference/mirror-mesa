@@ -64,6 +64,7 @@
 #include "zink_instance.h"
 #include "zink_shader_keys.h"
 #include "vk_dispatch_table.h"
+#include "util/perf/cpu_trace.h"
 
 #include "renderdoc_app.h"
 
@@ -243,6 +244,7 @@ enum zink_debug {
    ZINK_DEBUG_QUIET = (1<<18),
    ZINK_DEBUG_NOPC = (1<<19),
    ZINK_DEBUG_MSAAOPT = (1<<20),
+   ZINK_DEBUG_RPLOADS = (1<<22),
 };
 
 enum zink_pv_emulation_primitive {
@@ -1304,6 +1306,7 @@ struct zink_resource {
    bool copies_warned;
    bool swapchain;
    bool dmabuf;
+   bool subdata; //doing subdata call
    unsigned dt_stride;
 
    uint8_t modifiers_count;
@@ -1728,6 +1731,7 @@ struct zink_context {
    uint32_t transient_attachments;
    struct pipe_framebuffer_state fb_state;
    VkFormat fb_formats[PIPE_MAX_COLOR_BUFS + 1];
+   struct zink_resource *fb_resolve[2];
 
    struct zink_vertex_elements_state *element_state;
    struct zink_rasterizer_state *rast_state;
@@ -1909,7 +1913,7 @@ struct zink_context {
       bool bindless_refs_dirty;
       bool null_fbfetch_init;
    } di;
-   void (*invalidate_descriptor_state)(struct zink_context *ctx, gl_shader_stage shader, enum zink_descriptor_type type, unsigned, unsigned);
+   void (*invalidate_descriptor_state)(struct zink_context *ctx, mesa_shader_stage shader, enum zink_descriptor_type type, unsigned, unsigned);
    struct set *need_barriers[2]; //gfx, compute
    struct set update_barriers[2][2]; //[gfx, compute][current, next]
    uint8_t barrier_set_idx[2];

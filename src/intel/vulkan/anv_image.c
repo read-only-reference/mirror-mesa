@@ -312,7 +312,13 @@ anv_image_choose_isl_surf_usage(struct anv_physical_device *device,
    if (comp_flags & VK_IMAGE_COMPRESSION_DISABLED_EXT)
       isl_usage |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
 
-   if (anv_is_storage_format_atomics_emulated(devinfo, vk_format)) {
+   /* We only need software detiling for 64bit atomics and we need to disable
+    * AUX for software detiling, but we don't support sparseImageInt64Atomics,
+    * so don't set the flags when using sparse, as they affect which tiling
+    * format ISL will choose.
+    */
+   if (anv_is_storage_format_atomics_emulated(devinfo, vk_format) &&
+       (vk_create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) == 0) {
       isl_usage |= ISL_SURF_USAGE_DISABLE_AUX_BIT |
                    ISL_SURF_USAGE_SOFTWARE_DETILING;
    }
@@ -1482,8 +1488,24 @@ alloc_private_binding(struct anv_device *device,
    if (binding->memory_range.size == 0)
       return VK_SUCCESS;
 
+   enum anv_bo_alloc_flags alloc_flags = 0;
+   uint64_t explicit_address = 0;
+   if (create_info->flags & VK_IMAGE_CREATE_DESCRIPTOR_BUFFER_CAPTURE_REPLAY_BIT_EXT) {
+      alloc_flags |= ANV_BO_ALLOC_CLIENT_VISIBLE_ADDRESS;
+
+      const VkOpaqueCaptureDescriptorDataCreateInfoEXT *opaque_info =
+         vk_find_struct_const(create_info->pNext,
+                              OPAQUE_CAPTURE_DESCRIPTOR_DATA_CREATE_INFO_EXT);
+      if (opaque_info) {
+         const struct anv_image_opaque_capture_data *explicit_addresses =
+            opaque_info->opaqueCaptureDescriptorData;
+         explicit_address = explicit_addresses->private_binding;
+      }
+   }
+
    VkResult result = anv_device_alloc_bo(device, "image-binding-private",
-                                         binding->memory_range.size, 0, 0,
+                                         binding->memory_range.size,
+                                         alloc_flags, explicit_address,
                                          &binding->address.bo);
    ANV_DMR_BO_ALLOC(&image->vk.base, binding->address.bo, result);
 
@@ -1520,15 +1542,15 @@ anv_image_init_sparse_bindings(struct anv_image *image,
    assert(anv_image_is_sparse(image));
 
    enum anv_bo_alloc_flags alloc_flags = 0;
-   uint64_t explicit_address = 0;
+   const struct anv_image_opaque_capture_data *explicit_addresses = NULL;
    if (image->vk.create_flags & VK_IMAGE_CREATE_DESCRIPTOR_BUFFER_CAPTURE_REPLAY_BIT_EXT) {
-      alloc_flags |= ANV_BO_ALLOC_FIXED_ADDRESS;
+      alloc_flags |= ANV_BO_ALLOC_CLIENT_VISIBLE_ADDRESS;
 
       const VkOpaqueCaptureDescriptorDataCreateInfoEXT *opaque_info =
          vk_find_struct_const(create_info->vk_info->pNext,
                               OPAQUE_CAPTURE_DESCRIPTOR_DATA_CREATE_INFO_EXT);
       if (opaque_info)
-         explicit_address = *((const uint64_t *)opaque_info->opaqueCaptureDescriptorData);
+         explicit_addresses = opaque_info->opaqueCaptureDescriptorData;
    }
 
    for (int i = 0; i < ANV_IMAGE_MEMORY_BINDING_END; i++) {
@@ -1536,6 +1558,25 @@ anv_image_init_sparse_bindings(struct anv_image *image,
 
       if (b->memory_range.size != 0) {
          assert(b->sparse_data.size == 0);
+
+         uint64_t explicit_address = 0;
+         if (explicit_addresses) {
+            switch (i) {
+            case ANV_IMAGE_MEMORY_BINDING_MAIN:
+               explicit_address = explicit_addresses->planes[0];
+               break;
+            case ANV_IMAGE_MEMORY_BINDING_PLANE_0:
+            case ANV_IMAGE_MEMORY_BINDING_PLANE_1:
+            case ANV_IMAGE_MEMORY_BINDING_PLANE_2:
+               explicit_address = explicit_addresses->planes[i - ANV_IMAGE_MEMORY_BINDING_PLANE_0];
+               break;
+            case ANV_IMAGE_MEMORY_BINDING_PRIVATE:
+               explicit_address = explicit_addresses->private_binding;
+               break;
+            default:
+               UNREACHABLE("invalid binding");
+            }
+         }
 
          /* From the spec, Custom Sparse Image Block Shapes section:
           *   "... the size in bytes of the custom sparse image block shape
@@ -1639,9 +1680,6 @@ anv_image_init(struct anv_device *device, struct anv_image *image,
    if (image->vk.external_handle_types &
        VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID) {
       image->from_ahb = true;
-#if DETECT_OS_ANDROID
-      image->vk.ahb_format = anv_ahb_format_for_vk_format(image->vk.format);
-#endif
       return VK_SUCCESS;
    }
 
@@ -2011,7 +2049,7 @@ anv_image_finish(struct anv_image *image)
    }
 
    for (uint32_t b = 0; b < ARRAY_SIZE(image->bindings); b++) {
-      if (image->bindings[b].host_map != NULL) {
+      if (image->bindings[b].host_map != NULL && !image->bindings[b].address.bo->from_host_ptr) {
          anv_device_unmap_bo(device,
                              image->bindings[b].address.bo,
                              image->bindings[b].host_map,
@@ -2047,7 +2085,8 @@ anv_image_init_from_create_info(struct anv_device *device,
                                         pCreateInfo->tiling,
                                         pCreateInfo->samples,
                                         pCreateInfo->imageType,
-                                        pCreateInfo->format);
+                                        pCreateInfo->format,
+                                        NULL /* valid_samples_out */);
       if (result != VK_SUCCESS)
          return result;
    }
@@ -2136,6 +2175,41 @@ anv_DestroyImage(VkDevice _device, VkImage _image,
    vk_free2(&device->vk.alloc, pAllocator, image);
 }
 
+VkResult
+anv_GetImageOpaqueCaptureDescriptorDataEXT(VkDevice device,
+                                           const VkImageCaptureDescriptorDataInfoEXT *pInfo,
+                                           void *pData)
+{
+   ANV_FROM_HANDLE(anv_image, image, pInfo->image);
+
+   struct anv_image_opaque_capture_data *bound_addresses = pData;
+   memset(bound_addresses, 0, sizeof(*bound_addresses));
+   for (int i = 0; i < ANV_IMAGE_MEMORY_BINDING_END; i++) {
+      struct anv_image_binding *b = &image->bindings[i];
+
+      if (b->memory_range.size != 0) {
+         uint64_t addr = anv_address_physical(b->address);
+         switch (i) {
+         case ANV_IMAGE_MEMORY_BINDING_MAIN:
+            bound_addresses->planes[0] = addr;
+            break;
+         case ANV_IMAGE_MEMORY_BINDING_PLANE_0:
+         case ANV_IMAGE_MEMORY_BINDING_PLANE_1:
+         case ANV_IMAGE_MEMORY_BINDING_PLANE_2:
+            bound_addresses->planes[i - ANV_IMAGE_MEMORY_BINDING_PLANE_0] = addr;
+            break;
+         case ANV_IMAGE_MEMORY_BINDING_PRIVATE:
+            bound_addresses->private_binding = addr;
+            break;
+         default:
+            UNREACHABLE("invalid binding");
+         }
+      }
+   }
+
+   return VK_SUCCESS;
+}
+
 /* We are binding AHardwareBuffer. Get a description, resolve the
  * format and prepare anv_image properly.
  */
@@ -2163,14 +2237,9 @@ resolve_ahw_image(struct anv_device *device,
    assert(result == VK_SUCCESS);
    isl_tiling_flags_t isl_tiling_flags = (1u << tiling);
 
-   /* Check format. */
-   VkFormat vk_format = vk_format_from_android(desc.format, desc.usage);
-   assert(vk_format != VK_FORMAT_UNDEFINED);
-
    /* Now we are able to fill anv_image fields properly and create
     * isl_surface for it.
     */
-   vk_image_set_format(&image->vk, vk_format);
    image->n_planes = anv_get_format_planes(device->physical, image->vk.format);
 
    result = add_all_surfaces_implicit_layout(device, image, NULL, desc.stride,
@@ -2727,21 +2796,28 @@ anv_image_bind_address(struct anv_device *device,
    if (image->vk.usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT) {
       uint64_t offset = image->bindings[binding].address.offset +
                         image->bindings[binding].memory_range.offset;
-      uint64_t map_offset, map_size;
-      anv_sanitize_map_params(device, image->bindings[binding].address.bo, offset,
-                              image->bindings[binding].memory_range.size,
-                              &map_offset, &map_size);
 
-      VkResult result = anv_device_map_bo(device,
-                                          image->bindings[binding].address.bo,
-                                          map_offset, map_size,
-                                          NULL /* placed_addr */,
-                                          &image->bindings[binding].host_map);
-      if (result != VK_SUCCESS)
-         return result;
+      if (address.bo->from_host_ptr) {
+         image->bindings[binding].host_map = address.bo->map + address.bo->offset;
+         image->bindings[binding].map_size = address.bo->size;
+         image->bindings[binding].map_delta = 0;
+      } else {
+         uint64_t map_offset, map_size;
+         anv_sanitize_map_params(device, image->bindings[binding].address.bo, offset,
+                                 image->bindings[binding].memory_range.size,
+                                 &map_offset, &map_size);
 
-      image->bindings[binding].map_delta = (offset - map_offset);
-      image->bindings[binding].map_size = map_size;
+         VkResult result = anv_device_map_bo(device,
+                                             image->bindings[binding].address.bo,
+                                             map_offset, map_size,
+                                             NULL /* placed_addr */,
+                                             &image->bindings[binding].host_map);
+         if (result != VK_SUCCESS)
+            return result;
+
+         image->bindings[binding].map_delta = (offset - map_offset);
+         image->bindings[binding].map_size = map_size;
+      }
    }
 
    ANV_RMV(image_bind, device, image, binding);

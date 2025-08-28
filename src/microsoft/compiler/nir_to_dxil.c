@@ -1494,7 +1494,7 @@ emit_global_consts(struct ntd_context *ctx)
 
    nir_foreach_variable_with_modes(var, ctx->shader, nir_var_mem_constant) {
       if (!var->name)
-         var->name = ralloc_asprintf(var, "const_%d", var->data.driver_location);
+         nir_variable_set_namef(ctx->shader, var, "const_%d", var->data.driver_location);
 
       const struct dxil_value *agg_vals =
          get_value_for_const_aggregate(&ctx->mod, var->constant_initializer, var->type);
@@ -1525,7 +1525,7 @@ emit_shared_vars(struct ntd_context *ctx)
 
    nir_foreach_variable_with_modes(var, ctx->shader, nir_var_mem_shared) {
       if (!var->name)
-         var->name = ralloc_asprintf(var, "shared_%d", var->data.driver_location);
+         nir_variable_set_namef(ctx->shader, var, "shared_%d", var->data.driver_location);
       const struct dxil_value *gvar = dxil_add_global_ptr_var(&ctx->mod, var->name,
                                                               get_type_for_glsl_type(&ctx->mod, var->type),
                                                               DXIL_AS_GROUPSHARED, 16,
@@ -6437,7 +6437,7 @@ add_sysvalue(struct ntd_context *ctx,
               int driver_location)
 {
 
-   nir_variable *var = rzalloc(ctx->shader, nir_variable);
+   nir_variable *var = nir_variable_create_zeroed(ctx->shader);
    if (!var)
       return NULL;
    var->data.driver_location = driver_location;
@@ -6477,7 +6477,7 @@ struct sysvalue_name {
    gl_system_value value;
    int slot;
    char *name;
-   gl_shader_stage only_in_shader;
+   mesa_shader_stage only_in_shader;
 } possible_sysvalues[] = {
    {SYSTEM_VALUE_VERTEX_ID_ZERO_BASE, -1, "SV_VertexID", MESA_SHADER_NONE},
    {SYSTEM_VALUE_INSTANCE_ID, -1, "SV_InstanceID", MESA_SHADER_NONE},

@@ -112,6 +112,7 @@ if with_tools.contains('all')
     'nir',
     'nouveau',
     'panfrost',
+    'zink',
   ]
 endif
 
@@ -213,9 +214,11 @@ foreach gallium_driver : gallium_drivers
   pre_args += '-DHAVE_@0@'.format(gallium_driver.to_upper())
 endforeach
 with_llvm = with_llvm \
-  .enable_if(with_gallium_radeonsi and amd_with_llvm, error_message : 'RadeonSI Gallium driver configured to require LLVM') \
+  .enable_if(with_gallium_i915, error_message : 'i915 Gallium driver requires LLVM for vertex shaders') \
+  .enable_if(with_gallium_llvmpipe, error_message : 'LLVMPipe Gallium driver requires LLVM') \
+  .enable_if(with_gallium_r300, error_message : 'R300 Gallium driver requires LLVM for vertex shaders') \
   .enable_if(with_gallium_r600 and amd_with_llvm, error_message : 'R600 Gallium driver configured to require LLVM') \
-  .enable_if(with_gallium_llvmpipe, error_message : 'LLVMPipe Gallium driver requires LLVM')
+  .enable_if(with_gallium_radeonsi and amd_with_llvm, error_message : 'RadeonSI Gallium driver configured to require LLVM')
 
 # compatibility for "swrast" as an internal-ish driver name
 with_gallium_swrast = with_gallium_softpipe or with_gallium_llvmpipe
@@ -303,6 +306,11 @@ if freedreno_kmds.length() != 0 and freedreno_kmds != [ 'msm' ] and with_freedre
   endif
 endif
 
+pre_args += ['-DMESA_SYSTEM_HAS_KMS_DRM=@0@'.format(system_has_kms_drm.to_int())]
+if host_machine.cpu_family() == 'x86' and with_glx_read_only_text
+    pre_args += ['-DGLX_X86_READONLY_TEXT']
+endif
+
 with_vdrm = [
   with_amdgpu_virtio,
   freedreno_kmds.contains('virtio'),
@@ -325,8 +333,12 @@ with_any_broadcom = [
   with_broadcom_vk,
 ].contains(true)
 
+intel_vk_can_rt = host_machine.cpu_family() == 'x86_64' or \
+                  host_machine.cpu_family() == 'aarch64'
 with_intel_vk_rt = get_option('intel-rt') \
    .disable_auto_if(not with_intel_vk) \
+   .disable_if(not intel_vk_can_rt, \
+               error_message: 'Intel Ray Tracing requires 64-bit architectures') \
   .allowed()
 
 with_any_intel = [
@@ -765,8 +777,8 @@ if with_gallium_rusticl or with_nouveau_vk or with_tools.contains('etnaviv') or 
   rustc = meson.get_compiler('rust')
   rust = import('rust')
 
-  if rustc.version().version_compare('< 1.78')
-    error('Mesa requires Rust 1.78.0 or newer')
+  if rustc.version().version_compare('< 1.82')
+    error('Mesa requires Rust 1.82.0 or newer')
   endif
 
   # bindgen 0.71 is the first version that knows about `editions`
@@ -779,6 +791,8 @@ if with_gallium_rusticl or with_nouveau_vk or with_tools.contains('etnaviv') or 
   endif
 
   bindgen_output_args = [
+    # This is needed to generate 2024-safe code
+    '--wrap-unsafe-ops',
     # can't do anything about it anyway
     '--raw-line', '#![allow(clippy::all)]',
     '--raw-line', '#![allow(improper_ctypes)]',
@@ -787,10 +801,32 @@ if with_gallium_rusticl or with_nouveau_vk or with_tools.contains('etnaviv') or 
     '--raw-line', '#![allow(non_camel_case_types)]',
     '--raw-line', '#![allow(non_snake_case)]',
     '--raw-line', '#![allow(non_upper_case_globals)]',
+    # This is fixed in 0.72 but we don't have that in CI yet
+    '--raw-line', '#![allow(unsafe_op_in_unsafe_fn)]',
   ]
   if rustc.version().version_compare('>= 1.88')
     bindgen_output_args += ['--raw-line', '#![allow(unnecessary_transmutes)]']
   endif
+
+  rust_2024_lint_args = [
+    '-Dboxed_slice_into_iter',
+    '-Ddeprecated_safe_2024',
+    '-Dimpl_trait_overcaptures',
+    '-Dkeyword_idents_2024',
+    '-Dmissing_unsafe_on_extern',
+    '-Dnever_type_fallback_flowing_into_unsafe',
+    '-Drust_2024_prelude_collisions',
+    '-Dstatic_mut_refs',
+    '-Dunsafe_op_in_unsafe_fn',
+
+    # This requires cbindgen >= 0.28
+    # '-Dunsafe_attr_outside_unsafe',
+
+    # 1.83+
+    # '-Dif_let_rescope',
+    # '-Drust_2024_guarded_string_incompatible_syntax',
+    # '-Drust_2024_incompatible_pat',
+  ]
 endif
 
 if get_option('precomp-compiler') != 'system'
@@ -869,10 +905,6 @@ with_libbacktrace = get_option('android-libbacktrace') \
   .disable_auto_if(not with_platform_android) \
   .allowed()
 
-if with_libbacktrace
-  cpp_args += '-DWITH_LIBBACKTRACE'
-endif
-
 if with_platform_android
   dep_android_ui = null_dep
   dep_android_mapper4 = null_dep
@@ -883,7 +915,8 @@ if with_platform_android
       dependency('log'),
       dependency('sync'),
     ]
-    if with_libbacktrace
+    if with_libbacktrace and get_option('platform-sdk-version') < 34
+      cpp_args += '-DWITH_LIBBACKTRACE'
       dep_android += dependency('backtrace')
     endif
     if get_option('platform-sdk-version') >= 26
@@ -913,20 +946,34 @@ if get_option('allow-kcmp') \
 endif
 
 # On Windows, a venv has no versioned aliased to 'python'.
-prog_python = find_program('python3', 'python', version : '>= 3.8')
+prog_python = find_program('python3', 'python', version : '>= 3.9')
 
 has_mako = run_command(
   prog_python, '-c',
   '''
+import sys
+
 try:
-  from packaging.version import Version
+    try:
+        from packaging.version import Version
+    except:
+        from distutils.version import StrictVersion as Version
 except:
-  from distutils.version import StrictVersion as Version
-import mako
-assert Version(mako.__version__) >= Version("0.8.0")
-  ''', check: false)
-if has_mako.returncode() != 0
+    sys.exit(2)
+
+try:
+    import mako
+except:
+    sys.exit(1)
+
+if Version(mako.__version__) < Version("0.8.0"):
+    sys.exit(1)
+''', check: false)
+
+if has_mako.returncode() == 1
   error('Python (3.x) mako module >= 0.8.0 required to build mesa.')
+elif has_mako.returncode() == 2
+  error('One of Python (3.x) packaging or distutils module is required.')
 endif
 
 has_yaml = run_command(
@@ -998,6 +1045,22 @@ endforeach
 if cc.has_function_attribute('visibility:hidden')
   pre_args += '-DHAVE_FUNC_ATTRIBUTE_VISIBILITY'
 endif
+
+_no_sanitize_flags = []
+if get_option('b_sanitize').split(',').contains('address')
+  _no_sanitize_flags += ['address']
+endif
+if get_option('b_sanitize').split(',').contains('undefined')
+  _no_sanitize_flags += ['vptr']
+endif
+foreach flag: _no_sanitize_flags
+  if cc.compiles('__attribute__((no_sanitize("@0@"))) int foo(void) { return 0; }'.format(flag),
+                 name : 'no_sanitize(@0@)'.format(flag),
+                 werror: true)
+    pre_args += '-DHAVE_FUNC_ATTRIBUTE_NO_SANITIZE_@0@'.format(flag.to_upper())
+  endif
+endforeach
+
 if cc.compiles('__uint128_t foo(void) { return 0; }',
                name : '__uint128_t')
   pre_args += '-DHAVE_UINT128'
@@ -1301,55 +1364,6 @@ endif
 
 dep_ws2_32 = cc.find_library('ws2_32', required : with_platform_windows)
 
-# TODO: shared/static? Is this even worth doing?
-
-with_asm_arch = ''
-if host_machine.cpu_family() == 'x86'
-  if system_has_kms_drm or host_machine.system() == 'gnu'
-    with_asm_arch = 'x86'
-    pre_args += ['-DUSE_X86_ASM']
-
-    if with_glx_read_only_text
-      pre_args += ['-DGLX_X86_READONLY_TEXT']
-    endif
-  endif
-elif host_machine.cpu_family() == 'x86_64'
-  if system_has_kms_drm
-    with_asm_arch = 'x86_64'
-    pre_args += ['-DUSE_X86_64_ASM']
-  endif
-elif host_machine.cpu_family() == 'arm'
-  if system_has_kms_drm
-    with_asm_arch = 'arm'
-    pre_args += ['-DUSE_ARM_ASM']
-  endif
-elif host_machine.cpu_family() == 'aarch64'
-  if system_has_kms_drm
-    with_asm_arch = 'aarch64'
-    pre_args += ['-DUSE_AARCH64_ASM']
-  endif
-elif host_machine.cpu_family() == 'sparc64'
-  if system_has_kms_drm
-    with_asm_arch = 'sparc'
-    pre_args += ['-DUSE_SPARC_ASM']
-  endif
-elif host_machine.cpu_family() == 'ppc64' and host_machine.endian() == 'little'
-  if system_has_kms_drm
-    with_asm_arch = 'ppc64le'
-    pre_args += ['-DUSE_PPC64LE_ASM']
-  endif
-elif host_machine.cpu_family() == 'mips64' and host_machine.endian() == 'little'
-  if system_has_kms_drm
-    with_asm_arch = 'mips64el'
-    pre_args += ['-DUSE_MIPS64EL_ASM']
-  endif
-elif host_machine.cpu_family() == 'loongarch64'
-  if system_has_kms_drm
-    with_asm_arch = 'loongarch64'
-    pre_args += ['-DUSE_LOONGARCH64_ASM']
-  endif
-endif
-
 # Check for standard headers and functions
 if (cc.has_header_symbol('sys/sysmacros.h', 'major') and
   cc.has_header_symbol('sys/sysmacros.h', 'minor') and
@@ -1394,6 +1408,7 @@ functions_to_detect = {
   'qsort_s': '',
   'posix_fallocate': '',
   'secure_getenv': '',
+  'sysconf': '#include <unistd.h>',
 }
 
 foreach f, prefix: functions_to_detect
@@ -1524,7 +1539,7 @@ if host_machine.system() != 'windows'
     dep_dl = cc.find_library('dl', required : true)
   endif
   if cc.has_function('dladdr', dependencies : dep_dl)
-    # This is really only required for util/disk_cache.h
+    # This is required for src/util
     pre_args += '-DHAVE_DLADDR'
   endif
 endif
@@ -1552,6 +1567,16 @@ dep_zlib = dependency('zlib', version : '>= 1.2.3',
                       required : get_option('zlib'))
 if dep_zlib.found()
   pre_args += '-DHAVE_ZLIB'
+endif
+
+if host_machine.system() == 'windows' or with_platform_android
+  dep_display_info = null_dep
+else
+  dep_display_info = dependency('libdisplay-info', version : '>= 0.1.1',
+                                required : get_option('display-info'))
+  if dep_display_info.found()
+    pre_args += '-DHAVE_LIBDISPLAY_INFO'
+  endif
 endif
 
 dep_zstd = dependency('libzstd', required : get_option('zstd'))
@@ -1666,20 +1691,6 @@ endif
 
 allow_fallback_for_libdrm = get_option('allow-fallback-for').contains('libdrm')
 
-# Then get each libdrm module
-foreach d : _libdrm_checks
-  if d[1]
-    set_variable(
-      'dep_libdrm_' + d[0],
-      dependency(
-        'libdrm_' + d[0],
-        version : '>=' + _drm_ver,
-        allow_fallback: allow_fallback_for_libdrm,
-      )
-    )
-  endif
-endforeach
-
 with_gallium_drisw_kms = false
 if system_has_kms_drm
   dep_libdrm = dependency(
@@ -1698,6 +1709,20 @@ if dep_libdrm.found()
     with_gallium_drisw_kms = true
   endif
 endif
+
+# Then get each libdrm module
+foreach d : _libdrm_checks
+  if d[1]
+    set_variable(
+      'dep_libdrm_' + d[0],
+      dependency(
+        'libdrm_' + d[0],
+        version : '>=' + _drm_ver,
+        allow_fallback: allow_fallback_for_libdrm,
+      )
+    )
+  endif
+endforeach
 
 dep_libudev = dependency('libudev', required : false)
 if dep_libudev.found()
@@ -1763,6 +1788,10 @@ if dep_llvm.found()
     error('Lavapipe and llvmpipe require LLVM draw support.')
   endif
 
+  if (with_gallium_i915 or with_gallium_r300) and not draw_with_llvm
+    error('i915 and R300 require LLVM draw support for vertex shaders.')
+  endif
+
   if host_machine.system() != 'windows'
     # LLVM can be built without rtti, turning off rtti changes the ABI of C++
     # programs, so we need to build all C++ code in mesa without rtti as well to
@@ -1794,8 +1823,7 @@ else
   draw_with_llvm = false
 endif
 amd_with_llvm = amd_with_llvm and dep_llvm.found()
-pre_args += '-DLLVM_AVAILABLE=@0@'.format(dep_llvm.found().to_int())
-pre_args += '-DDRAW_LLVM_AVAILABLE=@0@'.format((dep_llvm.found() and draw_with_llvm).to_int())
+pre_args += '-DDRAW_LLVM_AVAILABLE=@0@'.format(draw_with_llvm.to_int())
 pre_args += '-DAMD_LLVM_AVAILABLE=@0@'.format(amd_with_llvm.to_int())
 pre_args += '-DGALLIVM_USE_ORCJIT=@0@'.format((dep_llvm.found() and llvm_with_orcjit).to_int())
 
@@ -1827,9 +1855,12 @@ else
   dep_llvmspirvlib = null_dep
 endif
 
+with_spirv_tools = get_option('spirv-tools') \
+    .enable_if(with_clc, error_message : 'CLC requires SPIRV-Tools')
+
 dep_spirv_tools = dependency(
   'SPIRV-Tools',
-  required : with_clc,
+  required : with_spirv_tools,
   version : '>= 2024.1'
 )
 if dep_spirv_tools.found()
@@ -1897,7 +1928,7 @@ endif
 # AddressSanitizer's leak reports need all the symbols to be present at exit to
 # decode well, which runs afoul of our dlopen()/dlclose()ing of the DRI drivers.
 # Set a flag so we can skip the dlclose for asan builds.
-if ['address', 'address,undefined'].contains(get_option('b_sanitize'))
+if get_option('b_sanitize').split(',').contains('address')
   asan_c_args = ['-DBUILT_WITH_ASAN=1']
 else
   asan_c_args = ['-DBUILT_WITH_ASAN=0']
@@ -2040,7 +2071,7 @@ dep_glproto_version = '>= 1.4.14'
 dep_xcb_dri3_version = '>= 1.13'
 dep_xcb_glx_version = '>= 1.8.1'
 dep_xcb_present_version = '>= 1.13'
-dep_xlib_version = '>= 1.8'
+dep_xlib_version = '>= 1.6' # RHEL8 has 1.6, RHEL9 has 1.7, U22.04 has 1.7
 dep_xlib_xrandr_version = '>= 1.3'
 dep_xshmfence_version = '>= 1.1'
 
@@ -2144,12 +2175,20 @@ else
   pre_args += '-DCUSTOM_SHADER_REPLACEMENT'
 endif
 
+allow_fallback_for_perfetto = get_option('allow-fallback-for').contains('perfetto')
 with_perfetto = get_option('perfetto')
 with_datasources = get_option('datasources')
 with_any_datasource = with_datasources.length() != 0
 if with_perfetto
-  dep_perfetto = dependency('perfetto', fallback: ['perfetto', 'dep_perfetto'])
+  dep_perfetto = dependency(
+      'perfetto',
+      fallback: allow_fallback_for_perfetto ? ['perfetto', 'dep_perfetto'] : [],
+  )
   pre_args += '-DHAVE_PERFETTO'
+endif
+
+if get_option('android-libperfetto').enabled()
+  pre_args += '-DANDROID_LIBPERFETTO'
 endif
 
 with_teflon = get_option('teflon')

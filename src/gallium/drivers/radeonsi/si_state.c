@@ -733,7 +733,7 @@ static bool si_check_blend_dst_sampler_noop(struct si_context *sctx)
           sel->info.writes_1_if_tex_is_1 != 0xff) {
          /* Now check if the texture is cleared to 1 */
          int unit = sctx->shader.ps.cso->info.writes_1_if_tex_is_1 - 1;
-         struct si_samplers *samp = &sctx->samplers[PIPE_SHADER_FRAGMENT];
+         struct si_samplers *samp = &sctx->samplers[MESA_SHADER_FRAGMENT];
          if ((1u << unit) & samp->enabled_mask) {
             struct si_texture* tex = (struct si_texture*) samp->views[unit]->texture;
             if (tex->is_depth &&
@@ -1415,9 +1415,9 @@ static void si_bind_rs_state(struct pipe_context *ctx, void *state)
    /* Used by si_get_vs_key_outputs in si_update_shaders: */
    if (old_rs->clip_plane_enable != rs->clip_plane_enable) {
       sctx->dirty_shaders_mask |=
-         BITFIELD_BIT(PIPE_SHADER_VERTEX) |
-         BITFIELD_BIT(PIPE_SHADER_TESS_EVAL) |
-         BITFIELD_BIT(PIPE_SHADER_GEOMETRY);
+         BITFIELD_BIT(MESA_SHADER_VERTEX) |
+         BITFIELD_BIT(MESA_SHADER_TESS_EVAL) |
+         BITFIELD_BIT(MESA_SHADER_GEOMETRY);
    }
 
    if (old_rs->line_smooth != rs->line_smooth ||
@@ -1760,16 +1760,16 @@ static void si_bind_dsa_state(struct pipe_context *ctx, void *state)
       si_ps_key_update_dsa(sctx);
       si_update_ps_inputs_read_or_disabled(sctx);
       sctx->dirty_shaders_mask |=
-         BITFIELD_BIT(PIPE_SHADER_VERTEX) |
-         BITFIELD_BIT(PIPE_SHADER_TESS_EVAL) |
-         BITFIELD_BIT(PIPE_SHADER_GEOMETRY) |
-         BITFIELD_BIT(PIPE_SHADER_FRAGMENT);
+         BITFIELD_BIT(MESA_SHADER_VERTEX) |
+         BITFIELD_BIT(MESA_SHADER_TESS_EVAL) |
+         BITFIELD_BIT(MESA_SHADER_GEOMETRY) |
+         BITFIELD_BIT(MESA_SHADER_FRAGMENT);
    }
 
    if (old_dsa->depth_enabled != dsa->depth_enabled ||
        old_dsa->stencil_enabled != dsa->stencil_enabled) {
       si_ps_key_update_framebuffer_blend_dsa_rasterizer(sctx);
-      sctx->dirty_shaders_mask |= BITFIELD_BIT(PIPE_SHADER_FRAGMENT);
+      sctx->dirty_shaders_mask |= BITFIELD_BIT(MESA_SHADER_FRAGMENT);
    }
 
    if (sctx->occlusion_query_mode == SI_OCCLUSION_QUERY_MODE_PRECISE_BOOLEAN &&
@@ -1836,12 +1836,12 @@ static void si_set_active_query_state(struct pipe_context *ctx, bool enable)
 
 void si_save_qbo_state(struct si_context *sctx, struct si_qbo_state *st)
 {
-   si_get_pipe_constant_buffer(sctx, PIPE_SHADER_COMPUTE, 0, &st->saved_const0);
+   si_get_pipe_constant_buffer(sctx, MESA_SHADER_COMPUTE, 0, &st->saved_const0);
 }
 
 void si_restore_qbo_state(struct si_context *sctx, struct si_qbo_state *st)
 {
-   sctx->b.set_constant_buffer(&sctx->b, PIPE_SHADER_COMPUTE, 0, true, &st->saved_const0);
+   sctx->b.set_constant_buffer(&sctx->b, MESA_SHADER_COMPUTE, 0, true, &st->saved_const0);
 }
 
 static void si_emit_db_render_state(struct si_context *sctx, unsigned index)
@@ -2802,10 +2802,10 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
    si_update_ps_inputs_read_or_disabled(sctx);
    si_update_vrs_flat_shading(sctx);
    sctx->dirty_shaders_mask |=
-      BITFIELD_BIT(PIPE_SHADER_VERTEX) |
-      BITFIELD_BIT(PIPE_SHADER_TESS_EVAL) |
-      BITFIELD_BIT(PIPE_SHADER_GEOMETRY) |
-      BITFIELD_BIT(PIPE_SHADER_FRAGMENT);
+      BITFIELD_BIT(MESA_SHADER_VERTEX) |
+      BITFIELD_BIT(MESA_SHADER_TESS_EVAL) |
+      BITFIELD_BIT(MESA_SHADER_GEOMETRY) |
+      BITFIELD_BIT(MESA_SHADER_FRAGMENT);
 
    if (sctx->gfx_level < GFX12 && !sctx->decompression_enabled) {
       /* Prevent textures decompression when the framebuffer state
@@ -3647,7 +3647,7 @@ static void si_set_min_samples(struct pipe_context *ctx, unsigned min_samples)
    sctx->ps_iter_samples = min_samples;
 
    si_ps_key_update_framebuffer_rasterizer_sample_shading(sctx);
-   sctx->dirty_shaders_mask |= BITFIELD_BIT(PIPE_SHADER_FRAGMENT);
+   sctx->dirty_shaders_mask |= BITFIELD_BIT(MESA_SHADER_FRAGMENT);
 
    si_update_ps_iter_samples(sctx);
 }
@@ -4686,7 +4686,7 @@ static void si_bind_vertex_elements(struct pipe_context *ctx, void *state)
        memcmp(old->fix_fetch, v->fix_fetch, sizeof(v->fix_fetch[0]) *
               MAX2(old->count, v->count))) {
       si_vs_key_update_inputs(sctx);
-      sctx->dirty_shaders_mask |= BITFIELD_BIT(PIPE_SHADER_VERTEX);
+      sctx->dirty_shaders_mask |= BITFIELD_BIT(MESA_SHADER_VERTEX);
    }
 
    if (v->instance_divisor_is_fetched) {
@@ -4766,7 +4766,7 @@ static void si_set_vertex_buffers(struct pipe_context *ctx, unsigned count,
     */
    if (sctx->vertex_elements->vb_alignment_check_mask & unaligned) {
       si_vs_key_update_inputs(sctx);
-      sctx->dirty_shaders_mask |= BITFIELD_BIT(PIPE_SHADER_VERTEX);
+      sctx->dirty_shaders_mask |= BITFIELD_BIT(MESA_SHADER_VERTEX);
    }
 }
 
@@ -5021,7 +5021,7 @@ static void si_init_graphics_preamble_state(struct si_context *sctx,
 
    ac_init_graphics_preamble_state(&preamble_state, &pm4->base);
 
-   if (sctx->gfx_level >= GFX7) {
+   if (sctx->gfx_level >= GFX7 && sctx->gfx_level < GFX12) {
       /* If any sample location uses the -8 coordinate, the EXCLUSION fields should be set to 0. */
       ac_pm4_set_reg(&pm4->base, R_02882C_PA_SU_PRIM_FILTER_CNTL,
                      S_02882C_XMAX_RIGHT_EXCLUSION(1) |

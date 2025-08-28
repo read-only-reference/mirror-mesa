@@ -237,6 +237,8 @@ struct nvk_cmd_buffer {
    struct util_dynarray pushes;
 
    uint64_t tls_space_needed;
+
+   uint8_t prev_subc;
 };
 
 VK_DEFINE_HANDLE_CASTS(nvk_cmd_buffer, vk.base, VkCommandBuffer,
@@ -288,11 +290,11 @@ void nvk_cmd_invalidate_compute_state(struct nvk_cmd_buffer *cmd);
 
 void nvk_cmd_bind_shaders(struct vk_command_buffer *vk_cmd,
                           uint32_t stage_count,
-                          const gl_shader_stage *stages,
+                          const mesa_shader_stage *stages,
                           struct vk_shader ** const shaders);
 
 void nvk_cmd_bind_graphics_shader(struct nvk_cmd_buffer *cmd,
-                                  const gl_shader_stage stage,
+                                  const mesa_shader_stage stage,
                                   struct nvk_shader *shader);
 
 void nvk_cmd_bind_compute_shader(struct nvk_cmd_buffer *cmd,
@@ -330,6 +332,24 @@ nvk_get_descriptor_state_for_stages(struct nvk_cmd_buffer *cmd,
       return &cmd->state.gfx.descriptors;
    } else {
       UNREACHABLE("Unknown shader stage");
+   }
+}
+
+/**
+ * Gets the most recently used subchannel in the nvk_cmd_buffer, or a valid
+ * default subchannel if none has been used.
+ *
+ * Note that this isn't guaranteed to be the subchannel that the hardware is
+ * actually using (eg. at the beginning of the command buffer or after an
+ * indirect) so callers cannot rely on this value for correctness.
+ */
+static inline uint8_t
+nvk_cmd_buffer_last_subchannel(const struct nvk_cmd_buffer *cmd)
+{
+   if (cmd->push.last_hdr_dw) {
+      return NVC0_FIFO_SUBC_FROM_PKHDR(cmd->push.last_hdr_dw);
+   } else {
+      return cmd->prev_subc;
    }
 }
 
@@ -390,8 +410,6 @@ void nvk_cmd_dispatch_shader(struct nvk_cmd_buffer *cmd,
 
 void nvk_meta_resolve_rendering(struct nvk_cmd_buffer *cmd,
                                 const VkRenderingInfo *pRenderingInfo);
-
-void nvk_cmd_buffer_dump(struct nvk_cmd_buffer *cmd, FILE *fp);
 
 void nvk_linear_render_copy(struct nvk_cmd_buffer *cmd,
                             const struct nvk_image_view *iview,

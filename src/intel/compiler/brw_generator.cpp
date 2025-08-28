@@ -94,7 +94,7 @@ normalize_brw_reg_for_encoding(brw_reg *reg)
 brw_generator::brw_generator(const struct brw_compiler *compiler,
                            const struct brw_compile_params *params,
                            struct brw_stage_prog_data *prog_data,
-                           gl_shader_stage stage)
+                           mesa_shader_stage stage)
 
    : compiler(compiler), params(params),
      devinfo(compiler->devinfo),
@@ -732,12 +732,13 @@ brw_generator::enable_debug(const char *shader_name)
 }
 
 int
-brw_generator::generate_code(const cfg_t *cfg, int dispatch_width,
-                            struct brw_shader_stats shader_stats,
-                            const brw_performance &perf,
-                            struct brw_compile_stats *stats,
-                            unsigned max_polygons)
+brw_generator::generate_code(const brw_shader &s,
+                             struct brw_compile_stats *stats)
 {
+   const int dispatch_width = s.dispatch_width;
+   struct brw_shader_stats shader_stats = s.shader_stats;
+   const brw_performance &perf = s.performance_analysis.require();
+
    /* align to 64 byte boundary. */
    brw_realign(p, 64);
 
@@ -748,10 +749,10 @@ brw_generator::generate_code(const cfg_t *cfg, int dispatch_width,
    int loop_count = 0, send_count = 0, nop_count = 0, sync_nop_count = 0;
    bool is_accum_used = false;
 
-   struct disasm_info *disasm_info = disasm_initialize(p->isa, cfg);
+   struct disasm_info *disasm_info = disasm_initialize(p->isa, s.cfg);
 
    brw_inst *prev_inst = NULL;
-   foreach_block_and_inst (block, brw_inst, inst, cfg) {
+   foreach_block_and_inst (block, brw_inst, inst, s.cfg) {
       if (inst->opcode == SHADER_OPCODE_UNDEF)
          continue;
 
@@ -1143,9 +1144,15 @@ brw_generator::generate_code(const cfg_t *cfg, int dispatch_width,
          break;
 
       case SHADER_OPCODE_SEND:
+         generate_send(inst, dst, src[SEND_SRC_DESC], src[SEND_SRC_EX_DESC],
+                       src[SEND_SRC_PAYLOAD1], src[SEND_SRC_PAYLOAD2]);
+         send_count++;
+         break;
+
       case SHADER_OPCODE_SEND_GATHER:
-         generate_send(inst, dst, src[0], src[1], src[2],
-                       inst->ex_mlen > 0 ? src[3] : brw_null_reg());
+         generate_send(inst, dst,
+                       src[SEND_GATHER_SRC_DESC], src[SEND_GATHER_SRC_EX_DESC],
+                       src[SEND_GATHER_SRC_SCALAR], brw_null_reg());
          send_count++;
          break;
 
@@ -1482,7 +1489,7 @@ brw_generator::generate_code(const cfg_t *cfg, int dispatch_width,
                         before_size, after_size);
    if (stats) {
       stats->dispatch_width = dispatch_width;
-      stats->max_polygons = max_polygons;
+      stats->max_polygons = s.max_polygons;
       stats->max_dispatch_width = dispatch_width;
       stats->instructions = before_size / 16 - nop_count - sync_nop_count;
       stats->sends = send_count;

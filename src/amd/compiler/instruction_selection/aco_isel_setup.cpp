@@ -129,7 +129,7 @@ sanitize_cf_list(nir_function_impl* impl, struct exec_list* cf_list)
           * from the loop header are live. Handle this without complicating the ACO IR by creating a
           * dummy break.
           */
-         if (nir_cf_node_cf_tree_next(&loop->cf_node)->predecessors->entries == 0) {
+         if (nir_cf_node_cf_tree_next(&loop->cf_node)->predecessors.entries == 0) {
             nir_builder b = nir_builder_create(impl);
             b.cursor = nir_after_block_before_jump(nir_loop_last_block(loop));
 
@@ -160,7 +160,7 @@ apply_nuw_to_ssa(isel_context* ctx, nir_def* ssa)
    if (!nir_scalar_is_alu(scalar) || nir_scalar_alu_op(scalar) != nir_op_iadd)
       return;
 
-   nir_alu_instr* add = nir_instr_as_alu(ssa->parent_instr);
+   nir_alu_instr* add = nir_def_as_alu(ssa);
 
    if (add->no_unsigned_wrap)
       return;
@@ -205,6 +205,10 @@ apply_nuw_to_offsets(isel_context* ctx, nir_function_impl* impl)
          case nir_intrinsic_load_scratch: apply_nuw_to_ssa(ctx, intrin->src[0].ssa); break;
          case nir_intrinsic_store_scratch:
          case nir_intrinsic_load_smem_amd: apply_nuw_to_ssa(ctx, intrin->src[1].ssa); break;
+         case nir_intrinsic_load_global_amd:
+            if (nir_intrinsic_access(intrin) & ACCESS_SMEM_AMD)
+               apply_nuw_to_ssa(ctx, intrin->src[1].ssa);
+            break;
          default: break;
          }
       }
@@ -340,6 +344,23 @@ skip_uniformize_merge_phi(nir_def* ssa, unsigned depth)
    return true;
 }
 
+bool
+intrinsic_try_skip_helpers(nir_intrinsic_instr* intr, UNUSED void* data)
+{
+   switch (intr->intrinsic) {
+   case nir_intrinsic_load_ssbo:
+   case nir_intrinsic_load_ubo:
+   case nir_intrinsic_load_constant:
+   case nir_intrinsic_load_scratch:
+   case nir_intrinsic_load_global_amd:
+   case nir_intrinsic_bindless_image_load:
+   case nir_intrinsic_bindless_image_fragment_mask_load_amd:
+   case nir_intrinsic_bindless_image_sparse_load:
+      return !(nir_intrinsic_access(intr) & ACCESS_SMEM_AMD);
+   default: return false;
+   }
+}
+
 } /* end namespace */
 
 void
@@ -366,6 +387,13 @@ init_context(isel_context* ctx, nir_shader* shader)
 
    apply_nuw_to_offsets(ctx, impl);
    ac_nir_flag_smem_for_loads(shader, ctx->program->gfx_level, false, true);
+
+   if (shader->info.stage == MESA_SHADER_FRAGMENT) {
+      nir_opt_load_skip_helpers_options skip_helper_options = {};
+      skip_helper_options.no_add_divergence = true;
+      skip_helper_options.intrinsic_cb = intrinsic_try_skip_helpers;
+      nir_opt_load_skip_helpers(shader, &skip_helper_options);
+   }
 
    /* sanitize control flow */
    sanitize_cf_list(impl, &impl->body);
@@ -621,11 +649,8 @@ init_context(isel_context* ctx, nir_shader* shader)
             }
             case nir_instr_type_tex: {
                nir_tex_instr* tex = nir_instr_as_tex(instr);
-               RegType type = tex->def.divergent ? RegType::vgpr : RegType::sgpr;
-
-               if (tex->op == nir_texop_texture_samples) {
-                  assert(!tex->def.divergent);
-               }
+               RegType type =
+                  tex->def.divergent || tex->skip_helpers ? RegType::vgpr : RegType::sgpr;
 
                RegClass rc = get_reg_class(ctx, type, tex->def.num_components, tex->def.bit_size);
                regclasses[tex->def.index] = rc;
@@ -760,7 +785,7 @@ setup_isel_context(Program* program, unsigned shader_count, struct nir_shader* c
    for (unsigned i = 0; i < shader_count; i++)
       scratch_size = std::max(scratch_size, shaders[i]->scratch_size);
 
-   ctx.program->config->scratch_bytes_per_wave = scratch_size * ctx.program->wave_size;
+   ctx.program->config->scratch_bytes_per_wave = align(scratch_size, 4) * ctx.program->wave_size;
 
    unsigned nir_num_blocks = 0;
    for (unsigned i = 0; i < shader_count; i++)

@@ -78,7 +78,7 @@ lower_rt_intrinsics_impl(nir_function_impl *impl,
    nir_def *hotzone_addr = brw_nir_rt_sw_hotzone_addr(b, devinfo);
    nir_def *hotzone = nir_load_global(b, hotzone_addr, 16, 4, 32);
 
-   gl_shader_stage stage = b->shader->info.stage;
+   mesa_shader_stage stage = b->shader->info.stage;
    struct brw_nir_rt_mem_ray_defs world_ray_in = {};
    struct brw_nir_rt_mem_ray_defs object_ray_in = {};
    struct brw_nir_rt_mem_hit_defs hit_in = {};
@@ -282,7 +282,7 @@ lower_rt_intrinsics_impl(nir_function_impl *impl,
             nir_def *geometry_index_dw =
                nir_load_global(b, nir_iadd_imm(b, hit_in.prim_leaf_ptr, 4), 4,
                                1, 32);
-            sysval = nir_iand_imm(b, geometry_index_dw, BITFIELD_MASK(29));
+            sysval = nir_iand_imm(b, geometry_index_dw, BITFIELD_MASK(24));
             break;
          }
 
@@ -388,8 +388,8 @@ lower_rt_intrinsics_impl(nir_function_impl *impl,
       }
    }
 
-   nir_progress(true, impl,
-                progress ? nir_metadata_none : (nir_metadata_control_flow));
+   nir_progress(progress, impl, nir_metadata_none);
+
    return progress;
 }
 
@@ -424,5 +424,6 @@ brw_nir_lower_rt_intrinsics(nir_shader *nir,
    nir_foreach_function_impl(impl, nir) {
       progress |= lower_rt_intrinsics_impl(impl, key, devinfo);
    }
+
    return progress;
 }

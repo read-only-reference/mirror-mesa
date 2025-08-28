@@ -18,7 +18,6 @@ extern "C" {
 
 typedef struct nir_shader nir_shader;
 struct radeon_info;
-struct radv_pipeline_layout;
 struct radv_shader_stage;
 struct radv_shader_info;
 struct radv_shader_args;
@@ -97,6 +96,8 @@ typedef struct radv_nir_opt_tid_function_options {
 bool radv_nir_opt_tid_function(nir_shader *shader, const radv_nir_opt_tid_function_options *options);
 
 bool radv_nir_opt_fs_builtins(nir_shader *shader, const struct radv_graphics_state_key *gfx_state);
+
+bool radv_nir_opt_access_can_speculate(nir_shader *shader);
 
 #ifdef __cplusplus
 }

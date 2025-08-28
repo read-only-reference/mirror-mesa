@@ -28,6 +28,8 @@ files_r300 = files(
   'r300_screen_buffer.h',
   'r300_screen.c',
   'r300_screen.h',
+  'r300_meminfo.c',
+  'r300_meminfo.h',
   'r300_shader_semantics.h',
   'r300_state.c',
   'r300_state_derived.c',
@@ -116,7 +118,6 @@ libr300 = static_library(
   files_r300, r300_nir_algebraic_c,
   include_directories : [
     inc_src, inc_include, inc_gallium, inc_gallium_aux, inc_gallium_drivers,
-    inc_mesa,
   ],
   gnu_symbol_visibility : 'hidden',
   dependencies : [dep_llvm, idep_mesautil, idep_nir, idep_xmlconfig],

@@ -59,12 +59,13 @@
 #ifdef HAVE_X11_PLATFORM
 #include "X11/Xlibint.h"
 #include "x11_dri3.h"
+#include "x11_display.h"
 #endif
 
 #include "GL/mesa_glinterop.h"
 #include "pipe-loader/pipe_loader.h"
 #include "loader/loader.h"
-#include "mapi/glapi/glapi.h"
+#include "mesa/glapi/glapi/glapi.h"
 #include "pipe/p_screen.h"
 #include "util/bitscan.h"
 #include "util/driconf.h"
@@ -76,7 +77,6 @@
 #include "util/u_vector.h"
 #include "egl_dri2.h"
 #include "egldefines.h"
-#include "mapi/glapi/glapi.h"
 #include "dispatch.h"
 
 #define NUM_ATTRIBS 16
@@ -1236,9 +1236,16 @@ dri2_create_context(_EGLDisplay *disp, _EGLConfig *conf,
                                   &num_attribs))
       goto cleanup;
 
+   bool thread_safe = true;
+
+#ifdef HAVE_X11_PLATFORM
+   if (disp->Platform == _EGL_PLATFORM_X11)
+      thread_safe = x11_xlib_display_is_thread_safe(disp->PlatformDisplay);
+#endif
+
    dri2_ctx->dri_context = driCreateContextAttribs(
       dri2_dpy->dri_screen_render_gpu, api, dri_config, shared, num_attribs / 2,
-      ctx_attribs, &error, dri2_ctx);
+      ctx_attribs, &error, dri2_ctx, thread_safe);
    dri2_create_context_attribs_error(error);
 
    if (!dri2_ctx->dri_context)
@@ -2194,6 +2201,8 @@ dri2_num_fourcc_format_planes(EGLint format)
    case DRM_FORMAT_NV21:
    case DRM_FORMAT_NV16:
    case DRM_FORMAT_NV61:
+   case DRM_FORMAT_NV24:
+   case DRM_FORMAT_NV42:
    case DRM_FORMAT_NV15:
    case DRM_FORMAT_NV20:
    case DRM_FORMAT_NV30:

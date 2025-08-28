@@ -31,10 +31,10 @@
 #include "util/u_debug.h"
 #include "radv_cs.h"
 #include "radv_debug.h"
+#include "radv_debug_nir.h"
 #include "radv_entrypoints.h"
 #include "radv_formats.h"
 #include "radv_physical_device.h"
-#include "radv_printf.h"
 #include "radv_rmv.h"
 #include "radv_shader.h"
 #include "radv_spm.h"
@@ -47,7 +47,6 @@
 typedef void *drmDevicePtr;
 #include <io.h>
 #else
-#include <amdgpu.h>
 #include <xf86drm.h>
 #include "drm-uapi/amdgpu_drm.h"
 #include "winsys/amdgpu/radv_amdgpu_winsys_public.h"
@@ -191,8 +190,7 @@ radv_device_init_vs_prologs(struct radv_device *device)
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const struct radv_instance *instance = radv_physical_device_instance(pdev);
 
-   if (!radv_shader_part_cache_init(&device->vs_prologs, &vs_prolog_ops))
-      return vk_error(instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+   radv_shader_part_cache_init(&device->vs_prologs, &vs_prolog_ops);
 
    /* don't pre-compile prologs if we want to print them */
    if (instance->debug_flags & RADV_DEBUG_DUMP_PROLOGS)
@@ -537,7 +535,7 @@ radv_device_init_perf_counter(struct radv_device *device)
    if (result != VK_SUCCESS)
       return result;
 
-   device->perf_counter_lock_cs = calloc(sizeof(struct radeon_winsys_cs *), 2 * PERF_CTR_MAX_PASSES);
+   device->perf_counter_lock_cs = calloc(sizeof(struct radv_cmd_stream *), 2 * PERF_CTR_MAX_PASSES);
    if (!device->perf_counter_lock_cs)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
@@ -558,7 +556,7 @@ radv_device_finish_perf_counter(struct radv_device *device)
 
    for (unsigned i = 0; i < 2 * PERF_CTR_MAX_PASSES; ++i) {
       if (device->perf_counter_lock_cs[i])
-         device->ws->cs_destroy(device->perf_counter_lock_cs[i]);
+         radv_destroy_cmd_stream(device, device->perf_counter_lock_cs[i]);
    }
 
    free(device->perf_counter_lock_cs);
@@ -709,6 +707,12 @@ radv_device_init_tools(struct radv_device *device)
    if (result != VK_SUCCESS)
       return result;
 
+   if (instance->debug_flags & RADV_DEBUG_VALIDATE_VAS) {
+      result = radv_init_va_validation(device);
+      if (result != VK_SUCCESS)
+         return result;
+   }
+
    result = radv_device_init_rgp(device);
    if (result != VK_SUCCESS)
       return result;
@@ -740,6 +744,7 @@ radv_device_finish_tools(struct radv_device *device)
    radv_trap_handler_finish(device);
    radv_memory_trace_finish(device);
    radv_device_finish_rgp(device);
+   radv_finish_va_validation(device);
    radv_device_finish_device_fault_detection(device);
 }
 
@@ -894,18 +899,21 @@ radv_device_init_cache_key(struct radv_device *device)
 static void
 radv_create_gfx_preamble(struct radv_device *device)
 {
-   struct radeon_cmdbuf *cs = device->ws->cs_create(device->ws, AMD_IP_GFX, false);
-   if (!cs)
+   struct radv_cmd_stream *cs;
+   VkResult result;
+
+   result = radv_create_cmd_stream(device, RADV_QUEUE_GENERAL, false, &cs);
+   if (result != VK_SUCCESS)
       return;
 
-   radeon_check_space(device->ws, cs, 512);
+   radeon_check_space(device->ws, cs->b, 512);
 
    radv_emit_graphics(device, cs);
 
-   device->ws->cs_pad(cs, 0);
+   device->ws->cs_pad(cs->b, 0);
 
-   VkResult result = radv_bo_create(
-      device, NULL, cs->cdw * 4, 4096, device->ws->cs_domain(device->ws),
+   result = radv_bo_create(
+      device, NULL, cs->b->cdw * 4, 4096, device->ws->cs_domain(device->ws),
       RADEON_FLAG_CPU_ACCESS | RADEON_FLAG_NO_INTERPROCESS_SHARING | RADEON_FLAG_READ_ONLY | RADEON_FLAG_GTT_WC,
       RADV_BO_PRIORITY_CS, 0, true, &device->gfx_init);
    if (result != VK_SUCCESS)
@@ -917,12 +925,12 @@ radv_create_gfx_preamble(struct radv_device *device)
       device->gfx_init = NULL;
       goto fail;
    }
-   memcpy(map, cs->buf, cs->cdw * 4);
+   memcpy(map, cs->b->buf, cs->b->cdw * 4);
 
    device->ws->buffer_unmap(device->ws, device->gfx_init, false);
-   device->gfx_init_size_dw = cs->cdw;
+   device->gfx_init_size_dw = cs->b->cdw;
 fail:
-   device->ws->cs_destroy(cs);
+   radv_destroy_cmd_stream(device, cs);
 }
 
 /* For MSAA sample positions. */
@@ -977,7 +985,7 @@ radv_get_default_max_sample_dist(int log_samples)
 }
 
 void
-radv_emit_default_sample_locations(const struct radv_physical_device *pdev, struct radeon_cmdbuf *cs, int nr_samples)
+radv_emit_default_sample_locations(const struct radv_physical_device *pdev, struct radv_cmd_stream *cs, int nr_samples)
 {
    uint64_t centroid_priority;
 
@@ -1024,7 +1032,7 @@ radv_emit_default_sample_locations(const struct radv_physical_device *pdev, stru
     * pixel boundary (-8 sample offset). It's currently always TRUE because the driver doesn't
     * support 16 samples.
     */
-   if (pdev->info.gfx_level >= GFX7) {
+   if (pdev->info.gfx_level >= GFX7 && pdev->info.gfx_level < GFX12) {
       radeon_set_context_reg(R_02882C_PA_SU_PRIM_FILTER_CNTL,
                              S_02882C_XMAX_RIGHT_EXCLUSION(1) | S_02882C_YMAX_BOTTOM_EXCLUSION(1));
    }
@@ -1349,12 +1357,8 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
        device->vk.enabled_features.extendedDynamicState3ColorBlendEnable ||
        device->vk.enabled_features.extendedDynamicState3ColorWriteMask ||
        device->vk.enabled_features.extendedDynamicState3AlphaToCoverageEnable ||
-       device->vk.enabled_features.extendedDynamicState3ColorBlendEquation) {
-      if (!radv_shader_part_cache_init(&device->ps_epilogs, &ps_epilog_ops)) {
-         result = VK_ERROR_OUT_OF_HOST_MEMORY;
-         goto fail;
-      }
-   }
+       device->vk.enabled_features.extendedDynamicState3ColorBlendEquation)
+      radv_shader_part_cache_init(&device->ps_epilogs, &ps_epilog_ops);
 
    if (pdev->info.has_graphics && !(instance->debug_flags & RADV_DEBUG_NO_IBS))
       radv_create_gfx_preamble(device);

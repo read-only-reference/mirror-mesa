@@ -33,7 +33,6 @@ struct ntr_insn {
    struct ureg_dst dst[2];
    struct ureg_src src[4];
    enum tgsi_texture_type tex_target;
-   enum tgsi_return_type tex_return_type;
    struct tgsi_texture_offset tex_offset[4];
 
    unsigned mem_qualifier;
@@ -629,7 +628,7 @@ ntr_get_chased_src(struct ntr_compile *c, nir_legacy_src *src)
 {
    if (src->is_ssa) {
       if (src->ssa->parent_instr->type == nir_instr_type_load_const)
-         return ntr_get_load_const_src(c, nir_instr_as_load_const(src->ssa->parent_instr));
+         return ntr_get_load_const_src(c, nir_def_as_load_const(src->ssa));
 
       return c->ssa_temp[src->ssa->index];
    } else {
@@ -695,7 +694,7 @@ ntr_get_ssa_def_decl(struct ntr_compile *c, nir_def *ssa)
    uint32_t writemask;
    /* Fix writemask for nir_intrinsic_load_ubo_vec4 according to uses. */
    if (ssa->parent_instr->type == nir_instr_type_intrinsic &&
-       nir_instr_as_intrinsic(ssa->parent_instr)->intrinsic == nir_intrinsic_load_ubo_vec4)
+       nir_def_as_intrinsic(ssa)->intrinsic == nir_intrinsic_load_ubo_vec4)
       writemask = nir_def_components_read(ssa);
    else
       writemask = BITSET_MASK(ssa->num_components);
@@ -1072,7 +1071,7 @@ ntr_emit_load_input(struct ntr_compile *c, nir_intrinsic_instr *instr)
    case nir_intrinsic_load_interpolated_input: {
       input = ntr_ureg_src_indirect(c, input, instr->src[1], 0);
 
-      nir_intrinsic_instr *bary_instr = nir_instr_as_intrinsic(instr->src[0].ssa->parent_instr);
+      nir_intrinsic_instr *bary_instr = nir_def_as_intrinsic(instr->src[0].ssa);
 
       switch (bary_instr->intrinsic) {
       case nir_intrinsic_load_barycentric_pixel:
@@ -1426,21 +1425,6 @@ ntr_emit_texture(struct ntr_compile *c, nir_tex_instr *instr)
 
    s.srcs[s.i++] = sampler;
 
-   enum tgsi_return_type tex_type;
-   switch (instr->dest_type) {
-   case nir_type_float32:
-      tex_type = TGSI_RETURN_TYPE_FLOAT;
-      break;
-   case nir_type_int32:
-      tex_type = TGSI_RETURN_TYPE_SINT;
-      break;
-   case nir_type_uint32:
-      tex_type = TGSI_RETURN_TYPE_UINT;
-      break;
-   default:
-      UNREACHABLE("unknown texture type");
-   }
-
    struct ureg_dst tex_dst;
    if (instr->op == nir_texop_query_levels)
       tex_dst = ureg_writemask(ntr_temp(c), TGSI_WRITEMASK_W);
@@ -1453,7 +1437,6 @@ ntr_emit_texture(struct ntr_compile *c, nir_tex_instr *instr)
    struct ntr_insn *insn =
       ntr_insn(c, tex_opcode, tex_dst, s.srcs[0], s.srcs[1], s.srcs[2], s.srcs[3]);
    insn->tex_target = target;
-   insn->tex_return_type = tex_type;
    insn->is_tex = true;
 
    int tex_offset_src = nir_tex_instr_src_index(instr, nir_tex_src_offset);
@@ -1676,8 +1659,7 @@ ntr_emit_block_ureg(struct ntr_compile *c, struct nir_block *block)
                   num_offsets = i + 1;
             }
             ureg_tex_insn(c->ureg, insn->opcode, insn->dst, opcode_info->num_dst, insn->tex_target,
-                          insn->tex_return_type, insn->tex_offset, num_offsets, insn->src,
-                          opcode_info->num_src);
+                          insn->tex_offset, num_offsets, insn->src, opcode_info->num_src);
          } else {
             ureg_insn(c->ureg, insn->opcode, insn->dst, opcode_info->num_dst, insn->src,
                       opcode_info->num_src, insn->precise);
@@ -1808,7 +1790,7 @@ ntr_should_vectorize_io(unsigned align, unsigned bit_size, unsigned num_componen
 static nir_variable_mode
 ntr_no_indirects_mask(nir_shader *s, struct pipe_screen *screen)
 {
-   unsigned pipe_stage = pipe_shader_type_from_mesa(s->info.stage);
+   unsigned pipe_stage = s->info.stage;
    unsigned indirect_mask = nir_var_shader_in | nir_var_shader_out;
 
    if (!screen->shader_caps[pipe_stage].indirect_temp_addr) {
@@ -2116,7 +2098,7 @@ nir_to_rc(struct nir_shader *s, struct pipe_screen *screen,
    }
 
    c->s = s;
-   c->ureg = ureg_create(pipe_shader_type_from_mesa(s->info.stage));
+   c->ureg = ureg_create(s->info.stage);
    ureg_setup_shader_info(c->ureg, &s->info);
    if (s->info.use_legacy_math_rules && screen->caps.legacy_math_rules)
       ureg_property(c->ureg, TGSI_PROPERTY_LEGACY_MATH_RULES, 1);

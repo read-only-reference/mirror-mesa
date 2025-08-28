@@ -936,21 +936,37 @@ trace_screen_fence_reference(struct pipe_screen *_screen,
 }
 
 
+static struct pipe_fence_handle *
+trace_screen_semaphore_create(struct pipe_screen *_screen)
+{
+   struct trace_screen *tr_scr = trace_screen(_screen);
+   struct pipe_screen *screen = tr_scr->screen;
+   struct pipe_fence_handle *res;
+
+   trace_dump_call_begin("pipe_screen", "fence_reference");
+   trace_dump_arg(ptr, screen);
+
+   res = screen->semaphore_create(screen);
+
+   trace_dump_ret(ptr, res);
+   trace_dump_call_end();
+
+   return res;
+}
+
+
 static int
 trace_screen_fence_get_fd(struct pipe_screen *_screen,
                           struct pipe_fence_handle *fence)
 {
    struct trace_screen *tr_scr = trace_screen(_screen);
    struct pipe_screen *screen = tr_scr->screen;
-   int result;
+   int result = screen->fence_get_fd(screen, fence);
 
    trace_dump_call_begin("pipe_screen", "fence_get_fd");
 
    trace_dump_arg(ptr, screen);
    trace_dump_arg(ptr, fence);
-
-   result = screen->fence_get_fd(screen, fence);
-
    trace_dump_ret(int, result);
 
    trace_dump_call_end();
@@ -1511,6 +1527,7 @@ trace_screen_create(struct pipe_screen *screen)
    SCR_INIT(resource_changed);
    tr_scr->base.resource_destroy = trace_screen_resource_destroy;
    tr_scr->base.fence_reference = trace_screen_fence_reference;
+   SCR_INIT(semaphore_create);
    SCR_INIT(fence_get_fd);
    SCR_INIT(create_fence_win32);
    tr_scr->base.fence_finish = trace_screen_fence_finish;

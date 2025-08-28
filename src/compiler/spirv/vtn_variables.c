@@ -594,12 +594,12 @@ get_deref_tail(nir_deref_instr *deref)
       return deref;
 
    nir_deref_instr *parent =
-      nir_instr_as_deref(deref->parent.ssa->parent_instr);
+      nir_def_as_deref(deref->parent.ssa);
 
    if (parent->deref_type == nir_deref_type_cast &&
        parent->parent.ssa->parent_instr->type == nir_instr_type_deref) {
       nir_deref_instr *grandparent =
-         nir_instr_as_deref(parent->parent.ssa->parent_instr);
+         nir_def_as_deref(parent->parent.ssa);
 
       if (glsl_type_is_cmat(grandparent->type))
          return grandparent;
@@ -1313,6 +1313,27 @@ vtn_get_builtin_location(struct vtn_builder *b,
 
    case SpvBuiltInSMIDNV:
       *location = SYSTEM_VALUE_SM_ID_NV;
+      set_mode_system_value(b, mode);
+      break;
+
+   case SpvBuiltInCoreIDARM:
+      *location = SYSTEM_VALUE_CORE_ID,
+      set_mode_system_value(b, mode);
+      break;
+   case SpvBuiltInCoreCountARM:
+      *location = SYSTEM_VALUE_CORE_COUNT_ARM,
+      set_mode_system_value(b, mode);
+      break;
+   case SpvBuiltInCoreMaxIDARM:
+      *location = SYSTEM_VALUE_CORE_MAX_ID_ARM,
+      set_mode_system_value(b, mode);
+      break;
+   case SpvBuiltInWarpIDARM:
+      *location = SYSTEM_VALUE_WARP_ID_ARM,
+      set_mode_system_value(b, mode);
+      break;
+   case SpvBuiltInWarpMaxIDARM:
+      *location = SYSTEM_VALUE_WARP_MAX_ID_ARM,
       set_mode_system_value(b, mode);
       break;
 
@@ -2182,8 +2203,8 @@ vtn_create_variable(struct vtn_builder *b, struct vtn_value *val,
    case vtn_variable_mode_hit_attrib:
    case vtn_variable_mode_node_payload:
       /* For these, we create the variable normally */
-      var->var = rzalloc(b->shader, nir_variable);
-      var->var->name = ralloc_strdup(var->var, val->name);
+      var->var = nir_variable_create_zeroed(b->shader);
+      nir_variable_set_name(b->shader, var->var, val->name);
       var->var->type = vtn_type_get_nir_type(b, var->type, var->mode);
 
       /* This is a total hack but we need some way to flag variables which are
@@ -2204,8 +2225,8 @@ vtn_create_variable(struct vtn_builder *b, struct vtn_value *val,
    case vtn_variable_mode_push_constant:
    case vtn_variable_mode_accel_struct:
    case vtn_variable_mode_shader_record:
-      var->var = rzalloc(b->shader, nir_variable);
-      var->var->name = ralloc_strdup(var->var, val->name);
+      var->var = nir_variable_create_zeroed(b->shader);
+      nir_variable_set_name(b->shader, var->var, val->name);
 
       var->var->type = vtn_type_get_nir_type(b, var->type, var->mode);
       var->var->interface_type = var->var->type;
@@ -2220,8 +2241,8 @@ vtn_create_variable(struct vtn_builder *b, struct vtn_value *val,
    case vtn_variable_mode_cross_workgroup:
    case vtn_variable_mode_task_payload:
       /* Create the variable normally */
-      var->var = rzalloc(b->shader, nir_variable);
-      var->var->name = ralloc_strdup(var->var, val->name);
+      var->var = nir_variable_create_zeroed(b->shader);
+      nir_variable_set_name(b->shader, var->var, val->name);
       var->var->type = vtn_type_get_nir_type(b, var->type, var->mode);
       var->var->data.mode = nir_mode;
       if (var->mode == vtn_variable_mode_workgroup &&
@@ -2231,8 +2252,8 @@ vtn_create_variable(struct vtn_builder *b, struct vtn_value *val,
 
    case vtn_variable_mode_input:
    case vtn_variable_mode_output: {
-      var->var = rzalloc(b->shader, nir_variable);
-      var->var->name = ralloc_strdup(var->var, val->name);
+      var->var = nir_variable_create_zeroed(b->shader);
+      nir_variable_set_name(b->shader, var->var, val->name);
       var->var->type = vtn_type_get_nir_type(b, var->type, var->mode);
       var->var->data.mode = nir_mode;
 
@@ -2293,7 +2314,7 @@ vtn_create_variable(struct vtn_builder *b, struct vtn_value *val,
       if (per_vertex_type->base_type == vtn_base_type_struct &&
           per_vertex_type->block) {
          var->var->num_members = glsl_get_length(per_vertex_type->type);
-         var->var->members = rzalloc_array(var->var, struct nir_variable_data,
+         var->var->members = rzalloc_array(b->shader, struct nir_variable_data,
                                            var->var->num_members);
 
          for (unsigned i = 0; i < var->var->num_members; i++) {
@@ -2399,7 +2420,7 @@ vtn_create_variable(struct vtn_builder *b, struct vtn_value *val,
       switch (initializer->value_type) {
       case vtn_value_type_constant:
          var->var->constant_initializer =
-            nir_constant_clone(initializer->constant, var->var);
+            nir_constant_clone(initializer->constant, b->shader);
          break;
       case vtn_value_type_pointer:
          var->var->pointer_initializer = initializer->pointer->var->var;
@@ -2614,7 +2635,6 @@ vtn_emit_make_visible_barrier(struct vtn_builder *b, SpvMemoryAccessMask access,
       return;
 
    vtn_emit_memory_barrier(b, scope, SpvMemorySemanticsMakeVisibleMask |
-                                     SpvMemorySemanticsAcquireMask |
                                      vtn_mode_to_memory_semantics(mode));
 }
 
@@ -2626,7 +2646,6 @@ vtn_emit_make_available_barrier(struct vtn_builder *b, SpvMemoryAccessMask acces
       return;
 
    vtn_emit_memory_barrier(b, scope, SpvMemorySemanticsMakeAvailableMask |
-                                     SpvMemorySemanticsReleaseMask |
                                      vtn_mode_to_memory_semantics(mode));
 }
 

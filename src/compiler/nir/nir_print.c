@@ -776,7 +776,7 @@ get_variable_mode_str(nir_variable_mode mode, bool want_local_global_mode)
 }
 
 static const char *
-get_location_str(unsigned location, gl_shader_stage stage,
+get_location_str(unsigned location, mesa_shader_stage stage,
                  nir_variable_mode mode, char *buf)
 {
    switch (stage) {
@@ -850,6 +850,7 @@ print_access(enum gl_access_qualifier access, print_state *state, const char *se
       { ACCESS_IN_BOUNDS, "in-bounds" },
       { ACCESS_KEEP_SCALAR, "keep-scalar" },
       { ACCESS_SMEM_AMD, "smem-amd" },
+      { ACCESS_SKIP_HELPERS, "skip-helpers" },
    };
 
    bool first = true;
@@ -1012,7 +1013,7 @@ print_deref_link(const nir_deref_instr *instr, bool whole_chain, print_state *st
    }
 
    nir_deref_instr *parent =
-      nir_instr_as_deref(instr->parent.ssa->parent_instr);
+      nir_def_as_deref(instr->parent.ssa);
 
    /* Is the parent we're going to print a bare cast? */
    const bool is_parent_cast =
@@ -1997,6 +1998,10 @@ print_tex_instr(nir_tex_instr *instr, print_state *state)
    if (instr->is_sparse) {
       fprintf(fp, ", sparse");
    }
+
+   if (instr->skip_helpers) {
+      fprintf(fp, ", skip_helpers");
+   }
 }
 
 static void
@@ -2082,7 +2087,7 @@ print_phi_instr(nir_phi_instr *instr, print_state *state)
    nir_block **preds =
       state->preds ? state->preds : nir_block_get_predecessors_sorted(instr->instr.block, NULL);
 
-   for (unsigned i = 0; i < instr->instr.block->predecessors->entries; i++) {
+   for (unsigned i = 0; i < instr->instr.block->predecessors.entries; i++) {
       nir_phi_src *src = nir_phi_get_src_from_block(instr, preds[i]);
       if (i != 0)
          fprintf(fp, ", ");
@@ -2243,7 +2248,7 @@ static void
 print_block_preds(nir_block *block, print_state *state)
 {
    FILE *fp = state->fp;
-   for (unsigned i = 0; i < block->predecessors->entries; i++) {
+   for (unsigned i = 0; i < block->predecessors.entries; i++) {
       fprintf(fp, " b%u", state->preds[i]->index);
    }
 }
@@ -2637,7 +2642,7 @@ print_nz_bool(FILE *fp, const char *label, bool value)
 static void
 print_shader_info(const struct shader_info *info, FILE *fp)
 {
-   fprintf(fp, "shader: %s\n", gl_shader_stage_name(info->stage));
+   fprintf(fp, "shader: %s\n", mesa_shader_stage_name(info->stage));
 
    if (memcmp(info->source_blake3, &(blake3_hash){ 0 }, sizeof(info->source_blake3))) {
       fprintf(fp, "source_blake3: {");
@@ -2653,7 +2658,7 @@ print_shader_info(const struct shader_info *info, FILE *fp)
 
    print_nz_bool(fp, "internal", info->internal);
 
-   if (gl_shader_stage_uses_workgroup(info->stage)) {
+   if (mesa_shader_stage_uses_workgroup(info->stage)) {
       fprintf(fp, "workgroup_size: %u, %u, %u%s\n",
               info->workgroup_size[0],
               info->workgroup_size[1],
@@ -2662,9 +2667,9 @@ print_shader_info(const struct shader_info *info, FILE *fp)
    }
 
    if (info->prev_stage != MESA_SHADER_NONE)
-      fprintf(fp, "prev_stage: %s\n", gl_shader_stage_name(info->prev_stage));
+      fprintf(fp, "prev_stage: %s\n", mesa_shader_stage_name(info->prev_stage));
    if (info->next_stage != MESA_SHADER_NONE)
-      fprintf(fp, "next_stage: %s\n", gl_shader_stage_name(info->next_stage));
+      fprintf(fp, "next_stage: %s\n", mesa_shader_stage_name(info->next_stage));
 
    print_nz_unsigned(fp, "num_textures", info->num_textures);
    print_nz_unsigned(fp, "num_ubos", info->num_ubos);
@@ -2676,6 +2681,8 @@ print_shader_info(const struct shader_info *info, FILE *fp)
    print_nz_x64(fp, "dual_slot_inputs", info->dual_slot_inputs);
    print_nz_x64(fp, "outputs_written", info->outputs_written);
    print_nz_x64(fp, "outputs_read", info->outputs_read);
+   print_nz_x64(fp, "perspective_varyings", info->perspective_varyings);
+   print_nz_x64(fp, "linear_varyings", info->linear_varyings);
 
    print_nz_bitset(fp, "system_values_read", info->system_values_read, ARRAY_SIZE(info->system_values_read));
 
@@ -2750,6 +2757,7 @@ print_shader_info(const struct shader_info *info, FILE *fp)
 
    print_nz_bool(fp, "first_ubo_is_default_ubo", info->first_ubo_is_default_ubo);
    print_nz_bool(fp, "separate_shader", info->separate_shader);
+   print_nz_bool(fp, "known_interpolation_qualifiers", info->known_interpolation_qualifiers);
    print_nz_bool(fp, "has_transform_feedback_varyings", info->has_transform_feedback_varyings);
    print_nz_bool(fp, "flrp_lowered", info->flrp_lowered);
    print_nz_bool(fp, "io_lowered", info->io_lowered);

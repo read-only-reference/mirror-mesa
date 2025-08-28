@@ -69,10 +69,11 @@ lower_query_size(nir_builder *b, nir_def *desc, nir_src *lod,
       if (gfx_level == GFX8) {
          /* On GFX8, the descriptor contains the size in bytes,
           * but TXQ must return the size in elements.
-          * The stride is always non-zero for resources using TXQ.
+          * The stride is always non-zero for resources using TXQ, except when
+          * using null descriptors in Vulkan, so apply trivial fixup.
           * Divide the size by the stride.
           */
-         size = nir_udiv(b, size, get_field(b, desc, 1, ~C_008F04_STRIDE));
+         size = nir_udiv(b, size, nir_umax_imm(b, get_field(b, desc, 1, ~C_008F04_STRIDE), 1));
       }
       return size;
    }
@@ -259,7 +260,7 @@ static bool lower_resinfo(nir_builder *b, nir_instr *instr, void *data)
 
       case nir_intrinsic_image_deref_size:
       case nir_intrinsic_image_deref_samples:
-         type = nir_instr_as_deref(intr->src[0].ssa->parent_instr)->type;
+         type = nir_def_as_deref(intr->src[0].ssa)->type;
          dim = glsl_get_sampler_dim(type);
          is_array = glsl_sampler_type_is_array(type);
          desc = nir_image_deref_descriptor_amd(b, dim == GLSL_SAMPLER_DIM_BUF ? 4 : 8,
@@ -368,7 +369,7 @@ static bool lower_resinfo(nir_builder *b, nir_instr *instr, void *data)
    if (dst->bit_size == 16)
       result = nir_u2u16(b, result);
 
-   nir_def_rewrite_uses_after(dst, result, instr);
+   nir_def_rewrite_uses_after_instr(dst, result, instr);
    nir_instr_remove(instr);
    return true;
 }

@@ -3609,13 +3609,24 @@ impl SM70Op for OpBra {
     }
 
     fn encode(&self, e: &mut SM70Encoder<'_>) {
-        e.set_opcode(0x947);
+        if self.cond.is_upred_reg() {
+            assert!(e.sm >= 80);
+            e.set_opcode(0x547);
+            e.set_upred_src(24..27, 27, &self.cond);
+            e.set_bit(32, true); // .U
+            e.set_field(87..90, 0x7_u8);
+            e.set_bit(91, true);
+        } else {
+            e.set_opcode(0x947);
+            e.set_bit(32, false); // .U
+            e.set_pred_src(87..90, 90, &self.cond);
+        }
+
         if e.sm >= 100 {
             e.set_rel_offset2(16..24, 34..82, &self.target);
         } else {
             e.set_rel_offset(34..82, &self.target);
         }
-        e.set_field(87..90, 0x7_u8); // TODO: Pred?
     }
 }
 
@@ -3957,6 +3968,40 @@ impl SM70Op for OpHmma {
     }
 }
 
+impl SM70Op for OpLdsm {
+    fn legalize(&mut self, b: &mut LegalizeBuilder) {
+        legalize_ext_instr(self, b);
+    }
+
+    fn encode(&self, e: &mut SM70Encoder<'_>) {
+        assert!(e.sm >= 75);
+
+        e.set_opcode(0x83b);
+        e.set_dst(&self.dst);
+        e.set_reg_src(24..32, &self.addr);
+        e.set_field(40..64, self.offset);
+        e.set_field(
+            72..74,
+            match self.mat_count {
+                1 => 0u8,
+                2 => 1u8,
+                4 => 2u8,
+                _ => panic!("Invalid LDSM mat count"),
+            },
+        );
+        e.set_field(
+            78..80,
+            match self.mat_size {
+                LdsmSize::M8N8 => 0u8,
+                LdsmSize::MT8N8 => 1u8,
+                // Those do value expansion and are weird, we'll probably never use them.
+                // LdsmSize::M8N16 => 2,
+                // LdsmSize::M8N32 => 3,
+            },
+        );
+    }
+}
+
 macro_rules! as_sm70_op_match {
     ($op: expr) => {
         match $op {
@@ -4047,6 +4092,7 @@ macro_rules! as_sm70_op_match {
             Op::Match(op) => op,
             Op::Hmma(op) => op,
             Op::Imma(op) => op,
+            Op::Ldsm(op) => op,
             _ => panic!("Unsupported op: {}", $op),
         }
     };

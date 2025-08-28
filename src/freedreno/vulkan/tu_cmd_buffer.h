@@ -151,6 +151,10 @@ enum tu_cmd_access_mask {
 
    TU_ACCESS_RTU_READ = 1 << 17,
 
+   /* An access through UCHE that must always be flushed/invalidated */
+   TU_ACCESS_UCHE_INCOHERENT_READ = 1 << 18,
+   TU_ACCESS_UCHE_INCOHERENT_WRITE = 1 << 19,
+
    TU_ACCESS_READ =
       TU_ACCESS_UCHE_READ |
       TU_ACCESS_CCU_COLOR_READ |
@@ -159,7 +163,8 @@ enum tu_cmd_access_mask {
       TU_ACCESS_CCU_DEPTH_INCOHERENT_READ |
       TU_ACCESS_SYSMEM_READ |
       TU_ACCESS_BINDLESS_DESCRIPTOR_READ |
-      TU_ACCESS_CCHE_READ,
+      TU_ACCESS_CCHE_READ |
+      TU_ACCESS_UCHE_INCOHERENT_READ,
 
    TU_ACCESS_WRITE =
       TU_ACCESS_UCHE_WRITE |
@@ -168,7 +173,8 @@ enum tu_cmd_access_mask {
       TU_ACCESS_CCU_DEPTH_WRITE |
       TU_ACCESS_CCU_DEPTH_INCOHERENT_WRITE |
       TU_ACCESS_SYSMEM_WRITE |
-      TU_ACCESS_CP_WRITE,
+      TU_ACCESS_CP_WRITE |
+      TU_ACCESS_UCHE_INCOHERENT_WRITE,
 
    TU_ACCESS_ALL =
       TU_ACCESS_READ |
@@ -549,6 +555,7 @@ struct tu_cmd_state
    bool stencil_front_write;
    bool stencil_back_write;
    bool stencil_written_on_depth_fail;
+   bool stencil_written_based_on_depth_test;
    bool pipeline_sysmem_single_prim_mode;
    bool pipeline_has_tess;
    bool pipeline_disable_gmem;
@@ -795,6 +802,7 @@ typedef void (*tu_fdm_bin_apply_t)(struct tu_cmd_buffer *cmd,
                                    struct tu_cs *cs,
                                    void *data,
                                    VkOffset2D common_bin_offset,
+                                   const VkOffset2D *hw_viewport_offsets,
                                    unsigned views,
                                    const VkExtent2D *frag_areas,
                                    const VkRect2D *bins);
@@ -851,6 +859,7 @@ _tu_create_fdm_bin_patchpoint(struct tu_cmd_buffer *cmd,
     */
    unsigned num_views = MAX2(cmd->state.pass->num_views, 1);
    VkExtent2D unscaled_frag_areas[num_views];
+   VkOffset2D hw_viewport_offsets[num_views];
    VkRect2D bins[num_views];
    for (unsigned i = 0; i < num_views; i++) {
       unscaled_frag_areas[i] = (VkExtent2D) { 1, 1 };
@@ -858,8 +867,9 @@ _tu_create_fdm_bin_patchpoint(struct tu_cmd_buffer *cmd,
          { 0, 0 },
          { MAX_VIEWPORT_SIZE, MAX_VIEWPORT_SIZE },
       };
+      hw_viewport_offsets[i] = (VkOffset2D) { 0, 0 };
    }
-   apply(cmd, cs, state, (VkOffset2D) {0, 0}, num_views, unscaled_frag_areas, bins);
+   apply(cmd, cs, state, (VkOffset2D) {0, 0}, hw_viewport_offsets, num_views, unscaled_frag_areas, bins);
    assert(tu_cs_get_cur_iova(cs) == patch.iova + patch.size * sizeof(uint32_t));
 
    util_dynarray_append(&cmd->fdm_bin_patchpoints,

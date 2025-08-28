@@ -660,8 +660,8 @@ struct linkage_info {
    bool always_interpolate_convergent_fs_inputs;
    bool group_tes_inputs_into_pos_var_groups;
 
-   gl_shader_stage producer_stage;
-   gl_shader_stage consumer_stage;
+   mesa_shader_stage producer_stage;
+   mesa_shader_stage consumer_stage;
    nir_builder producer_builder;
    nir_builder consumer_builder;
    unsigned max_varying_expression_cost;
@@ -969,7 +969,7 @@ color_uses_shade_model(struct linkage_info *linkage, unsigned i)
       assert(iter->instr->intrinsic == nir_intrinsic_load_interpolated_input);
 
       nir_intrinsic_instr *baryc =
-         nir_instr_as_intrinsic(iter->instr->src[0].ssa->parent_instr);
+         nir_def_as_intrinsic(iter->instr->src[0].ssa);
       if (nir_intrinsic_interp_mode(baryc) == INTERP_MODE_NONE)
          return true;
    }
@@ -985,7 +985,7 @@ get_interp_vec4_type(struct linkage_info *linkage, unsigned slot,
    assert(load->intrinsic == nir_intrinsic_load_interpolated_input);
 
    nir_intrinsic_instr *baryc =
-      nir_instr_as_intrinsic(load->src[0].ssa->parent_instr);
+      nir_def_as_intrinsic(load->src[0].ssa);
    enum fs_vec4_type base;
 
    if (color_uses_shade_model(linkage, slot))
@@ -1038,7 +1038,7 @@ build_convert_inf_to_nan(nir_builder *b, nir_def *x)
 {
    /* Do x*0 + x. The multiplication by 0 can't be optimized out. */
    nir_def *fma = nir_ffma_imm1(b, x, 0, x);
-   nir_instr_as_alu(fma->parent_instr)->exact = true;
+   nir_def_as_alu(fma)->exact = true;
    return fma;
 }
 
@@ -1053,7 +1053,7 @@ is_sysval(nir_instr *instr, gl_system_value sysval)
 
       if (intr->intrinsic == nir_intrinsic_load_deref) {
          nir_deref_instr *deref =
-            nir_instr_as_deref(intr->src[0].ssa->parent_instr);
+            nir_def_as_deref(intr->src[0].ssa);
 
          return nir_deref_mode_is_one_of(deref, nir_var_system_value) &&
                 nir_deref_instr_get_variable(deref)->data.location == sysval;
@@ -2230,7 +2230,7 @@ clone_ssa_impl(struct linkage_info *linkage, nir_builder *b, nir_def *ssa)
    switch (ssa->parent_instr->type) {
    case nir_instr_type_load_const:
       clone = nir_build_imm(b, ssa->num_components, ssa->bit_size,
-                            nir_instr_as_load_const(ssa->parent_instr)->value);
+                            nir_def_as_load_const(ssa)->value);
       break;
 
    case nir_instr_type_undef:
@@ -2238,7 +2238,7 @@ clone_ssa_impl(struct linkage_info *linkage, nir_builder *b, nir_def *ssa)
       break;
 
    case nir_instr_type_alu: {
-      nir_alu_instr *alu = nir_instr_as_alu(ssa->parent_instr);
+      nir_alu_instr *alu = nir_def_as_alu(ssa);
 
       if (alu->instr.pass_flags & FLAG_ALU_IS_TES_INTERP_LOAD) {
          /* We are cloning an interpolated TES load in the producer for
@@ -2256,7 +2256,7 @@ clone_ssa_impl(struct linkage_info *linkage, nir_builder *b, nir_def *ssa)
          src[i] = clone_ssa_impl(linkage, b, alu->src[i].src.ssa);
 
       clone = nir_build_alu(b, alu->op, src[0], src[1], src[2], src[3]);
-      nir_alu_instr *alu_clone = nir_instr_as_alu(clone->parent_instr);
+      nir_alu_instr *alu_clone = nir_def_as_alu(clone);
 
       alu_clone->exact = alu->exact;
       alu_clone->no_signed_wrap = alu->no_signed_wrap;
@@ -2275,12 +2275,12 @@ clone_ssa_impl(struct linkage_info *linkage, nir_builder *b, nir_def *ssa)
       /* Clone load_deref of uniform or ubo. It's the only thing that can
        * occur here.
        */
-      nir_intrinsic_instr *intr = nir_instr_as_intrinsic(ssa->parent_instr);
+      nir_intrinsic_instr *intr = nir_def_as_intrinsic(ssa);
 
       switch (intr->intrinsic) {
       case nir_intrinsic_load_deref: {
          nir_def *ssa = clone_ssa_impl(linkage, b, intr->src[0].ssa);
-         clone = nir_load_deref(b, nir_instr_as_deref(ssa->parent_instr));
+         clone = nir_load_deref(b, nir_def_as_deref(ssa));
          break;
       }
 
@@ -2304,7 +2304,7 @@ clone_ssa_impl(struct linkage_info *linkage, nir_builder *b, nir_def *ssa)
    }
 
    case nir_instr_type_deref: {
-      nir_deref_instr *deref = nir_instr_as_deref(ssa->parent_instr);
+      nir_deref_instr *deref = nir_def_as_deref(ssa);
       assert(nir_deref_mode_is_one_of(deref, nir_var_uniform | nir_var_mem_ubo));
 
       /* Get the uniform from the original shader. */
@@ -2323,8 +2323,7 @@ clone_ssa_impl(struct linkage_info *linkage, nir_builder *b, nir_def *ssa)
       } else {
          nir_deref_instr *parent_orig = nir_deref_instr_parent(deref);
          nir_deref_instr *parent_clone =
-            nir_instr_as_deref(clone_ssa_impl(linkage, b, &parent_orig->def)
-                                  ->parent_instr);
+            nir_def_as_deref(clone_ssa_impl(linkage, b, &parent_orig->def));
 
          switch (deref->deref_type) {
          case nir_deref_type_array: {
@@ -2642,7 +2641,7 @@ get_input_qualifier(struct linkage_info *linkage, unsigned i)
        baryc->intrinsic == nir_intrinsic_load_barycentric_at_sample) {
       list_for_each_entry(struct list_node, iter, &slot->consumer.loads, head) {
          nir_intrinsic_instr *bar =
-            nir_instr_as_intrinsic(iter->instr->src[0].ssa->parent_instr);
+            nir_def_as_intrinsic(iter->instr->src[0].ssa);
 
          if (bar->intrinsic != nir_intrinsic_load_barycentric_centroid &&
              bar->intrinsic != nir_intrinsic_load_barycentric_at_offset &&
@@ -3581,8 +3580,7 @@ try_move_postdominator(struct linkage_info *linkage,
       }
 
       if (baryc != first_load->src[0].ssa) {
-         nir_intrinsic_instr *baryc_i =
-            nir_instr_as_intrinsic(baryc->parent_instr);
+         nir_intrinsic_instr *baryc_i = nir_def_as_intrinsic(baryc);
 
          if (alu_interp == FLAG_INTERP_LINEAR_PIXEL ||
              alu_interp == FLAG_INTERP_LINEAR_CENTROID ||
@@ -3724,7 +3722,7 @@ try_move_postdominator(struct linkage_info *linkage,
       list_for_each_entry(struct list_node, iter, &slot->consumer.loads,
                           head) {
          assert(i < 3);
-         iter->instr = nir_instr_as_intrinsic(new_tes_loads[i]->parent_instr);
+         iter->instr = nir_def_as_intrinsic(new_tes_loads[i]);
          i++;
       }
 
@@ -3732,11 +3730,11 @@ try_move_postdominator(struct linkage_info *linkage,
       assert(postdom_def->bit_size != 1);
 
       slot->consumer.tes_interp_load =
-         nir_instr_as_alu(new_input->parent_instr);
+         nir_def_as_alu(new_input);
    } else {
       assert(list_is_singular(&slot->consumer.loads));
       list_first_entry(&slot->consumer.loads, struct list_node, head)->instr =
-         nir_instr_as_intrinsic(new_input->parent_instr);
+         nir_def_as_intrinsic(new_input);
 
       /* The input is a bigger type even if the post-dominator is boolean. */
       if (postdom_def->bit_size == 1)
@@ -4247,6 +4245,8 @@ relocate_slot(struct linkage_info *linkage, struct scalar_slot *slot,
          }
 
 #if PRINT_RELOCATE_SLOT
+         unsigned bit_size = nir_intrinsic_infos[intr->intrinsic].has_dest ? intr->def.bit_size : intr->src[0].ssa->bit_size;
+
          assert(bit_size == 16 || bit_size == 32);
 
          fprintf(stderr, "--- relocating: %s.%c%s%s -> %s.%c%s%s FS_VEC4_TYPE_%s\n",
@@ -4302,7 +4302,7 @@ relocate_slot(struct linkage_info *linkage, struct scalar_slot *slot,
                               .dest_type = nir_intrinsic_dest_type(intr));
 
             nir_def_rewrite_uses(&intr->def, load);
-            iter->instr = nir_instr_as_intrinsic(load->parent_instr);
+            iter->instr = nir_def_as_intrinsic(load);
             nir_instr_remove(&intr->instr);
             *progress |= nir_progress_consumer;
 
@@ -5478,12 +5478,16 @@ nir_opt_varyings_bulk(nir_shader **shaders, uint32_t num_shaders, bool spirv,
       NIR_PASS(_, nir, nir_lower_io_to_scalar, nir_varying_var_mask(nir),
                NULL, NULL);
       NIR_PASS(_, nir, nir_opt_vectorize_io, nir_varying_var_mask(nir), false);
+
+      /* Regather shader info so we have consistent behaviour for
+       * linked/unlinked code paths. Honeykrisp depends on this.
+       */
+      nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
       return;
    }
 
    for (unsigned i = 0; i < num_shaders; i++) {
       nir_shader *nir = shaders[i];
-      assert(i == 0 || nir->info.stage > shaders[i - 1]->info.stage);
 
       /* Inter-shader code motion in nir_opt_varyings requires that each input
        * load is loaded only once when possible, so move all input loads
@@ -5552,10 +5556,25 @@ nir_opt_varyings_bulk(nir_shader **shaders, uint32_t num_shaders, bool spirv,
       NIR_PASS(_, nir, nir_recompute_io_bases,
                nir_var_shader_in | nir_var_shader_out);
 
+      /* Regather shader info because the slots info is messed up now. */
+      nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+
       /* Regenerate transform feedback info because compaction in
        * nir_opt_varyings always moves them to other slots.
        */
       if (nir->xfb_info)
          nir_gather_xfb_info_from_intrinsics(nir);
+   }
+
+   /* Now that we've picked slots, link interpolation qualifiers. */
+   nir_shader *fs = shaders[num_shaders - 1];
+   if (fs->info.stage == MESA_SHADER_FRAGMENT) {
+      nir_shader *producer = shaders[num_shaders - 2];
+
+      producer->info.known_interpolation_qualifiers =
+         fs->info.known_interpolation_qualifiers;
+
+      producer->info.linear_varyings = fs->info.linear_varyings;
+      producer->info.perspective_varyings = fs->info.perspective_varyings;
    }
 }

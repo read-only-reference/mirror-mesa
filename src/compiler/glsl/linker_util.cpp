@@ -285,10 +285,6 @@ link_util_check_subroutine_resources(struct gl_shader_program *prog)
    }
 }
 
-#if defined(_MSC_VER) && DETECT_ARCH_AARCH64
-// Work around https://developercommunity.visualstudio.com/t/Incorrect-ARM64-codegen-with-optimizatio/10564605
-#pragma optimize("", off)
-#endif
 /**
  * Validate uniform resources used by a program versus the implementation limits
  */
@@ -299,7 +295,7 @@ link_util_check_uniform_resources(const struct gl_constants *consts,
    unsigned total_uniform_blocks = 0;
    unsigned total_shader_storage_blocks = 0;
 
-   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
+   for (unsigned i = 0; i < MESA_SHADER_MESH_STAGES; i++) {
       struct gl_linked_shader *sh = prog->_LinkedShaders[i];
 
       if (sh == NULL)
@@ -368,9 +364,6 @@ link_util_check_uniform_resources(const struct gl_constants *consts,
       }
    }
 }
-#if defined(_MSC_VER) && DETECT_ARCH_AARCH64
-#pragma optimize("", on)
-#endif
 
 void
 link_util_calculate_subroutine_compat(struct gl_shader_program *prog)
