@@ -45,6 +45,8 @@ else
   anv_flags += '-DANV_SUPPORT_RT=0'
 endif
 
+icd_file_name = libname_prefix + 'vulkan_intel.' + libname_suffix
+
 intel_icd = custom_target(
   'intel_icd',
   input : [vk_icd_gen, vk_api_xml],
@@ -53,8 +55,7 @@ intel_icd = custom_target(
     prog_python, '@INPUT0@',
     '--api-version', '1.4', '--xml', '@INPUT1@',
     '--sizeof-pointer', sizeof_pointer,
-    '--lib-path', join_paths(get_option('prefix'), get_option('libdir'),
-                             'libvulkan_intel.so'),
+    '--lib-path', vulkan_icd_lib_path / icd_file_name,
     '--out', '@OUTPUT@',
   ],
   build_by_default : true,
@@ -72,7 +73,7 @@ _dev_icd = custom_target(
     prog_python, '@INPUT0@',
     '--api-version', '1.4', '--xml', '@INPUT1@',
     '--sizeof-pointer', sizeof_pointer,
-    '--lib-path', meson.current_build_dir() / 'libvulkan_intel.so',
+    '--lib-path', meson.current_build_dir() / icd_file_name,
     '--out', '@OUTPUT@',
   ],
   build_by_default : true,
@@ -96,9 +97,9 @@ anv_per_hw_ver_files = files(
   'genX_gpu_memcpy.c',
   'genX_init_state.c',
   'genX_internal_kernels.c',
-  'genX_pipeline.c',
   'genX_query.c',
   'genX_simple_shader.c',
+  'genX_shader.c',
 )
 if with_intel_vk_rt
   anv_per_hw_ver_files += files(
@@ -180,13 +181,14 @@ libanv_files = files(
   'anv_nir_push_descriptor_analysis.c',
   'anv_perf.c',
   'anv_physical_device.c',
-  'anv_pipeline.c',
   'anv_pipeline_cache.c',
   'anv_private.h',
   'anv_queue.c',
   'anv_rmv.c',
   'anv_rmv.h',
   'anv_sampler.c',
+  'anv_shader.c',
+  'anv_shader_compile.c',
   'anv_slab_bo.c',
   'anv_slab_bo.h',
   'anv_sparse.c',
@@ -210,6 +212,7 @@ anv_deps = [
   idep_vulkan_wsi_headers,
   idep_intel_shaders,
   idep_intel_blorp,
+  idep_mda,
 ]
 
 if with_platform_x11

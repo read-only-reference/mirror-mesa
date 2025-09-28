@@ -313,6 +313,19 @@ translate_wrap(unsigned pipe_wrap)
    return map[pipe_wrap];
 }
 
+#if GFX_VER > 8
+static uint32_t
+translate_tex_filter_mode(unsigned mode)
+{
+   static const unsigned map[] = {
+      [PIPE_TEX_REDUCTION_WEIGHTED_AVERAGE] = STD_FILTER,
+      [PIPE_TEX_REDUCTION_MIN]              = MINIMUM,
+      [PIPE_TEX_REDUCTION_MAX]              = MAXIMUM,
+   };
+   return map[mode];
+}
+#endif
+
 /**
  * Allocate space for some indirect state.
  *
@@ -326,7 +339,7 @@ upload_state(struct u_upload_mgr *uploader,
              unsigned alignment)
 {
    void *p = NULL;
-   u_upload_alloc(uploader, 0, size, alignment, &ref->offset, &ref->res, &p);
+   u_upload_alloc_ref(uploader, 0, size, alignment, &ref->offset, &ref->res, &p);
    return p;
 }
 
@@ -347,7 +360,7 @@ stream_state(struct iris_batch *batch,
 {
    void *ptr = NULL;
 
-   u_upload_alloc(uploader, 0, size, alignment, out_offset, out_res, &ptr);
+   u_upload_alloc_ref(uploader, 0, size, alignment, out_offset, out_res, &ptr);
 
    struct iris_bo *bo = iris_resource_bo(*out_res);
    iris_use_pinned_bo(batch, bo, false, IRIS_DOMAIN_NONE);
@@ -668,6 +681,15 @@ iris_rewrite_compute_walker_pc(struct iris_batch *batch,
 
    for (uint32_t i = 0; i < GENX(COMPUTE_WALKER_length); i++)
       walker[i] |= dwords[i];
+
+   /*
+    * TDOD: Add INTEL_NEEDS_WA_14025112257 check once HSD is propogated for all
+    * other impacted platforms.
+    */
+   if (screen->devinfo->ver >= 20 && batch->name == IRIS_BATCH_COMPUTE) {
+      iris_emit_pipe_control_flush(batch, "WA_14025112257",
+                                   PIPE_CONTROL_STATE_CACHE_INVALIDATE);
+   }
 #else
    UNREACHABLE("Unsupported");
 #endif
@@ -2243,7 +2265,6 @@ struct iris_rasterizer_state {
    bool depth_clip_far; /* for CC_VIEWPORT */
    bool flatshade; /* for shader state */
    bool flatshade_first; /* for stream output */
-   bool clamp_fragment_color; /* for shader state */
    bool light_twoside; /* for shader state */
    bool rasterizer_discard; /* for 3DSTATE_STREAMOUT and 3DSTATE_CLIP */
    bool half_pixel_center; /* for 3DSTATE_MULTISAMPLE */
@@ -2307,7 +2328,6 @@ iris_create_rasterizer_state(struct pipe_context *ctx,
    cso->depth_clip_far = state->depth_clip_far;
    cso->flatshade = state->flatshade;
    cso->flatshade_first = state->flatshade_first;
-   cso->clamp_fragment_color = state->clamp_fragment_color;
    cso->light_twoside = state->light_twoside;
    cso->rasterizer_discard = state->rasterizer_discard;
    cso->half_pixel_center = state->half_pixel_center;
@@ -2520,6 +2540,11 @@ fill_sampler_state(uint32_t *sampler_state,
       mag_img_filter = state->min_img_filter;
    }
 
+#if GFX_VER > 8
+   uint32_t reduction_mode =
+      translate_tex_filter_mode(state->reduction_mode);
+#endif
+
    iris_pack_state(GENX(SAMPLER_STATE), sampler_state, samp) {
       samp.TCXAddressControlMode = translate_wrap(state->wrap_s);
       samp.TCYAddressControlMode = translate_wrap(state->wrap_t);
@@ -2530,7 +2555,11 @@ fill_sampler_state(uint32_t *sampler_state,
       samp.MagModeFilter = mag_img_filter;
       samp.MipModeFilter = translate_mip_filter(state->min_mip_filter);
       samp.MaximumAnisotropy = RATIO21;
-
+#if GFX_VER > 8
+      samp.ReductionType = reduction_mode;
+      samp.ReductionTypeEnable =
+         reduction_mode != PIPE_TEX_REDUCTION_WEIGHTED_AVERAGE;
+#endif
       if (max_anisotropy >= 2) {
          if (state->min_img_filter == PIPE_TEX_FILTER_LINEAR) {
 #if GFX_VER >= 30
@@ -3954,7 +3983,6 @@ iris_set_framebuffer_state(struct pipe_context *ctx,
 static void
 iris_set_constant_buffer(struct pipe_context *ctx,
                          mesa_shader_stage stage, unsigned index,
-                         bool take_ownership,
                          const struct pipe_constant_buffer *input)
 {
    struct iris_context *ice = (struct iris_context *) ctx;
@@ -3970,12 +3998,12 @@ iris_set_constant_buffer(struct pipe_context *ctx,
       if (input->user_buffer) {
          void *map = NULL;
          pipe_resource_reference(&cbuf->buffer, NULL);
-         u_upload_alloc(ice->ctx.const_uploader, 0, input->buffer_size, 64,
+         u_upload_alloc_ref(ice->ctx.const_uploader, 0, input->buffer_size, 64,
                         &cbuf->buffer_offset, &cbuf->buffer, (void **) &map);
 
          if (!cbuf->buffer) {
             /* Allocation was unsuccessful - just unbind */
-            iris_set_constant_buffer(ctx, stage, index, false, NULL);
+            iris_set_constant_buffer(ctx, stage, index, NULL);
             return;
          }
 
@@ -3988,12 +4016,7 @@ iris_set_constant_buffer(struct pipe_context *ctx,
             shs->dirty_cbufs |= 1u << index;
          }
 
-         if (take_ownership) {
-            pipe_resource_reference(&cbuf->buffer, NULL);
-            cbuf->buffer = input->buffer;
-         } else {
-            pipe_resource_reference(&cbuf->buffer, input->buffer);
-         }
+         pipe_resource_reference(&cbuf->buffer, input->buffer);
 
          cbuf->buffer_offset = input->buffer_offset;
       }
@@ -4033,7 +4056,7 @@ upload_sysvals(struct iris_context *ice,
    void *map = NULL;
 
    assert(sysval_cbuf_index < PIPE_MAX_CONSTANT_BUFFERS);
-   u_upload_alloc(ice->ctx.const_uploader, 0, upload_size, 64,
+   u_upload_alloc_ref(ice->ctx.const_uploader, 0, upload_size, 64,
                   &cbuf->buffer_offset, &cbuf->buffer, &map);
 
    uint32_t *sysval_map = map;
@@ -4200,8 +4223,7 @@ iris_set_vertex_buffers(struct pipe_context *ctx,
           state->resource != buffer->buffer.resource)
          ice->state.dirty |= IRIS_DIRTY_VERTEX_BUFFER_FLUSHES;
 
-      pipe_resource_reference(&state->resource, NULL);
-      state->resource = buffer->buffer.resource;
+      pipe_resource_reference(&state->resource, buffer->buffer.resource);
 
       struct iris_resource *res = (void *) state->resource;
 
@@ -5042,14 +5064,9 @@ iris_populate_fs_key(const struct iris_context *ice,
 
    key->nr_color_regions = fb->nr_cbufs;
 
-   key->clamp_fragment_color = rast->clamp_fragment_color;
-
    key->alpha_to_coverage = blend->alpha_to_coverage;
 
    key->alpha_test_replicate_alpha = fb->nr_cbufs > 1 && zsa->alpha_enabled;
-
-   key->flat_shade = rast->flatshade &&
-      (info->inputs_read & (VARYING_BIT_COL0 | VARYING_BIT_COL1));
 
    key->persample_interp = rast->force_persample_interp;
    key->multisample_fbo = rast->multisample && fb->samples > 1;
@@ -8483,7 +8500,7 @@ iris_emit_index_buffer(struct iris_context *ice,
    if (draw->has_user_indices) {
       unsigned start_offset = draw->index_size * sc->start;
 
-      u_upload_data(ice->ctx.const_uploader, start_offset,
+      u_upload_data_ref(ice->ctx.const_uploader, start_offset,
                     sc->count * draw->index_size, 4,
                     (char*)draw->index.user + start_offset,
                     &offset, &ice->state.last_res.index_buffer);
@@ -9248,6 +9265,15 @@ iris_upload_compute_walker(struct iris_context *ice,
          cw.body                           = body;
          assert(iris_cs_push_const_total_size(shader, dispatch.threads) == 0);
       }
+   }
+
+   /*
+    * TDOD: Add INTEL_NEEDS_WA_14025112257 check once HSD is propogated for all
+    * other impacted platforms.
+    */
+   if (screen->devinfo->ver >= 20 && batch->name == IRIS_BATCH_COMPUTE) {
+      iris_emit_pipe_control_flush(batch, "WA_14025112257",
+                                   PIPE_CONTROL_STATE_CACHE_INVALIDATE);
    }
 
    trace_intel_end_compute(&batch->trace, grid->grid[0], grid->grid[1], grid->grid[2], 0);
@@ -10653,6 +10679,7 @@ genX(init_state)(struct iris_context *ice)
    ctx->set_viewport_states = iris_set_viewport_states;
    ctx->sampler_view_destroy = iris_sampler_view_destroy;
    ctx->sampler_view_release = u_default_sampler_view_release;
+   ctx->resource_release = u_default_resource_release;
    ctx->surface_destroy = iris_surface_destroy;
    ctx->draw_vbo = iris_draw_vbo;
    ctx->launch_grid = iris_launch_grid;

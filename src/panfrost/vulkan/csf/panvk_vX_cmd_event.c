@@ -7,6 +7,7 @@
 #include "panvk_entrypoints.h"
 #include "panvk_event.h"
 #include "panvk_instr.h"
+#include "panvk_meta.h"
 
 #include "util/bitscan.h"
 
@@ -28,7 +29,7 @@ panvk_per_arch(CmdResetEvent2)(VkCommandBuffer commandBuffer, VkEvent _event,
    };
    struct panvk_cs_deps deps = {0};
 
-   panvk_per_arch(add_cs_deps)(cmdbuf, PANVK_BARRIER_STAGE_FIRST, &info, &deps);
+   panvk_per_arch(add_cs_deps)(cmdbuf, PANVK_BARRIER_STAGE_FIRST, &info, &deps, false);
 
    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
       struct cs_builder *b = panvk_get_cs_builder(cmdbuf, i);
@@ -66,14 +67,14 @@ panvk_per_arch(CmdSetEvent2)(VkCommandBuffer commandBuffer, VkEvent _event,
    VK_FROM_HANDLE(panvk_event, event, _event);
    struct panvk_cs_deps deps = {0};
 
-   panvk_per_arch(add_cs_deps)(cmdbuf, PANVK_BARRIER_STAGE_FIRST, pDependencyInfo, &deps);
+   panvk_per_arch(add_cs_deps)(cmdbuf, PANVK_BARRIER_STAGE_FIRST, pDependencyInfo, &deps, true);
 
    if (deps.needs_draw_flush)
       panvk_per_arch(cmd_flush_draws)(cmdbuf);
 
    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
       struct cs_builder *b = panvk_get_cs_builder(cmdbuf, i);
-      uint16_t sb_mask = deps.src[i].wait_sb_mask;
+      uint32_t sb_mask = deps.src[i].wait_sb_mask;
       struct cs_index sync_addr = cs_scratch_reg64(b, 0);
       struct cs_index seqno = cs_scratch_reg32(b, 2);
       struct cs_index cmp_scratch = cs_scratch_reg32(b, 3);
@@ -106,13 +107,13 @@ panvk_per_arch(CmdSetEvent2)(VkCommandBuffer commandBuffer, VkEvent _event,
 }
 
 static void
-cmd_wait_event(struct panvk_cmd_buffer *cmdbuf,
-   struct panvk_event *event, const VkDependencyInfo *info,
-   struct panvk_cs_deps *trans_deps, bool *needs_trans_barrier)
+cmd_wait_event(struct panvk_cmd_buffer *cmdbuf, struct panvk_event *event,
+               const VkDependencyInfo *info, struct panvk_cs_deps *trans_deps,
+               bool *needs_trans_barrier)
 {
    struct panvk_cs_deps deps = {0};
 
-   panvk_per_arch(add_cs_deps)(cmdbuf, PANVK_BARRIER_STAGE_FIRST, info, &deps);
+   panvk_per_arch(add_cs_deps)(cmdbuf, PANVK_BARRIER_STAGE_FIRST, info, &deps, false);
 
    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
       struct cs_builder *b = panvk_get_cs_builder(cmdbuf, i);
@@ -141,7 +142,7 @@ cmd_wait_event(struct panvk_cmd_buffer *cmdbuf,
 
       panvk_per_arch(add_cs_deps)(
          cmdbuf, PANVK_BARRIER_STAGE_AFTER_LAYOUT_TRANSITION,
-         info, trans_deps);
+         info, trans_deps, false);
       *needs_trans_barrier = true;
    }
 }

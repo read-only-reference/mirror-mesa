@@ -125,7 +125,7 @@ static void si_upload_descriptors(struct si_context *sctx, struct si_descriptors
 
    uint32_t *ptr;
    unsigned buffer_offset;
-   u_upload_alloc(sctx->b.const_uploader, first_slot_offset, upload_size,
+   u_upload_alloc_ref(sctx->b.const_uploader, first_slot_offset, upload_size,
                   si_optimal_tcc_alignment(sctx, upload_size), &buffer_offset,
                   (struct pipe_resource **)&desc->buffer, (void **)&ptr);
    if (!desc->buffer) {
@@ -1112,58 +1112,49 @@ static struct si_descriptors *si_const_and_shader_buffer_descriptors(struct si_c
    return &sctx->descriptors[si_const_and_shader_buffer_descriptors_idx(shader)];
 }
 
-static void si_upload_const_buffer(struct si_context *sctx, struct si_resource **buf,
-                                   const uint8_t *ptr, unsigned size, uint32_t *const_offset)
-{
-   void *tmp;
-
-   u_upload_alloc(sctx->b.const_uploader, 0, size, si_optimal_tcc_alignment(sctx, size),
-                  const_offset, (struct pipe_resource **)buf, &tmp);
-   if (*buf)
-      util_memcpy_cpu_to_le32(tmp, ptr, size);
-}
-
 static void si_set_constant_buffer(struct si_context *sctx, struct si_buffer_resources *buffers,
-                                   unsigned descriptors_idx, uint slot, bool take_ownership,
+                                   unsigned descriptors_idx, uint slot,
                                    const struct pipe_constant_buffer *input)
 {
    struct si_descriptors *descs = &sctx->descriptors[descriptors_idx];
    assert(slot < descs->num_elements);
-   pipe_resource_reference(&buffers->buffers[slot], NULL);
+   struct pipe_constant_buffer uploaded_constbuf;
 
    /* GFX7 cannot unbind a constant buffer (S_BUFFER_LOAD is buggy
     * with a NULL buffer). We need to use a dummy buffer instead. */
-   if (sctx->gfx_level == GFX7 && (!input || (!input->buffer && !input->user_buffer)))
+   if (sctx->gfx_level == GFX7 && (!input || (!input->buffer && !input->user_buffer))) {
       input = &sctx->null_const_buf;
+   } else if (input && input->user_buffer) {
+      /* Upload the user buffer. */
+      struct pipe_resource *release_buf = NULL;
+      void *tmp;
 
-   if (input && (input->buffer || input->user_buffer)) {
-      struct pipe_resource *buffer = NULL;
-      unsigned buffer_offset;
+      u_upload_alloc(sctx->b.const_uploader, 0, input->buffer_size,
+                     si_optimal_tcc_alignment(sctx, input->buffer_size),
+                     &uploaded_constbuf.buffer_offset, &uploaded_constbuf.buffer, &release_buf,
+                     &tmp);
+      pipe_resource_release(&sctx->b, release_buf);
 
-      /* Upload the user buffer if needed. */
-      if (input->user_buffer) {
-         si_upload_const_buffer(sctx, (struct si_resource **)&buffer, input->user_buffer,
-                                input->buffer_size, &buffer_offset);
-         if (!buffer) {
-            /* Just unbind on failure. */
-            si_set_constant_buffer(sctx, buffers, descriptors_idx, slot, false, NULL);
-            return;
-         }
+      if (uploaded_constbuf.buffer) {
+         util_memcpy_cpu_to_le32(tmp, input->user_buffer, input->buffer_size);
+         uploaded_constbuf.buffer_size = input->buffer_size;
+         input = &uploaded_constbuf;
       } else {
-         if (take_ownership) {
-            buffer = input->buffer;
-         } else {
-            pipe_resource_reference(&buffer, input->buffer);
-         }
-         buffer_offset = input->buffer_offset;
+         /* Failure to upload. Bind NULL. */
+         input = NULL;
       }
+   }
+
+   if (input && input->buffer) {
+      struct pipe_resource *buffer = input->buffer;
+      unsigned buffer_offset = input->buffer_offset;
 
       /* Set the descriptor. */
       uint32_t *desc = descs->list + slot * 4;
       si_set_buf_desc_address(si_resource(buffer), buffer_offset, desc);
       desc[2] = input->buffer_size;
 
-      buffers->buffers[slot] = buffer;
+      pipe_resource_reference(&buffers->buffers[slot], buffer);
       buffers->offsets[slot] = buffer_offset;
       radeon_add_to_buffer_list(sctx, &sctx->gfx_cs, si_resource(buffer),
                                 RADEON_USAGE_READ | buffers->priority_constbuf);
@@ -1171,6 +1162,7 @@ static void si_set_constant_buffer(struct si_context *sctx, struct si_buffer_res
    } else {
       /* Clear the descriptor. Only 3 dwords are cleared. The 4th dword is immutable. */
       memset(descs->list + slot * 4, 0, sizeof(uint32_t) * 3);
+      pipe_resource_reference(&buffers->buffers[slot], NULL);
       buffers->enabled_mask &= ~(1llu << slot);
    }
 
@@ -1212,7 +1204,7 @@ void si_invalidate_inlinable_uniforms(struct si_context *sctx, mesa_shader_stage
 }
 
 static void si_pipe_set_constant_buffer(struct pipe_context *ctx, mesa_shader_stage shader,
-                                        uint slot, bool take_ownership,
+                                        uint slot,
                                         const struct pipe_constant_buffer *input)
 {
    struct si_context *sctx = (struct si_context *)ctx;
@@ -1237,7 +1229,7 @@ static void si_pipe_set_constant_buffer(struct pipe_context *ctx, mesa_shader_st
    slot = si_get_constbuf_slot(slot);
    si_set_constant_buffer(sctx, &sctx->const_and_shader_buffers[shader],
                           si_const_and_shader_buffer_descriptors_idx(shader), slot,
-                          take_ownership, input);
+                          input);
 }
 
 static void si_set_inlinable_constants(struct pipe_context *ctx,
@@ -1390,7 +1382,7 @@ void si_get_shader_buffers(struct si_context *sctx, mesa_shader_stage shader, ui
 void si_set_internal_const_buffer(struct si_context *sctx, uint slot,
                                   const struct pipe_constant_buffer *input)
 {
-   si_set_constant_buffer(sctx, &sctx->internal_bindings, SI_DESCS_INTERNAL, slot, false, input);
+   si_set_constant_buffer(sctx, &sctx->internal_bindings, SI_DESCS_INTERNAL, slot, input);
 }
 
 void si_set_internal_shader_buffer(struct si_context *sctx, uint slot,

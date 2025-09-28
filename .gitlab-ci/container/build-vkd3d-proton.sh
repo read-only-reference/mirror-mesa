@@ -30,12 +30,13 @@ git checkout "$VKD3D_PROTON_COMMIT"
 git submodule update --init --recursive
 git submodule update --recursive
 
-meson setup                              \
-      -D enable_tests=true               \
-      --buildtype release                \
-      --prefix "$VKD3D_PROTON_DST_DIR"   \
-      --strip                            \
-      --libdir "lib"                     \
+meson setup                                           \
+      -D c_args=-Wno-error=incompatible-pointer-types \
+      -D enable_tests=true                            \
+      --buildtype release                             \
+      --prefix "$VKD3D_PROTON_DST_DIR"                \
+      --strip                                         \
+      --libdir "lib"                                  \
       "$VKD3D_PROTON_BUILD_DIR/build"
 
 ninja -C "$VKD3D_PROTON_BUILD_DIR/build" install
@@ -57,7 +58,7 @@ else
   echo "Uploaded vkd3d-proton not found, reuploading..."
   tar --zstd -cf "$VKD3D_PROTON_S3_ARTIFACT" -C / "${VKD3D_PROTON_DST_DIR#/}" "${VKD3D_PROTON_WINE_DIR#/}"
   ci-fairy s3cp --token-file "${S3_JWT_FILE}" "$VKD3D_PROTON_S3_ARTIFACT" \
-    "https://${S3_BASE_PATH}/${S3_PROJECT_PATH}/${ARTIFACT_PATH}"
+    "https://${S3_BASE_PATH}/${CI_PROJECT_PATH}/${ARTIFACT_PATH}"
   rm "$VKD3D_PROTON_S3_ARTIFACT"
 fi
 

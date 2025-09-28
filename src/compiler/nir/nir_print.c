@@ -1446,11 +1446,14 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
          case nir_intrinsic_load_input_vertex:
          case nir_intrinsic_load_coefficients_agx:
          case nir_intrinsic_load_attribute_pan:
+         case nir_intrinsic_load_fs_coeffs_pco:
             mode = nir_var_shader_in;
             break;
 
          case nir_intrinsic_load_output:
          case nir_intrinsic_load_per_vertex_output:
+         case nir_intrinsic_load_converted_output_pan:
+         case nir_intrinsic_load_readonly_output_pan:
          case nir_intrinsic_load_per_primitive_output:
          case nir_intrinsic_store_output:
          case nir_intrinsic_store_per_primitive_output:
@@ -2352,7 +2355,19 @@ print_loop(nir_loop *loop, print_state *state, unsigned tabs)
    FILE *fp = state->fp;
 
    print_indentation(tabs, fp);
-   fprintf(fp, "%sloop {\n", divergence_status(state, loop->divergent_break));
+   fprintf(fp, "%sloop", divergence_status(state, loop->divergent_break));
+   switch (loop->control) {
+   case nir_loop_control_unroll:
+      fprintf(fp, "  // unroll");
+      break;
+   case nir_loop_control_dont_unroll:
+      fprintf(fp, "  // don't unroll");
+      break;
+   case nir_loop_control_none:
+   default:
+      break;
+   }
+   fprintf(fp, " {\n");
    foreach_list_typed(nir_cf_node, node, node, &loop->body) {
       print_cf_node(node, state, tabs + 1);
    }
@@ -2725,8 +2740,11 @@ print_shader_info(const struct shader_info *info, FILE *fp)
 
    print_nz_unsigned(fp, "ray queries", info->ray_queries);
 
-   fprintf(fp, "subgroup_size: %u\n", info->subgroup_size);
+   print_nz_unsigned(fp, "api_subgroup_size", info->api_subgroup_size);
+   fprintf(fp, "max_subgroup_size: %u\n", info->max_subgroup_size);
+   fprintf(fp, "min_subgroup_size: %u\n", info->min_subgroup_size);
 
+   print_nz_bool(fp, "api_subgroup_size_draw_uniform", info->api_subgroup_size_draw_uniform);
    print_nz_bool(fp, "uses_wide_subgroup_intrinsics", info->uses_wide_subgroup_intrinsics);
 
    bool has_xfb_stride = info->xfb_stride[0] || info->xfb_stride[1] || info->xfb_stride[2] || info->xfb_stride[3];

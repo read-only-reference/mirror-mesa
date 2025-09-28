@@ -768,18 +768,6 @@ nvk_image_init(struct nvk_device *dev,
 
    vk_image_init(&dev->vk, &image->vk, pCreateInfo);
 
-   if ((image->vk.usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) &&
-       image->vk.samples > 1) {
-      image->vk.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
-      image->vk.stencil_usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
-   }
-
-   if (image->vk.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
-      image->vk.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
-   if (image->vk.usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT)
-      image->vk.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
    nil_image_usage_flags usage = 0;
    if (image->vk.tiling == VK_IMAGE_TILING_LINEAR)
       usage |= NIL_IMAGE_USAGE_LINEAR_BIT;
@@ -1195,17 +1183,16 @@ nvk_get_image_memory_requirements(struct nvk_device *dev,
    uint32_t memory_types = (1 << pdev->mem_type_count) - 1;
 
    /* Remove non host visible heaps from the types for host image copy in case
-    * of potential issues. This should be removed when we get ReBAR.
+    * of potential issues when we do not have ReBAR.
     */
-   if (image->vk.usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT) {
+   if (pdev->info.bar_size_B < pdev->info.vram_size_B &&
+       image->vk.usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT) {
       for (uint32_t i = 0; i < pdev->mem_type_count; i++) {
          if (!(pdev->mem_types[i].propertyFlags &
              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
             memory_types &= ~BITFIELD_BIT(i);
       }
    }
-
-   // TODO hope for the best?
 
    uint64_t size_B = 0;
    uint32_t align_B = 0;
@@ -1503,6 +1490,7 @@ nvk_bind_image_memory(struct nvk_device *dev,
 {
    VK_FROM_HANDLE(nvk_device_memory, mem, info->memory);
    VK_FROM_HANDLE(nvk_image, image, info->image);
+   uint64_t offset_B = info->memoryOffset;
    VkResult result;
 
 #if DETECT_OS_ANDROID
@@ -1523,11 +1511,11 @@ nvk_bind_image_memory(struct nvk_device *dev,
       assert(swapchain_info && swapchain_info->swapchain != VK_NULL_HANDLE);
       mem = nvk_device_memory_from_handle(
          wsi_common_get_memory(swapchain_info->swapchain, swapchain_info->imageIndex));
+      offset_B = 0;
    }
 #endif
 
    assert(mem != NULL);
-   uint64_t offset_B = info->memoryOffset;
    if (image->disjoint) {
       const VkBindImagePlaneMemoryInfo *plane_info =
          vk_find_struct_const(info->pNext, BIND_IMAGE_PLANE_MEMORY_INFO);

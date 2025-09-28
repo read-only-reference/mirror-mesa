@@ -31,6 +31,9 @@
 #include "broadcom/common/v3d_tiling.h"
 #include "broadcom/common/v3d_tfu.h"
 
+#define V3D_VERSION 42
+#include "v3dx_format_table.h"
+
 /**
  * The param @op_blit is used to tell if we are saving state for blitter_blit
  * (if true) or blitter_clear (if false). If other blitter functions are used
@@ -347,11 +350,20 @@ check_tlb_blit_ok(struct v3d_device_info *devinfo, struct pipe_blit_info *info)
             v3d_get_rt_format(devinfo, info->dst.format))
                 return false;
 
+        /* We can not support tlb copies between different formats with
+         * the same internal format if either format is emulated in shaders.
+         */
+        if ((info->src.format != info->dst.format) &&
+            (v3d_rt_format_is_emulated(info->src.format) ||
+             v3d_rt_format_is_emulated(info->dst.format))) {
+                return false;
+        }
+
         bool is_msaa_resolve = (info->src.resource->nr_samples > 1 &&
                                 info->dst.resource->nr_samples < 2);
 
         if (is_msaa_resolve &&
-            !v3d_format_supports_tlb_msaa_resolve(devinfo, info->src.format))
+            !v3d_format_supports_tlb_resolve_and_blend(devinfo, info->src.format))
                 return false;
 
         return true;
@@ -837,7 +849,7 @@ v3d_sand8_blit(struct pipe_context *pctx, struct pipe_blit_info *info)
                 .buffer_size = sizeof(sand8_stride),
         };
 
-        pctx->set_constant_buffer(pctx, MESA_SHADER_FRAGMENT, 0, false,
+        pctx->set_constant_buffer(pctx, MESA_SHADER_FRAGMENT, 0,
                                   &cb_uniforms);
         struct pipe_constant_buffer saved_fs_cb1 = { 0 };
         pipe_resource_reference(&saved_fs_cb1.buffer,
@@ -850,7 +862,7 @@ v3d_sand8_blit(struct pipe_context *pctx, struct pipe_blit_info *info)
                 .buffer_size = (src->bo->size -
                                 src->slices[info->src.level].offset),
         };
-        pctx->set_constant_buffer(pctx, MESA_SHADER_FRAGMENT, 1, false,
+        pctx->set_constant_buffer(pctx, MESA_SHADER_FRAGMENT, 1,
                                   &cb_src);
         /* Unbind the textures, to make sure we don't try to recurse into the
          * shadow blit.
@@ -866,7 +878,7 @@ v3d_sand8_blit(struct pipe_context *pctx, struct pipe_blit_info *info)
         util_blitter_restore_constant_buffer_state(v3d->blitter);
 
         /* Restore cb1 (util_blitter doesn't handle this one). */
-        pctx->set_constant_buffer(pctx, MESA_SHADER_FRAGMENT, 1, true,
+        pctx->set_constant_buffer(pctx, MESA_SHADER_FRAGMENT, 1,
                                   &saved_fs_cb1);
 
         pipe_resource_reference(&dst_surf.texture, NULL);
@@ -1144,7 +1156,7 @@ v3d_sand30_blit(struct pipe_context *pctx, struct pipe_blit_info *info)
                 .buffer_size = sizeof(sand30_stride),
         };
 
-        pctx->set_constant_buffer(pctx, MESA_SHADER_FRAGMENT, 0, false,
+        pctx->set_constant_buffer(pctx, MESA_SHADER_FRAGMENT, 0,
                                   &cb_uniforms);
 
         struct pipe_constant_buffer saved_fs_cb1 = { 0 };
@@ -1158,7 +1170,7 @@ v3d_sand30_blit(struct pipe_context *pctx, struct pipe_blit_info *info)
                 .buffer_size = (src->bo->size -
                                 src->slices[info->src.level].offset),
         };
-        pctx->set_constant_buffer(pctx, MESA_SHADER_FRAGMENT, 1, false,
+        pctx->set_constant_buffer(pctx, MESA_SHADER_FRAGMENT, 1,
                                   &cb_src);
         /* Unbind the textures, to make sure we don't try to recurse into the
          * shadow blit.
@@ -1175,7 +1187,7 @@ v3d_sand30_blit(struct pipe_context *pctx, struct pipe_blit_info *info)
         util_blitter_restore_constant_buffer_state(v3d->blitter);
 
         /* Restore cb1 (util_blitter doesn't handle this one). */
-        pctx->set_constant_buffer(pctx, MESA_SHADER_FRAGMENT, 1, true,
+        pctx->set_constant_buffer(pctx, MESA_SHADER_FRAGMENT, 1,
                                   &saved_fs_cb1);
         pipe_resource_reference(&dst_surf.texture, NULL);
 

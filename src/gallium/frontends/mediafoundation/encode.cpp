@@ -385,10 +385,20 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
          templ.format = (enum pipe_format) m_EncoderCapabilities.m_HWSupportStatsSATDMapOutput.bits.pipe_pixel_format;
          templ.width0 = static_cast<uint32_t>( std::ceil( m_uiOutputWidth / static_cast<float>( block_size ) ) );
          templ.height0 = static_cast<uint16_t>( std::ceil( m_uiOutputHeight / static_cast<float>( block_size ) ) );
-         CHECKNULL_GOTO(
-            pDX12EncodeContext->pPipeResourceSATDMapStats = m_pVlScreen->pscreen->resource_create( m_pVlScreen->pscreen, &templ ),
-            E_OUTOFMEMORY,
-            done );
+         pDX12EncodeContext->bUseSATDMapAllocator = m_bUseSATDMapAllocator;
+         if ( m_bUseSATDMapAllocator )
+         {
+            pDX12EncodeContext->pPipeResourceSATDMapStats =
+               AllocatePipeResourceFromAllocator( m_spSATDMapAllocator.Get(), m_pVlScreen->pscreen, &templ );
+            CHECKNULL_GOTO( pDX12EncodeContext->pPipeResourceSATDMapStats, E_OUTOFMEMORY, done );
+         }
+         else
+         {
+            CHECKNULL_GOTO(
+               pDX12EncodeContext->pPipeResourceSATDMapStats = m_pVlScreen->pscreen->resource_create( m_pVlScreen->pscreen, &templ ),
+               E_OUTOFMEMORY,
+               done );
+         }
       }
 
       if( m_EncoderCapabilities.m_HWSupportStatsRCBitAllocationMapOutput.bits.supported && m_uiVideoOutputBitsUsedMapBlockSize > 0 )
@@ -397,10 +407,21 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
          templ.format = (enum pipe_format) m_EncoderCapabilities.m_HWSupportStatsRCBitAllocationMapOutput.bits.pipe_pixel_format;
          templ.width0 = static_cast<uint32_t>( std::ceil( m_uiOutputWidth / static_cast<float>( block_size ) ) );
          templ.height0 = static_cast<uint16_t>( std::ceil( m_uiOutputHeight / static_cast<float>( block_size ) ) );
-         CHECKNULL_GOTO( pDX12EncodeContext->pPipeResourceRCBitAllocMapStats =
+
+         pDX12EncodeContext->bUseBitsusedMapAllocator = m_bUseBitsusedMapAllocator;
+         if( m_bUseBitsusedMapAllocator )
+         {
+            pDX12EncodeContext->pPipeResourceRCBitAllocMapStats =
+               AllocatePipeResourceFromAllocator( m_spBitsusedMapAllocator.Get(), m_pVlScreen->pscreen, &templ );
+            CHECKNULL_GOTO( pDX12EncodeContext->pPipeResourceRCBitAllocMapStats, E_OUTOFMEMORY, done );
+         }
+         else
+         {
+            CHECKNULL_GOTO( pDX12EncodeContext->pPipeResourceRCBitAllocMapStats =
                             m_pVlScreen->pscreen->resource_create( m_pVlScreen->pscreen, &templ ),
-                         E_OUTOFMEMORY,
-                         done );
+                            E_OUTOFMEMORY,
+                            done );
+         }
       }
 
       if( m_EncoderCapabilities.m_PSNRStatsSupport.bits.supports_y_channel && m_bVideoEnableFramePsnrYuv )
@@ -456,6 +477,40 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
 
    pDX12EncodeContext->pVlScreen = m_pVlScreen;   // weakref
 
+#if ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
+
+   //
+   // Update the encoder priorities (if any set)
+   //
+   
+#if 0 // For testing priorities
+   {
+      m_bWorkProcessPrioritySet = ((pipeEncoderInputFenceHandleValue % 2) == 0) ? TRUE : FALSE;
+      m_WorkGlobalPriority = static_cast<D3D12_COMMAND_QUEUE_GLOBAL_PRIORITY>((pipeEncoderInputFenceHandleValue % 14) + 18); // 18-31 range (no hard realtime privileges)
+      m_bWorkGlobalPrioritySet = ((pipeEncoderInputFenceHandleValue % 2) == 0) ? TRUE : FALSE;
+      m_WorkProcessPriority = static_cast<D3D12_COMMAND_QUEUE_PROCESS_PRIORITY>(pipeEncoderInputFenceHandleValue % 2); // 0-1 range
+   }
+#endif // For testing priorities
+
+   if (m_bWorkProcessPrioritySet || m_bWorkGlobalPrioritySet)
+   {
+      for (ID3D12CommandQueue* queue : m_ContextPriorityMgr.m_registeredQueues)
+      {
+         mtx_lock(&m_ContextPriorityMgr.m_lock);
+         int result = m_ContextPriorityMgr.base.set_queue_priority(&m_ContextPriorityMgr.base, queue, reinterpret_cast<uint32_t*>(&m_WorkGlobalPriority), reinterpret_cast<uint32_t*>(&m_WorkProcessPriority));
+         mtx_unlock(&m_ContextPriorityMgr.m_lock);
+
+         CHECKBOOL_GOTO(result == 0, MF_E_UNEXPECTED, done);
+      }
+
+      // Once set in the underlying pipe context, don't set them again
+      // until they're modified by the CodecAPI SetValue function.
+      m_bWorkProcessPrioritySet = FALSE;
+      m_bWorkGlobalPrioritySet = FALSE;
+   }
+
+#endif // ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
+
    // Call the helper for encoder specific work
    pDX12EncodeContext->encoderPicInfo.base.in_fence = pPipeEncoderInputFenceHandle;
    pDX12EncodeContext->encoderPicInfo.base.in_fence_value = pipeEncoderInputFenceHandleValue;
@@ -487,19 +542,19 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
          if( m_EncoderCapabilities.m_HWSupportSlicedFences.bits.multiple_buffers_required )
          {
             // Buffer byte size for sliced buffers + notifications with multiple individual buffers per slice
-            templ.width0 = ( 1024 /*1K*/ * 1024 /*1MB*/ ) * 8 /*8 MB*/;
+            templ.width0 = m_uiMaxOutputBitstreamSize;
          }
          else
          {
             // Buffer byte size for sliced buffers + notifications with a single buffer (suballocated by driver for each slice)
-            templ.width0 = ( 1024 /*1K*/ * 1024 /*1MB*/ ) * 8 /*8 MB*/;
+            templ.width0 = m_uiMaxOutputBitstreamSize;
          }
       }
       else
 #endif   // (USE_D3D12_PREVIEW_HEADERS && (D3D12_PREVIEW_SDK_VERSION >= 717))
       {
          // Buffer byte size for full frame bitstream (when num_output_buffers == 1)
-         templ.width0 = ( 1024 /*1K*/ * 1024 /*1MB*/ ) * 8 /*8 MB*/;
+         templ.width0 = m_uiMaxOutputBitstreamSize;
       }
 
       templ.target = PIPE_BUFFER;

@@ -549,7 +549,6 @@ spec@arb_texture_buffer_object@formats (vs- arb)@GL_INTENSITY8,Fail
 spec@arb_texture_buffer_object@formats (vs- arb)@GL_INTENSITY8I_EXT,Fail
 spec@arb_texture_buffer_object@formats (vs- arb)@GL_INTENSITY8UI_EXT,Fail
 
-spec@arb_viewport_array@display-list,Fail
 spec@egl 1.4@eglterminate then unbind context,Fail
 spec@egl_chromium_sync_control@conformance,Fail
 spec@egl_chromium_sync_control@conformance@eglGetSyncValuesCHROMIUM_msc_and_sbc_test,Fail
@@ -666,3 +665,9 @@ wayland-dEQP-EGL.functional.resize.surface_size.grow,Fail
 wayland-dEQP-EGL.functional.resize.surface_size.shrink,Fail
 wayland-dEQP-EGL.functional.resize.surface_size.stretch_height,Fail
 wayland-dEQP-EGL.functional.resize.surface_size.stretch_width,Fail
+
+
+# shader objects #13839
+spec@arb_fragment_program@fog-modes,Crash
+spec@arb_occlusion_query@occlusion_query_meta_fragments,Fail
+spec@arb_occlusion_query@occlusion_query_meta_save,Fail

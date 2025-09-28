@@ -645,6 +645,11 @@ struct v3d_context {
         unsigned sample_mask;
         struct pipe_framebuffer_state framebuffer;
 
+        /* True when the framebuffer state has a format that needs software
+         * blending to be enabled.
+         */
+        bool framebuffer_soft_blend;
+
         /* Flags if we have submitted any jobs for the current framebuffer so
          * we can make skip framebuffer invalidation for cases where we had to
          * split the command list into multiple jobs for the same frame (i.e.
@@ -833,20 +838,20 @@ void v3d_flush_jobs_reading_resource(struct v3d_context *v3d,
 void v3d_update_compiled_shaders(struct v3d_context *v3d, uint8_t prim_mode);
 void v3d_update_compiled_cs(struct v3d_context *v3d);
 
+bool v3d_rt_format_is_emulated(enum pipe_format f);
 bool v3d_rt_format_supported(const struct v3d_device_info *devinfo,
                              enum pipe_format f);
 bool v3d_tex_format_supported(const struct v3d_device_info *devinfo,
                               enum pipe_format f);
-uint8_t v3d_get_rt_format(const struct v3d_device_info *devinfo, enum pipe_format f);
-uint8_t v3d_get_tex_format(const struct v3d_device_info *devinfo, enum pipe_format f);
+
 uint8_t v3d_get_tex_return_size(const struct v3d_device_info *devinfo,
                                 enum pipe_format f);
 uint8_t v3d_get_tex_return_channels(const struct v3d_device_info *devinfo,
                                     enum pipe_format f);
 const uint8_t *v3d_get_format_swizzle(const struct v3d_device_info *devinfo,
                                       enum pipe_format f);
-bool v3d_format_supports_tlb_msaa_resolve(const struct v3d_device_info *devinfo,
-                                          enum pipe_format f);
+bool v3d_format_supports_tlb_resolve_and_blend(const struct v3d_device_info *devinfo,
+                                               enum pipe_format f);
 bool v3d_format_needs_tlb_rb_swap(enum pipe_format format);
 void v3d_format_get_internal_type_and_bpp(const struct v3d_device_info *devinfo,
                                           enum pipe_format format,

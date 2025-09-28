@@ -71,6 +71,7 @@ static const struct debug_control_bitset debug_control[] = {
    OPT1("blorp",             DEBUG_BLORP),
    OPT1("nodualobj",         DEBUG_NO_DUAL_OBJECT_GS),
    OPT1("optimizer",         DEBUG_OPTIMIZER),
+   OPT1("mda",               DEBUG_MDA),
    OPT1("ann",               DEBUG_ANNOTATION),
    OPT1("no8",               DEBUG_NO8),
    OPT1("no-oaconfig",       DEBUG_NO_OACONFIG),
@@ -253,9 +254,9 @@ static void
 process_intel_debug_variable_once(void)
 {
    BITSET_ZERO(intel_debug);
-   parse_debug_bitset(getenv("INTEL_DEBUG"), debug_control);
+   parse_debug_bitset(os_get_option("INTEL_DEBUG"), debug_control);
 
-   intel_simd = parse_debug_string(getenv("INTEL_SIMD_DEBUG"), simd_control);
+   intel_simd = parse_debug_string(os_get_option("INTEL_SIMD_DEBUG"), simd_control);
    intel_debug_batch_frame_start =
       debug_get_num_option("INTEL_DEBUG_BATCH_FRAME_START", 0);
    intel_debug_batch_frame_stop =

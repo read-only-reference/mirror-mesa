@@ -108,10 +108,9 @@ brw_emit_tcs_thread_end(brw_shader &s)
    srcs[URB_LOGICAL_SRC_HANDLE] = s.tcs_payload().patch_urb_output;
    srcs[URB_LOGICAL_SRC_CHANNEL_MASK] = brw_imm_ud(WRITEMASK_X);
    srcs[URB_LOGICAL_SRC_DATA] = brw_imm_ud(0);
-   srcs[URB_LOGICAL_SRC_COMPONENTS] = brw_imm_ud(1);
-   brw_inst *inst = bld.emit(SHADER_OPCODE_URB_WRITE_LOGICAL,
-                            reg_undef, srcs, ARRAY_SIZE(srcs));
-   inst->eot = true;
+   brw_urb_inst *urb = bld.URB_WRITE(srcs, ARRAY_SIZE(srcs));
+   urb->eot = true;
+   urb->components = 1;
 }
 
 static void
@@ -193,6 +192,8 @@ brw_compile_tcs(const struct brw_compiler *compiler,
 
    const bool debug_enabled = brw_should_print_shader(nir, DEBUG_TCS, params->base.source_hash);
 
+   brw_debug_archive_nir(params->base.archiver, nir, dispatch_width, "first");
+
    brw_prog_data_init(&prog_data->base.base, &params->base);
 
    nir->info.outputs_written = key->outputs_written;
@@ -203,16 +204,17 @@ brw_compile_tcs(const struct brw_compiler *compiler,
                        key->base.vue_layout, 1);
    brw_compute_tess_vue_map(&vue_prog_data->vue_map,
                             nir->info.outputs_written,
-                            nir->info.patch_outputs_written);
+                            nir->info.patch_outputs_written,
+                            key->separate_tess_vue_layout);
 
    brw_nir_apply_key(nir, compiler, &key->base, dispatch_width);
    brw_nir_lower_vue_inputs(nir, &input_vue_map);
-   brw_nir_lower_tcs_outputs(nir, &vue_prog_data->vue_map,
+   brw_nir_lower_tcs_outputs(nir, devinfo, &vue_prog_data->vue_map,
                              key->_tes_primitive_mode);
-   if (key->input_vertices > 0)
-      intel_nir_lower_patch_vertices_in(nir, key->input_vertices, NULL, NULL);
+   intel_nir_lower_patch_vertices_in(nir, key->input_vertices);
 
-   brw_postprocess_nir(nir, compiler, debug_enabled,
+   brw_postprocess_nir(nir, compiler, dispatch_width,
+                       params->base.archiver, debug_enabled,
                        key->base.robust_flags);
 
    bool has_primitive_id =
@@ -282,6 +284,7 @@ brw_compile_tcs(const struct brw_compiler *compiler,
       .needs_register_pressure = params->base.stats != NULL,
       .log_data                = params->base.log_data,
       .debug_enabled           = debug_enabled,
+      .archiver                = params->base.archiver,
    };
    brw_shader v(&shader_params);
    if (!run_tcs(v)) {

@@ -23,6 +23,7 @@
 #ifndef VK_RENDER_PASS_H
 #define VK_RENDER_PASS_H
 
+#include "vk_internal_exts.h"
 #include "vk_limits.h"
 #include "vk_object.h"
 
@@ -32,42 +33,6 @@ extern "C" {
 
 struct vk_command_buffer;
 struct vk_image;
-
-/* Mesa-specific dynamic rendering flag to indicate that legacy RPs don't use
- * input attachments with concurrent writes (aka. feedback loops).
- */
-#define VK_RENDERING_INPUT_ATTACHMENT_NO_CONCURRENT_WRITES_BIT_MESA 0x80000000
-
-/**
- * Pseudo-extension struct that may be chained into VkRenderingAttachmentInfo
- * to indicate an initial layout for the attachment.  This is only allowed if
- * all of the following conditions are met:
- *
- *    1. VkRenderingAttachmentInfo::loadOp == LOAD_OP_CLEAR
- *
- *    2. VkRenderingInfo::renderArea is the entire image view LOD
- *
- *    3. For 3D image attachments, VkRenderingInfo::viewMask == 0 AND
- *       VkRenderingInfo::layerCount references the entire bound image view
- *       OR VkRenderingInfo::viewMask is dense (no holes) and references the
- *       entire bound image view.  (2D and 2D array images have no such
- *       requirement.)
- *
- * If this struct is included in the pNext chain of a
- * VkRenderingAttachmentInfo, the driver is responsible for transitioning the
- * bound region of the image from
- * VkRenderingAttachmentInitialLayoutInfoMESA::initialLayout to
- * VkRenderingAttachmentInfo::imageLayout prior to rendering.
- */
-typedef struct VkRenderingAttachmentInitialLayoutInfoMESA {
-    VkStructureType    sType;
-#define VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INITIAL_LAYOUT_INFO_MESA (VkStructureType)1000044901
-#define VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INITIAL_LAYOUT_INFO_MESA_cast VkRenderingAttachmentInitialLayoutInfoMESA
-    const void*        pNext;
-
-    /** Initial layout of the attachment */
-    VkImageLayout      initialLayout;
-} VkRenderingAttachmentInitialLayoutInfoMESA;
 
 /***/
 struct vk_subpass_attachment {
@@ -99,12 +64,13 @@ struct vk_subpass_attachment {
     */
    VkImageLayout stencil_layout;
 
-   /** A per-view mask for if this is the last use of this attachment
+   /** A per-view mask for if this is the first or last use of this attachment
     *
     * If the same render pass attachment is used multiple ways within a
-    * subpass, corresponding last_subpass bits will be set in all of them.
+    * subpass, corresponding first/last_subpass bits will be set in all of them.
     * For the non-multiview case, only the first bit is used.
     */
+   uint32_t first_subpass;
    uint32_t last_subpass;
 
    /** Resolve attachment, if any */

@@ -39,6 +39,7 @@
 #include "panvk_device.h"
 #include "panvk_entrypoints.h"
 #include "panvk_instance.h"
+#include "panvk_meta.h"
 #include "panvk_physical_device.h"
 #include "panvk_priv_bo.h"
 
@@ -149,11 +150,9 @@ panvk_per_arch(cmd_close_batch)(struct panvk_cmd_buffer *cmdbuf)
       fbinfo->first_provoking_vertex =
          cmdbuf->state.gfx.render.first_provoking_vertex != U_TRISTATE_NO;
 
-      if (batch->vtc_jc.first_tiler) {
-         VkResult result = panvk_per_arch(cmd_fb_preload)(cmdbuf, fbinfo);
-         if (result != VK_SUCCESS)
-            return;
-      }
+      VkResult result = panvk_per_arch(cmd_fb_preload)(cmdbuf, fbinfo);
+      if (result != VK_SUCCESS)
+         return;
 
       uint32_t view_mask = cmdbuf->state.gfx.render.view_mask;
       assert(view_mask == 0 || util_bitcount(view_mask) <= batch->fb.layer_count);

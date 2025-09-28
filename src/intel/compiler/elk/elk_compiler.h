@@ -490,13 +490,11 @@ struct elk_wm_prog_key {
    /* Some collection of ELK_WM_IZ_* */
    uint8_t iz_lookup;
    bool stats_wm:1;
-   bool flat_shade:1;
    unsigned nr_color_regions:5;
    bool emit_alpha_test:1;
    enum compare_func alpha_test_func:3; /* < For Gfx4/5 MRT alpha test */
    bool alpha_test_replicate_alpha:1;
    enum elk_sometimes alpha_to_coverage:2;
-   bool clamp_fragment_color:1;
 
    bool force_dual_color_blend:1;
 
@@ -518,7 +516,7 @@ struct elk_wm_prog_key {
    bool coherent_fb_fetch:1;
    bool ignore_sample_mask_out:1;
 
-   uint64_t padding:56;
+   uint64_t padding:58;
 };
 
 struct elk_cs_prog_key {

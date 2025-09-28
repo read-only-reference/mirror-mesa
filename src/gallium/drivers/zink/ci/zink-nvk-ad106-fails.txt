@@ -40,7 +40,12 @@ dEQP-GLES31.functional.shaders.multisample_interpolation.interpolate_at_sample.n
 dEQP-GLES31.functional.shaders.multisample_interpolation.interpolate_at_sample.non_multisample_buffer.sample_n_singlesample_rbo,Fail
 dEQP-GLES31.functional.shaders.multisample_interpolation.interpolate_at_sample.non_multisample_buffer.sample_n_singlesample_texture,Fail
 
-KHR-GL46.framebuffer_blit.scissor_blit,Fail
+KHR-GL46.direct_state_access.framebuffers_blit,Crash
+KHR-GL46.direct_state_access.renderbuffers_storage_multisample,Crash
+KHR-GL46.framebuffer_blit.multisampled_to_singlesampled_blit_depth_config_test,Crash
+KHR-GL46.framebuffer_blit.scissor_blit,Crash
+KHR-GL46.packed_depth_stencil.blit.depth24_stencil8,Crash
+KHR-GL46.packed_depth_stencil.blit.depth32f_stencil8,Crash
 KHR-GL46.shader_image_size.advanced-ms-cs-float,Fail
 KHR-GL46.shader_image_size.advanced-ms-cs-int,Fail
 KHR-GL46.shader_image_size.advanced-ms-cs-uint,Fail
@@ -490,7 +495,6 @@ spec@arb_texture_buffer_object@formats (vs- arb)@GL_LUMINANCE_ALPHA32UI_EXT,Fail
 spec@arb_texture_buffer_object@formats (vs- arb)@GL_LUMINANCE_ALPHA8I_EXT,Fail
 spec@arb_texture_buffer_object@formats (vs- arb)@GL_LUMINANCE_ALPHA8UI_EXT,Fail
 spec@arb_texture_cube_map_array@texsubimage cube_map_array,Fail
-spec@arb_viewport_array@display-list,Fail
 spec@egl 1.4@egl-ext_egl_image_storage,Fail
 spec@egl 1.4@eglterminate then unbind context,Fail
 spec@egl_chromium_sync_control@conformance,Fail
@@ -501,7 +505,6 @@ spec@egl_khr_surfaceless_context@viewport,Fail
 spec@egl_mesa_configless_context@basic,Fail
 spec@ext_external_objects@vk-image-overwrite,Crash
 spec@ext_external_objects@vk-ping-pong-multi-sem,Fail
-spec@ext_external_objects@vk-ping-pong-single-sem,Fail
 spec@ext_framebuffer_multisample@enable-flag,Fail
 spec@ext_framebuffer_multisample@interpolation 2 centroid-deriv-disabled,Fail
 spec@ext_framebuffer_multisample@interpolation 2 centroid-disabled,Fail

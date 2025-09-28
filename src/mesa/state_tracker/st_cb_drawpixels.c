@@ -439,12 +439,12 @@ internal_format(struct gl_context *ctx, GLenum format, GLenum type)
  */
 static struct pipe_resource *
 alloc_texture(struct st_context *st, GLsizei width, GLsizei height,
-              enum pipe_format texFormat, unsigned bind)
+              enum pipe_format texFormat, unsigned flags, unsigned bind)
 {
    struct pipe_resource *pt;
 
    pt = st_texture_create(st, st->internal_target, texFormat, 0,
-                          width, height, 1, 1, 0, bind, false,
+                          width, height, 1, 1, 0, flags, bind, false,
                           PIPE_COMPRESSION_FIXED_RATE_NONE);
 
    return pt;
@@ -631,7 +631,7 @@ make_texture(struct st_context *st,
       return NULL;
 
    /* alloc temporary texture */
-   pt = alloc_texture(st, width, height, pipeFormat, PIPE_BIND_SAMPLER_VIEW);
+   pt = alloc_texture(st, width, height, pipeFormat, PIPE_RESOURCE_FLAG_MAP_UNSYNCHRONIZED, PIPE_BIND_SAMPLER_VIEW);
    if (!pt) {
       _mesa_unmap_pbo_source(ctx, unpack);
       return NULL;
@@ -647,7 +647,7 @@ make_texture(struct st_context *st,
 
       /* map texture transfer */
       dest = pipe_texture_map(pipe, pt, 0, 0,
-                              PIPE_MAP_WRITE | PIPE_MAP_DISCARD_WHOLE_RESOURCE,
+                              PIPE_MAP_WRITE | PIPE_MAP_DISCARD_WHOLE_RESOURCE | PIPE_MAP_UNSYNCHRONIZED,
                               0, 0, width, height, &transfer);
       if (!dest) {
          pipe_resource_reference(&pt, NULL);
@@ -805,6 +805,8 @@ draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
    cso_set_tessctrl_shader_handle(cso, NULL);
    cso_set_tesseval_shader_handle(cso, NULL);
    cso_set_geometry_shader_handle(cso, NULL);
+   cso_set_task_shader_handle(cso, NULL);
+   cso_set_mesh_shader_handle(cso, NULL);
 
    /* user samplers, plus the drawpix samplers */
    {
@@ -928,8 +930,7 @@ draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
    st->state.num_sampler_views[MESA_SHADER_FRAGMENT] = 0;
 
    ctx->Array.NewVertexElements = true;
-   ctx->NewDriverState |= ST_NEW_VERTEX_ARRAYS |
-                          ST_NEW_FS_SAMPLER_VIEWS;
+   ST_SET_STATE2(ctx->NewDriverState, ST_NEW_VERTEX_ARRAYS, ST_NEW_FS_SAMPLER_VIEWS);
 }
 
 
@@ -1273,7 +1274,8 @@ st_DrawPixels(struct gl_context *ctx, GLint x, GLint y,
    st_flush_bitmap_cache(st);
    st_invalidate_readpix_cache(st);
 
-   st_validate_state(st, ST_PIPELINE_META_STATE_MASK);
+   ST_PIPELINE_META_STATE_MASK(mask);
+   st_validate_state(st, mask);
 
    clippedUnpack = *unpack;
    unpack = &clippedUnpack;
@@ -1385,7 +1387,7 @@ st_DrawPixels(struct gl_context *ctx, GLint x, GLint y,
 
    for (unsigned i = 0; i < num_sampler_view; i++)
       st->pipe->sampler_view_release(st->pipe, sv[i]);
-
+   
    /* free the texture (but may persist in the cache) */
    pipe_resource_reference(&pt, NULL);
 }
@@ -1676,7 +1678,8 @@ st_CopyPixels(struct gl_context *ctx, GLint srcx, GLint srcy,
    st_flush_bitmap_cache(st);
    st_invalidate_readpix_cache(st);
 
-   st_validate_state(st, ST_PIPELINE_META_STATE_MASK);
+   ST_PIPELINE_META_STATE_MASK(mask);
+   st_validate_state(st, mask);
 
    if (blit_copy_pixels(ctx, srcx, srcy, width, height, dstx, dsty, type))
       return;
@@ -1830,7 +1833,7 @@ st_CopyPixels(struct gl_context *ctx, GLint srcx, GLint srcy,
    readH = MAX2(0, readH);
 
    /* Allocate the temporary texture. */
-   pt = alloc_texture(st, width, height, srcFormat, srcBind);
+   pt = alloc_texture(st, width, height, srcFormat, 0, srcBind);
    if (!pt)
       return;
 
@@ -1916,7 +1919,7 @@ st_CopyPixels(struct gl_context *ctx, GLint srcx, GLint srcy,
    st->pipe->sampler_view_release(st->pipe, sv[0]);
    if (frontend_owns_sv1)
       st->pipe->sampler_view_release(st->pipe, sv[1]);
-
+   
    pipe_resource_reference(&pt, NULL);
 }
 

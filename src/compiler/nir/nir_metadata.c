@@ -38,6 +38,8 @@ nir_metadata_require(nir_function_impl *impl, nir_metadata required, ...)
       nir_index_instrs(impl);
    if (NEEDS_UPDATE(nir_metadata_dominance))
       nir_calc_dominance_impl(impl);
+   if (NEEDS_UPDATE(nir_metadata_dominance_lca))
+      nir_calc_dominance_lca_impl(impl);
    if (NEEDS_UPDATE(nir_metadata_live_defs))
       nir_live_defs_impl(impl);
    if (NEEDS_UPDATE(nir_metadata_divergence))
@@ -72,6 +74,9 @@ nir_progress(bool progress, nir_function_impl *impl, nir_metadata preserved)
    /* If we do not make progress, we preserve all metadata. */
    if (!progress)
       preserved = nir_metadata_all;
+
+   if (!(preserved & nir_metadata_dominance))
+      assert(!(preserved & nir_metadata_dominance_lca));
 
    /* If we discard valid liveness information, immediately free the
     * liveness information for each block. For large shaders, it can
@@ -175,12 +180,24 @@ nir_metadata_check_validation_flag(nir_shader *shader)
 }
 
 void
-nir_metadata_require_all(nir_shader *shader)
+nir_metadata_require_most(nir_shader *shader)
 {
    bool force_unroll_sampler_indirect = shader->options->force_indirect_unrolling_sampler;
    nir_variable_mode indirect_mask = shader->options->force_indirect_unrolling;
    nir_foreach_function_impl(impl, shader) {
-      nir_metadata_require(impl, nir_metadata_all, indirect_mask,
+      nir_metadata md = nir_metadata_all;
+
+      /* We don't know if divergence analysis supports this shader. */
+      md &= ~nir_metadata_divergence;
+
+      if (!impl->structured) {
+         /* These don't support unstructured control flow. */
+         md &= ~nir_metadata_instr_index;
+         md &= ~nir_metadata_loop_analysis;
+         md &= ~nir_metadata_live_defs;
+      }
+
+      nir_metadata_require(impl, md, indirect_mask,
                            (int)force_unroll_sampler_indirect);
    }
 }

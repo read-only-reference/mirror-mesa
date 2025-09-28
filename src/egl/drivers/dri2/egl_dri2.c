@@ -574,6 +574,11 @@ dri2_query_device_info(const void* driver_device_identifier,
                        struct egl_device_info *device_info)
 {
    const char* drm_device_name = (const char*)driver_device_identifier;
+
+   /* We have information cached already. */
+   if (device_info->vendor_name)
+      return true;
+
    return dri_get_drm_device_info(
       drm_device_name, device_info->device_uuid, device_info->driver_uuid,
       &device_info->vendor_name, &device_info->renderer_name, &device_info->driver_name);
@@ -1239,8 +1244,17 @@ dri2_create_context(_EGLDisplay *disp, _EGLConfig *conf,
    bool thread_safe = true;
 
 #ifdef HAVE_X11_PLATFORM
-   if (disp->Platform == _EGL_PLATFORM_X11)
-      thread_safe = x11_xlib_display_is_thread_safe(disp->PlatformDisplay);
+   if (disp->Platform == _EGL_PLATFORM_X11) {
+      if (disp->PlatformDisplay != EGL_DEFAULT_DISPLAY) {
+         thread_safe = x11_xlib_display_is_thread_safe(disp->PlatformDisplay);
+      } else {
+         Display *display = XOpenDisplay(NULL);
+         if (display) {
+            thread_safe = x11_xlib_display_is_thread_safe(display);
+            XCloseDisplay(display);
+         }
+      }
+   }
 #endif
 
    dri2_ctx->dri_context = driCreateContextAttribs(
@@ -2532,41 +2546,49 @@ dri2_export_dma_buf_image_mesa(_EGLDisplay *disp, _EGLImage *img, int *fds,
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display_lock(disp);
    struct dri2_egl_image *dri2_img = dri2_egl_image(img);
-   EGLint nplanes;
 
    if (!dri2_can_export_dma_buf_image(disp, img)) {
       mtx_unlock(&dri2_dpy->lock);
       return EGL_FALSE;
    }
 
-   /* EGL_MESA_image_dma_buf_export spec says:
-    *    "If the number of fds is less than the number of planes, then
-    *    subsequent fd slots should contain -1."
+   int nplanes;
+   /* Query nplanes so that we know how big the given array is. */
+   dri2_query_image(dri2_img->dri_image, __DRI_IMAGE_ATTRIB_NUM_PLANES, &nplanes);
+
+   /* For driver which does not implement disjoint query, still uses
+    * single fd to match previous behavior.
     */
-   if (fds) {
-      /* Query nplanes so that we know how big the given array is. */
-      dri2_query_image(dri2_img->dri_image,
-                                  __DRI_IMAGE_ATTRIB_NUM_PLANES, &nplanes);
-      memset(fds, -1, nplanes * sizeof(int));
+   int is_disjoint = false;
+   if (nplanes > 1) {
+      dri2_query_image(dri2_img->dri_image, __DRI_IMAGE_ATTRIB_DISJOINT_PLANES,
+                       &is_disjoint);
    }
 
-   /* rework later to provide multiple fds/strides/offsets */
-   if (fds)
-      dri2_query_image(dri2_img->dri_image, __DRI_IMAGE_ATTRIB_FD,
-                                  fds);
+   for (int i = 0; i < nplanes; i++) {
+      struct dri_image *image = dri2_img->dri_image;
+      if (i)
+         image = dri2_from_planar(image, i, NULL);
 
-   if (strides)
-      dri2_query_image(dri2_img->dri_image,
-                                  __DRI_IMAGE_ATTRIB_STRIDE, strides);
+      if (fds) {
+         /* EGL_MESA_image_dma_buf_export spec says:
+          *    "If the number of fds is less than the number of planes, then
+          *    subsequent fd slots should contain -1."
+          */
+         if (i == 0 || is_disjoint)
+            dri2_query_image(image, __DRI_IMAGE_ATTRIB_FD, &fds[i]);
+         else
+            fds[i] = -1;
+      }
 
-   if (offsets) {
-      int img_offset;
-      bool ret = dri2_query_image(
-         dri2_img->dri_image, __DRI_IMAGE_ATTRIB_OFFSET, &img_offset);
-      if (ret)
-         offsets[0] = img_offset;
-      else
-         offsets[0] = 0;
+      if (strides && !dri2_query_image(image, __DRI_IMAGE_ATTRIB_STRIDE, &strides[i]))
+         strides[i] = 0;
+
+      if (offsets && !dri2_query_image(image, __DRI_IMAGE_ATTRIB_OFFSET, &offsets[i]))
+         offsets[i] = 0;
+
+      if (i)
+         dri2_destroy_image(image);
    }
 
    mtx_unlock(&dri2_dpy->lock);

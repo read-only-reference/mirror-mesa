@@ -40,6 +40,7 @@
 #include "compiler/shader_info.h"
 #include "compiler/list.h"
 #include "compiler/glsl/ir_list.h"
+#include "state_tracker/st_atom.h"
 
 #include "pipe/p_state.h"
 
@@ -131,6 +132,18 @@ struct gl_shader_info
        */
       enum gl_derivative_group DerivativeGroup;
    } Comp;
+
+   /**
+    * Mesh shader state from EXT_mesh_shader
+    */
+   struct {
+      unsigned LocalSize[3];
+
+      enum mesa_prim OutputType;
+
+      GLint MaxVertices;
+      GLint MaxPrimitives;
+   } Mesh;
 };
 
 /**
@@ -438,8 +451,7 @@ struct gl_shader_program
     * UniformStorage entries. Arrays will have multiple contiguous slots
     * in the UniformRemapTable, all pointing to the same UniformStorage entry.
     */
-   unsigned NumUniformRemapTable;
-   struct gl_uniform_storage **UniformRemapTable;
+   struct list_head *UniformRemapTable;
 
    /**
     * Sometimes there are empty slots left over in UniformRemapTable after we
@@ -530,7 +542,7 @@ struct gl_program
 
    struct pipe_shader_state state;
    struct ati_fragment_shader *ati_fs;
-   uint64_t affected_states; /**< ST_NEW_* flags to mark dirty when binding */
+   st_state_bitset affected_states; /**< ST_NEW_* flags to mark dirty when binding */
 
    void *serialized_nir;
    unsigned serialized_nir_size;
@@ -1170,6 +1182,11 @@ struct gl_shader_variable
     * Precision qualifier.
     */
    unsigned precision:2;
+
+   /**
+    * Per-primitive qualifier
+    */
+   unsigned per_primitive:1;
 };
 
 #endif

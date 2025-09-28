@@ -139,7 +139,9 @@ _mesa_ast_to_hir(ir_exec_list *instructions, struct _mesa_glsl_parse_state *stat
 
    state->gs_input_prim_type_specified = false;
    state->tcs_output_vertices_specified = false;
-   state->cs_input_local_size_specified = false;
+   state->cs_ms_input_local_size_specified = false;
+   state->ms_output_max_vertices_specified = false;
+   state->ms_output_max_primitives_specified = false;
 
    /* Section 4.2 of the GLSL 1.20 specification states:
     * "The built-in functions are scoped in a scope outside the global scope
@@ -3302,8 +3304,17 @@ validate_interpolation_qualifier(struct _mesa_glsl_parse_state *state,
                        "deprecated storage qualifier '%s'", i, s);
    }
 
-   validate_fragment_flat_interpolation_input(state, loc, interpolation,
-                                              var_type, mode);
+   if (qual->flags.q.per_primitive) {
+      if (interpolation != INTERP_MODE_NONE) {
+         _mesa_glsl_error(loc, state,
+                          "interpolation qualifier '%s' cannot be applied to "
+                          "per-primitive auxiliary storage qualifier",
+                          interpolation_string(interpolation));
+      }
+   } else {
+      validate_fragment_flat_interpolation_input(state, loc, interpolation,
+                                                 var_type, mode);
+   }
 }
 
 static glsl_interp_mode
@@ -3400,6 +3411,7 @@ apply_explicit_location(const struct ast_type_qualifier *qual,
    case MESA_SHADER_TESS_CTRL:
    case MESA_SHADER_TESS_EVAL:
    case MESA_SHADER_GEOMETRY:
+   case MESA_SHADER_MESH:
       if (var->data.mode == ir_var_shader_in || var->data.mode == ir_var_shader_out) {
          if (!state->check_separate_shader_objects_allowed(loc, var))
             return;
@@ -3428,10 +3440,11 @@ apply_explicit_location(const struct ast_type_qualifier *qual,
       fail = true;
       break;
 
+   case MESA_SHADER_TASK:
    case MESA_SHADER_COMPUTE:
       _mesa_glsl_error(loc, state,
-                       "compute shader variables cannot be given "
-                       "explicit locations");
+                       "%s shader variables cannot be given explicit locations",
+                       _mesa_shader_stage_to_string(state->stage));
       return;
    default:
       fail = true;
@@ -3456,6 +3469,7 @@ apply_explicit_location(const struct ast_type_qualifier *qual,
       case MESA_SHADER_TESS_CTRL:
       case MESA_SHADER_TESS_EVAL:
       case MESA_SHADER_GEOMETRY:
+      case MESA_SHADER_MESH:
          if (var->data.patch)
             var->data.location = qual_location + VARYING_SLOT_PATCH0;
          else
@@ -4222,6 +4236,8 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
       var->data.mode = ir_var_shader_storage;
    else if (qual->flags.q.shared_storage)
       var->data.mode = ir_var_shader_shared;
+   else if (qual->flags.q.task_payload)
+      var->data.mode = ir_var_shader_task_payload;
 
    if (!is_parameter && state->stage == MESA_SHADER_FRAGMENT) {
       if (state->has_framebuffer_fetch()) {
@@ -4398,10 +4414,40 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
                        "`out' or `varying' variables between shader stages");
    }
 
-   if (qual->flags.q.shared_storage && state->stage != MESA_SHADER_COMPUTE) {
+   if (qual->flags.q.shared_storage && state->stage != MESA_SHADER_COMPUTE &&
+       state->stage != MESA_SHADER_TASK && state->stage != MESA_SHADER_MESH) {
       _mesa_glsl_error(loc, state,
                        "the shared storage qualifiers can only be used with "
-                       "compute shaders");
+                       "compute, task, or mesh shaders");
+   }
+
+   if (qual->flags.q.task_payload && state->stage != MESA_SHADER_TASK &&
+       state->stage != MESA_SHADER_MESH) {
+      _mesa_glsl_error(loc, state,
+                       "the taskPayloadSharedEXT storage qualifier can only be used "
+                       "with task and mesh shaders");
+   }
+
+   if (qual->flags.q.per_primitive) {
+      if (state->stage == MESA_SHADER_MESH) {
+         if (var->data.mode != ir_var_shader_out) {
+            _mesa_glsl_error(loc, state,
+                             "the perprimitiveEXT auxiliary storage qualifier can only be "
+                             "used on `out` variables with mesh shader");
+         }
+      } else if (state->stage == MESA_SHADER_FRAGMENT) {
+         if (var->data.mode != ir_var_shader_in) {
+            _mesa_glsl_error(loc, state,
+                             "the perprimitiveEXT auxiliary storage qualifier can only be "
+                             "used on `in` variables with fragment shader");
+         }
+      } else {
+         _mesa_glsl_error(loc, state,
+                          "the perprimitiveEXT auxiliary storage qualifier can only be "
+                          "used with mesh and fragment shaders");
+      }
+
+      var->data.per_primitive = 1;
    }
 
    apply_image_qualifier_to_variable(qual, var, state, loc);
@@ -4937,6 +4983,44 @@ handle_tess_ctrl_shader_output_decl(struct _mesa_glsl_parse_state *state,
    validate_layout_qualifier_vertex_count(state, loc, var, num_vertices,
                                           &state->tcs_output_size,
                                           "tessellation control shader output");
+}
+
+static void
+handle_mesh_shader_output_decl(struct _mesa_glsl_parse_state *state,
+                               YYLTYPE loc, ir_variable *var)
+{
+   unsigned max_vertices = 0;
+   if (state->ms_output_max_vertices_specified) {
+      if (!state->out_qualifier->max_vertices->
+          process_qualifier_constant(state, "max_vertices", &max_vertices, false)) {
+         return;
+      }
+   }
+
+   unsigned max_primitives = 0;
+   if (state->ms_output_max_primitives_specified) {
+      if (!state->out_qualifier->max_primitives->
+          process_qualifier_constant(state, "max_primitives", &max_primitives, false)) {
+         return;
+      }
+   }
+
+   if (!glsl_type_is_array(var->type)) {
+      _mesa_glsl_error(&loc, state, "mesh shader outputs must be arrays");
+
+      /* To avoid cascading failures, short circuit the checks below. */
+      return;
+   }
+
+   if (var->data.per_primitive) {
+      validate_layout_qualifier_vertex_count(state, loc, var, max_primitives,
+                                             &state->ms_per_primitive_output_size,
+                                             "mesh shader per primitive output");
+   } else {
+      validate_layout_qualifier_vertex_count(state, loc, var, max_vertices,
+                                             &state->ms_per_vertex_output_size,
+                                             "mesh shader per vertex output");
+   }
 }
 
 /**
@@ -5744,6 +5828,8 @@ ast_declarator_list::hir(ir_exec_list *instructions,
 
          if (state->stage == MESA_SHADER_TESS_CTRL) {
             handle_tess_ctrl_shader_output_decl(state, loc, var);
+         } else if (state->stage == MESA_SHADER_MESH) {
+            handle_mesh_shader_output_decl(state, loc, var);
          }
       } else if (glsl_contains_subroutine(var->type)) {
          /* declare subroutine uniforms as hidden */
@@ -7723,6 +7809,7 @@ ast_process_struct_or_iface_block_members(ir_exec_list *instructions,
          fields[i].centroid = qual->flags.q.centroid ? 1 : 0;
          fields[i].sample = qual->flags.q.sample ? 1 : 0;
          fields[i].patch = qual->flags.q.patch ? 1 : 0;
+         fields[i].per_primitive = qual->flags.q.per_primitive ? 1 : 0;
          fields[i].offset = -1;
          fields[i].explicit_xfb_buffer = explicit_xfb_buffer;
          fields[i].xfb_buffer = xfb_buffer;
@@ -8152,14 +8239,17 @@ ast_interface_block::hir(ir_exec_list *instructions,
          if (state->stage == MESA_SHADER_GEOMETRY) {
             allowed_blk_qualifiers.flags.q.stream = 1;
             allowed_blk_qualifiers.flags.q.explicit_stream = 1;
-         }
-         if (state->stage == MESA_SHADER_TESS_CTRL) {
+         } else if (state->stage == MESA_SHADER_TESS_CTRL) {
             allowed_blk_qualifiers.flags.q.patch = 1;
+         } else if (state->stage == MESA_SHADER_MESH) {
+            allowed_blk_qualifiers.flags.q.per_primitive = 1;
          }
       } else {
          allowed_blk_qualifiers.flags.q.in = 1;
          if (state->stage == MESA_SHADER_TESS_EVAL) {
             allowed_blk_qualifiers.flags.q.patch = 1;
+         } else if (state->stage == MESA_SHADER_FRAGMENT) {
+            allowed_blk_qualifiers.flags.q.per_primitive = 1;
          }
       }
    }
@@ -8208,6 +8298,15 @@ ast_interface_block::hir(ir_exec_list *instructions,
       matrix_layout = GLSL_MATRIX_LAYOUT_COLUMN_MAJOR;
 
    bool redeclaring_per_vertex = strcmp(this->block_name, "gl_PerVertex") == 0;
+   bool redeclaring_mesh_per_vertex =
+      strcmp(this->block_name, "gl_MeshPerVertexEXT") == 0;
+   bool redeclaring_mesh_per_primitive =
+      strcmp(this->block_name, "gl_MeshPerPrimitiveEXT") == 0;
+   bool redeclaring =
+      redeclaring_per_vertex ||
+      redeclaring_mesh_per_vertex ||
+      redeclaring_mesh_per_primitive;
+
    ir_exec_list declared_variables;
    glsl_struct_field *fields;
 
@@ -8287,7 +8386,7 @@ ast_interface_block::hir(ir_exec_list *instructions,
                                                 &fields,
                                                 true,
                                                 matrix_layout,
-                                                redeclaring_per_vertex,
+                                                redeclaring,
                                                 var_mode,
                                                 &this->layout,
                                                 qual_stream,
@@ -8296,7 +8395,7 @@ ast_interface_block::hir(ir_exec_list *instructions,
                                                 expl_location,
                                                 expl_align);
 
-   if (!redeclaring_per_vertex) {
+   if (!redeclaring) {
       validate_identifier(this->block_name, loc, state);
 
       /* From section 4.3.9 ("Interface Blocks") of the GLSL 4.50 spec:
@@ -8313,7 +8412,7 @@ ast_interface_block::hir(ir_exec_list *instructions,
       }
    }
 
-   const glsl_type *earlier_per_vertex = NULL;
+   const glsl_type *earlier_redeclaring = NULL;
    if (redeclaring_per_vertex) {
       /* Find the previous declaration of gl_PerVertex.  If we're redeclaring
        * the named interface block gl_in, we can find it by looking at the
@@ -8328,7 +8427,7 @@ ast_interface_block::hir(ir_exec_list *instructions,
       case ir_var_shader_in:
          if (ir_variable *earlier_gl_in =
              state->symbols->get_variable("gl_in")) {
-            earlier_per_vertex = earlier_gl_in->get_interface_type();
+            earlier_redeclaring = earlier_gl_in->get_interface_type();
          } else {
             _mesa_glsl_error(&loc, state,
                              "redeclaration of gl_PerVertex input not allowed "
@@ -8346,10 +8445,10 @@ ast_interface_block::hir(ir_exec_list *instructions,
       case ir_var_shader_out:
          if (ir_variable *earlier_gl_Position =
              state->symbols->get_variable("gl_Position")) {
-            earlier_per_vertex = earlier_gl_Position->get_interface_type();
+            earlier_redeclaring = earlier_gl_Position->get_interface_type();
          } else if (ir_variable *earlier_gl_out =
                state->symbols->get_variable("gl_out")) {
-            earlier_per_vertex = earlier_gl_out->get_interface_type();
+            earlier_redeclaring = earlier_gl_out->get_interface_type();
          } else {
             _mesa_glsl_error(&loc, state,
                              "redeclaration of gl_PerVertex output not "
@@ -8377,42 +8476,78 @@ ast_interface_block::hir(ir_exec_list *instructions,
                           "output");
          break;
       }
+   } else if (redeclaring_mesh_per_vertex || redeclaring_mesh_per_primitive) {
+      const char *instance_name = redeclaring_mesh_per_vertex ?
+         "gl_MeshVerticesEXT" : "gl_MeshPrimitivesEXT";
+      ir_variable *earlier_var = state->symbols->get_variable(instance_name);
+      if (earlier_var) {
+         earlier_redeclaring = earlier_var->get_interface_type();
+      } else {
+         _mesa_glsl_error(&loc, state,
+                          "redeclaration of %s output not allowed "
+                          "in the %s shader", this->block_name,
+                          _mesa_shader_stage_to_string(state->stage));
+      }
 
-      if (earlier_per_vertex == NULL) {
+      if (var_mode == ir_var_shader_out) {
+         if (this->instance_name == NULL ||
+             strcmp(this->instance_name, instance_name) != 0 ||
+             this->array_specifier == NULL) {
+            _mesa_glsl_error(&loc, state,
+                             "%s output must be redeclared as %s[]",
+                             this->block_name, instance_name);
+         }
+      } else {
+         _mesa_glsl_error(&loc, state,
+                          "%s must be declared as an output", this->block_name);
+      }
+
+      if (redeclaring_mesh_per_primitive && !this->layout.flags.q.per_primitive) {
+         _mesa_glsl_error(&loc, state,
+                          "gl_MeshPerPrimitiveEXT must be declared with "
+                          "perprimitiveEXT");
+      }
+   }
+
+   if (redeclaring) {
+      if (earlier_redeclaring == NULL) {
          /* An error has already been reported.  Bail out to avoid null
           * dereferences later in this function.
           */
          return NULL;
       }
 
-      /* Copy locations from the old gl_PerVertex interface block. */
+      /* Copy locations from the old interface block. */
       for (unsigned i = 0; i < num_variables; i++) {
-         int j = glsl_get_field_index(earlier_per_vertex, fields[i].name);
+         int j = glsl_get_field_index(earlier_redeclaring, fields[i].name);
          if (j == -1) {
             _mesa_glsl_error(&loc, state,
-                             "redeclaration of gl_PerVertex must be a subset "
-                             "of the built-in members of gl_PerVertex");
+                             "redeclaration of %s must be a subset "
+                             "of the built-in members of %s",
+                             this->block_name, this->block_name);
          } else {
             fields[i].location =
-               earlier_per_vertex->fields.structure[j].location;
+               earlier_redeclaring->fields.structure[j].location;
             fields[i].offset =
-               earlier_per_vertex->fields.structure[j].offset;
+               earlier_redeclaring->fields.structure[j].offset;
             fields[i].interpolation =
-               earlier_per_vertex->fields.structure[j].interpolation;
+               earlier_redeclaring->fields.structure[j].interpolation;
             fields[i].centroid =
-               earlier_per_vertex->fields.structure[j].centroid;
+               earlier_redeclaring->fields.structure[j].centroid;
             fields[i].sample =
-               earlier_per_vertex->fields.structure[j].sample;
+               earlier_redeclaring->fields.structure[j].sample;
             fields[i].patch =
-               earlier_per_vertex->fields.structure[j].patch;
+               earlier_redeclaring->fields.structure[j].patch;
+            fields[i].per_primitive =
+               earlier_redeclaring->fields.structure[j].per_primitive;
             fields[i].precision =
-               earlier_per_vertex->fields.structure[j].precision;
+               earlier_redeclaring->fields.structure[j].precision;
             fields[i].explicit_xfb_buffer =
-               earlier_per_vertex->fields.structure[j].explicit_xfb_buffer;
+               earlier_redeclaring->fields.structure[j].explicit_xfb_buffer;
             fields[i].xfb_buffer =
-               earlier_per_vertex->fields.structure[j].xfb_buffer;
+               earlier_redeclaring->fields.structure[j].xfb_buffer;
             fields[i].xfb_stride =
-               earlier_per_vertex->fields.structure[j].xfb_stride;
+               earlier_redeclaring->fields.structure[j].xfb_stride;
          }
       }
 
@@ -8427,7 +8562,7 @@ ast_interface_block::hir(ir_exec_list *instructions,
        * gl_PerVertex by GLSL 1.50, therefore we implement this behaviour
        * regardless of GLSL version.
        */
-      interface_block_usage_visitor v(var_mode, earlier_per_vertex);
+      interface_block_usage_visitor v(var_mode, earlier_redeclaring);
       v.run(instructions);
       if (v.usage_found()) {
          _mesa_glsl_error(&loc, state,
@@ -8485,6 +8620,10 @@ ast_interface_block::hir(ir_exec_list *instructions,
               this->array_specifier == NULL &&
               var_mode == ir_var_shader_out) {
       _mesa_glsl_error(&loc, state, "tessellation control shader outputs must be arrays");
+   } else if (state->stage == MESA_SHADER_MESH &&
+              this->array_specifier == NULL &&
+              var_mode == ir_var_shader_out) {
+      _mesa_glsl_error(&loc, state, "mesh shader outputs must be arrays");
    }
 
 
@@ -8496,7 +8635,7 @@ ast_interface_block::hir(ir_exec_list *instructions,
     *     field selector ( . ) operator (analogously to structures)."
     */
    if (this->instance_name) {
-      if (redeclaring_per_vertex) {
+      if (redeclaring) {
          /* When a built-in in an unnamed interface block is redeclared,
           * get_variable_being_redeclared() calls
           * check_builtin_array_max_size() to make sure that built-in array
@@ -8544,7 +8683,7 @@ ast_interface_block::hir(ir_exec_list *instructions,
           *     per-vertex-arrays as required for tessellation, it is an error
           *     to declare a member of the block with a location qualifier."
           */
-         if (!redeclaring_per_vertex &&
+         if (!redeclaring &&
              (state->has_enhanced_layouts() || state->has_shader_io_blocks())) {
             bool allow_location;
             switch (state->stage)
@@ -8556,6 +8695,10 @@ ast_interface_block::hir(ir_exec_list *instructions,
             case MESA_SHADER_GEOMETRY:
                allow_location = (this->array_specifier->is_single_dimension()
                                  && var_mode == ir_var_shader_in);
+               break;
+            case MESA_SHADER_MESH:
+               allow_location = (this->array_specifier->is_single_dimension()
+                                 && var_mode == ir_var_shader_out);
                break;
             default:
                allow_location = false;
@@ -8601,7 +8744,8 @@ ast_interface_block::hir(ir_exec_list *instructions,
             bool allow_inputs = state->stage == MESA_SHADER_GEOMETRY ||
                                 state->stage == MESA_SHADER_TESS_CTRL ||
                                 state->stage == MESA_SHADER_TESS_EVAL;
-            bool allow_outputs = state->stage == MESA_SHADER_TESS_CTRL;
+            bool allow_outputs = state->stage == MESA_SHADER_TESS_CTRL ||
+                                 state->stage == MESA_SHADER_MESH;
 
             if (this->layout.flags.q.in) {
                if (!allow_inputs)
@@ -8651,6 +8795,7 @@ ast_interface_block::hir(ir_exec_list *instructions,
          var->data.read_only = true;
 
       var->data.patch = this->layout.flags.q.patch;
+      var->data.per_primitive = this->layout.flags.q.per_primitive;
 
       if (state->stage == MESA_SHADER_GEOMETRY && var_mode == ir_var_shader_in)
          handle_geometry_shader_input_decl(state, loc, var);
@@ -8659,6 +8804,8 @@ ast_interface_block::hir(ir_exec_list *instructions,
          handle_tess_shader_input_decl(state, loc, var);
       else if (state->stage == MESA_SHADER_TESS_CTRL && var_mode == ir_var_shader_out)
          handle_tess_ctrl_shader_output_decl(state, loc, var);
+      else if (state->stage == MESA_SHADER_MESH && var_mode == ir_var_shader_out)
+         handle_mesh_shader_output_decl(state, loc, var);
 
       for (unsigned i = 0; i < num_variables; i++) {
          if (var->data.mode == ir_var_shader_storage)
@@ -8667,7 +8814,7 @@ ast_interface_block::hir(ir_exec_list *instructions,
 
       if (ir_variable *earlier =
           state->symbols->get_variable(this->instance_name)) {
-         if (!redeclaring_per_vertex) {
+         if (!redeclaring) {
             _mesa_glsl_error(&loc, state, "`%s' redeclared",
                              this->instance_name);
          }
@@ -8706,6 +8853,7 @@ ast_interface_block::hir(ir_exec_list *instructions,
          var->data.patch = fields[i].patch;
          var->data.stream = qual_stream;
          var->data.location = fields[i].location;
+         var->data.per_primitive = fields[i].per_primitive;
 
          if (fields[i].location != -1)
             var->data.explicit_location = true;
@@ -8804,7 +8952,7 @@ ast_interface_block::hir(ir_exec_list *instructions,
          instructions->push_tail(var);
       }
 
-      if (redeclaring_per_vertex && block_type != earlier_per_vertex) {
+      if (redeclaring_per_vertex && block_type != earlier_redeclaring) {
          /* From section 7.1 ("Built-in Language Variables") of the GLSL 4.10 spec:
           *
           *     It is also a compilation error ... to redeclare a built-in
@@ -8829,7 +8977,7 @@ ast_interface_block::hir(ir_exec_list *instructions,
          ir_foreach_in_list_safe(ir_instruction, node, instructions) {
             ir_variable *const var = node->as_variable();
             if (var != NULL &&
-                var->get_interface_type() == earlier_per_vertex &&
+                var->get_interface_type() == earlier_redeclaring &&
                 var->data.mode == var_mode) {
                if (var->data.how_declared == ir_var_declared_normally) {
                   _mesa_glsl_error(&loc, state,
@@ -8906,6 +9054,101 @@ ast_tcs_output_layout::hir(ir_exec_list *instructions,
 
 
 ir_rvalue *
+ast_ms_output_layout::hir(ir_exec_list *instructions,
+                          struct _mesa_glsl_parse_state *state)
+{
+   YYLTYPE loc = this->get_location();
+
+   unsigned max_vertices;
+   bool max_vertices_specified = state->out_qualifier->max_vertices->
+      process_qualifier_constant(state, "max_vertices", &max_vertices, false);
+   if (max_vertices_specified) {
+      /* If any shader outputs occurred before this declaration and specified an
+       * array size, make sure the size they specified is consistent with the
+       * layout qualifier.
+       */
+      if (state->ms_per_vertex_output_size != 0 &&
+          state->ms_per_vertex_output_size != max_vertices) {
+         _mesa_glsl_error(&loc, state,
+                          "this mesh shader output layout "
+                          "specifies %u max_vertices, but a previous output "
+                          "is declared with size %u",
+                          max_vertices, state->ms_per_vertex_output_size);
+         return NULL;
+      }
+
+      state->ms_output_max_vertices_specified = true;
+   }
+
+   unsigned max_primitives;
+   bool max_primitives_specified = state->out_qualifier->max_primitives->
+      process_qualifier_constant(state, "max_primitives", &max_primitives, false);
+   if (max_primitives_specified) {
+      /* If any shader outputs occurred before this declaration and specified an
+       * array size, make sure the size they specified is consistent with the
+       * layout qualifier.
+       */
+      if (state->ms_per_primitive_output_size != 0 &&
+          state->ms_per_primitive_output_size != max_primitives) {
+         _mesa_glsl_error(&loc, state,
+                          "this mesh shader output layout "
+                          "specifies %u max_primitives, but a previous output "
+                          "is declared with size %u",
+                          max_primitives, state->ms_per_primitive_output_size);
+         return NULL;
+      }
+
+      state->ms_output_max_primitives_specified = true;
+   }
+
+   if (!max_vertices_specified && !max_primitives_specified)
+      return NULL;
+
+   /* If any shader outputs occurred before this declaration and did not
+    * specify an array size, their size is determined now.
+    */
+   ir_foreach_in_list (ir_instruction, node, instructions) {
+      ir_variable *var = node->as_variable();
+      if (var == NULL || var->data.mode != ir_var_shader_out)
+         continue;
+
+      if (!glsl_type_is_unsized_array(var->type))
+         continue;
+
+      if (var->data.per_primitive) {
+         if (!max_primitives_specified)
+            continue;
+
+         if (var->data.max_array_access >= (int)max_primitives) {
+            _mesa_glsl_error(&loc, state,
+                             "this mesh shader output layout "
+                             "specifies %u max_primitives, but an access to element "
+                             "%u of output `%s' already exists", max_primitives,
+                             var->data.max_array_access, var->name);
+         } else {
+            var->type = glsl_array_type(var->type->fields.array, max_primitives, 0);
+         }
+      } else {
+         if (!max_vertices_specified)
+            continue;
+
+         if (var->data.max_array_access >= (int)max_vertices) {
+            _mesa_glsl_error(&loc, state,
+                             "this mesh shader output layout "
+                             "specifies %u vertices, but an access to element "
+                             "%u of output `%s' already exists", max_vertices,
+                             var->data.max_array_access, var->name);
+         } else {
+            var->type = glsl_array_type(var->type->fields.array, max_vertices, 0);
+         }
+      }
+   }
+
+   return NULL;
+}
+
+
+ir_rvalue *
 ast_gs_input_layout::hir(ir_exec_list *instructions,
                          struct _mesa_glsl_parse_state *state)
 {
@@ -8962,8 +9205,8 @@ ast_gs_input_layout::hir(ir_exec_list *instructions,
 
 
 ir_rvalue *
-ast_cs_input_layout::hir(ir_exec_list *instructions,
-                         struct _mesa_glsl_parse_state *state)
+ast_cs_ms_input_layout::hir(ir_exec_list *instructions,
+                            struct _mesa_glsl_parse_state *state)
 {
    YYLTYPE loc = this->get_location();
 
@@ -8978,6 +9221,26 @@ ast_cs_input_layout::hir(ir_exec_list *instructions,
     * MAX_COMPUTE_WORK_GROUP_INVOCATIONS, but it seems reasonable to
     * report it at compile time as well.
     */
+
+   const unsigned *max_work_group_size;
+   unsigned max_work_group_invocations;
+   switch (state->stage) {
+   case MESA_SHADER_COMPUTE:
+      max_work_group_size = state->consts->MaxComputeWorkGroupSize;
+      max_work_group_invocations = state->consts->MaxComputeWorkGroupInvocations;
+      break;
+   case MESA_SHADER_TASK:
+      max_work_group_size = state->caps->mesh.max_task_work_group_size;
+      max_work_group_invocations = state->caps->mesh.max_task_work_group_invocations;
+      break;
+   case MESA_SHADER_MESH:
+      max_work_group_size = state->caps->mesh.max_mesh_work_group_size;
+      max_work_group_invocations = state->caps->mesh.max_mesh_work_group_invocations;
+      break;
+   default:
+      UNREACHABLE("invalid shader stage");
+   }
+
    GLuint64 total_invocations = 1;
    unsigned qual_local_size[3];
    for (int i = 0; i < 3; i++) {
@@ -8995,20 +9258,19 @@ ast_cs_input_layout::hir(ir_exec_list *instructions,
       }
       ralloc_free(local_size_str);
 
-      if (qual_local_size[i] > state->consts->MaxComputeWorkGroupSize[i]) {
+      if (qual_local_size[i] > max_work_group_size[i]) {
          _mesa_glsl_error(&loc, state,
-                          "local_size_%c exceeds MAX_COMPUTE_WORK_GROUP_SIZE"
+                          "local_size_%c exceeds max work group size"
                           " (%d)", 'x' + i,
-                          state->consts->MaxComputeWorkGroupSize[i]);
+                          max_work_group_size[i]);
          break;
       }
       total_invocations *= qual_local_size[i];
-      if (total_invocations >
-          state->consts->MaxComputeWorkGroupInvocations) {
+      if (total_invocations > max_work_group_invocations) {
          _mesa_glsl_error(&loc, state,
                           "product of local_sizes exceeds "
-                          "MAX_COMPUTE_WORK_GROUP_INVOCATIONS (%d)",
-                          state->consts->MaxComputeWorkGroupInvocations);
+                          "max work group invocations (%d)",
+                          max_work_group_invocations);
          break;
       }
    }
@@ -9016,11 +9278,11 @@ ast_cs_input_layout::hir(ir_exec_list *instructions,
    /* If any compute input layout declaration preceded this one, make sure it
     * was consistent with this one.
     */
-   if (state->cs_input_local_size_specified) {
+   if (state->cs_ms_input_local_size_specified) {
       for (int i = 0; i < 3; i++) {
-         if (state->cs_input_local_size[i] != qual_local_size[i]) {
+         if (state->cs_ms_input_local_size[i] != qual_local_size[i]) {
             _mesa_glsl_error(&loc, state,
-                             "compute shader input layout does not match"
+                             "shader input layout does not match"
                              " previous declaration");
             return NULL;
          }
@@ -9041,9 +9303,9 @@ ast_cs_input_layout::hir(ir_exec_list *instructions,
       return NULL;
    }
 
-   state->cs_input_local_size_specified = true;
+   state->cs_ms_input_local_size_specified = true;
    for (int i = 0; i < 3; i++)
-      state->cs_input_local_size[i] = qual_local_size[i];
+      state->cs_ms_input_local_size[i] = qual_local_size[i];
 
    /* We may now declare the built-in constant gl_WorkGroupSize (see
     * builtin_variable_generator::generate_constants() for why we didn't

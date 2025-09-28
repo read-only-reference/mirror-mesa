@@ -8,6 +8,7 @@
 #include "ac_nir.h"
 #include "ac_nir_helpers.h"
 #include "nir_builder.h"
+#include "nir_intrinsics.h"
 
 /* Set NIR options shared by ACO, LLVM, RADV, and radeonsi. */
 void ac_nir_set_options(struct radeon_info *info, bool use_llvm,
@@ -114,6 +115,10 @@ void ac_nir_set_options(struct radeon_info *info, bool use_llvm,
       BITFIELD_BIT(nir_lower_packing_op_unpack_32_2x16) |
       BITFIELD_BIT(nir_lower_packing_op_pack_32_4x8) |
       BITFIELD_BIT(nir_lower_packing_op_unpack_32_4x8);
+   options->max_workgroup_invocations = 1024;
+   options->max_workgroup_count[0] = UINT32_MAX;
+   options->max_workgroup_count[1] = UINT16_MAX;
+   options->max_workgroup_count[2] = UINT16_MAX;
 }
 
 /* Sleep for the given number of clock cycles. */
@@ -824,12 +829,12 @@ ac_nir_repack_invocations_in_workgroup(nir_builder *b, nir_def **input_bool,
    nir_def *dont_care = nir_undef(b, 1, num_lds_dwords * 32);
    nir_def *packed_counts = NULL;
 
-   nir_if *if_use_lds = nir_push_if(b, nir_inverse_ballot(b, 1, nir_imm_intN_t(b, ballot, wave_size)));
+   nir_if *if_use_lds = nir_push_if(b, nir_inverse_ballot_imm(b, ballot, wave_size));
    {
       nir_def *store_val = surviving_invocations_in_current_wave[0];
 
       if (num_repacks == 2) {
-         nir_def *lane_id_0 = nir_inverse_ballot(b, 1, nir_imm_intN_t(b, 1, wave_size));
+         nir_def *lane_id_0 = nir_inverse_ballot_imm(b, 1, wave_size);
          nir_def *off = nir_bcsel(b, lane_id_0, nir_imm_int(b, 0), nir_imm_int(b, num_lds_dwords * 4));
          lds_addr_base = nir_iadd_nuw(b, lds_addr_base, off);
          store_val = nir_bcsel(b, lane_id_0, store_val, surviving_invocations_in_current_wave[1]);
@@ -888,4 +893,17 @@ ac_nir_lower_phis_to_scalar_cb(const nir_instr *instr, const void *_)
       return 1;
 
    return 32 / phi->def.bit_size;
+}
+
+bool
+ac_nir_allow_offset_wrap_cb(nir_intrinsic_instr *instr, const void *data)
+{
+   switch (instr->intrinsic) {
+   case nir_intrinsic_load_shared:
+   case nir_intrinsic_store_shared:
+   case nir_intrinsic_shared_atomic:
+   case nir_intrinsic_shared_atomic_swap:
+      return true;
+   default: return false;
+   }
 }

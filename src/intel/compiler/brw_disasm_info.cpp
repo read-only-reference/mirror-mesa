@@ -28,9 +28,57 @@
 #include "dev/intel_debug.h"
 #include "compiler/nir/nir.h"
 
+static bool
+is_do_block(struct bblock_t *block)
+{
+   return block->start()->opcode == BRW_OPCODE_DO;
+}
+
+static bool
+is_flow_block(struct bblock_t *block)
+{
+   return block->start()->opcode == SHADER_OPCODE_FLOW;
+}
+
+static bool
+should_omit_link(struct bblock_t *block,
+                 struct bblock_link *link)
+{
+   return link->kind == bblock_link_physical &&
+          (is_do_block(block) || is_do_block(link->block));
+}
+
+static void
+print_successors_for_disasm(FILE *f, struct bblock_t *block)
+{
+   brw_foreach_list_typed(struct bblock_link, succ, link,
+                          &block->children) {
+      if (should_omit_link(block, succ))
+         continue;
+      if (is_do_block(succ->block) || is_flow_block(succ->block))
+         print_successors_for_disasm(f, succ->block);
+      else
+         fprintf(f, " ->B%d", succ->block->num);
+   }
+}
+
+static void
+print_predecessors_for_disasm(FILE *f, struct bblock_t *block)
+{
+   brw_foreach_list_typed(struct bblock_link, pred, link,
+                          &block->parents) {
+      if (should_omit_link(block, pred))
+         continue;
+      if (is_do_block(pred->block) || is_flow_block(pred->block))
+         print_predecessors_for_disasm(f, pred->block);
+      else
+         fprintf(f, " <-B%d", pred->block->num);
+   }
+}
+
 void
 dump_assembly(void *assembly, int start_offset, int end_offset,
-              struct disasm_info *disasm, const unsigned *block_latency)
+              struct disasm_info *disasm, const unsigned *block_latency, FILE *f)
 {
    const struct brw_isa_info *isa = disasm->isa;
    const char *last_annotation_string = NULL;
@@ -51,42 +99,34 @@ dump_assembly(void *assembly, int start_offset, int end_offset,
       int end_offset = next->offset;
 
       if (group->block_start) {
-         fprintf(stderr, "   START B%d", group->block_start->num);
-         brw_foreach_list_typed(struct bblock_link, predecessor_link, link,
-                            &group->block_start->parents) {
-            struct bblock_t *predecessor_block = predecessor_link->block;
-            fprintf(stderr, " <-B%d", predecessor_block->num);
-         }
+         fprintf(f, "   START B%d", group->block_start->num);
+         print_predecessors_for_disasm(f, group->block_start);
          if (block_latency)
-            fprintf(stderr, " (%u cycles)",
+            fprintf(f, " (%u cycles)",
                     block_latency[group->block_start->num]);
-         fprintf(stderr, "\n");
+         fprintf(f, "\n");
       }
 
       if (last_annotation_string != group->annotation) {
          last_annotation_string = group->annotation;
          if (last_annotation_string)
-            fprintf(stderr, "   %s\n", last_annotation_string);
+            fprintf(f, "   %s\n", last_annotation_string);
       }
 
       brw_disassemble(isa, assembly, start_offset, end_offset,
-                      root_label, NULL, stderr);
+                      root_label, NULL, f);
 
       if (group->error) {
-         fputs(group->error, stderr);
+         fputs(group->error, f);
       }
 
       if (group->block_end) {
-         fprintf(stderr, "   END B%d", group->block_end->num);
-         brw_foreach_list_typed(struct bblock_link, successor_link, link,
-                            &group->block_end->children) {
-            struct bblock_t *successor_block = successor_link->block;
-            fprintf(stderr, " ->B%d", successor_block->num);
-         }
-         fprintf(stderr, "\n");
+         fprintf(f, "   END B%d", group->block_end->num);
+         print_successors_for_disasm(f, group->block_end);
+         fprintf(f, "\n");
       }
    }
-   fprintf(stderr, "\n");
+   fprintf(f, "\n");
 
    ralloc_free(mem_ctx);
 }
@@ -135,20 +175,15 @@ disasm_annotate(struct disasm_info *disasm,
    }
 #endif
 
-   if (cfg->blocks[disasm->cur_block]->start() == inst) {
-      group->block_start = cfg->blocks[disasm->cur_block];
+   if (inst->opcode == BRW_OPCODE_DO ||
+       inst->opcode == SHADER_OPCODE_FLOW) {
+      disasm->use_tail = true;
+      disasm->cur_block++;
+      return;
    }
 
-   /* There is no hardware DO instruction on Gfx6+, so since DO always
-    * starts a basic block, we need to set the .block_start of the next
-    * instruction's annotation with a pointer to the bblock started by
-    * the DO.
-    *
-    * There's also only complication from emitting an annotation without
-    * a corresponding hardware instruction to disassemble.
-    */
-   if (inst->opcode == BRW_OPCODE_DO) {
-      disasm->use_tail = true;
+   if (cfg->blocks[disasm->cur_block]->start() == inst) {
+      group->block_start = cfg->blocks[disasm->cur_block];
    }
 
    if (cfg->blocks[disasm->cur_block]->end() == inst) {

@@ -187,9 +187,13 @@ void brw_nir_lower_fs_inputs(nir_shader *nir,
                              const struct intel_device_info *devinfo,
                              const struct brw_wm_prog_key *key);
 void brw_nir_lower_vue_outputs(nir_shader *nir);
-void brw_nir_lower_tcs_outputs(nir_shader *nir, const struct intel_vue_map *vue,
+void brw_nir_lower_tcs_outputs(nir_shader *nir,
+                               const struct intel_device_info *devinfo,
+                               const struct intel_vue_map *vue,
                                enum tess_primitive_mode tes_primitive_mode);
 void brw_nir_lower_fs_outputs(nir_shader *nir);
+bool brw_nir_lower_fs_load_output(nir_shader *shader,
+                                  const struct brw_wm_prog_key *key);
 
 bool brw_nir_lower_cmat(nir_shader *nir, unsigned subgroup_size);
 
@@ -208,6 +212,9 @@ bool brw_nir_lower_texel_address(nir_shader *shader,
                                  const struct intel_device_info *devinfo,
                                  enum isl_tiling tiling);
 
+bool brw_nir_lower_mcs_fetch(nir_shader *shader,
+                             const struct intel_device_info *devinfo);
+
 struct brw_nir_lower_texture_opts {
    bool combined_lod_and_array_index;
    bool combined_lod_or_bias_and_offset;
@@ -225,10 +232,27 @@ bool brw_nir_lower_mem_access_bit_sizes(nir_shader *shader,
 
 bool brw_nir_lower_simd(nir_shader *nir, unsigned dispatch_width);
 
-void brw_postprocess_nir(nir_shader *nir,
-                         const struct brw_compiler *compiler,
-                         bool debug_enabled,
-                         enum brw_robustness_flags robust_flags);
+void brw_postprocess_nir_opts(nir_shader *nir,
+                              const struct brw_compiler *compiler,
+                              enum brw_robustness_flags robust_flags);
+
+void brw_postprocess_nir_out_of_ssa(nir_shader *nir,
+                                    unsigned dispatch_width,
+                                    debug_archiver *archiver,
+                                    bool debug_enabled);
+
+static inline void
+brw_postprocess_nir(nir_shader *nir,
+                    const struct brw_compiler *compiler,
+                    unsigned dispatch_width,
+                    debug_archiver *archiver,
+                    bool debug_enabled,
+                    enum brw_robustness_flags robust_flags)
+{
+   brw_postprocess_nir_opts(nir, compiler, robust_flags);
+   brw_postprocess_nir_out_of_ssa(nir, dispatch_width, archiver,
+                                  debug_enabled);
+}
 
 bool brw_nir_apply_attribute_workarounds(nir_shader *nir,
                                          const uint8_t *attrib_wa_flags);
@@ -236,6 +260,8 @@ bool brw_nir_apply_attribute_workarounds(nir_shader *nir,
 bool brw_nir_apply_trig_workarounds(nir_shader *nir);
 
 bool brw_nir_limit_trig_input_range_workaround(nir_shader *nir);
+
+bool brw_nir_apply_sqrt_workarounds(nir_shader *nir);
 
 bool brw_nir_lower_fsign(nir_shader *nir);
 
@@ -284,6 +310,10 @@ nir_def *brw_nir_load_global_const(nir_builder *b,
                                        nir_intrinsic_instr *load_uniform,
                                        nir_def *base_addr,
                                        unsigned off);
+
+void brw_nir_quick_pressure_estimate(nir_shader *nir,
+                                     const struct intel_device_info *devinfo,
+                                     unsigned simd_est[3]);
 
 const struct glsl_type *brw_nir_get_var_type(const struct nir_shader *nir,
                                              nir_variable *var);

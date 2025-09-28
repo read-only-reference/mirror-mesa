@@ -82,8 +82,8 @@ static bool match_layout_qualifier(const char *s1, const char *s2,
 
 %expect 0
 
-%pure-parser
-%error-verbose
+%define api.pure
+%define parse.error verbose
 
 %locations
 %initial-action {
@@ -147,6 +147,7 @@ static bool match_layout_qualifier(const char *s1, const char *s2,
 %token IMAGE1DSHADOW IMAGE2DSHADOW IMAGE1DARRAYSHADOW IMAGE2DARRAYSHADOW
 %token COHERENT VOLATILE RESTRICT READONLY WRITEONLY
 %token SHARED
+%token TASKPAYLOAD PERPRIMITIVE
 %token STRUCT VOID_TOK WHILE
 %token <identifier> IDENTIFIER TYPE_IDENTIFIER NEW_IDENTIFIER
 %type <identifier> any_identifier
@@ -1327,7 +1328,7 @@ layout_qualifier_id:
          }
 
          if ($$.flags.i && !state->has_geometry_shader() &&
-             !state->has_tessellation_shader()) {
+             !state->has_tessellation_shader() && !state->EXT_mesh_shader_enable) {
             _mesa_glsl_error(& @1, state, "#version 150 layout "
                              "qualifier `%s' used", $1);
          }
@@ -1815,10 +1816,18 @@ layout_qualifier_id:
       if (match_layout_qualifier("max_vertices", $1, state) == 0) {
          $$.flags.q.max_vertices = 1;
          $$.max_vertices = new(ctx) ast_layout_expression(@1, $3);
-         if (!state->has_geometry_shader()) {
+         if (!state->has_geometry_shader() && !state->EXT_mesh_shader_enable) {
             _mesa_glsl_error(& @3, state,
-                             "#version 150 max_vertices qualifier "
-                             "specified");
+                             "max_vertices qualifier specified");
+         }
+      }
+
+      if (match_layout_qualifier("max_primitives", $1, state) == 0) {
+         $$.flags.q.max_primitives = 1;
+         $$.max_primitives = new(ctx) ast_layout_expression(@1, $3);
+         if (!state->EXT_mesh_shader_enable) {
+            _mesa_glsl_error(& @3, state,
+                             "max_primitives qualifier specified");
          }
       }
 
@@ -1858,10 +1867,10 @@ layout_qualifier_id:
       for (int i = 0; i < 3; i++) {
          if (match_layout_qualifier(local_size_qualifiers[i], $1,
                                     state) == 0) {
-            if (!state->has_compute_shader()) {
+            if (!state->has_compute_shader() && !state->EXT_mesh_shader_enable) {
                _mesa_glsl_error(& @3, state,
                                 "%s qualifier requires GLSL 4.30 or "
-                                "GLSL ES 3.10 or ARB_compute_shader",
+                                "GLSL ES 3.10 or ARB_compute_shader or EXT_mesh_shader",
                                 local_size_qualifiers[i]);
                YYERROR;
             } else {
@@ -2189,6 +2198,11 @@ auxiliary_storage_qualifier:
       memset(& $$, 0, sizeof($$));
       $$.flags.q.patch = 1;
    }
+   | PERPRIMITIVE
+   {
+      memset(& $$, 0, sizeof($$));
+      $$.flags.q.per_primitive = 1;
+   }
 
 storage_qualifier:
    CONST_TOK
@@ -2262,6 +2276,11 @@ storage_qualifier:
    {
       memset(& $$, 0, sizeof($$));
       $$.flags.q.shared_storage = 1;
+   }
+   | TASKPAYLOAD
+   {
+      memset(& $$, 0, sizeof($$));
+      $$.flags.q.task_payload = 1;
    }
    ;
 
@@ -2945,14 +2964,15 @@ interface_qualifier:
    }
    | auxiliary_storage_qualifier interface_qualifier
    {
-      if (!$1.flags.q.patch) {
+      if (!$1.flags.q.patch && !$1.flags.q.per_primitive) {
          _mesa_glsl_error(&@1, state, "invalid interface qualifier");
       }
       if ($2.has_auxiliary_storage()) {
-         _mesa_glsl_error(&@1, state, "duplicate patch qualifier");
+         _mesa_glsl_error(&@1, state, "duplicate auxiliary storage qualifier");
       }
       $$ = $2;
-      $$.flags.q.patch = 1;
+      $$.flags.q.patch = $1.flags.q.patch;
+      $$.flags.q.per_primitive = $1.flags.q.per_primitive;
    }
    ;
 

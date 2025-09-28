@@ -26,15 +26,17 @@
 #include <stdio.h>
 #include "c11/threads.h"
 #include "dev/intel_device_info.h"
+#include "mda/debug_archiver.h"
 #include "isl/isl.h"
+#include "mda/debug_archiver.h"
 #include "util/macros.h"
 #include "util/mesa-sha1.h"
 #include "util/enum_operators.h"
 #include "util/ralloc.h"
 #include "util/u_math.h"
-#include "util/u_printf.h"
 #include "brw_isa_info.h"
 #include "intel_shader_enums.h"
+#include "nir_shader_compiler_options.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -46,7 +48,6 @@ struct nir_def;
 struct nir_shader;
 struct shader_info;
 
-struct nir_shader_compiler_options;
 typedef struct nir_builder nir_builder;
 typedef struct nir_def nir_def;
 typedef struct nir_shader nir_shader;
@@ -82,7 +83,7 @@ struct brw_compiler {
    void (*shader_perf_log)(void *, unsigned *id, const char *str, ...) PRINTFLIKE(3, 4);
 
    bool use_tcs_multi_patch;
-   struct nir_shader_compiler_options *nir_options[MESA_ALL_SHADER_STAGES];
+   struct nir_shader_compiler_options nir_options[MESA_ALL_SHADER_STAGES];
 
    /**
     * Apply workarounds for SIN and COS output range problems.
@@ -122,6 +123,26 @@ struct brw_compiler {
    bool lower_dpas;
 
    /**
+    * This can be set to use an "optimistic" SIMD heuristic that
+    * assumes that the highest SIMD width and polygon count achievable
+    * without spills will give the highest performance, so the
+    * compiler doesn't need to try more than that.
+    *
+    * As of xe3 most programs compile without spills at 32-wide
+    * dispatch so with this option enabled typically only a single
+    * back-end compilation will be done instead of the default
+    * behavior of one compilation per supported dispatch mode.  This
+    * can speed up the back-end compilation of fragment shaders by a
+    * 2+ factor, but could also increase compile-time especially on
+    * pre-xe3 platforms in cases with high register pressure.
+    *
+    * Run-time performance of the shaders will be reduced since this
+    * removes the ability to use a static analysis to estimate the
+    * relative performance of the dispatch modes supported.
+    */
+   bool optimistic_simd_heuristic;
+
+   /**
     * Calling the ra_allocate function after each register spill can take
     * several minutes. This option speeds up shader compilation by spilling
     * more registers after the ra_allocate failure. Required for
@@ -130,7 +151,17 @@ struct brw_compiler {
     */
    int spilling_rate;
 
-   struct nir_shader *clc_shader;
+   /**
+    * We perform a quick register pressure estimate at the NIR level before
+    * attempting backend compilation at various SIMD widths.  If the estimated
+    * register pressure for a given SIMD width is beyond this threshold, we
+    * will skip FS and CS compilation at that width.
+    *
+    * This is vaguely the number of GRFs supported by the hardware, with a
+    * bit of a fudge factor because we are only estimating, and sometimes
+    * backend IR scheduling can reduce register pressure.
+    */
+   unsigned register_pressure_threshold;
 
    /**
     * A list of storage formats to lower from the matching return HW format.
@@ -219,6 +250,12 @@ enum brw_robustness_flags {
 struct brw_base_prog_key {
    unsigned program_string_id;
 
+   /** Multiview mask
+    *
+    * Used to compute the number of position slots in the VUE
+    */
+   uint32_t view_mask;
+
    enum brw_robustness_flags robust_flags:2;
 
    bool uses_inline_push_addr:1;
@@ -232,7 +269,7 @@ struct brw_base_prog_key {
     */
    bool limit_trig_input_range:1;
 
-   unsigned padding:26;
+   uint64_t padding:58;
 };
 
 /**
@@ -294,7 +331,7 @@ struct brw_vs_prog_key {
     */
    bool no_vf_slot_compaction : 1;
 
-   uint32_t padding : 30;
+   uint64_t padding : 62;
 };
 
 /** The program key for Tessellation Control Shaders. */
@@ -313,7 +350,10 @@ struct brw_tcs_prog_key
    /** A bitfield of per-patch outputs written. */
    uint32_t patch_outputs_written;
 
-   uint32_t padding;
+   /** Tesselation VUE layout */
+   bool separate_tess_vue_layout:1;
+
+   uint32_t padding:31;
 };
 
 #define BRW_MAX_TCS_INPUT_VERTICES (32)
@@ -336,7 +376,10 @@ struct brw_tes_prog_key
    /** A bitfield of per-patch inputs read. */
    uint32_t patch_inputs_read;
 
-   uint32_t padding;
+   /** Tesselation VUE layout */
+   bool separate_tess_vue_layout:1;
+
+   uint32_t padding:31;
 };
 
 /** The program key for Geometry Shaders. */
@@ -366,11 +409,9 @@ struct brw_wm_prog_key {
    uint8_t color_outputs_valid;
 
    /* Some collection of BRW_WM_IZ_* */
-   bool flat_shade:1;
    unsigned nr_color_regions:5;
    bool alpha_test_replicate_alpha:1;
    enum intel_sometimes alpha_to_coverage:2;
-   bool clamp_fragment_color:1;
 
    bool force_dual_color_blend:1;
 
@@ -398,6 +439,7 @@ struct brw_wm_prog_key {
    bool coarse_pixel:1;
    bool null_push_constant_tbimr_workaround:1;
    bool api_sample_shading:1;
+   unsigned pad:2;
 };
 
 static inline bool
@@ -421,7 +463,7 @@ struct brw_cs_prog_key {
     */
    bool lower_unaligned_dispatch:1;
 
-   uint32_t padding:31;
+   uint64_t padding:63;
 };
 
 struct brw_bs_prog_key {
@@ -432,6 +474,8 @@ struct brw_bs_prog_key {
     * shader.
     */
    uint32_t pipeline_ray_flags;
+
+   uint32_t padding;
 };
 
 /* brw_any_prog_key is any of the keys that map to an API stage */
@@ -652,10 +696,6 @@ struct brw_stage_prog_data {
 
    /* Whether shader uses atomic operations. */
    bool uses_atomic_load_store;
-
-   /* Printf descriptions contained by the shader */
-   uint32_t printf_info_count;
-   u_printf_info *printf_info;
 };
 
 /**
@@ -663,11 +703,6 @@ struct brw_stage_prog_data {
  * a number of GRF register blocks supported by the hardware on PTL+.
  */
 unsigned ptl_register_blocks(unsigned grf_used);
-
-void
-brw_stage_prog_data_add_printf(struct brw_stage_prog_data *prog_data,
-                               void *mem_ctx,
-                               const u_printf_info *print);
 
 enum brw_pixel_shader_computed_depth_mode {
    BRW_PSCDEPTH_OFF   = 0, /* PS does not compute depth */
@@ -1139,7 +1174,8 @@ void brw_compute_vue_map(const struct intel_device_info *devinfo,
 
 void brw_compute_tess_vue_map(struct intel_vue_map *const vue_map,
                               uint64_t slots_valid,
-                              uint32_t is_patch);
+                              uint32_t is_patch,
+                              bool separate_shader);
 
 struct brw_vue_prog_data {
    struct brw_stage_prog_data base;
@@ -1190,11 +1226,23 @@ struct brw_tcs_prog_data
    /** Should the non-SINGLE_PATCH payload provide primitive ID? */
    bool include_primitive_id;
 
+   /** Whether the tessellation domain is unknown at compile time
+    *
+    * Used with VK_EXT_shader_object
+    */
+   bool dynamic_domain;
+
    /** Number vertices in output patch */
    int instances;
 
    /** Track patch count threshold */
    int patch_count_threshold;
+
+   /**
+    * Push constant location of intel_tess_config (dynamic configuration of
+    * the tessellation shaders).
+    */
+   unsigned tess_config_param;
 };
 
 
@@ -1206,6 +1254,12 @@ struct brw_tes_prog_data
    enum intel_tess_output_topology output_topology;
    enum intel_tess_domain domain;
    bool include_primitive_id;
+
+   /**
+    * Push constant location of intel_tess_config (dynamic configuration of
+    * the tessellation shaders).
+    */
+   unsigned tess_config_param;
 };
 
 struct brw_gs_prog_data
@@ -1438,6 +1492,8 @@ struct brw_compile_params {
    uint64_t debug_flag;
 
    uint32_t source_hash;
+
+   debug_archiver *archiver;
 };
 
 /**

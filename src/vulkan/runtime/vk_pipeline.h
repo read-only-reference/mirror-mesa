@@ -24,6 +24,7 @@
 #ifndef VK_PIPELINE_H
 #define VK_PIPELINE_H
 
+#include "vk_internal_exts.h"
 #include "vk_object.h"
 #include "vk_util.h"
 
@@ -39,20 +40,6 @@ struct vk_device;
 extern "C" {
 #endif
 
-#define VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_NIR_CREATE_INFO_MESA \
-   (VkStructureType)1000290001
-
-#define VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_NIR_CREATE_INFO_MESA_cast \
-   VkPipelineShaderStageNirCreateInfoMESA
-
-static const VkPipelineCreateFlagBits2 VK_PIPELINE_CREATE_2_UNALIGNED_DISPATCH_BIT_MESA = 0x20000000000ull;
-
-typedef struct VkPipelineShaderStageNirCreateInfoMESA {
-   VkStructureType sType;
-   const void *pNext;
-   struct nir_shader *nir;
-} VkPipelineShaderStageNirCreateInfoMESA;
-
 bool
 vk_pipeline_shader_stage_is_null(const VkPipelineShaderStageCreateInfo *info);
 
@@ -67,9 +54,12 @@ vk_pipeline_shader_stage_to_nir(struct vk_device *device,
                                 const struct nir_shader_compiler_options *nir_options,
                                 void *mem_ctx, struct nir_shader **nir_out);
 
-enum gl_subgroup_size
-vk_get_subgroup_size(uint32_t spirv_version,
-                     mesa_shader_stage stage,
+typedef struct nir_shader nir_shader;
+
+void
+vk_set_subgroup_size(struct vk_device *device,
+                     nir_shader *shader,
+                     uint32_t spirv_version,
                      const void *info_pNext,
                      bool allow_varying,
                      bool require_full);

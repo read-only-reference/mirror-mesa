@@ -16,7 +16,6 @@
 #include "panvk_instance.h"
 #include "panvk_macros.h"
 #include "panvk_mempool.h"
-#include "panvk_meta.h"
 #include "panvk_physical_device.h"
 #include "panvk_utrace_perfetto.h"
 
@@ -25,6 +24,7 @@
 #include "util/perf/u_trace.h"
 
 #include "util/simple_mtx.h"
+#include "util/u_call_once.h"
 #include "util/u_printf.h"
 #include "util/vma.h"
 
@@ -45,6 +45,7 @@ struct panvk_device_draw_context;
 
 enum panvk_queue_family {
    PANVK_QUEUE_FAMILY_GPU,
+   PANVK_QUEUE_FAMILY_BIND,
    PANVK_QUEUE_FAMILY_COUNT,
 };
 
@@ -83,6 +84,11 @@ struct panvk_device {
       struct panvk_pool rw_nc;
       struct panvk_pool exec;
    } mempools;
+
+   struct {
+      util_once_flag blackhole_once;
+      struct pan_kmod_bo *blackhole;
+   } sparse_mem;
 
    /* For each subqueue, maximum size of the register dump region needed by
     * exception handlers or functions */
@@ -152,6 +158,12 @@ panvk_device_adjust_bo_flags(const struct panvk_device *device,
 }
 
 static inline uint64_t
+panvk_get_gpu_page_size(const struct panvk_device *device)
+{
+   return (uint64_t)1 << (ffsll(device->kmod.vm->pgsize_bitmap) - 1);
+}
+
+static inline uint64_t
 panvk_as_alloc(struct panvk_device *device, uint64_t size, uint64_t alignment)
 {
    simple_mtx_lock(&device->as.lock);
@@ -167,6 +179,11 @@ panvk_as_free(struct panvk_device *device, uint64_t address, uint64_t size)
    util_vma_heap_free(&device->as.heap, address, size);
    simple_mtx_unlock(&device->as.lock);
 }
+
+VkResult panvk_map_to_blackhole(struct panvk_device *device,
+                                uint64_t address, uint64_t size);
+
+struct pan_kmod_bo *panvk_get_blackhole(struct panvk_device *device);
 
 #if PAN_ARCH
 VkResult

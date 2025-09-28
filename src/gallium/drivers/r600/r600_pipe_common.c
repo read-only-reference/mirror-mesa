@@ -14,8 +14,6 @@
 #include "util/u_upload_mgr.h"
 #include "util/os_time.h"
 #include "util/hex.h"
-#include "vl/vl_decoder.h"
-#include "vl/vl_video_buffer.h"
 #include "radeon_video.h"
 #include "git_sha1.h"
 
@@ -158,7 +156,7 @@ void r600_draw_rectangle(struct blitter_context *blitter,
 	/* Upload vertices. The hw rectangle has only 3 vertices,
 	 * The 4th one is derived from the first 3.
 	 * The vertex specification should match u_blitter's vertex element state. */
-	u_upload_alloc(rctx->b.stream_uploader, 0, sizeof(float) * 24,
+	u_upload_alloc_ref(rctx->b.stream_uploader, 0, sizeof(float) * 24,
 		       rctx->screen->info.tcc_cache_line_size,
                        &offset, &buf, (void**)&vb);
 	if (!buf)
@@ -786,34 +784,6 @@ static const char* r600_get_name(struct pipe_screen* pscreen)
 	return rscreen->renderer_string;
 }
 
-static int r600_get_video_param(struct pipe_screen *screen,
-				enum pipe_video_profile profile,
-				enum pipe_video_entrypoint entrypoint,
-				enum pipe_video_cap param)
-{
-	switch (param) {
-	case PIPE_VIDEO_CAP_SUPPORTED:
-		return vl_profile_supported(screen, profile, entrypoint);
-	case PIPE_VIDEO_CAP_NPOT_TEXTURES:
-		return 1;
-	case PIPE_VIDEO_CAP_MAX_WIDTH:
-	case PIPE_VIDEO_CAP_MAX_HEIGHT:
-		return vl_video_buffer_max_size(screen);
-	case PIPE_VIDEO_CAP_PREFERRED_FORMAT:
-		return PIPE_FORMAT_NV12;
-	case PIPE_VIDEO_CAP_PREFERS_INTERLACED:
-		return false;
-	case PIPE_VIDEO_CAP_SUPPORTS_INTERLACED:
-		return false;
-	case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
-		return true;
-	case PIPE_VIDEO_CAP_MAX_LEVEL:
-		return vl_level_supported(screen, profile);
-	default:
-		return 0;
-	}
-}
-
 static uint64_t r600_get_timestamp(struct pipe_screen *screen)
 {
 	struct r600_common_screen *rscreen = (struct r600_common_screen*)screen;
@@ -1041,9 +1011,6 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 	if (rscreen->info.ip[AMD_IP_UVD].num_queues) {
 		rscreen->b.get_video_param = rvid_get_video_param;
 		rscreen->b.is_video_format_supported = rvid_is_format_supported;
-	} else {
-		rscreen->b.get_video_param = r600_get_video_param;
-		rscreen->b.is_video_format_supported = vl_video_buffer_is_format_supported;
 	}
 
 	for (unsigned i = 0; i <= MESA_SHADER_COMPUTE; i++)
@@ -1170,6 +1137,7 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 		.vectorize_tess_levels = 1,
 		.io_options = nir_io_mediump_is_32bit,
 		.vertex_id_zero_based = rscreen->info.gfx_level >= EVERGREEN,
+		.avoid_ternary_with_fabs = 1,
 	};
 
 	rscreen->nir_options = nir_options;

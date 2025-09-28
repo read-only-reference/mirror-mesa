@@ -316,6 +316,7 @@ iris_init_screen_caps(struct iris_screen *screen)
    caps->texture_multisample = true;
    caps->cube_map_array = true;
    caps->texture_buffer_objects = true;
+   caps->sampler_reduction_minmax_arb = devinfo->ver > 8;
    caps->query_pipeline_statistics_single = true;
    caps->texture_query_lod = true;
    caps->sample_shading = true;
@@ -409,7 +410,7 @@ iris_init_screen_caps(struct iris_screen *screen)
    caps->constant_buffer_offset_alignment = 32;
    caps->min_map_buffer_alignment = IRIS_MAP_BUFFER_ALIGNMENT;
    caps->shader_buffer_offset_alignment = 4;
-   caps->max_shader_buffer_size = 1 << 27;
+   caps->max_shader_buffer_size = (unsigned)MIN2(screen->isl_dev.max_buffer_size, INT32_MAX); // INT32_MAX is correct.
    caps->texture_buffer_offset_alignment = 16; // XXX: u_screen says 256 is the minimum value...
    caps->linear_image_pitch_alignment = 1;
    caps->linear_image_base_address_alignment = 1;
@@ -446,6 +447,9 @@ iris_init_screen_caps(struct iris_screen *screen)
       PIPE_CONTEXT_PRIORITY_LOW |
       PIPE_CONTEXT_PRIORITY_MEDIUM |
       PIPE_CONTEXT_PRIORITY_HIGH;
+
+   /* Let mesa/st lower for us */
+   caps->flatshade = false;
 
    caps->frontend_noop = true;
 

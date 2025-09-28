@@ -2273,8 +2273,6 @@ lower_to_hw_instr(Program* program)
 
    int end_with_regs_block_index = -1;
 
-   bool should_dealloc_vgprs = dealloc_vgprs(program);
-
    for (int block_idx = program->blocks.size() - 1; block_idx >= 0; block_idx--) {
       Block* block = &program->blocks[block_idx];
       lower_context ctx;
@@ -2404,9 +2402,6 @@ lower_to_hw_instr(Program* program)
                               instr2->definitions[0].isFixed() &&
                               instr2->definitions[0].physReg() == exec)
                         continue;
-                     else if (instr2->opcode == aco_opcode::s_sendmsg &&
-                              instr2->salu().imm == sendmsg_dealloc_vgprs)
-                        continue;
 
                      ignore_early_exit = false;
                   }
@@ -2431,12 +2426,6 @@ lower_to_hw_instr(Program* program)
                   block = &program->blocks[block_idx];
                   ctx.block = block;
 
-                  /* sendmsg(dealloc_vgprs) releases scratch, so it isn't safe if there is an
-                   * in-progress scratch store. */
-                  wait_imm wait;
-                  if (should_dealloc_vgprs && uses_scratch(program))
-                     wait.vs = 0;
-
                   bld.reset(discard_block);
                   if (program->has_pops_overlapped_waves_wait &&
                       (program->gfx_level >= GFX11 || discard_sends_pops_done)) {
@@ -2444,6 +2433,7 @@ lower_to_hw_instr(Program* program)
                       * the waitcnt necessary before resuming overlapping waves as the normal
                       * waitcnt insertion doesn't work in a discard early exit block.
                       */
+                     wait_imm wait;
                      if (program->gfx_level >= GFX10)
                         wait.vs = 0;
                      wait.vm = 0;
@@ -2461,10 +2451,6 @@ lower_to_hw_instr(Program* program)
                   if (program->stage == fragment_fs)
                      bld.exp(aco_opcode::exp, Operand(v1), Operand(v1), Operand(v1), Operand(v1), 0,
                              target, false, true, true);
-
-                  wait.build_waitcnt(bld);
-                  if (should_dealloc_vgprs)
-                     bld.sopp(aco_opcode::s_sendmsg, sendmsg_dealloc_vgprs);
 
                   bld.sopp(aco_opcode::s_endpgm);
 
@@ -2956,6 +2942,35 @@ lower_to_hw_instr(Program* program)
          } else if (instr->isMIMG() && instr->mimg().strict_wqm) {
             lower_image_sample(&ctx, instr);
             ctx.instructions.emplace_back(std::move(instr));
+         } else if (instr->isCall()) {
+            unsigned extra_param_count = 2;
+            PhysReg stack_reg = instr->operands[0].physReg();
+
+            if (instr->operands[1].constantValue()) {
+               bld.sop2(aco_opcode::s_add_u32, Definition(stack_reg, s1), Definition(scc, s1),
+                        Operand(stack_reg, s1), instr->operands[1]);
+               if (program->gfx_level < GFX9) {
+                  /* The callee's VGPR spill buffer resource needs to be based at the
+                   * start of callee scratch.
+                   */
+                  PhysReg rsrc_dword1 = stack_reg.advance(4);
+                  bld.sop2(aco_opcode::s_addc_u32, Definition(rsrc_dword1, s1), Definition(scc, s1),
+                           Operand(rsrc_dword1, s1), Operand::c32(0), Operand(scc, s1));
+               }
+            }
+
+            bld.sop1(aco_opcode::s_swappc_b64, Definition(instr->definitions[0].physReg(), s2),
+                     Operand(instr->operands[extra_param_count + 1].physReg(), s2));
+
+            if (instr->operands[1].constantValue()) {
+               bld.sop2(aco_opcode::s_sub_u32, Definition(stack_reg, s1), Definition(scc, s1),
+                        Operand(stack_reg, s1), instr->operands[1]);
+               if (program->gfx_level < GFX9) {
+                  PhysReg rsrc_dword1 = stack_reg.advance(4);
+                  bld.sop2(aco_opcode::s_subb_u32, Definition(rsrc_dword1, s1), Definition(scc, s1),
+                           Operand(rsrc_dword1, s1), Operand::c32(0), Operand(scc, s1));
+               }
+            }
          } else {
             ctx.instructions.emplace_back(std::move(instr));
          }

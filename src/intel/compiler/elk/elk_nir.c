@@ -567,19 +567,8 @@ elk_nir_lower_fs_inputs(nir_shader *nir,
    nir_foreach_shader_in_variable(var, nir) {
       var->data.driver_location = var->data.location;
 
-      /* Apply default interpolation mode.
-       *
-       * Everything defaults to smooth except for the legacy GL color
-       * built-in variables, which might be flat depending on API state.
-       */
-      if (var->data.interpolation == INTERP_MODE_NONE) {
-         const bool flat = key->flat_shade &&
-            (var->data.location == VARYING_SLOT_COL0 ||
-             var->data.location == VARYING_SLOT_COL1);
-
-         var->data.interpolation = flat ? INTERP_MODE_FLAT
-                                        : INTERP_MODE_SMOOTH;
-      }
+      if (var->data.interpolation == INTERP_MODE_NONE)
+         var->data.interpolation = INTERP_MODE_SMOOTH;
 
       /* On Ironlake and below, there is only one interpolation mode.
        * Centroid interpolation doesn't mean anything on this hardware --
@@ -1565,7 +1554,11 @@ elk_postprocess_nir(nir_shader *nir, const struct elk_compiler *compiler,
 
    OPT(nir_copy_prop);
    OPT(nir_opt_dce);
-   OPT(nir_opt_move, nir_move_comparisons);
+
+   nir_move_options common = nir_move_const_undef | nir_move_load_input |
+                             nir_move_copies | nir_move_load_ssbo;
+   OPT(nir_opt_sink, common);
+   OPT(nir_opt_move, common | nir_move_comparisons | nir_move_load_ubo);
    OPT(nir_opt_dead_cf);
 
    /* TODO: Enable nir_opt_uniform_atomics on Gfx7.x too.
@@ -1679,12 +1672,11 @@ elk_nir_apply_sampler_key(nir_shader *nir,
 static unsigned
 get_subgroup_size(const struct shader_info *info, unsigned max_subgroup_size)
 {
-   switch (info->subgroup_size) {
-   case SUBGROUP_SIZE_API_CONSTANT:
-      /* We have to use the global constant size. */
-      return ELK_SUBGROUP_SIZE;
-
-   case SUBGROUP_SIZE_UNIFORM:
+   if (info->api_subgroup_size) {
+      /* We have to use the global/required constant size. */
+      assert(info->api_subgroup_size >= 8 && info->api_subgroup_size <= 32);
+      return info->api_subgroup_size;
+   } else if (info->api_subgroup_size_draw_uniform) {
       /* It has to be uniform across all invocations but can vary per stage
        * if we want.  This gives us a bit more freedom.
        *
@@ -1694,8 +1686,7 @@ get_subgroup_size(const struct shader_info *info, unsigned max_subgroup_size)
        * to be uniform across invocations.
        */
       return max_subgroup_size;
-
-   case SUBGROUP_SIZE_VARYING:
+   } else {
       /* The subgroup size is allowed to be fully varying.  For geometry
        * stages, we know it's always 8 which is max_subgroup_size so we can
        * return that.  For compute, elk_nir_apply_key is called once per
@@ -1707,27 +1698,7 @@ get_subgroup_size(const struct shader_info *info, unsigned max_subgroup_size)
        * size.
        */
       return info->stage == MESA_SHADER_FRAGMENT ? 0 : max_subgroup_size;
-
-   case SUBGROUP_SIZE_REQUIRE_4:
-      UNREACHABLE("Unsupported subgroup size type");
-
-   case SUBGROUP_SIZE_REQUIRE_8:
-   case SUBGROUP_SIZE_REQUIRE_16:
-   case SUBGROUP_SIZE_REQUIRE_32:
-      assert(mesa_shader_stage_uses_workgroup(info->stage) ||
-             (info->stage >= MESA_SHADER_RAYGEN && info->stage <= MESA_SHADER_CALLABLE));
-      /* These enum values are expressly chosen to be equal to the subgroup
-       * size that they require.
-       */
-      return info->subgroup_size;
-
-   case SUBGROUP_SIZE_FULL_SUBGROUPS:
-   case SUBGROUP_SIZE_REQUIRE_64:
-   case SUBGROUP_SIZE_REQUIRE_128:
-      break;
    }
-
-   UNREACHABLE("Invalid subgroup size type");
 }
 
 unsigned

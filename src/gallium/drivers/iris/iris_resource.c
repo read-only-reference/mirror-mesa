@@ -803,6 +803,18 @@ iris_resource_configure_main(const struct iris_screen *screen,
    if (res->mod_info && !isl_drm_modifier_has_aux(modifier))
       usage |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
 
+   /* On pre-Xe2 platforms, we still have a chance to disable CCS compression
+    * in the first query (iris_resource_disable_aux_on_first_query). But that
+    * function won't work on Xe2+ platforms because the compression state has
+    * been set in bo's allocation. We have to disable compression since the
+    * beginning of the image's life cycle in the below case on Xe2, unless a
+    * complicated bo or VMA manipulation is implemented. That is probably
+    * unworthy.
+    */
+   else if (screen->devinfo->ver >= 20 && !res->mod_info &&
+            (templ->bind & PIPE_BIND_SHARED))
+      usage |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
+
    else if (!res->mod_info && res->external_format != PIPE_FORMAT_NONE)
       usage |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
 
@@ -1660,7 +1672,8 @@ iris_flush_resource(struct pipe_context *ctx, struct pipe_resource *resource)
 }
 
 static void
-iris_resource_disable_aux_on_first_query(struct pipe_resource *resource,
+iris_resource_disable_aux_on_first_query(struct iris_screen *screen,
+                                         struct pipe_resource *resource,
                                          unsigned usage)
 {
    struct iris_resource *res = (struct iris_resource *)resource;
@@ -1674,6 +1687,7 @@ iris_resource_disable_aux_on_first_query(struct pipe_resource *resource,
    if (!mod_with_aux &&
       (!(usage & PIPE_HANDLE_USAGE_EXPLICIT_FLUSH) && res->aux.usage != 0) &&
        p_atomic_read(&resource->reference.count) == 1) {
+         assert(screen->devinfo->ver < 20);
          iris_resource_disable_aux(res);
    }
 }
@@ -1705,7 +1719,7 @@ iris_resource_get_param(struct pipe_screen *pscreen,
    bool result;
    unsigned handle;
 
-   iris_resource_disable_aux_on_first_query(resource, handle_usage);
+   iris_resource_disable_aux_on_first_query(screen, resource, handle_usage);
 
    struct iris_bo *bo = wants_cc ? res->aux.clear_color_bo :
                         wants_aux ? res->aux.bo : res->bo;
@@ -1831,7 +1845,7 @@ iris_resource_get_handle(struct pipe_screen *pscreen,
    bool mod_with_aux =
       res->mod_info && isl_drm_modifier_has_aux(res->mod_info->modifier);
 
-   iris_resource_disable_aux_on_first_query(resource, usage);
+   iris_resource_disable_aux_on_first_query(screen, resource, usage);
 
    assert(iris_bo_is_real(res->bo));
 

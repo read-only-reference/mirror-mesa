@@ -653,6 +653,7 @@ optimize_once(nir_shader *shader)
    NIR_PASS(progress, shader, nir_opt_dce);
    NIR_PASS(progress, shader, nir_opt_undef);
    NIR_PASS(progress, shader, nir_opt_loop_unroll);
+   NIR_PASS(progress, shader, r600_sfn_lower_alu);
    return progress;
 }
 
@@ -865,7 +866,7 @@ r600_lower_and_optimize_nir(nir_shader *sh,
             sh,
             nir_lower_vars_to_scratch,
             nir_var_function_temp,
-            40,
+            64,
             r600_get_scratch_size_align,
             r600_get_scratch_size_align);
 
@@ -878,6 +879,7 @@ r600_lower_and_optimize_nir(nir_shader *sh,
    bool late_algebraic_progress;
    do {
       late_algebraic_progress = false;
+      NIR_PASS(late_algebraic_progress, sh, r600_sfn_lower_alu);
       NIR_PASS(late_algebraic_progress, sh, nir_opt_algebraic_late);
       NIR_PASS(late_algebraic_progress, sh, nir_opt_constant_folding);
       NIR_PASS(late_algebraic_progress, sh, nir_copy_prop);

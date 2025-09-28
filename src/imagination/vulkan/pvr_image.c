@@ -77,6 +77,16 @@ static void pvr_image_init_physical_extent(struct pvr_image *image)
    } else {
       assert(image->memlayout == PVR_MEMLAYOUT_LINEAR);
       image->physical_extent = image->vk.extent;
+
+      /* If the image is being rendered to (written by the PBE) make sure the
+       * width is aligned correctly.
+       */
+      if (image->vk.usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                             VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
+         image->physical_extent.width =
+            ALIGN(image->physical_extent.width,
+                  ROGUE_PBESTATE_REG_WORD0_LINESTRIDE_UNIT_SIZE);
+      }
    }
 }
 
@@ -142,7 +152,7 @@ VkResult pvr_CreateImage(VkDevice _device,
                          const VkAllocationCallbacks *pAllocator,
                          VkImage *pImage)
 {
-   PVR_FROM_HANDLE(pvr_device, device, _device);
+   VK_FROM_HANDLE(pvr_device, device, _device);
    struct pvr_image *image;
 
    image =
@@ -169,8 +179,8 @@ void pvr_DestroyImage(VkDevice _device,
                       VkImage _image,
                       const VkAllocationCallbacks *pAllocator)
 {
-   PVR_FROM_HANDLE(pvr_device, device, _device);
-   PVR_FROM_HANDLE(pvr_image, image, _image);
+   VK_FROM_HANDLE(pvr_device, device, _device);
+   VK_FROM_HANDLE(pvr_image, image, _image);
 
    if (!image)
       return;
@@ -217,12 +227,12 @@ VkResult pvr_BindImageMemory2(VkDevice _device,
                               uint32_t bindInfoCount,
                               const VkBindImageMemoryInfo *pBindInfos)
 {
-   PVR_FROM_HANDLE(pvr_device, device, _device);
+   VK_FROM_HANDLE(pvr_device, device, _device);
    uint32_t i;
 
    for (i = 0; i < bindInfoCount; i++) {
-      PVR_FROM_HANDLE(pvr_device_memory, mem, pBindInfos[i].memory);
-      PVR_FROM_HANDLE(pvr_image, image, pBindInfos[i].image);
+      VK_FROM_HANDLE(pvr_device_memory, mem, pBindInfos[i].memory);
+      VK_FROM_HANDLE(pvr_image, image, pBindInfos[i].image);
 
       VkResult result = pvr_bind_memory(device,
                                         mem,
@@ -233,7 +243,7 @@ VkResult pvr_BindImageMemory2(VkDevice _device,
                                         &image->dev_addr);
       if (result != VK_SUCCESS) {
          while (i--) {
-            PVR_FROM_HANDLE(pvr_image, image, pBindInfos[i].image);
+            VK_FROM_HANDLE(pvr_image, image, pBindInfos[i].image);
 
             pvr_unbind_memory(device, image->vma);
          }
@@ -268,7 +278,7 @@ void pvr_GetImageSubresourceLayout(VkDevice device,
                                    const VkImageSubresource *subresource,
                                    VkSubresourceLayout *layout)
 {
-   PVR_FROM_HANDLE(pvr_image, image, _image);
+   VK_FROM_HANDLE(pvr_image, image, _image);
 
    pvr_get_image_subresource_layout(image, subresource, layout);
 }
@@ -301,8 +311,8 @@ VkResult pvr_CreateImageView(VkDevice _device,
                              const VkAllocationCallbacks *pAllocator,
                              VkImageView *pView)
 {
-   PVR_FROM_HANDLE(pvr_device, device, _device);
-   struct pvr_texture_state_info info;
+   VK_FROM_HANDLE(pvr_device, device, _device);
+   struct pvr_texture_state_info info = { 0 };
    unsigned char input_swizzle[4];
    const uint8_t *format_swizzle;
    const struct pvr_image *image;
@@ -310,7 +320,6 @@ VkResult pvr_CreateImageView(VkDevice _device,
    VkResult result;
 
    iview = vk_image_view_create(&device->vk,
-                                false /* driver_internal */,
                                 pCreateInfo,
                                 pAllocator,
                                 sizeof(*iview));
@@ -319,11 +328,17 @@ VkResult pvr_CreateImageView(VkDevice _device,
 
    image = pvr_image_view_get_image(iview);
 
+   if (image->vk.image_type == VK_IMAGE_TYPE_3D &&
+       (iview->vk.view_type == VK_IMAGE_VIEW_TYPE_2D_ARRAY ||
+        iview->vk.view_type == VK_IMAGE_VIEW_TYPE_2D)) {
+      iview->vk.layer_count = image->vk.extent.depth;
+   }
+
    info.type = iview->vk.view_type;
    info.base_level = iview->vk.base_mip_level;
    info.mip_levels = iview->vk.level_count;
    info.extent = image->vk.extent;
-   info.aspect_mask = image->vk.aspects;
+   info.aspect_mask = iview->vk.aspects;
    info.is_cube = (info.type == VK_IMAGE_VIEW_TYPE_CUBE ||
                    info.type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY);
    info.array_size = iview->vk.layer_count;
@@ -337,11 +352,39 @@ VkResult pvr_CreateImageView(VkDevice _device,
    info.addr = image->dev_addr;
 
    info.format = pCreateInfo->format;
+   info.layer_size = image->layer_size;
+
+   if (image->vk.create_flags & VK_IMAGE_CREATE_2D_VIEW_COMPATIBLE_BIT_EXT) {
+      info.offset = 0;
+      info.z_slice = iview->vk.base_array_layer;
+   }
 
    pvr_adjust_non_compressed_view(image, &info);
 
    vk_component_mapping_to_pipe_swizzle(iview->vk.swizzle, input_swizzle);
-   format_swizzle = pvr_get_format_swizzle(info.format);
+
+   enum pipe_format pipe_format =
+      vk_format_to_pipe_format(iview->vk.view_format);
+   if (util_format_is_depth_or_stencil(pipe_format)) {
+      switch (pipe_format) {
+      case PIPE_FORMAT_S8_UINT:
+         pipe_format = PIPE_FORMAT_R8_UINT;
+         break;
+
+      case PIPE_FORMAT_Z16_UNORM:
+         pipe_format = PIPE_FORMAT_R16_UINT;
+         break;
+
+      case PIPE_FORMAT_Z32_FLOAT:
+         pipe_format = PIPE_FORMAT_R32_FLOAT;
+         break;
+
+      default:
+         break;
+      }
+   }
+   format_swizzle = util_format_description(pipe_format)->swizzle;
+
    util_format_compose_swizzles(format_swizzle, input_swizzle, info.swizzle);
 
    result = pvr_pack_tex_state(device,
@@ -408,8 +451,8 @@ void pvr_DestroyImageView(VkDevice _device,
                           VkImageView _iview,
                           const VkAllocationCallbacks *pAllocator)
 {
-   PVR_FROM_HANDLE(pvr_device, device, _device);
-   PVR_FROM_HANDLE(pvr_image_view, iview, _iview);
+   VK_FROM_HANDLE(pvr_device, device, _device);
+   VK_FROM_HANDLE(pvr_image_view, iview, _iview);
 
    if (!iview)
       return;
@@ -422,9 +465,9 @@ VkResult pvr_CreateBufferView(VkDevice _device,
                               const VkAllocationCallbacks *pAllocator,
                               VkBufferView *pView)
 {
-   PVR_FROM_HANDLE(pvr_buffer, buffer, pCreateInfo->buffer);
-   PVR_FROM_HANDLE(pvr_device, device, _device);
-   struct pvr_texture_state_info info;
+   VK_FROM_HANDLE(pvr_buffer, buffer, pCreateInfo->buffer);
+   VK_FROM_HANDLE(pvr_device, device, _device);
+   struct pvr_texture_state_info info = { 0 };
    const uint8_t *format_swizzle;
    struct pvr_buffer_view *bview;
    VkResult result;
@@ -445,15 +488,16 @@ VkResult pvr_CreateBufferView(VkDevice _device,
    /* The range of the buffer view shouldn't be smaller than one texel. */
    assert(bview->vk.range >= vk_format_get_blocksize(bview->vk.format));
 
+   bview->num_rows = DIV_ROUND_UP(bview->vk.elements, PVR_BUFFER_VIEW_WIDTH);
+
    info.base_level = 0U;
    info.mip_levels = 1U;
    info.mipmaps_present = false;
-   info.extent.width = 8192U;
-   info.extent.height = bview->vk.elements;
-   info.extent.height = DIV_ROUND_UP(info.extent.height, info.extent.width);
+   info.extent.width = PVR_BUFFER_VIEW_WIDTH;
+   info.extent.height = bview->num_rows;
    info.extent.depth = 0U;
    info.sample_count = 1U;
-   info.stride = info.extent.width;
+   info.stride = PVR_BUFFER_VIEW_WIDTH;
    info.offset = 0U;
    info.addr = PVR_DEV_ADDR_OFFSET(buffer->dev_addr, pCreateInfo->offset);
    info.mem_layout = PVR_MEMLAYOUT_LINEAR;
@@ -463,6 +507,7 @@ VkResult pvr_CreateBufferView(VkDevice _device,
    info.format = bview->vk.format;
    info.flags = PVR_TEXFLAGS_INDEX_LOOKUP;
    info.aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT;
+   info.buffer_elems = bview->vk.elements;
 
    if (PVR_HAS_FEATURE(&device->pdevice->dev_info, tpu_array_textures))
       info.array_size = 1U;
@@ -488,8 +533,8 @@ void pvr_DestroyBufferView(VkDevice _device,
                            VkBufferView bufferView,
                            const VkAllocationCallbacks *pAllocator)
 {
-   PVR_FROM_HANDLE(pvr_buffer_view, bview, bufferView);
-   PVR_FROM_HANDLE(pvr_device, device, _device);
+   VK_FROM_HANDLE(pvr_buffer_view, bview, bufferView);
+   VK_FROM_HANDLE(pvr_device, device, _device);
 
    if (!bview)
       return;

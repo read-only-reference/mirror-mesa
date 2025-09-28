@@ -50,7 +50,9 @@ static const struct debug_named_value nir_debug_control[] = {
    { "novalidate", NIR_DEBUG_NOVALIDATE,
      "Disable shader validation at each successful lowering/optimization call" },
    { "extended_validation", NIR_DEBUG_EXTENDED_VALIDATION,
-     "Validate even if a pass does not make progress and test that it properly preserves all types of metadata. This can be very slow" },
+     "Validate even if a pass does not make progress and test that it properly preserves most types of metadata. This can be very slow" },
+   { "progress_validation", NIR_DEBUG_PROGRESS_VALIDATION,
+     "Validate that a shader is unmodified if a pass does not report progress" },
    { "invalidate_metadata", NIR_DEBUG_INVALIDATE_METADATA,
      "Invalidate metadata before passes to try to find passes which don't require metadata that they use. This overrides NIR_DEBUG=extended_validation somewhat" },
    { "tgsi", NIR_DEBUG_TGSI,
@@ -196,8 +198,7 @@ nir_component_mask_reinterpret(nir_component_mask_t mask,
 nir_shader *
 nir_shader_create(void *mem_ctx,
                   mesa_shader_stage stage,
-                  const nir_shader_compiler_options *options,
-                  shader_info *si)
+                  const nir_shader_compiler_options *options)
 {
    nir_shader *shader = rzalloc(mem_ctx, nir_shader);
 
@@ -211,18 +212,15 @@ nir_shader_create(void *mem_ctx,
 
    shader->options = options;
 
-   if (si) {
-      assert(si->stage == stage);
-      shader->info = *si;
-   } else {
-      shader->info.stage = stage;
+   shader->info.stage = stage;
 
-      /* Assume there is no known prev/next stage, this is the case for
-       * nir_builder_init_simple_shader for example.
-       */
-      shader->info.prev_stage = MESA_SHADER_NONE;
-      shader->info.next_stage = MESA_SHADER_NONE;
-   }
+   /* Assume there is no known prev/next stage, this is the case for
+    * nir_builder_init_simple_shader for example.
+    */
+   shader->info.prev_stage = MESA_SHADER_NONE;
+   shader->info.next_stage = MESA_SHADER_NONE;
+   shader->info.max_subgroup_size = 128;
+   shader->info.min_subgroup_size = 1;
 
    exec_list_make_empty(&shader->functions);
 
@@ -692,6 +690,8 @@ nir_function_impl_create_bare(nir_shader *shader)
    impl->num_blocks = 0;
    impl->valid_metadata = nir_metadata_none;
    impl->structured = true;
+   range_minimum_query_table_init(&impl->dom_lca_info.table);
+   impl->dom_lca_info.block_from_idx = NULL;
 
    /* create start & end blocks */
    nir_block *start_block = nir_block_create(shader);

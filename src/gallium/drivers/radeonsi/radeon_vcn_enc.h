@@ -15,8 +15,6 @@
 
 #include "ac_vcn_enc.h"
 
-#define PIPE_ALIGN_IN_BLOCK_SIZE(value, alignment) DIV_ROUND_UP(value, alignment)
-
 #define RADEON_ENC_CS(value) (enc->cs.current.buf[enc->cs.current.cdw++] = (value))
 #define RADEON_ENC_BEGIN(cmd)                                                                    \
    {                                                                                             \
@@ -236,6 +234,7 @@ struct radeon_encoder {
    unsigned input_color_range;
    unsigned output_color_volume;
    unsigned output_color_range;
+   unsigned output_chroma_location;
 
    struct pb_buffer_lean *bs_handle;
    unsigned bs_size;

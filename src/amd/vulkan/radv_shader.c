@@ -51,10 +51,8 @@
 static void
 get_nir_options_for_stage(struct radv_physical_device *pdev, mesa_shader_stage stage)
 {
-   const struct radv_instance *instance = radv_physical_device_instance(pdev);
    nir_shader_compiler_options *options = &pdev->nir_options[stage];
-   bool split_fma =
-      (stage <= MESA_SHADER_GEOMETRY || stage == MESA_SHADER_MESH) && instance->debug_flags & RADV_DEBUG_SPLIT_FMA;
+   const bool split_fma = (stage <= MESA_SHADER_GEOMETRY || stage == MESA_SHADER_MESH) && pdev->cache_key.split_fma;
 
    ac_nir_set_options(&pdev->info, pdev->use_llvm, options);
 
@@ -251,6 +249,7 @@ radv_optimize_nir_algebraic(nir_shader *nir, bool opt_offsets, bool opt_mqsad)
          .discard_ok = true,
       };
       NIR_PASS(_, nir, nir_opt_peephole_select, &peephole_select_options);
+      NIR_PASS(_, nir, nir_opt_undef);
       NIR_PASS(_, nir, nir_opt_phi_to_bool);
       NIR_PASS(more_algebraic, nir, nir_opt_algebraic);
       NIR_PASS(_, nir, nir_opt_generate_bfi);
@@ -262,8 +261,9 @@ radv_optimize_nir_algebraic(nir_shader *nir, bool opt_offsets, bool opt_mqsad)
       static const nir_opt_offsets_options offset_options = {
          .uniform_max = 0,
          .buffer_max = ~0,
-         .shared_max = ~0,
-         .shared_atomic_max = ~0,
+         .shared_max = UINT16_MAX,
+         .shared_atomic_max = UINT16_MAX,
+         .allow_offset_wrap_cb = ac_nir_allow_offset_wrap_cb,
       };
       NIR_PASS(_, nir, nir_opt_offsets, &offset_options);
    }
@@ -340,23 +340,90 @@ radv_compiler_debug(void *private_data, enum aco_compiler_debug_level level, con
    vk_debug_report(&instance->vk, vk_flags[level] | VK_DEBUG_REPORT_DEBUG_BIT_EXT, NULL, 0, 0, "radv", message);
 }
 
+static void
+radv_shader_choose_subgroup_size(struct radv_device *device, nir_shader *nir,
+                                 const struct radv_shader_stage_key *stage_key, unsigned spirv_version)
+{
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+
+   VkPipelineShaderStageRequiredSubgroupSizeCreateInfo rss_info = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO,
+      .requiredSubgroupSize = stage_key->subgroup_required_size * 32,
+   };
+
+   vk_set_subgroup_size(&device->vk, nir, spirv_version, rss_info.requiredSubgroupSize ? &rss_info : NULL,
+                        stage_key->subgroup_allow_varying, stage_key->subgroup_require_full);
+
+   nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+
+   unsigned wave_size;
+
+   if (nir->info.min_subgroup_size == nir->info.max_subgroup_size) {
+      wave_size = nir->info.min_subgroup_size;
+   } else if (mesa_shader_stage_uses_workgroup(nir->info.stage)) {
+      const unsigned local_size =
+         nir->info.workgroup_size[0] * nir->info.workgroup_size[1] * nir->info.workgroup_size[2];
+
+      unsigned default_wave_size;
+      if (nir->info.ray_queries)
+         default_wave_size = pdev->rt_wave_size;
+      else if (nir->info.stage == MESA_SHADER_MESH)
+         default_wave_size = pdev->ge_wave_size;
+      else
+         default_wave_size = pdev->cs_wave_size;
+
+      /* Games don't always request full subgroups when they should, which can cause bugs if cswave32
+       * is enabled. Furthermore, if cooperative matrices or subgroup info are used, we can't transparently change
+       * the subgroup size.
+       */
+      const bool require_full_subgroups =
+         (default_wave_size == 32 &&
+          (nir->info.uses_wide_subgroup_intrinsics ||
+           (nir->info.stage == MESA_SHADER_COMPUTE && nir->info.cs.has_cooperative_matrix)) &&
+          local_size % RADV_SUBGROUP_SIZE == 0);
+
+      /* Use wave32 for small workgroups. */
+      if (local_size <= 32)
+         wave_size = 32;
+      else if (require_full_subgroups)
+         wave_size = 64;
+      else
+         wave_size = default_wave_size;
+   } else if (nir->info.stage == MESA_SHADER_GEOMETRY &&
+              (pdev->info.gfx_level >= GFX10 && pdev->info.gfx_level <= GFX10_3)) {
+      /* Legacy GS doesn't support wave32. */
+      wave_size = 64;
+   } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+      if (nir->info.ray_queries)
+         wave_size = pdev->rt_wave_size;
+      else
+         wave_size = pdev->ps_wave_size;
+   } else if (mesa_shader_stage_is_rt(nir->info.stage)) {
+      wave_size = pdev->rt_wave_size;
+   } else {
+      wave_size = pdev->ge_wave_size;
+   }
+
+   if (nir->info.api_subgroup_size == 0) {
+      /* Report real wave_size for allow_varying. */
+      nir->info.api_subgroup_size = wave_size;
+   }
+
+   nir->info.max_subgroup_size = wave_size;
+
+   /* We might still decide to use ngg later. */
+   if (nir->info.stage == MESA_SHADER_GEOMETRY)
+      nir->info.min_subgroup_size = pdev->ge_wave_size;
+   else
+      nir->info.min_subgroup_size = wave_size;
+}
+
 nir_shader *
 radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_shader_stage *stage,
                          const struct radv_spirv_to_nir_options *options, bool is_internal)
 {
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const struct radv_instance *instance = radv_physical_device_instance(pdev);
-   unsigned subgroup_size = 64, ballot_bit_size = 64;
-   const unsigned required_subgroup_size = stage->key.subgroup_required_size * 32;
-   if (required_subgroup_size) {
-      /* Only compute/mesh/task shaders currently support requiring a
-       * specific subgroup size.
-       */
-      assert(stage->stage >= MESA_SHADER_COMPUTE);
-      subgroup_size = required_subgroup_size;
-      ballot_bit_size = required_subgroup_size;
-   }
-
    nir_shader *nir;
 
    if (stage->internal_nir) {
@@ -368,6 +435,7 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_shader_st
       nir_validate_shader(nir, "in internal shader");
 
       assert(exec_list_length(&nir->functions) == 1);
+      radv_shader_choose_subgroup_size(device, nir, &stage->key, 0);
    } else {
       uint32_t *spirv = (uint32_t *)stage->spirv.data;
       assert(stage->spirv.size % 4 == 0);
@@ -458,6 +526,8 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_shader_st
        */
       NIR_PASS(_, nir, nir_lower_variable_initializers, ~0);
 
+      radv_shader_choose_subgroup_size(device, nir, &stage->key, vk_spirv_version(spirv, stage->spirv.size));
+
       progress = false;
       NIR_PASS(progress, nir, nir_lower_cooperative_matrix_flexible_dimensions, 16, 16, 16);
       if (progress) {
@@ -465,7 +535,7 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_shader_st
          NIR_PASS(_, nir, nir_opt_dce);
          NIR_PASS(_, nir, nir_remove_dead_variables, nir_var_function_temp | nir_var_shader_temp, NULL);
       }
-      NIR_PASS(_, nir, radv_nir_lower_cooperative_matrix, pdev->info.gfx_level, subgroup_size);
+      NIR_PASS(_, nir, radv_nir_lower_cooperative_matrix, pdev->info.gfx_level, nir->info.max_subgroup_size);
 
       /* Split member structs.  We do this before lower_io_to_temporaries so that
        * it doesn't lower system values to temporaries by accident.
@@ -589,8 +659,8 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_shader_st
 
    NIR_PASS(_, nir, nir_lower_subgroups,
             &(struct nir_lower_subgroups_options){
-               .subgroup_size = subgroup_size,
-               .ballot_bit_size = ballot_bit_size,
+               .subgroup_size = nir->info.api_subgroup_size,
+               .ballot_bit_size = nir->info.api_subgroup_size,
                .ballot_components = 1,
                .lower_to_scalar = 1,
                .lower_subgroup_masks = 1,
@@ -609,7 +679,7 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_shader_st
             });
 
    NIR_PASS(_, nir, nir_lower_load_const_to_scalar);
-   NIR_PASS(_, nir, nir_opt_shrink_stores, !instance->drirc.disable_shrink_image_store);
+   NIR_PASS(_, nir, nir_opt_shrink_stores, !instance->drirc.debug.disable_shrink_image_store);
    if (nir->info.stage == MESA_SHADER_FRAGMENT && nir->info.fs.uses_discard)
       NIR_PASS(_, nir, nir_lower_discard_if, nir_move_terminate_out_of_loops);
 

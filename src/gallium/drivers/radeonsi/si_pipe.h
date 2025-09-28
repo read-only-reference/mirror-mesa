@@ -212,8 +212,7 @@ enum
 
    DBG_TMZ,
    DBG_SQTT,
-   DBG_USE_ACO,
-   DBG_USE_LLVM,
+   DBG_EXPORT_MODIFIER,
 
    DBG_COUNT
 };
@@ -249,6 +248,9 @@ enum
    DBG_CHECK_IR,
    DBG_MONOLITHIC_SHADERS,
    DBG_NO_OPT_VARIANT,
+
+   DBG_USE_ACO,
+   DBG_USE_LLVM,
 };
 
 /* Debug options for multimedia. */
@@ -1151,12 +1153,6 @@ struct si_context {
    bool vertex_buffers_dirty;
    uint16_t vertex_buffer_unaligned; /* bitmask of not dword-aligned buffers */
    struct pipe_vertex_buffer vertex_buffer[SI_NUM_VERTEX_BUFFERS];
-
-   /* Even though we don't need this variable, u_upload_alloc has an optimization that skips
-    * reference counting when the new upload buffer is the same as the last one. So keep
-    * the last upload buffer here and always pass &last_const_upload_buffer to u_upload_alloc.
-    */
-   struct si_resource *last_const_upload_buffer;
 
    /* MSAA config state. */
    uint8_t ps_iter_samples;

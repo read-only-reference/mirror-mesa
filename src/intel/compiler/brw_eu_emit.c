@@ -604,7 +604,7 @@ brw_alu3(struct brw_codegen *p, unsigned opcode, struct brw_reg dest,
 
       brw_eu_inst_set_3src_a1_dst_reg_file(devinfo, inst, phys_file(dest));
       brw_eu_inst_set_3src_dst_reg_nr(devinfo, inst, phys_nr(devinfo, dest));
-      brw_eu_inst_set_3src_a1_dst_subreg_nr(devinfo, inst, phys_subnr(devinfo, dest) / 8);
+      brw_eu_inst_set_3src_a1_dst_subreg_nr(devinfo, inst, phys_subnr(devinfo, dest));
       brw_eu_inst_set_3src_a1_dst_hstride(devinfo, inst,
                                           to_3src_align1_dst_hstride(dest.hstride));
 
@@ -1018,6 +1018,15 @@ brw_DPAS(struct brw_codegen *p, enum gfx12_systolic_depth sdepth,
 {
    return brw_dpas_three_src(p, BRW_OPCODE_DPAS, sdepth, rcount, dest, src0,
                              src1, src2);
+}
+
+brw_eu_inst *
+brw_SRND(struct brw_codegen *p, struct brw_reg dest,
+         struct brw_reg src0, struct brw_reg src1)
+{
+   assert(dest.type == BRW_TYPE_HF);
+   assert(src0.type == BRW_TYPE_F);
+   return brw_alu2(p, BRW_OPCODE_SRND, dest, src0, src1);
 }
 
 void brw_NOP(struct brw_codegen *p)

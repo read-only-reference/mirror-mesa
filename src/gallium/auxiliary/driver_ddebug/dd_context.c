@@ -312,6 +312,8 @@ DD_SHADER(VERTEX, vs)
 DD_SHADER(GEOMETRY, gs)
 DD_SHADER(TESS_CTRL, tcs)
 DD_SHADER(TESS_EVAL, tes)
+DD_SHADER(TASK, ts)
+DD_SHADER(MESH, ms)
 
 static void * \
 dd_context_create_compute_state(struct pipe_context *_pipe,
@@ -360,7 +362,6 @@ DD_IMM_STATE(polygon_stipple, const struct pipe_poly_stipple, *state, state)
 static void
 dd_context_set_constant_buffer(struct pipe_context *_pipe,
                                mesa_shader_stage shader, uint index,
-                               bool take_ownership,
                                const struct pipe_constant_buffer *constant_buffer)
 {
    struct dd_context *dctx = dd_context(_pipe);
@@ -368,7 +369,7 @@ dd_context_set_constant_buffer(struct pipe_context *_pipe,
 
    safe_memcpy(&dctx->draw_state.constant_buffers[shader][index],
                constant_buffer, sizeof(*constant_buffer));
-   pipe->set_constant_buffer(pipe, shader, index, take_ownership, constant_buffer);
+   pipe->set_constant_buffer(pipe, shader, index, constant_buffer);
 }
 
 static void
@@ -884,6 +885,12 @@ dd_context_create(struct dd_screen *dscreen, struct pipe_context *pipe)
    CTX_INIT(create_compute_state);
    CTX_INIT(bind_compute_state);
    CTX_INIT(delete_compute_state);
+   CTX_INIT(create_ts_state);
+   CTX_INIT(bind_ts_state);
+   CTX_INIT(delete_ts_state);
+   CTX_INIT(create_ms_state);
+   CTX_INIT(bind_ms_state);
+   CTX_INIT(delete_ms_state);
    CTX_INIT(create_vertex_elements_state);
    CTX_INIT(bind_vertex_elements_state);
    CTX_INIT(delete_vertex_elements_state);

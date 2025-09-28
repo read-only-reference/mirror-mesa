@@ -75,9 +75,36 @@ brw_print_instructions(const brw_shader &s, FILE *file)
 }
 
 static const char *
-brw_instruction_name(const struct brw_isa_info *isa, enum opcode op)
+brw_sampler_opcode_name(sampler_opcode opcode) {
+   switch (opcode) {
+   case SAMPLER_OPCODE_TEX_LOGICAL:              return "tex_logical";
+   case SAMPLER_OPCODE_TXD_LOGICAL:              return "txd_logical";
+   case SAMPLER_OPCODE_TXF_LOGICAL:              return "txf_logical";
+   case SAMPLER_OPCODE_TXL_LOGICAL:              return "txl_logical";
+   case SAMPLER_OPCODE_TXS_LOGICAL:              return "txs_logical";
+   case SAMPLER_OPCODE_TXB_LOGICAL:              return "txb_logical";
+   case SAMPLER_OPCODE_TXF_CMS_W_LOGICAL:        return "txf_cms_w_logical";
+   case SAMPLER_OPCODE_TXF_CMS_W_GFX12_LOGICAL:  return "txf_cms_w_gfx12_logical";
+   case SAMPLER_OPCODE_TXF_MCS_LOGICAL:          return "txf_mcs_logical";
+   case SAMPLER_OPCODE_LOD_LOGICAL:              return "lod_logical";
+   case SAMPLER_OPCODE_TG4_LOGICAL:              return "tg4_logical";
+   case SAMPLER_OPCODE_TG4_OFFSET_LOGICAL:       return "tg4_offset_logical";
+   case SAMPLER_OPCODE_TG4_OFFSET_LOD_LOGICAL:   return "tg4_offset_lod_logical";
+   case SAMPLER_OPCODE_TG4_OFFSET_BIAS_LOGICAL:  return "tg4_offset_bias_logical";
+   case SAMPLER_OPCODE_TG4_BIAS_LOGICAL:         return "tg4_b_logical";
+   case SAMPLER_OPCODE_TG4_EXPLICIT_LOD_LOGICAL: return "tg4_l_logical";
+   case SAMPLER_OPCODE_TG4_IMPLICIT_LOD_LOGICAL: return "tg4_i_logical";
+   case SAMPLER_OPCODE_SAMPLEINFO_LOGICAL:       return "sampleinfo_logical";
+   case SAMPLER_OPCODE_IMAGE_SIZE_LOGICAL:       return "image_size_logical";
+   default: UNREACHABLE("invalid sampler opcode");
+   }
+}
+
+static const char *
+brw_instruction_name(const struct brw_isa_info *isa, const brw_inst *inst)
 {
    const struct intel_device_info *devinfo = isa->devinfo;
+   enum opcode op = inst->opcode;
 
    switch (op) {
    case 0 ... NUM_BRW_OPCODES - 1:
@@ -130,45 +157,8 @@ brw_instruction_name(const struct brw_isa_info *isa, enum opcode op)
    case SHADER_OPCODE_UNDEF:
       return "undef";
 
-   case SHADER_OPCODE_TEX_LOGICAL:
-      return "tex_logical";
-   case SHADER_OPCODE_TXD_LOGICAL:
-      return "txd_logical";
-   case SHADER_OPCODE_TXF_LOGICAL:
-      return "txf_logical";
-   case SHADER_OPCODE_TXL_LOGICAL:
-      return "txl_logical";
-   case SHADER_OPCODE_TXS_LOGICAL:
-      return "txs_logical";
-   case FS_OPCODE_TXB_LOGICAL:
-      return "txb_logical";
-   case SHADER_OPCODE_TXF_CMS_W_LOGICAL:
-      return "txf_cms_w_logical";
-   case SHADER_OPCODE_TXF_CMS_W_GFX12_LOGICAL:
-      return "txf_cms_w_gfx12_logical";
-   case SHADER_OPCODE_TXF_MCS_LOGICAL:
-      return "txf_mcs_logical";
-   case SHADER_OPCODE_LOD_LOGICAL:
-      return "lod_logical";
-   case SHADER_OPCODE_TG4_LOGICAL:
-      return "tg4_logical";
-   case SHADER_OPCODE_TG4_OFFSET_LOGICAL:
-      return "tg4_offset_logical";
-   case SHADER_OPCODE_TG4_OFFSET_LOD_LOGICAL:
-      return "tg4_offset_lod_logical";
-   case SHADER_OPCODE_TG4_OFFSET_BIAS_LOGICAL:
-      return "tg4_offset_bias_logical";
-   case SHADER_OPCODE_TG4_BIAS_LOGICAL:
-      return "tg4_b_logical";
-   case SHADER_OPCODE_TG4_EXPLICIT_LOD_LOGICAL:
-      return "tg4_l_logical";
-   case SHADER_OPCODE_TG4_IMPLICIT_LOD_LOGICAL:
-      return "tg4_i_logical";
-   case SHADER_OPCODE_SAMPLEINFO_LOGICAL:
-      return "sampleinfo_logical";
-
-   case SHADER_OPCODE_IMAGE_SIZE_LOGICAL:
-      return "image_size_logical";
+   case SHADER_OPCODE_SAMPLER:
+      return brw_sampler_opcode_name(inst->as_tex()->sampler_opcode);
 
    case SHADER_OPCODE_MEMORY_FENCE:
       return "memory_fence";
@@ -321,61 +311,17 @@ brw_instruction_name(const struct brw_isa_info *isa, enum opcode op)
 static bool
 print_memory_logical_source(FILE *file, const brw_inst *inst, unsigned i)
 {
-   if (inst->is_control_source(i)) {
-      assert(inst->src[i].file == IMM &&
-             (inst->src[i].type == BRW_TYPE_UD ||
-              inst->src[i].type == BRW_TYPE_D));
-      assert(!inst->src[i].negate);
-      assert(!inst->src[i].abs);
-   }
-
    switch (i) {
-   case MEMORY_LOGICAL_OPCODE:
-      fprintf(file, " %s", brw_lsc_op_to_string(inst->src[i].ud));
-      return true;
-   case MEMORY_LOGICAL_MODE: {
-      static const char *modes[] = {
-         [MEMORY_MODE_TYPED]        = "typed",
-         [MEMORY_MODE_UNTYPED]      = "untyped",
-         [MEMORY_MODE_SHARED_LOCAL] = "shared",
-         [MEMORY_MODE_SCRATCH]      = "scratch",
-         [MEMORY_MODE_CONSTANT]     = "const",
-      };
-      assert(inst->src[i].ud < ARRAY_SIZE(modes));
-      fprintf(file, " %s", modes[inst->src[i].ud]);
-      return true;
-   }
-   case MEMORY_LOGICAL_BINDING_TYPE:
-      fprintf(file, " %s", brw_lsc_addr_surftype_to_string(inst->src[i].ud));
-      if (inst->src[i].ud != LSC_ADDR_SURFTYPE_FLAT)
+   case MEMORY_LOGICAL_BINDING: {
+      lsc_addr_surface_type binding_type = inst->as_mem()->binding_type;
+      fprintf(file, " %s", brw_lsc_addr_surftype_to_string(binding_type));
+      if (binding_type != LSC_ADDR_SURFTYPE_FLAT)
          fprintf(file, ":");
-      return true;
-   case MEMORY_LOGICAL_BINDING:
       return inst->src[i].file == BAD_FILE;
+   }
    case MEMORY_LOGICAL_ADDRESS:
       fprintf(file, " addr: ");
       return false;
-   case MEMORY_LOGICAL_ADDRESS_OFFSET:
-      fprintf(file, " offset: ");
-      return false;
-   case MEMORY_LOGICAL_COORD_COMPONENTS:
-      fprintf(file, " coord_comps:");
-      return false;
-   case MEMORY_LOGICAL_ALIGNMENT:
-      fprintf(file, " align:");
-      return false;
-   case MEMORY_LOGICAL_DATA_SIZE:
-      fprintf(file, " %s", brw_lsc_data_size_to_string(inst->src[i].ud));
-      return true;
-   case MEMORY_LOGICAL_COMPONENTS:
-      fprintf(file, " comps:");
-      return false;
-   case MEMORY_LOGICAL_FLAGS:
-      if (inst->src[i].ud & MEMORY_FLAG_TRANSPOSE)
-         fprintf(file, " transpose");
-      if (inst->src[i].ud & MEMORY_FLAG_INCLUDE_HELPERS)
-         fprintf(file, " helpers");
-      return true;
    case MEMORY_LOGICAL_DATA0:
       fprintf(file, " data0: ");
       return false;
@@ -399,7 +345,7 @@ brw_print_instruction(const brw_shader &s, const brw_inst *inst, FILE *file, con
               inst->flag_subreg % 2);
    }
 
-   fprintf(file, "%s", brw_instruction_name(&s.compiler->isa, inst->opcode));
+   fprintf(file, "%s", brw_instruction_name(&s.compiler->isa, inst));
    if (inst->saturate)
       fprintf(file, ".sat");
    if (inst->conditional_mod) {
@@ -415,12 +361,14 @@ brw_print_instruction(const brw_shader &s, const brw_inst *inst, FILE *file, con
    }
    fprintf(file, "(%d) ", inst->exec_size);
 
-   if (inst->mlen) {
-      fprintf(file, "(mlen: %d) ", inst->mlen);
+   const brw_send_inst *send = inst->as_send();
+
+   if (send && send->mlen) {
+      fprintf(file, "(mlen: %d) ", send->mlen);
    }
 
-   if (inst->ex_mlen) {
-      fprintf(file, "(ex_mlen: %d) ", inst->ex_mlen);
+   if (send && send->ex_mlen) {
+      fprintf(file, "(ex_mlen: %d) ", send->ex_mlen);
    }
 
    if (inst->eot) {
@@ -497,10 +445,37 @@ brw_print_instruction(const brw_shader &s, const brw_inst *inst, FILE *file, con
       fprintf(file, ":%s", brw_reg_type_to_letters(inst->dst.type));
    }
 
+   const brw_mem_inst *mem = inst->as_mem();
+   if (mem) {
+      fprintf(file, " %s", brw_lsc_op_to_string(mem->lsc_op));
+
+      static const char *modes[] = {
+         [MEMORY_MODE_TYPED]        = "typed",
+         [MEMORY_MODE_UNTYPED]      = "untyped",
+         [MEMORY_MODE_SHARED_LOCAL] = "shared",
+         [MEMORY_MODE_SCRATCH]      = "scratch",
+         [MEMORY_MODE_CONSTANT]     = "const",
+      };
+      assert(mem->mode < ARRAY_SIZE(modes));
+      fprintf(file, " %s", modes[mem->mode]);
+      fprintf(file, " offset: %dd", mem->address_offset);
+      fprintf(file, " coord_comps: %uu", mem->coord_components);
+      fprintf(file, " %s", brw_lsc_data_size_to_string(mem->data_size));
+      fprintf(file, " comps: %uu", mem->components);
+      fprintf(file, " align: %uu", mem->alignment);
+
+      if (mem->flags & MEMORY_FLAG_TRANSPOSE)
+         fprintf(file, " transpose");
+      if (mem->flags & MEMORY_FLAG_INCLUDE_HELPERS)
+         fprintf(file, " helpers");
+      if (mem->flags & MEMORY_FLAG_VOLATILE_ACCESS)
+         fprintf(file, " volatile");
+      if (mem->flags & MEMORY_FLAG_COHERENT_ACCESS)
+         fprintf(file, " coherent");
+   }
+
    for (int i = 0; i < inst->sources; i++) {
-      if (inst->opcode == SHADER_OPCODE_MEMORY_LOAD_LOGICAL ||
-          inst->opcode == SHADER_OPCODE_MEMORY_STORE_LOGICAL ||
-          inst->opcode == SHADER_OPCODE_MEMORY_ATOMIC_LOGICAL) {
+      if (mem) {
          if (print_memory_logical_source(file, inst, i))
             continue;
       } else {
@@ -654,6 +629,17 @@ brw_print_instruction(const brw_shader &s, const brw_inst *inst, FILE *file, con
       }
    }
 
+   if (const brw_tex_inst *tex = inst->as_tex()) {
+      if (tex->surface_bindless)
+         fprintf(file, ", surface bindless");
+      if (tex->sampler_bindless)
+         fprintf(file, ", sampler bindless");
+      fprintf(file, ", grad_comps: %uu", tex->grad_components);
+      fprintf(file, ", coord_comps: %uu", tex->coord_components);
+      fprintf(file, ", grad_comps: %uu", tex->grad_components);
+      fprintf(file, ", residency: %s", tex->residency ? "true" : "false");
+   }
+
    fprintf(file, " ");
 
    if (inst->force_writemask_all)
@@ -665,14 +651,14 @@ brw_print_instruction(const brw_shader &s, const brw_inst *inst, FILE *file, con
    if (inst->has_no_mask_send_params)
       fprintf(file, "NoMaskParams ");
 
-   if (is_send && inst->desc)
-      fprintf(file, "Desc 0x%08x ", inst->desc);
+   if (send && send->desc)
+      fprintf(file, "Desc 0x%08x ", send->desc);
 
-   if (is_send && inst->ex_desc)
-      fprintf(file, "ExDesc 0x%08x ", inst->ex_desc);
+   if (send && send->ex_desc)
+      fprintf(file, "ExDesc 0x%08x ", send->ex_desc);
 
-   if (is_send && inst->send_ex_desc_imm)
-      fprintf(file, "ExDescImmInst 0x%08x ", inst->offset);
+   if (send && send->ex_desc_imm)
+      fprintf(file, "ExDescImmInst 0x%08x ", send->offset);
 
    if (inst->sched.regdist || inst->sched.mode) {
       fprintf(file, "{ ");

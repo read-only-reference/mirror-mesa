@@ -641,6 +641,17 @@ general_restrictions_based_on_operand_types(const struct brw_isa_info *isa,
       }
    }
 
+   if (devinfo->ver >= 20) {
+      if (inst->opcode == BRW_OPCODE_SRND) {
+         bool valid = false;
+         if (inst->dst.type == BRW_TYPE_HF &&
+             inst->src[0].type == BRW_TYPE_F &&
+             inst->src[1].type == BRW_TYPE_F)
+            valid = true;
+         ERROR_IF(!valid, "Invalid type combination for SRND.");
+      }
+   }
+
    enum brw_reg_type dst_type = inst->dst.type;
 
    ERROR_IF(brw_type_is_bfloat(dst_type) &&
@@ -2731,7 +2742,7 @@ brw_hw_decode_inst(const struct brw_isa_info *isa,
          inst->dst.file = brw_eu_inst_3src_a1_dst_reg_file(devinfo, raw);
          inst->dst.type = brw_eu_inst_3src_a1_dst_type(devinfo, raw);
          inst->dst.nr = brw_eu_inst_3src_dst_reg_nr(devinfo, raw);
-         inst->dst.subnr = brw_eu_inst_3src_a1_dst_subreg_nr(devinfo, raw) * 8;
+         inst->dst.subnr = brw_eu_inst_3src_a1_dst_subreg_nr(devinfo, raw);
          inst->dst.hstride = DST_STRIDE_3SRC(brw_eu_inst_3src_a1_dst_hstride(devinfo, raw));
 
          inst->src[0].file = brw_eu_inst_3src_a1_src0_reg_file(devinfo, raw);

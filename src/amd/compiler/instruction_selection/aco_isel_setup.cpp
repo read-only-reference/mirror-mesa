@@ -172,9 +172,8 @@ apply_nuw_to_ssa(isel_context* ctx, nir_def* ssa)
       std::swap(src0, src1);
    }
 
-   uint32_t src1_ub = nir_unsigned_upper_bound(ctx->shader, ctx->range_ht, src1, &ctx->ub_config);
-   add->no_unsigned_wrap =
-      !nir_addition_might_overflow(ctx->shader, ctx->range_ht, src0, src1_ub, &ctx->ub_config);
+   uint32_t src1_ub = nir_unsigned_upper_bound(ctx->shader, ctx->range_ht, src1);
+   add->no_unsigned_wrap = !nir_addition_might_overflow(ctx->shader, ctx->range_ht, src0, src1_ub);
 }
 
 void
@@ -369,17 +368,14 @@ init_context(isel_context* ctx, nir_shader* shader)
    nir_function_impl* impl = nir_shader_get_entrypoint(shader);
    ctx->shader = shader;
 
+   assert(shader->info.max_subgroup_size >= ctx->program->wave_size);
+   assert(shader->info.min_subgroup_size <= ctx->program->wave_size);
+   shader->info.max_subgroup_size = ctx->program->wave_size;
+   shader->info.min_subgroup_size = ctx->program->wave_size;
+
    /* Init NIR range analysis. */
    ctx->range_ht = _mesa_pointer_hash_table_create(NULL);
-   ctx->ub_config.min_subgroup_size = ctx->program->wave_size;
-   ctx->ub_config.max_subgroup_size = ctx->program->wave_size;
-   ctx->ub_config.max_workgroup_invocations = 2048;
-   ctx->ub_config.max_workgroup_count[0] = 4294967295;
-   ctx->ub_config.max_workgroup_count[1] = 65535;
-   ctx->ub_config.max_workgroup_count[2] = 65535;
-   ctx->ub_config.max_workgroup_size[0] = 1024;
-   ctx->ub_config.max_workgroup_size[1] = 1024;
-   ctx->ub_config.max_workgroup_size[2] = 1024;
+   ctx->numlsb_ht = _mesa_pointer_hash_table_create(NULL);
 
    uint32_t options =
       shader->options->divergence_analysis_options | nir_divergence_ignore_undef_if_phi_srcs;
@@ -413,6 +409,8 @@ init_context(isel_context* ctx, nir_shader* shader)
    ctx->first_temp_id = ctx->program->peekAllocationId();
    ctx->program->allocateRange(impl->ssa_alloc);
    RegClass* regclasses = ctx->program->temp_rc.data() + ctx->first_temp_id;
+
+   unsigned call_count = 0;
 
    /* TODO: make this recursive to improve compile times */
    bool done = false;
@@ -702,11 +700,17 @@ init_context(isel_context* ctx, nir_shader* shader)
                regclasses[phi->def.index] = rc;
                break;
             }
+            case nir_instr_type_call: {
+               ++call_count;
+               break;
+            }
             default: break;
             }
          }
       }
    }
+
+   ctx->call_infos.reserve(call_count);
 
    ctx->program->config->spi_ps_input_ena = ctx->program->info.ps.spi_ps_input_ena;
    ctx->program->config->spi_ps_input_addr = ctx->program->info.ps.spi_ps_input_addr;
@@ -719,12 +723,13 @@ init_context(isel_context* ctx, nir_shader* shader)
                                       (uint8_t*)shader->constant_data,
                                       (uint8_t*)shader->constant_data + shader->constant_data_size);
 
-   BITSET_CLEAR_RANGE(ctx->output_args, 0, BITSET_SIZE(ctx->output_args));
+   BITSET_ZERO(ctx->output_args);
 }
 
 void
 cleanup_context(isel_context* ctx)
 {
+   _mesa_hash_table_destroy(ctx->numlsb_ht, NULL);
    _mesa_hash_table_destroy(ctx->range_ht, NULL);
 }
 

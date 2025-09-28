@@ -853,9 +853,11 @@ ballot_khr_and_fp64(const _mesa_glsl_parse_state *state)
 }
 
 static bool
-compute_shader(const _mesa_glsl_parse_state *state)
+compute_or_mesh_shader(const _mesa_glsl_parse_state *state)
 {
-   return state->stage == MESA_SHADER_COMPUTE;
+   return state->stage == MESA_SHADER_COMPUTE ||
+      state->stage == MESA_SHADER_MESH ||
+      state->stage == MESA_SHADER_TASK;
 }
 
 static bool
@@ -867,7 +869,7 @@ compute_shader_supported(const _mesa_glsl_parse_state *state)
 static bool
 buffer_atomics_supported(const _mesa_glsl_parse_state *state)
 {
-   return compute_shader(state) || shader_storage_buffer_object(state);
+   return compute_or_mesh_shader(state) || shader_storage_buffer_object(state);
 }
 
 static bool
@@ -880,7 +882,7 @@ buffer_int64_atomics_supported(const _mesa_glsl_parse_state *state)
 static bool
 barrier_supported(const _mesa_glsl_parse_state *state)
 {
-   return compute_shader(state) ||
+   return compute_or_mesh_shader(state) ||
           state->stage == MESA_SHADER_TESS_CTRL;
 }
 
@@ -1130,6 +1132,12 @@ static bool
 subgroup_quad_and_fp64(const _mesa_glsl_parse_state *state)
 {
    return subgroup_quad(state) && fp64(state);
+}
+
+static bool
+mesh_shader(const _mesa_glsl_parse_state *state)
+{
+   return state->EXT_mesh_shader_enable;
 }
 
 /** @} */
@@ -1585,6 +1593,12 @@ private:
    ir_function_signature *_quad_swap_intrinsic(const glsl_type *type, enum ir_intrinsic_id id);
    ir_function_signature *_quad_swap(const glsl_type *type, const char *intrinsic_name);
 
+   ir_function_signature *_emit_mesh_tasks_intrinsic();
+   ir_function_signature *_emit_mesh_tasks();
+
+   ir_function_signature *_set_mesh_outputs_intrinsic();
+   ir_function_signature *_set_mesh_outputs();
+
 #undef B0
 #undef B1
 #undef B2
@@ -1916,7 +1930,7 @@ builtin_builder::create_intrinsics()
                                           ir_intrinsic_memory_barrier),
                 NULL);
    add_function("__intrinsic_group_memory_barrier",
-                _memory_barrier_intrinsic(compute_shader,
+                _memory_barrier_intrinsic(compute_or_mesh_shader,
                                           ir_intrinsic_group_memory_barrier),
                 NULL);
    add_function("__intrinsic_memory_barrier_atomic_counter",
@@ -1932,7 +1946,7 @@ builtin_builder::create_intrinsics()
                                           ir_intrinsic_memory_barrier_image),
                 NULL);
    add_function("__intrinsic_memory_barrier_shared",
-                _memory_barrier_intrinsic(compute_shader,
+                _memory_barrier_intrinsic(compute_or_mesh_shader,
                                           ir_intrinsic_memory_barrier_shared),
                 NULL);
 
@@ -2062,6 +2076,9 @@ builtin_builder::create_intrinsics()
                 FIUBD(_quad_swap_intrinsic, ir_intrinsic_quad_swap_vertical), NULL);
    add_function("__intrinsic_quad_swap_diagonal",
                 FIUBD(_quad_swap_intrinsic, ir_intrinsic_quad_swap_diagonal), NULL);
+
+   add_function("__intrinsic_emit_mesh_tasks", _emit_mesh_tasks_intrinsic(), NULL);
+   add_function("__intrinsic_set_mesh_outputs", _set_mesh_outputs_intrinsic(), NULL);
 }
 
 /**
@@ -5605,7 +5622,7 @@ builtin_builder::create_builtins()
                 NULL);
    add_function("groupMemoryBarrier",
                 _memory_barrier("__intrinsic_group_memory_barrier",
-                                compute_shader),
+                                compute_or_mesh_shader),
                 NULL);
    add_function("memoryBarrierAtomicCounter",
                 _memory_barrier("__intrinsic_memory_barrier_atomic_counter",
@@ -5621,7 +5638,7 @@ builtin_builder::create_builtins()
                 NULL);
    add_function("memoryBarrierShared",
                 _memory_barrier("__intrinsic_memory_barrier_shared",
-                                compute_shader),
+                                compute_or_mesh_shader),
                 NULL);
 
    add_function("ballotARB", _ballot(&glsl_type_builtin_uint64_t, ballot_arb), NULL);
@@ -6023,6 +6040,9 @@ builtin_builder::create_builtins()
                 FIUBD(_quad_swap, "__intrinsic_quad_swap_vertical"), NULL);
    add_function("subgroupQuadSwapDiagonal",
                 FIUBD(_quad_swap, "__intrinsic_quad_swap_diagonal"), NULL);
+
+   add_function("EmitMeshTasksEXT", _emit_mesh_tasks(), NULL);
+   add_function("SetMeshOutputsEXT", _set_mesh_outputs(), NULL);
 
 #undef F
 #undef FI
@@ -9558,6 +9578,48 @@ builtin_builder::_quad_swap(const glsl_type *type, const char *intrinsic_name)
    ir_variable *retval = body.make_temp(type, "retval");
    body.emit(call(symbols->get_function(intrinsic_name), retval, sig->parameters));
    body.emit(ret(retval));
+   return sig;
+}
+
+ir_function_signature *builtin_builder::_emit_mesh_tasks_intrinsic()
+{
+   ir_variable *x = in_var(&glsl_type_builtin_uint, "num_group_x");
+   ir_variable *y = in_var(&glsl_type_builtin_uint, "num_group_y");
+   ir_variable *z = in_var(&glsl_type_builtin_uint, "num_group_z");
+   MAKE_INTRINSIC(&glsl_type_builtin_void, ir_intrinsic_emit_mesh_tasks,
+                  mesh_shader, 3, x, y, z);
+   return sig;
+}
+
+ir_function_signature *builtin_builder::_emit_mesh_tasks()
+{
+   ir_variable *x = in_var(&glsl_type_builtin_uint, "num_group_x");
+   ir_variable *y = in_var(&glsl_type_builtin_uint, "num_group_y");
+   ir_variable *z = in_var(&glsl_type_builtin_uint, "num_group_z");
+   MAKE_SIG(&glsl_type_builtin_void, mesh_shader, 3, x, y, z);
+
+   body.emit(call(symbols->get_function("__intrinsic_emit_mesh_tasks"),
+                  NULL, sig->parameters));
+   return sig;
+}
+
+ir_function_signature *builtin_builder::_set_mesh_outputs_intrinsic()
+{
+   ir_variable *vc = in_var(&glsl_type_builtin_uint, "vertex_count");
+   ir_variable *pc = in_var(&glsl_type_builtin_uint, "primitive_count");
+   MAKE_INTRINSIC(&glsl_type_builtin_void, ir_intrinsic_set_mesh_outputs,
+                  mesh_shader, 2, vc, pc);
+   return sig;
+}
+
+ir_function_signature *builtin_builder::_set_mesh_outputs()
+{
+   ir_variable *vc = in_var(&glsl_type_builtin_uint, "vertex_count");
+   ir_variable *pc = in_var(&glsl_type_builtin_uint, "primitive_count");
+   MAKE_SIG(&glsl_type_builtin_void, mesh_shader, 2, vc, pc);
+
+   body.emit(call(symbols->get_function("__intrinsic_set_mesh_outputs"),
+                  NULL, sig->parameters));
    return sig;
 }
 

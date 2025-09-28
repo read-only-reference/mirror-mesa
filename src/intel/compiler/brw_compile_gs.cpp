@@ -41,7 +41,7 @@ brw_emit_gs_thread_end(brw_shader &s)
    }
 
    const brw_builder abld = brw_builder(&s).annotate("thread end");
-   brw_inst *inst;
+   brw_urb_inst *urb;
 
    if (gs_prog_data->static_vertex_count != -1) {
       /* Try and tag the last URB write with EOT instead of emitting a whole
@@ -52,19 +52,17 @@ brw_emit_gs_thread_end(brw_shader &s)
 
       brw_reg srcs[URB_LOGICAL_NUM_SRCS];
       srcs[URB_LOGICAL_SRC_HANDLE] = s.gs_payload().urb_handles;
-      srcs[URB_LOGICAL_SRC_COMPONENTS] = brw_imm_ud(0);
-      inst = abld.emit(SHADER_OPCODE_URB_WRITE_LOGICAL, reg_undef,
-                       srcs, ARRAY_SIZE(srcs));
+      urb = abld.URB_WRITE(srcs, ARRAY_SIZE(srcs));
+      urb->components = 0;
    } else {
       brw_reg srcs[URB_LOGICAL_NUM_SRCS];
       srcs[URB_LOGICAL_SRC_HANDLE] = s.gs_payload().urb_handles;
       srcs[URB_LOGICAL_SRC_DATA] = s.final_gs_vertex_count;
-      srcs[URB_LOGICAL_SRC_COMPONENTS] = brw_imm_ud(1);
-      inst = abld.emit(SHADER_OPCODE_URB_WRITE_LOGICAL, reg_undef,
-                       srcs, ARRAY_SIZE(srcs));
+      urb = abld.URB_WRITE(srcs, ARRAY_SIZE(srcs));
+      urb->components = 1;
    }
-   inst->eot = true;
-   inst->offset = 0;
+   urb->eot = true;
+   urb->offset = 0;
 }
 
 static void
@@ -148,6 +146,8 @@ brw_compile_gs(const struct brw_compiler *compiler,
 
    const bool debug_enabled = brw_should_print_shader(nir, DEBUG_GS, params->base.source_hash);
 
+   brw_debug_archive_nir(params->base.archiver, nir, dispatch_width, "first");
+
    brw_prog_data_init(&prog_data->base.base, &params->base);
 
    /* The GLSL linker will have already matched up GS inputs and the outputs
@@ -163,10 +163,21 @@ brw_compile_gs(const struct brw_compiler *compiler,
                        &input_vue_map, inputs_read,
                        key->base.vue_layout, 1);
 
+   const uint32_t pos_slots =
+      (nir->info.per_view_outputs & VARYING_BIT_POS) ?
+      MAX2(1, util_bitcount(key->base.view_mask)) : 1;
+
+   brw_compute_vue_map(compiler->devinfo,
+                       &prog_data->base.vue_map,
+                       nir->info.outputs_written,
+                       key->base.vue_layout,
+                       pos_slots);
+
    brw_nir_apply_key(nir, compiler, &key->base, dispatch_width);
    brw_nir_lower_vue_inputs(nir, &input_vue_map);
    brw_nir_lower_vue_outputs(nir);
-   brw_postprocess_nir(nir, compiler, debug_enabled,
+   brw_postprocess_nir(nir, compiler, dispatch_width,
+                       params->base.archiver, debug_enabled,
                        key->base.robust_flags);
 
    const bool has_clip_cull_dist =
@@ -362,6 +373,7 @@ brw_compile_gs(const struct brw_compiler *compiler,
       .needs_register_pressure = params->base.stats != NULL,
       .log_data                = params->base.log_data,
       .debug_enabled           = debug_enabled,
+      .archiver                = params->base.archiver,
    };
    brw_shader v(&shader_params);
    v.gs.control_data_bits_per_vertex = control_data_bits_per_vertex;

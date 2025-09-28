@@ -18,19 +18,13 @@ libvulkan_lvp = shared_library(
   install : true,
 )
 
-if host_machine.system() == 'windows'
-  icd_lib_path = import('fs').relative_to(get_option('bindir'), with_vulkan_icd_dir)
-  icd_file_name = 'vulkan_lvp.dll'
-else
-  icd_lib_path = join_paths(get_option('prefix'), get_option('libdir'))
-  icd_file_name = 'libvulkan_lvp.@0@'.format(host_machine.system() == 'darwin' ? 'dylib' : 'so')
-endif
+icd_file_name = libname_prefix + 'vulkan_lvp.' + libname_suffix
 
 icd_command = [
   prog_python, '@INPUT0@',
   '--api-version', '1.4', '--xml', '@INPUT1@',
   '--sizeof-pointer', sizeof_pointer,
-  '--lib-path', join_paths(icd_lib_path, icd_file_name),
+  '--lib-path', vulkan_icd_lib_path / icd_file_name,
   '--out', '@OUTPUT@',
 ]
 if host_machine.system() == 'windows'

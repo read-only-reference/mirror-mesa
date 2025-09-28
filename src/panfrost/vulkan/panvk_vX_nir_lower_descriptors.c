@@ -923,6 +923,8 @@ lower_input_attachment_load(nir_builder *b, nir_intrinsic_instr *intr,
       nir_def *is_color_att = nir_ilt_imm(b, target, 8);
       nir_def *load_color, *load_zs;
       nir_io_semantics iosem = {0};
+      iosem.fb_fetch_output = true;
+      iosem.fb_fetch_output_coherent = !!(nir_intrinsic_access(intr) & ACCESS_COHERENT);
 
       nir_push_if(b, is_color_att);
       {
@@ -1541,7 +1543,7 @@ panvk_per_arch(nir_lower_descriptors)(
    ctx.desc_info.num_varying_attr_descs = 0;
    /* We require Attribute Descriptors if we cannot use LD_VAR_BUF[_IMM] for
     * varyings. */
-   if (shader->info.stage == MESA_SHADER_FRAGMENT &&
+   if (nir->info.stage == MESA_SHADER_FRAGMENT &&
        !panvk_use_ld_var_buf(shader))
       ctx.desc_info.num_varying_attr_descs =
          shader->desc_info.max_varying_loads;

@@ -64,6 +64,7 @@ files_mesa_util = files(
   'u_idalloc.h',
   'list.h',
   'log.c',
+  'lut.c',
   'macros.h',
   'memstream.c',
   'memstream.h',
@@ -99,6 +100,8 @@ files_mesa_util = files(
   'ralloc.h',
   'rand_xor.c',
   'rand_xor.h',
+  'range_minimum_query.c',
+  'range_minimum_query.h',
   'rb_tree.c',
   'rb_tree.h',
   'register_allocate.c',
@@ -118,6 +121,7 @@ files_mesa_util = files(
   'sparse_array.h',
   'string_buffer.c',
   'string_buffer.h',
+  'strndup.c',
   'strndup.h',
   'strtod.c',
   'strtod.h',
@@ -140,6 +144,8 @@ files_mesa_util = files(
   'u_pointer.h',
   'u_queue.c',
   'u_queue.h',
+  'u_range_remap.c',
+  'u_range_remap.h',
   'u_string.c',
   'u_string.h',
   'u_thread.c',
@@ -159,6 +165,7 @@ files_mesa_util = files(
   'u_cpu_detect.h',
   'u_printf.c',
   'u_printf.h',
+  'u_overflow.h',
   'u_tristate.h',
   'u_worklist.c',
   'u_worklist.h',
@@ -215,12 +222,13 @@ format_srgb = custom_target(
   capture : true,
 )
 
-files_mesa_util += custom_target(
+shader_stats_h = custom_target(
   input : ['process_shader_stats.py', 'shader_stats.rnc', 'shader_stats.xml'],
   output : 'shader_stats.h',
   command : [prog_python, '@INPUT@'],
   capture : true,
 )
+files_mesa_util += shader_stats_h
 
 # subdir format provide files_mesa_format
 subdir('format')
@@ -309,6 +317,7 @@ _libmesa_util = static_library(
 )
 
 idep_mesautil = declare_dependency(
+  sources : [shader_stats_h],
   link_with : _libmesa_util,
   include_directories : [inc_util],
   dependencies : deps_for_libmesa_util,
@@ -397,9 +406,12 @@ if with_tests
     'tests/half_float_test.cpp',
     'tests/int_min_max.cpp',
     'tests/linear_test.cpp',
+    'tests/list_test.cpp',
+    'tests/lut_test.cpp',
     'tests/mesa-sha1_test.cpp',
     'tests/os_mman_test.cpp',
     'tests/perf/u_trace_test.cpp',
+    'tests/range_minimum_query_test.cpp',
     'tests/rb_tree_test.cpp',
     'tests/register_allocate_test.cpp',
     'tests/roundeven_test.cpp',

@@ -215,6 +215,11 @@ static inline bool vk_format_is_alpha_on_msb(VkFormat vk_format)
 #endif
 }
 
+static inline bool vk_format_is_scaled(VkFormat vk_format)
+{
+   return util_format_is_scaled(vk_format_to_pipe_format(vk_format));
+}
+
 static inline unsigned
 vk_format_get_blocksize(VkFormat format)
 {
@@ -350,9 +355,6 @@ vk_format_get_plane_height(VkFormat format, unsigned plane, unsigned height)
 VkClearColorValue
 vk_swizzle_color_value(VkClearColorValue color,
                        VkComponentMapping swizzle, bool is_int);
-
-VkFormat
-vk_select_android_external_format(const void *next, VkFormat default_format);
 
 #ifdef __cplusplus
 }

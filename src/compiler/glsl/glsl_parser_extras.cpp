@@ -63,8 +63,8 @@ static const unsigned known_desktop_gl_versions[] =
 _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
 					       mesa_shader_stage stage,
                                                void *mem_ctx)
-   : ctx(_ctx), exts(&_ctx->Extensions), consts(&_ctx->Const),
-     api(_ctx->API), cs_input_local_size_specified(false), cs_input_local_size(),
+   : ctx(_ctx), exts(&_ctx->Extensions), consts(&_ctx->Const), caps(&_ctx->screen->caps),
+     api(_ctx->API), cs_ms_input_local_size_specified(false), cs_ms_input_local_size(),
      switch_state(), warnings_enabled(true)
 {
    assert(stage < MESA_SHADER_MESH_STAGES);
@@ -304,6 +304,10 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
 
    this->gs_input_prim_type_specified = false;
    this->tcs_output_vertices_specified = false;
+   this->ms_output_max_vertices_specified = false;
+   this->ms_output_max_primitives_specified = false;
+   this->ms_per_vertex_output_size = 0;
+   this->ms_per_primitive_output_size = 0;
    this->gs_input_size = 0;
    this->in_qualifier = new(this) ast_type_qualifier();
    this->out_qualifier = new(this) ast_type_qualifier();
@@ -658,6 +662,10 @@ mesa_stage_to_gl_stage_bit(unsigned stage)
       return GL_FRAGMENT_SHADER_BIT;
    case MESA_SHADER_COMPUTE:
       return GL_COMPUTE_SHADER_BIT;
+   case MESA_SHADER_TASK:
+      return GL_TASK_SHADER_BIT_EXT;
+   case MESA_SHADER_MESH:
+      return GL_MESH_SHADER_BIT_EXT;
    default:
       UNREACHABLE("glsl parser: invalid shader stage");
    }
@@ -820,6 +828,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT_AEP(EXT_geometry_shader),
    EXT(EXT_gpu_shader4),
    EXT_AEP(EXT_gpu_shader5),
+   EXT(EXT_mesh_shader),
    EXT_AEP(EXT_primitive_bounding_box),
    EXT(EXT_separate_shader_objects),
    EXT(EXT_shader_clock),
@@ -1216,6 +1225,7 @@ _mesa_ast_process_interface_block(YYLTYPE *locp,
    temp_type_qualifier.flags.q.out = true;
    temp_type_qualifier.flags.q.buffer = true;
    temp_type_qualifier.flags.q.patch = true;
+   temp_type_qualifier.flags.q.per_primitive = true;
    interface_type_mask = temp_type_qualifier.flags.i;
 
    /* Get the block's interface qualifier.  The interface_qualifier
@@ -1235,7 +1245,10 @@ _mesa_ast_process_interface_block(YYLTYPE *locp,
       block->default_layout.stream = state->out_qualifier->stream;
    }
 
-   if (state->has_enhanced_layouts() && block->default_layout.flags.q.out &&
+   /* Not apply to mesh shader. */
+   if (state->stage <= MESA_SHADER_GEOMETRY &&
+       state->has_enhanced_layouts() &&
+       block->default_layout.flags.q.out &&
        state->exts->ARB_transform_feedback3) {
       /* Assign global layout's xfb_buffer value. */
       block->default_layout.flags.q.xfb_buffer = 1;
@@ -1324,6 +1337,8 @@ _mesa_ast_type_qualifier_print(const struct ast_type_qualifier *q)
       printf("flat ");
    if (q->flags.q.noperspective)
       printf("noperspective ");
+   if (q->flags.q.per_primitive)
+      printf("per_primitive ");
 }
 
 
@@ -1900,13 +1915,20 @@ set_shader_inout_layout(struct gl_shader *shader,
    /* Should have been prevented by the parser. */
    if (shader->Stage != MESA_SHADER_GEOMETRY &&
        shader->Stage != MESA_SHADER_TESS_EVAL &&
-       shader->Stage != MESA_SHADER_COMPUTE) {
+       shader->Stage != MESA_SHADER_COMPUTE &&
+       shader->Stage != MESA_SHADER_TASK &&
+       shader->Stage != MESA_SHADER_MESH) {
       assert(!state->in_qualifier->flags.i);
+   }
+
+   if (shader->Stage != MESA_SHADER_COMPUTE &&
+       shader->Stage != MESA_SHADER_TASK &&
+       shader->Stage != MESA_SHADER_MESH) {
+      assert(!state->cs_ms_input_local_size_specified);
    }
 
    if (shader->Stage != MESA_SHADER_COMPUTE) {
       /* Should have been prevented by the parser. */
-      assert(!state->cs_input_local_size_specified);
       assert(!state->cs_input_local_size_variable_specified);
       assert(state->cs_derivative_group == DERIVATIVE_GROUP_NONE);
    }
@@ -2036,9 +2058,9 @@ set_shader_inout_layout(struct gl_shader *shader,
       break;
 
    case MESA_SHADER_COMPUTE:
-      if (state->cs_input_local_size_specified) {
+      if (state->cs_ms_input_local_size_specified) {
          for (int i = 0; i < 3; i++)
-            shader->info.Comp.LocalSize[i] = state->cs_input_local_size[i];
+            shader->info.Comp.LocalSize[i] = state->cs_ms_input_local_size[i];
       } else {
          for (int i = 0; i < 3; i++)
             shader->info.Comp.LocalSize[i] = 0;
@@ -2093,6 +2115,61 @@ set_shader_inout_layout(struct gl_shader *shader,
       shader->SampleInterlockOrdered = state->fs_sample_interlock_ordered;
       shader->SampleInterlockUnordered = state->fs_sample_interlock_unordered;
       shader->BlendSupport = state->fs_blend_support;
+      break;
+
+   case MESA_SHADER_MESH:
+      if (state->out_qualifier->flags.q.prim_type) {
+         shader->info.Mesh.OutputType =
+            gl_to_mesa_prim(state->out_qualifier->prim_type);
+      } else {
+         shader->info.Mesh.OutputType = MESA_PRIM_UNKNOWN;
+      }
+
+      shader->info.Mesh.MaxVertices = -1;
+      if (state->out_qualifier->flags.q.max_vertices) {
+         unsigned qual_max_vertices;
+         if (state->out_qualifier->max_vertices->
+               process_qualifier_constant(state, "max_vertices",
+                                          &qual_max_vertices, true)) {
+
+            if (qual_max_vertices > state->caps->mesh.max_mesh_output_vertices) {
+               YYLTYPE loc = state->out_qualifier->max_vertices->get_location();
+               _mesa_glsl_error(&loc, state,
+                                "maximum output vertices (%d) exceeds "
+                                "GL_MAX_MESH_OUTPUT_VERTICES_EXT",
+                                qual_max_vertices);
+            }
+            shader->info.Mesh.MaxVertices = qual_max_vertices;
+         }
+      }
+
+      shader->info.Mesh.MaxPrimitives = -1;
+      if (state->out_qualifier->flags.q.max_primitives) {
+         unsigned qual_max_primitives;
+         if (state->out_qualifier->max_primitives->
+               process_qualifier_constant(state, "max_primitives",
+                                          &qual_max_primitives, true)) {
+
+            if (qual_max_primitives > state->caps->mesh.max_mesh_output_primitives) {
+               YYLTYPE loc = state->out_qualifier->max_primitives->get_location();
+               _mesa_glsl_error(&loc, state,
+                                "maximum output primitives (%d) exceeds "
+                                "GL_MAX_MESH_OUTPUT_PRIMITIVES_EXT",
+                                qual_max_primitives);
+            }
+            shader->info.Mesh.MaxPrimitives = qual_max_primitives;
+         }
+      }
+
+      FALLTHROUGH;
+   case MESA_SHADER_TASK:
+      if (state->cs_ms_input_local_size_specified) {
+         for (int i = 0; i < 3; i++)
+            shader->info.Mesh.LocalSize[i] = state->cs_ms_input_local_size[i];
+      } else {
+         for (int i = 0; i < 3; i++)
+            shader->info.Mesh.LocalSize[i] = 0;
+      }
       break;
 
    default:

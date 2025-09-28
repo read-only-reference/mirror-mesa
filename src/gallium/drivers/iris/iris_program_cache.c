@@ -165,7 +165,7 @@ iris_upload_shader(struct iris_screen *screen,
 {
    const struct intel_device_info *devinfo = screen->devinfo;
 
-   u_upload_alloc(uploader, 0, shader->program_size, 64,
+   u_upload_alloc_ref(uploader, 0, shader->program_size, 64,
                   &shader->assembly.offset, &shader->assembly.res,
                   &shader->map);
    memcpy(shader->map, assembly, shader->program_size);
@@ -377,7 +377,7 @@ iris_ensure_indirect_generation_shader(struct iris_batch *batch)
 #ifdef INTEL_USE_ELK
       screen->elk ? screen->elk->nir_options[MESA_SHADER_COMPUTE] :
 #endif
-      screen->brw->nir_options[MESA_SHADER_COMPUTE];
+      &screen->brw->nir_options[MESA_SHADER_COMPUTE];
 
    nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT,
                                                   nir_options,

@@ -233,6 +233,8 @@ translate_depth_format(enum pipe_format fmt)
       return VIVS_PE_DEPTH_CONFIG_DEPTH_FORMAT_D24S8;
    case PIPE_FORMAT_S8_UINT_Z24_UNORM:
       return VIVS_PE_DEPTH_CONFIG_DEPTH_FORMAT_D24S8;
+   case PIPE_FORMAT_S8_UINT:
+      return VIVS_PE_DEPTH_CONFIG_DEPTH_FORMAT_D24S8;
    default:
       return ETNA_NO_MATCH;
    }
@@ -333,6 +335,12 @@ translate_blt_format(enum pipe_format fmt)
       return BLT_FORMAT_R8;
    case PIPE_FORMAT_R8G8_UNORM:
       return BLT_FORMAT_R8G8;
+   case PIPE_FORMAT_A8_UNORM:
+      return BLT_FORMAT_A8;
+   case PIPE_FORMAT_L8_UNORM:
+      return BLT_FORMAT_L8;
+   case PIPE_FORMAT_L8A8_UNORM:
+      return BLT_FORMAT_A8L8;
    default:
       return ETNA_NO_MATCH;
    }

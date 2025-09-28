@@ -173,6 +173,12 @@ do {                       \
 #define ATTRIBUTE_CONST
 #endif
 
+#if defined(HAVE_FUNC_ATTRIBUTE_COLD)
+#define ATTRIBUTE_COLD __attribute__((__cold__))
+#else
+#define ATTRIBUTE_COLD
+#endif
+
 #ifdef HAVE_FUNC_ATTRIBUTE_FLATTEN
 #define FLATTEN __attribute__((__flatten__))
 #else
@@ -554,5 +560,25 @@ typedef int lock_cap_t;
       /* NOLINTEND(bugprone-sizeof-expression) */                              \
    } while (0)
 #endif
+
+#define typed_memcpy(dest, src, count) do { \
+   STATIC_ASSERT(sizeof(*(src)) == sizeof(*(dest))); \
+   uint8_t *d = (uint8_t*)(dest); \
+   const uint8_t *s = (const uint8_t*)(src); \
+   if (d != NULL && s != NULL && (count) > 0) { \
+       memcpy(d, s, (count) * sizeof(*(src))); \
+   } \
+} while (0)
+
+/*
+ * Swap bits a and b. From Bithacks
+ * https://graphics.stanford.edu/~seander/bithacks.html#SwappingBitsXOR
+ */
+static inline uint32_t
+util_bit_swap(uint32_t v, unsigned a, unsigned b)
+{
+   uint32_t x = ((v >> a) ^ (v >> b)) & 1;
+   return v ^ ((x << a) | (x << b));
+}
 
 #endif /* UTIL_MACROS_H */

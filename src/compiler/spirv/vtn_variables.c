@@ -885,7 +885,8 @@ set_mode_system_value(struct vtn_builder *b, nir_variable_mode *mode)
 static void
 vtn_get_builtin_location(struct vtn_builder *b,
                          SpvBuiltIn builtin, int *location,
-                         nir_variable_mode *mode)
+                         nir_variable_mode *mode,
+                         enum glsl_interp_mode *interp_mode)
 {
    switch (builtin) {
    case SpvBuiltInPosition:
@@ -940,31 +941,35 @@ vtn_get_builtin_location(struct vtn_builder *b,
    case SpvBuiltInLayer:
    case SpvBuiltInLayerPerViewNV:
       *location = VARYING_SLOT_LAYER;
-      if (b->shader->info.stage == MESA_SHADER_FRAGMENT)
+      if (b->shader->info.stage == MESA_SHADER_FRAGMENT) {
          *mode = nir_var_shader_in;
-      else if (b->shader->info.stage == MESA_SHADER_GEOMETRY)
+         *interp_mode = INTERP_MODE_FLAT;
+      } else if (b->shader->info.stage == MESA_SHADER_GEOMETRY) {
          *mode = nir_var_shader_out;
-      else if (b->supported_capabilities.ShaderViewportIndexLayerEXT &&
+      } else if (b->supported_capabilities.ShaderViewportIndexLayerEXT &&
                (b->shader->info.stage == MESA_SHADER_VERTEX ||
                 b->shader->info.stage == MESA_SHADER_TESS_EVAL ||
-                b->shader->info.stage == MESA_SHADER_MESH))
+                b->shader->info.stage == MESA_SHADER_MESH)) {
          *mode = nir_var_shader_out;
-      else
+      } else {
          vtn_fail("invalid stage for SpvBuiltInLayer");
+      }
       break;
    case SpvBuiltInViewportIndex:
       *location = VARYING_SLOT_VIEWPORT;
-      if (b->shader->info.stage == MESA_SHADER_GEOMETRY)
+      if (b->shader->info.stage == MESA_SHADER_GEOMETRY) {
          *mode = nir_var_shader_out;
-      else if (b->supported_capabilities.ShaderViewportIndexLayerEXT &&
+      } else if (b->supported_capabilities.ShaderViewportIndexLayerEXT &&
                (b->shader->info.stage == MESA_SHADER_VERTEX ||
                 b->shader->info.stage == MESA_SHADER_TESS_EVAL ||
-                b->shader->info.stage == MESA_SHADER_MESH))
+                b->shader->info.stage == MESA_SHADER_MESH)) {
          *mode = nir_var_shader_out;
-      else if (b->shader->info.stage == MESA_SHADER_FRAGMENT)
+      } else if (b->shader->info.stage == MESA_SHADER_FRAGMENT) {
          *mode = nir_var_shader_in;
-      else
+         *interp_mode = INTERP_MODE_FLAT;
+      } else {
          vtn_fail("invalid stage for SpvBuiltInViewportIndex");
+      }
       break;
    case SpvBuiltInViewportMaskNV:
    case SpvBuiltInViewportMaskPerViewNV:
@@ -1402,8 +1407,10 @@ apply_var_decoration(struct vtn_builder *b,
       SpvBuiltIn builtin = dec->operands[0];
 
       nir_variable_mode mode = var_data->mode;
-      vtn_get_builtin_location(b, builtin, &var_data->location, &mode);
+      enum glsl_interp_mode interpolation = var_data->interpolation;
+      vtn_get_builtin_location(b, builtin, &var_data->location, &mode, &interpolation);
       var_data->mode = mode;
+      var_data->interpolation = interpolation;
 
       switch (builtin) {
       case SpvBuiltInTessLevelOuter:
@@ -2649,22 +2656,6 @@ vtn_emit_make_available_barrier(struct vtn_builder *b, SpvMemoryAccessMask acces
                                      vtn_mode_to_memory_semantics(mode));
 }
 
-static void
-ptr_nonuniform_workaround_cb(struct vtn_builder *b, struct vtn_value *val,
-                  int member, const struct vtn_decoration *dec, void *void_ptr)
-{
-   enum gl_access_qualifier *access = void_ptr;
-
-   switch (dec->decoration) {
-   case SpvDecorationNonUniformEXT:
-      *access |= ACCESS_NON_UNIFORM;
-      break;
-
-   default:
-      break;
-   }
-}
-
 struct vtn_pointer *
 vtn_cast_pointer(struct vtn_builder *b, struct vtn_pointer *p,
                  struct vtn_type *pointed)
@@ -2836,7 +2827,8 @@ vtn_handle_variables(struct vtn_builder *b, SpvOp opcode,
          }
 
          /* Workaround for https://gitlab.freedesktop.org/mesa/mesa/-/issues/3406 */
-         vtn_foreach_decoration(b, link_val, ptr_nonuniform_workaround_cb, &access);
+         if (vtn_has_decoration(b, link_val, SpvDecorationNonUniformEXT))
+            access |= ACCESS_NON_UNIFORM;
 
          idx++;
       }

@@ -53,7 +53,7 @@ class Intrinsic(object):
        - dest_components: number of destination components, -1 means no
          dest, 0 means number of components given in num_components field
          in nir_intrinsic_instr.
-       - indices: list of constant indicies
+       - indices: list of constant indices
        - flags: list of semantic flags
        - sysval: is this a system-value intrinsic
        - bit_sizes: allowed dest bit_sizes or the source it must match
@@ -546,7 +546,7 @@ intrinsic("read_getlast_ir3", src_comp=[0], dest_comp=0, bit_sizes=src0, flags=S
 intrinsic("elect", dest_comp=1, flags=SUBGROUP_FLAGS)
 intrinsic("first_invocation", dest_comp=1, bit_sizes=[32], flags=SUBGROUP_FLAGS)
 intrinsic("last_invocation", dest_comp=1, bit_sizes=[32], flags=SUBGROUP_FLAGS)
-intrinsic("inverse_ballot", src_comp=[0], dest_comp=1, flags=[CAN_ELIMINATE, CAN_REORDER])
+intrinsic("inverse_ballot", src_comp=[0], dest_comp=1, bit_sizes=[1], flags=[CAN_ELIMINATE, CAN_REORDER])
 
 barrier("begin_invocation_interlock")
 barrier("end_invocation_interlock")
@@ -566,12 +566,12 @@ intrinsic("vote_ieq", src_comp=[0], dest_comp=1, flags=SUBGROUP_FLAGS)
 # These operations work like their ALU counterparts except that the operate
 # on a uvec4 which is treated as a 128bit integer.  Also, they are, in
 # general, free to ignore any bits which are above the subgroup size.
-intrinsic("ballot_bitfield_extract", src_comp=[4, 1], dest_comp=1, flags=[CAN_REORDER, CAN_ELIMINATE])
-intrinsic("ballot_bit_count_reduce", src_comp=[4], dest_comp=1, flags=[CAN_REORDER, CAN_ELIMINATE])
-intrinsic("ballot_bit_count_inclusive", src_comp=[4], dest_comp=1, flags=[CAN_REORDER, CAN_ELIMINATE])
-intrinsic("ballot_bit_count_exclusive", src_comp=[4], dest_comp=1, flags=[CAN_REORDER, CAN_ELIMINATE])
-intrinsic("ballot_find_lsb", src_comp=[4], dest_comp=1, flags=[CAN_REORDER, CAN_ELIMINATE])
-intrinsic("ballot_find_msb", src_comp=[4], dest_comp=1, flags=[CAN_REORDER, CAN_ELIMINATE])
+intrinsic("ballot_bitfield_extract", src_comp=[4, 1], dest_comp=1, bit_sizes=[1], flags=[CAN_REORDER, CAN_ELIMINATE])
+intrinsic("ballot_bit_count_reduce", src_comp=[4], dest_comp=1, bit_sizes=[32], flags=[CAN_REORDER, CAN_ELIMINATE])
+intrinsic("ballot_bit_count_inclusive", src_comp=[4], dest_comp=1, bit_sizes=[32], flags=[CAN_REORDER, CAN_ELIMINATE])
+intrinsic("ballot_bit_count_exclusive", src_comp=[4], dest_comp=1, bit_sizes=[32], flags=[CAN_REORDER, CAN_ELIMINATE])
+intrinsic("ballot_find_lsb", src_comp=[4], dest_comp=1, bit_sizes=[32], flags=[CAN_REORDER, CAN_ELIMINATE])
+intrinsic("ballot_find_msb", src_comp=[4], dest_comp=1, bit_sizes=[32], flags=[CAN_REORDER, CAN_ELIMINATE])
 
 # Shuffle operations from SPIR-V.
 intrinsic("shuffle", src_comp=[0, 1], dest_comp=0, bit_sizes=src0, flags=SUBGROUP_FLAGS)
@@ -895,6 +895,10 @@ intrinsic("load_vulkan_descriptor", src_comp=[-1], dest_comp=0,
 #
 # AGX global variants take a 64-bit base address plus a 32-bit offset in words.
 # The offset is sign-extended or zero-extended based on the SIGN_EXTEND index.
+#
+# PCO global variants use a vec3 for the memory address and data, where component X
+# has the low 32 address bits, component Y has the high 32 address bits, and component Z
+# has the data parameter.
 
 intrinsic("deref_atomic",  src_comp=[-1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP])
 intrinsic("ssbo_atomic",  src_comp=[-1, 1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP, OFFSET_SHIFT])
@@ -904,6 +908,7 @@ intrinsic("global_atomic",  src_comp=[1, 1], dest_comp=1, indices=[ATOMIC_OP])
 intrinsic("global_atomic_2x32",  src_comp=[2, 1], dest_comp=1, indices=[ATOMIC_OP])
 intrinsic("global_atomic_amd",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
 intrinsic("global_atomic_agx",  src_comp=[1, 1, 1], dest_comp=1, indices=[ATOMIC_OP, SIGN_EXTEND])
+intrinsic("global_atomic_pco",  src_comp=[3], dest_comp=1, indices=[ATOMIC_OP], bit_sizes=[32])
 
 intrinsic("deref_atomic_swap",  src_comp=[-1, 1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP])
 intrinsic("ssbo_atomic_swap",  src_comp=[-1, 1, 1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP, OFFSET_SHIFT])
@@ -913,6 +918,7 @@ intrinsic("global_atomic_swap",  src_comp=[1, 1, 1], dest_comp=1, indices=[ATOMI
 intrinsic("global_atomic_swap_2x32",  src_comp=[2, 1, 1], dest_comp=1, indices=[ATOMIC_OP])
 intrinsic("global_atomic_swap_amd",  src_comp=[1, 1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
 intrinsic("global_atomic_swap_agx",  src_comp=[1, 1, 1, 1], dest_comp=1, indices=[ATOMIC_OP, SIGN_EXTEND])
+intrinsic("global_atomic_swap_pco",  src_comp=[4], dest_comp=1, indices=[ATOMIC_OP], bit_sizes=[32])
 
 def system_value(name, dest_comp, indices=[], bit_sizes=[32], can_reorder=True):
     flags = [CAN_ELIMINATE, CAN_REORDER] if can_reorder else [CAN_ELIMINATE]
@@ -1357,6 +1363,9 @@ load("mesh_view_indices", [1], [BASE, RANGE], [CAN_ELIMINATE, CAN_REORDER])
 load("preamble", [], indices=[BASE, PREAMBLE_CLASS],
      flags=[CAN_ELIMINATE, CAN_REORDER])
 store("preamble", [], indices=[BASE, PREAMBLE_CLASS])
+
+# src[] = { value, offset }.
+store("preamble_dynamic", [1], indices=[PREAMBLE_CLASS])
 
 # A 64-bit bitfield indexed by I/O location storing 1 in bits corresponding to
 # varyings that have the flat interpolation specifier in the fragment shader and
@@ -2474,7 +2483,10 @@ intrinsic("load_inline_data_intel", [], dest_comp=0,
           indices=[BASE],
           flags=[CAN_ELIMINATE, CAN_REORDER])
 
-# Dynamic fragment shader parameters.
+# Dynamic tesselation parameters (see intel_tess_config).
+system_value("tess_config_intel", 1)
+
+# Dynamic fragment shader parameters (see intel_msaa_flags) .
 system_value("fs_msaa_intel", 1)
 
 # Per primitive remapping table offset.
@@ -2678,3 +2690,114 @@ intrinsic("enqueue_node_payloads", src_comp=[-1])
 
 # Returns true if it has been called for every payload.
 intrinsic("finalize_incoming_node_payload", src_comp=[-1], dest_comp=1)
+
+# load_{tex,smp}_state_pco(array element)
+# Loads the texture/sampler state words for a given descriptor.
+intrinsic("load_tex_state_pco", src_comp=[1], dest_comp=0, indices=[DESC_SET, BINDING, COMPONENT], flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
+intrinsic("load_smp_state_pco", src_comp=[1], dest_comp=0, indices=[DESC_SET, BINDING, COMPONENT, FLAGS], flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
+
+# load_{tex,smp}_meta_pco(array element)
+# Loads the texture/sampler metadata for a given descriptor.
+intrinsic("load_tex_meta_pco", src_comp=[1], dest_comp=0, indices=[DESC_SET, BINDING, COMPONENT], flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
+intrinsic("load_smp_meta_pco", src_comp=[1], dest_comp=0, indices=[DESC_SET, BINDING, COMPONENT], flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
+
+index("uint16_t", "smp_flags_pco")
+
+# smp_pco(data, tex_state, smp_state)
+# Performs a standard sampling operation with the given data and state words.
+# Outputs between 1-4 comps.
+intrinsic("smp_pco", src_comp=[16, 4, 4], dest_comp=0, indices=[SMP_FLAGS_PCO, RANGE], bit_sizes=[32])
+
+# smp_coeffs_pco(data, tex_state, smp_state)
+# Returns the calculated sampling coefficients for the given data and state words.
+intrinsic("smp_coeffs_pco", src_comp=[16, 4, 4], dest_comp=8, indices=[SMP_FLAGS_PCO, RANGE], bit_sizes=[32])
+
+# smp_raw_pco(data, tex_state, smp_state)
+# Returns the raw sampling data for the given data and state words.
+# Actually outputs 4/8/12/16 components, but NIR doesn't support num_components == 12, so fake it as 8 for now.
+intrinsic("smp_raw_pco", src_comp=[16, 4, 4], dest_comp=16, indices=[SMP_FLAGS_PCO, RANGE], bit_sizes=[32])
+
+# smp_write_pco(data, tex_state, smp_state)
+# Performs a sample write for the given data and state words.
+intrinsic("smp_write_pco", src_comp=[16, 4, 4], indices=[SMP_FLAGS_PCO, RANGE], bit_sizes=[32])
+
+# alphatst_pco(data, comparator, comparison op)
+# Performs an alpha test on the given parameters, returning float 0/1 depending on the comparison result.
+intrinsic("alphatst_pco", src_comp=[1, 1, 1], dest_comp=1, flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
+
+# Load the current instance's number/id within its slot.
+intrinsic("load_instance_num_pco", dest_comp=1, flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
+
+index("unsigned", "mutex_id_pco")
+index("unsigned", "mutex_op_pco")
+
+# Perform a mutex operation (slot granularity).
+intrinsic("mutex_pco", indices=[MUTEX_ID_PCO, MUTEX_OP_PCO])
+
+# isp_feedback_pco(discard condition/undef, depth value/undef)
+# Perform an ISP feedback operation.
+intrinsic("isp_feedback_pco", src_comp=[1, 1])
+
+# Loads the valid mask.
+intrinsic("load_savmsk_vm_pco", src_comp=[], dest_comp=1, indices=[], flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
+
+index("bool", "freep")
+intrinsic("emitpix_pco", src_comp=[1, 1], indices=[FREEP], bit_sizes=[32])
+intrinsic("wop_pco")
+
+system_value("face_ccw_pco", 1, bit_sizes=[32])
+system_value("front_face_op_pco", 1, bit_sizes=[32])
+
+system_value("fs_meta_pco", 1, bit_sizes=[32])
+
+intrinsic("flush_tile_buffer_pco", src_comp=[1, 1], indices=[BASE, RANGE])
+
+intrinsic("dummy_load_store_pco", indices=[BASE])
+
+index("bool", "scale")
+index("bool", "roundzero")
+intrinsic("pack_pco", src_comp=[0], dest_comp=1, flags=[CAN_ELIMINATE, CAN_REORDER], indices=[FORMAT], bit_sizes=[32])
+intrinsic("unpack_pco", src_comp=[1], dest_comp=0, flags=[CAN_ELIMINATE, CAN_REORDER], indices=[FORMAT], bit_sizes=[32])
+intrinsic("pck_prog_pco", src_comp=[0, 1], dest_comp=0, flags=[CAN_ELIMINATE, CAN_REORDER], indices=[SCALE, ROUNDZERO], bit_sizes=[32])
+
+# uvsw_write_pco(offset/address, data)
+intrinsic("uvsw_write_pco", src_comp=[1, 0], bit_sizes=[32])
+
+# load_vtxin_pco(offset)
+intrinsic("load_vtxin_pco", src_comp=[1], dest_comp=0, bit_sizes=[32])
+
+# load_coeff_pco(offset)
+intrinsic("load_coeff_pco", src_comp=[1], dest_comp=0, bit_sizes=[32])
+
+# frag_store_pco(data, offset/base)
+intrinsic("frag_store_pco", src_comp=[1], indices=[BASE], bit_sizes=[32])
+
+# dma_ld_pco(address)
+intrinsic("dma_ld_pco", src_comp=[2], dest_comp=0, flags=[CAN_ELIMINATE], bit_sizes=[32])
+
+# dma_st_pco(address_data, emit_idf)
+intrinsic("dma_st_pco", src_comp=[0], indices=[FLAGS], bit_sizes=[32])
+
+# dma_st_tiled_pco(address_data, valid_mask)
+intrinsic("dma_st_tiled_pco", src_comp=[3, 1], bit_sizes=[32])
+
+# load_tiled_offset_pco(component, is_store)
+intrinsic("load_tiled_offset_pco", dest_comp=1, indices=[COMPONENT, FLAGS], bit_sizes=[32])
+
+intrinsic("load_shared_reg_alloc_size_pco", dest_comp=1, bit_sizes=[32])
+
+# dma_ld_shregs_pco(address, burst_len, shreg_offset)
+intrinsic("dma_ld_shregs_pco", src_comp=[2, 1, 1], bit_sizes=[32])
+
+# dma_st_shregs_pco(address, burst_len, shreg_offset, emit_idf)
+intrinsic("dma_st_shregs_pco", src_comp=[2, 1, 1], indices=[FLAGS], bit_sizes=[32])
+
+intrinsic("load_tile_coord_pco", dest_comp=0, flags=[CAN_ELIMINATE, CAN_REORDER], indices=[COMPONENT], bit_sizes=[32])
+
+intrinsic("load_fs_coeffs_pco", dest_comp=3, flags=[CAN_ELIMINATE, CAN_REORDER], indices=[COMPONENT, IO_SEMANTICS], bit_sizes=[32])
+
+# load_packed_sample_location_pco(dword_index)
+intrinsic("load_packed_sample_location_pco", src_comp=[1], dest_comp=1, flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
+
+# src[] = { buffer_index/deref }.
+intrinsic("is_null_descriptor", src_comp=[-1], dest_comp=1, flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[1])

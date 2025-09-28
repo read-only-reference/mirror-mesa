@@ -319,6 +319,7 @@ enum ir_variable_mode {
    ir_var_uniform,              /**< Variable declared as a uniform. */
    ir_var_shader_storage,       /**< Variable declared as an ssbo. */
    ir_var_shader_shared,        /**< Variable declared as shared. */
+   ir_var_shader_task_payload,
    ir_var_shader_in,
    ir_var_shader_out,
    ir_var_function_in,
@@ -858,6 +859,11 @@ public:
       unsigned implicit_conversion_prohibited:1;
 
       /**
+       * Non-zero if the variable is per-primitive as defined by EXT_mesh_shader
+       */
+      unsigned per_primitive:1;
+
+      /**
        * Emit a warning if this variable is accessed.
        */
    private:
@@ -1164,6 +1170,9 @@ enum ir_intrinsic_id {
    ir_intrinsic_quad_swap_horizontal,
    ir_intrinsic_quad_swap_vertical,
    ir_intrinsic_quad_swap_diagonal,
+
+   ir_intrinsic_emit_mesh_tasks,
+   ir_intrinsic_set_mesh_outputs,
 };
 
 /*@{*/

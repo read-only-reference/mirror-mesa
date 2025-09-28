@@ -68,6 +68,7 @@ zink-anv-adl:
     DEQP_SUITE: zink-anv-adl
     PIGLIT_NO_WINDOW: 1
     HWCI_START_WESTON: 1
+    ZINK_DESCRIPTORS: db
     # We use gbm because its a copy of tgl job
     PIGLIT_PLATFORM: gbm
     FDO_CI_CONCURRENT: 6 # higher is too much, and leads to OOM
@@ -89,6 +90,7 @@ zink-anv-adl-traces:
   extends:
     - .zink-anv-adl-trace-test
   variables:
+    ZINK_DESCRIPTORS: db
     PIGLIT_TRACES_FILE: traces-zink.yml
 
 zink-anv-adl-traces-restricted:
@@ -96,6 +98,7 @@ zink-anv-adl-traces-restricted:
     - .zink-anv-adl-trace-test
     - .zink-anv-rules-restricted
   variables:
+    ZINK_DESCRIPTORS: db
     PIGLIT_TRACES_FILE: traces-zink-restricted.yml
     PIGLIT_REPLAY_EXTRA_ARGS: --db-path ${CI_PROJECT_DIR}/replayer-db/ --minio_bucket=${S3_TRACIE_PRIVATE_BUCKET} --jwt-file=${S3_JWT_FILE}
   allow_failure: true
@@ -109,6 +112,7 @@ zink-anv-adl-traces-performance:
     - !reference [.piglit-performance-base, rules]
     - !reference [.zink-anv-manual-rules, rules]
   variables:
+    ZINK_DESCRIPTORS: db
     PIGLIT_TRACES_FILE: traces-zink.yml
 
 zink-anv-tgl:
@@ -177,6 +181,7 @@ zink-tu-a618:
     HWCI_START_WESTON: 1
     GPU_VERSION: zink-tu-a618
     DRIVER_NAME: null  # Don't use freedreno skips
+    ZINK_DEBUG: validation
   parallel: 3
 
 zink-tu-a618-traces:
@@ -293,7 +298,7 @@ zink-radv-vangogh-traces:
   parallel: null
   timeout: 10m
   variables:
-    CI_TRON_TIMEOUT__OVERALL__MINUTES: 5  # normal runtime = 40-50 sec
+    CI_TRON_TIMEOUT__OVERALL__MINUTES: 8  # normal runtime = 40-50 sec
     PIGLIT_TRACES_FILE: traces-zink.yml
 
 zink-radv-navi31-valve:

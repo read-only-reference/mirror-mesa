@@ -205,6 +205,7 @@ static VkResult
 check_global_priority(const struct panvk_physical_device *phys_dev,
                       const VkDeviceQueueCreateInfo *create_info)
 {
+   const unsigned arch = pan_arch(phys_dev->kmod.props.gpu_id);
    const VkDeviceQueueGlobalPriorityCreateInfoKHR *priority_info =
       vk_find_struct_const(create_info->pNext,
                            DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR);
@@ -212,15 +213,36 @@ check_global_priority(const struct panvk_physical_device *phys_dev,
       priority_info ? priority_info->globalPriority
                     : VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR;
 
-   enum pan_kmod_group_allow_priority_flags requested_prio =
-      global_priority_to_group_allow_priority_flag(priority);
-   enum pan_kmod_group_allow_priority_flags allowed_prio_mask =
-      phys_dev->kmod.props.allowed_group_priorities_mask;
+   switch (create_info->queueFamilyIndex) {
+   case PANVK_QUEUE_FAMILY_GPU: {
+      enum pan_kmod_group_allow_priority_flags requested_prio =
+         global_priority_to_group_allow_priority_flag(priority);
+      enum pan_kmod_group_allow_priority_flags allowed_prio_mask =
+         phys_dev->kmod.props.allowed_group_priorities_mask;
 
-   if (requested_prio & allowed_prio_mask)
-      return VK_SUCCESS;
+      /* Non-medium priority context is not hooked-up in the JM backend, even
+       * though the panfrost kmod advertize it. Manually filter non-medium
+       * priority for now.
+       */
+      if (arch < 10)
+         allowed_prio_mask &= PAN_KMOD_GROUP_ALLOW_PRIORITY_MEDIUM;
 
-   return VK_ERROR_NOT_PERMITTED_KHR;
+      if (requested_prio & allowed_prio_mask)
+         return VK_SUCCESS;
+
+      return VK_ERROR_NOT_PERMITTED_KHR;
+   }
+
+   case PANVK_QUEUE_FAMILY_BIND: {
+      if (priority == VK_QUEUE_GLOBAL_PRIORITY_MEDIUM)
+         return VK_SUCCESS;
+
+      return VK_ERROR_NOT_PERMITTED_KHR;
+   }
+
+   default:
+      UNREACHABLE("Unknown queue family");
+   }
 }
 
 static VkResult
@@ -229,8 +251,10 @@ panvk_queue_check_status(struct vk_queue *queue)
    switch (queue->queue_family_index) {
    case PANVK_QUEUE_FAMILY_GPU:
       return panvk_per_arch(gpu_queue_check_status)(queue);
+   case PANVK_QUEUE_FAMILY_BIND:
+      return panvk_per_arch(bind_queue_check_status)(queue);
    default:
-      return VK_SUCCESS;
+      UNREACHABLE("Unknown queue family");
    }
 }
 
@@ -260,6 +284,17 @@ panvk_device_check_status(struct vk_device *vk_dev)
 }
 
 static VkResult
+panvk_device_get_timestamp(struct vk_device *vk_dev, uint64_t *timestamp)
+{
+   struct panvk_physical_device *pdev =
+      to_panvk_physical_device(vk_dev->physical);
+
+   *timestamp = pan_kmod_query_timestamp(pdev->kmod.dev);
+
+   return VK_SUCCESS;
+}
+
+static VkResult
 panvk_queue_create(struct panvk_device *dev,
                    const VkDeviceQueueCreateInfo *create_info,
                    uint32_t queue_idx,
@@ -268,6 +303,9 @@ panvk_queue_create(struct panvk_device *dev,
    switch (create_info->queueFamilyIndex) {
    case PANVK_QUEUE_FAMILY_GPU:
       return panvk_per_arch(create_gpu_queue)(
+         dev, create_info, queue_idx, out_queue);
+   case PANVK_QUEUE_FAMILY_BIND:
+      return panvk_per_arch(create_bind_queue)(
          dev, create_info, queue_idx, out_queue);
    default:
       return panvk_error(dev, VK_ERROR_INITIALIZATION_FAILED);
@@ -280,6 +318,9 @@ panvk_queue_destroy(struct vk_queue *queue)
    switch (queue->queue_family_index) {
    case PANVK_QUEUE_FAMILY_GPU:
       panvk_per_arch(destroy_gpu_queue)(queue);
+      break;
+   case PANVK_QUEUE_FAMILY_BIND:
+      panvk_per_arch(destroy_bind_queue)(queue);
       break;
    default:
       UNREACHABLE("Unknown queue family");
@@ -344,6 +385,7 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
    device->vk.command_buffer_ops = &panvk_per_arch(cmd_buffer_ops);
    device->vk.shader_ops = &panvk_per_arch(device_shader_ops);
    device->vk.check_status = panvk_device_check_status;
+   device->vk.get_timestamp = panvk_device_get_timestamp;
    device->vk.copy_sync_payloads = vk_drm_syncobj_copy_payloads;
 
    device->kmod.allocator = (struct pan_kmod_allocator){
@@ -589,6 +631,7 @@ panvk_per_arch(destroy_device)(struct panvk_device *device,
    panvk_per_arch(device_draw_context_cleanup)(device);
 #endif
    panvk_meta_cleanup(device);
+   pan_kmod_bo_put(device->sparse_mem.blackhole);
    u_printf_destroy(&device->printf.ctx);
    panvk_priv_bo_unref(device->printf.bo);
    panvk_priv_bo_unref(device->tiler_oom.handlers_bo);
@@ -623,72 +666,4 @@ panvk_per_arch(GetRenderingAreaGranularityKHR)(
    VkExtent2D *pGranularity)
 {
    *pGranularity = (VkExtent2D){32, 32};
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL
-panvk_per_arch(GetCalibratedTimestampsKHR)(
-   VkDevice _device, uint32_t timestampCount,
-   const VkCalibratedTimestampInfoKHR *pTimestampInfos, uint64_t *pTimestamps,
-   uint64_t *pMaxDeviation)
-{
-   VK_FROM_HANDLE(panvk_device, device, _device);
-   struct panvk_physical_device *pdev =
-      to_panvk_physical_device(device->vk.physical);
-
-   bool requested_domain[] = {
-      [VK_TIME_DOMAIN_DEVICE_KHR] = false,
-      [VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR] = false,
-      [VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR] = false,
-   };
-   uint64_t timestamps[] = {
-      [VK_TIME_DOMAIN_DEVICE_KHR] = 0,
-      [VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR] = 0,
-      [VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR] = 0,
-   };
-   uint64_t max_period = 0;
-
-   for (uint32_t idx = 0; idx < timestampCount; ++idx)
-      requested_domain[pTimestampInfos[idx].timeDomain] |= true;
-
-   uint64_t begin, end;
-#ifdef CLOCK_MONOTONIC_RAW
-   requested_domain[VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR] = true;
-   begin = vk_clock_gettime(CLOCK_MONOTONIC_RAW);
-#else
-   requested_domain[VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR] = true;
-   begin = vk_clock_gettime(CLOCK_MONOTONIC);
-#endif
-
-   if (requested_domain[VK_TIME_DOMAIN_DEVICE_KHR]) {
-      timestamps[VK_TIME_DOMAIN_DEVICE_KHR] =
-         pan_kmod_query_timestamp(pdev->kmod.dev);
-      max_period = MAX2(max_period, panvk_get_gpu_system_timestamp_period(pdev));
-   }
-
-   if (requested_domain[VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR]) {
-      timestamps[VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR] =
-         vk_clock_gettime(CLOCK_MONOTONIC);
-      max_period = MAX2(max_period, 1);
-   }
-
-#ifdef CLOCK_MONOTONIC_RAW
-   if (requested_domain[VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR]) {
-      timestamps[VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR] =
-         vk_clock_gettime(CLOCK_MONOTONIC_RAW);
-      max_period = MAX2(max_period, 1);
-   }
-#endif
-
-#ifdef CLOCK_MONOTONIC_RAW
-   end = timestamps[VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR];
-#else
-   end = timestamps[VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR];
-#endif
-
-   for (uint32_t idx = 0; idx < timestampCount; ++idx)
-      pTimestamps[idx] = timestamps[pTimestampInfos[idx].timeDomain];
-
-   *pMaxDeviation = vk_time_max_deviation(begin, end, max_period);
-
-   return VK_SUCCESS;
 }

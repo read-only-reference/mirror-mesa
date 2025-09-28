@@ -1473,7 +1473,7 @@ generate_fs_twiddle(struct gallivm_state *gallivm,
                     LLVMValueRef* dst,
                     bool pad_inline)
 {
-   LLVMValueRef src[16];
+   LLVMValueRef src[16] = { 0 };
    unsigned pixels = type.length / 4;
    unsigned src_channels = dst_channels < 3 ? dst_channels : 4;
    unsigned src_count = num_fs * src_channels;
@@ -3362,22 +3362,44 @@ generate_fragment(struct llvmpipe_context *lp,
 
       if (key->multisample && key->coverage_samples == 4) {
          LLVMValueRef sample_pos_arr[8];
-         for (unsigned i = 0; i < 4; i++) {
-            sample_pos_arr[i * 2] = LLVMConstReal(flt_type,
-                                                  lp_sample_pos_4x[i][0]);
-            sample_pos_arr[i * 2 + 1] = LLVMConstReal(flt_type,
-                                                      lp_sample_pos_4x[i][1]);
+         if (key->sample_locations_enabled) {
+            for (unsigned i = 0; i < 4; i++) {
+               /*
+                * sample_locations holds 4 bit values, just divide by 16
+                * to get subpixel offset as float
+                */
+               sample_pos_arr[i * 2] = LLVMConstReal(flt_type,
+                                                     (key->sample_locations[i] & 0xF) * 0.0625);
+               sample_pos_arr[i * 2 + 1] = LLVMConstReal(flt_type,
+                                                         (key->sample_locations[i] >> 4) * 0.0625);
+            }
+         } else {
+            for (unsigned i = 0; i < 4; i++) {
+               sample_pos_arr[i * 2] = LLVMConstReal(flt_type,
+                                                     lp_sample_pos_4x[i][0]);
+               sample_pos_arr[i * 2 + 1] = LLVMConstReal(flt_type,
+                                                         lp_sample_pos_4x[i][1]);
+            }
          }
          sample_pos_array =
             LLVMConstArray(LLVMFloatTypeInContext(gallivm->context),
                            sample_pos_arr, 8);
       } else if (key->multisample && key->coverage_samples == 8) {
          LLVMValueRef sample_pos_arr[16];
-         for (unsigned i = 0; i < 8; i++) {
-            sample_pos_arr[i * 2] = LLVMConstReal(flt_type,
-                                                  lp_sample_pos_8x[i][0]);
-            sample_pos_arr[i * 2 + 1] = LLVMConstReal(flt_type,
-                                                      lp_sample_pos_8x[i][1]);
+         if (key->sample_locations_enabled) {
+            for (unsigned i = 0; i < 8; i++) {
+               sample_pos_arr[i * 2] = LLVMConstReal(flt_type,
+                                                     (key->sample_locations[i] & 0xF) * 0.0625);
+               sample_pos_arr[i * 2 + 1] = LLVMConstReal(flt_type,
+                                                         (key->sample_locations[i] >> 4) * 0.0625);
+            }
+         } else {
+            for (unsigned i = 0; i < 8; i++) {
+               sample_pos_arr[i * 2] = LLVMConstReal(flt_type,
+                                                     lp_sample_pos_8x[i][0]);
+               sample_pos_arr[i * 2 + 1] = LLVMConstReal(flt_type,
+                                                         lp_sample_pos_8x[i][1]);
+            }
          }
          sample_pos_array =
             LLVMConstArray(LLVMFloatTypeInContext(gallivm->context),
@@ -3616,6 +3638,15 @@ dump_fs_variant_key(struct lp_fragment_shader_variant_key *key)
       debug_printf("coverage samples = %d\n", key->coverage_samples);
       debug_printf("min samples = %d\n", key->min_samples);
    }
+
+   if (key->sample_locations_enabled) {
+      debug_printf("sample_locations_enabled = 1\n");
+      for (unsigned i = 0; i < LP_MAX_SAMPLES; i++) {
+         debug_printf("sample %d loc x = %d y = %d\n", i,
+                      key->sample_locations[i] & 0xF, key->sample_locations[i] >> 4);
+      }
+   }
+
    for (unsigned i = 0; i < key->nr_cbufs; ++i) {
       debug_printf("cbuf_format[%u] = %s\n", i, util_format_name(key->cbuf_format[i]));
       debug_printf("cbuf nr_samples[%u] = %d\n", i, key->cbuf_nr_samples[i]);
@@ -4229,7 +4260,6 @@ llvmpipe_delete_fs_state(struct pipe_context *pipe, void *fs)
 static void
 llvmpipe_set_constant_buffer(struct pipe_context *pipe,
                              mesa_shader_stage shader, uint index,
-                             bool take_ownership,
                              const struct pipe_constant_buffer *cb)
 {
    struct llvmpipe_context *llvmpipe = llvmpipe_context(pipe);
@@ -4239,15 +4269,14 @@ llvmpipe_set_constant_buffer(struct pipe_context *pipe,
    assert(index < ARRAY_SIZE(llvmpipe->constants[shader]));
 
    /* note: reference counting */
-   util_copy_constant_buffer(&llvmpipe->constants[shader][index], cb,
-                             take_ownership);
+   util_copy_constant_buffer(&llvmpipe->constants[shader][index], cb);
 
    /* user_buffer is only valid until the next set_constant_buffer (at most,
     * possibly until shader deletion), so we need to upload it now to make
     * sure it doesn't get updated/freed out from under us.
     */
    if (constants->user_buffer) {
-      u_upload_data(llvmpipe->pipe.const_uploader, 0, constants->buffer_size,
+      u_upload_data_ref(llvmpipe->pipe.const_uploader, 0, constants->buffer_size,
                     16, constants->user_buffer, &constants->buffer_offset,
                     &constants->buffer);
    }
@@ -4540,6 +4569,14 @@ make_variant_key(struct llvmpipe_context *lp,
       if (lp->min_samples > 1 || nir->info.fs.uses_fbfetch_output)
          key->min_samples = key->coverage_samples;
    }
+
+   if (key->multisample) {
+      key->sample_locations_enabled = lp->sample_locations_enabled;
+      if (key->sample_locations_enabled) {
+         memcpy(key->sample_locations, lp->sample_locations, sizeof(key->sample_locations));
+      }
+   }
+
    key->nr_cbufs = lp->framebuffer.nr_cbufs;
 
    if (!key->blend.independent_blend_enable) {

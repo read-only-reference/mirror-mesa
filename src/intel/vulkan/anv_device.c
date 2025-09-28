@@ -31,6 +31,7 @@
 
 #include "anv_private.h"
 #include "anv_measure.h"
+#include "anv_shader.h"
 #include "anv_slab_bo.h"
 #include "util/u_debug.h"
 #include "util/os_file.h"
@@ -379,6 +380,8 @@ VkResult anv_CreateDevice(
                            &dispatch_table, pCreateInfo, pAllocator);
    if (result != VK_SUCCESS)
       goto fail_alloc;
+
+   device->vk.shader_ops = &anv_device_shader_ops;
 
    if (INTEL_DEBUG(DEBUG_BATCH) || INTEL_DEBUG(DEBUG_BATCH_STATS)) {
       for (unsigned i = 0; i < physical_device->queue.family_count; i++) {
@@ -950,11 +953,7 @@ VkResult anv_CreateDevice(
    if (!device->vk.enabled_extensions.EXT_sample_locations)
       BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_SAMPLE_PATTERN);
    if (!device->vk.enabled_extensions.KHR_fragment_shading_rate) {
-      if (device->info->ver >= 30) {
-         BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_COARSE_PIXEL);
-      } else {
-         BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_CPS);
-      }
+      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_CPS);
    }
    if (!device->vk.enabled_extensions.EXT_mesh_shader) {
       BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_SBE_MESH);

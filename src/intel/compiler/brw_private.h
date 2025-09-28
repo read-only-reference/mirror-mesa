@@ -37,6 +37,15 @@ void brw_alloc_reg_sets(struct brw_compiler *compiler);
 extern const char *const conditional_modifier[16];
 extern const char *const pred_ctrl_align16[16];
 
+#ifndef NDEBUG
+void brw_debug_archive_nir(debug_archiver *archiver, nir_shader *nir,
+                           unsigned dispatch_width, const char *step);
+#else
+static inline void
+brw_debug_archive_nir(debug_archiver *archiver, nir_shader *nir,
+                      unsigned dispatch_width, const char *step) {}
+#endif
+
 #ifdef __cplusplus
 }
 #endif
@@ -61,6 +70,7 @@ struct brw_simd_selection_state {
 
    bool compiled[SIMD_COUNT];
    bool spilled[SIMD_COUNT];
+   bool beyond_threshold[SIMD_COUNT];
 };
 
 inline int brw_simd_first_compiled(const brw_simd_selection_state &state)

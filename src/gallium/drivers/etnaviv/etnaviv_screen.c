@@ -232,6 +232,8 @@ etna_init_screen_caps(struct etna_screen *screen)
    caps->fs_position_is_sysval = true;
    caps->fs_face_is_integer_sysval = true; /* note: not integer */
    caps->fs_point_is_sysval = false;
+   caps->generate_mipmap =
+   caps->clear_scissored = screen->specs.use_blt;
 
    /* Memory */
    caps->constant_buffer_offset_alignment = 256;
@@ -255,9 +257,9 @@ etna_init_screen_caps(struct etna_screen *screen)
    caps->texrect = false;
 
    /* Stream output. */
-   caps->max_stream_output_buffers = DBG_ENABLED(ETNA_DBG_DEQP) ? 4 : 0;
-   caps->max_stream_output_separate_components = 0;
-   caps->max_stream_output_interleaved_components = 0;
+   caps->max_stream_output_buffers = VIV_FEATURE(screen, ETNA_FEATURE_HWTFB) ? 4 : 0;
+   caps->max_stream_output_separate_components = 64;
+   caps->max_stream_output_interleaved_components = 64;
 
    caps->max_vertex_attrib_stride = 128;
    caps->max_vertex_element_src_offset = 255;
@@ -279,8 +281,11 @@ etna_init_screen_caps(struct etna_screen *screen)
 
    caps->min_texel_offset = -8;
    caps->max_texel_offset = 7;
+   caps->max_texture_gather_components =
+      (VIV_FEATURE(screen, ETNA_FEATURE_HALTI5) && DBG_ENABLED(ETNA_DBG_DEQP)) ? 4 : 0;
    caps->seamless_cube_map_per_texture =
    caps->seamless_cube_map = VIV_FEATURE(screen, ETNA_FEATURE_SEAMLESS_CUBE_MAP);
+   caps->texture_multisample = DBG_ENABLED(ETNA_DBG_DEQP);
 
    /* Render targets. */
    caps->max_render_targets = VIV_FEATURE(screen, ETNA_FEATURE_HALTI2) ?
@@ -410,6 +415,9 @@ gpu_supports_texture_format(struct etna_screen *screen, uint32_t fmt,
        (util_format_is_pure_integer(format) || util_format_is_float(format)))
       supported = VIV_FEATURE(screen, ETNA_FEATURE_HALTI2);
 
+   if (format == PIPE_FORMAT_S8X24_UINT)
+      supported = VIV_FEATURE(screen, ETNA_FEATURE_HALTI5) &&
+                  !DBG_ENABLED(ETNA_DBG_NO_TEXDESC);
 
    if (etna_format_needs_yuv_tiler(format))
       supported = VIV_FEATURE(screen, ETNA_FEATURE_YUV420_TILER);
@@ -499,6 +507,15 @@ gpu_supports_vertex_format(struct etna_screen *screen, enum pipe_format format)
 }
 
 static bool
+gpu_supports_depth_stencil_format(struct etna_screen *screen, enum pipe_format format)
+{
+   if (format == PIPE_FORMAT_S8_UINT)
+      return VIV_FEATURE(screen, ETNA_FEATURE_S8);
+
+   return true;
+}
+
+static bool
 etna_screen_is_format_supported(struct pipe_screen *pscreen,
                                 enum pipe_format format,
                                 enum pipe_texture_target target,
@@ -525,7 +542,12 @@ etna_screen_is_format_supported(struct pipe_screen *pscreen,
    }
 
    if (usage & PIPE_BIND_DEPTH_STENCIL) {
-      if (translate_depth_format(format) != ETNA_NO_MATCH)
+      uint32_t fmt = translate_depth_format(format);
+
+      if (!gpu_supports_depth_stencil_format(screen, format))
+         fmt = ETNA_NO_MATCH;
+
+      if (fmt != ETNA_NO_MATCH)
          allowed |= PIPE_BIND_DEPTH_STENCIL;
    }
 
@@ -786,7 +808,7 @@ etna_get_specs(struct etna_screen *screen)
    uint32_t instruction_count = 0;
 
    /* Copy all relevant limits from etna_core_info. */
-   if (info->type == ETNA_CORE_GPU) {
+   if (etna_core_has_feature(info, ETNA_FEATURE_CORE_GPU)) {
       instruction_count = info->gpu.max_instructions;
       screen->specs.pixel_pipes = info->gpu.pixel_pipes;
 
@@ -794,7 +816,7 @@ etna_get_specs(struct etna_screen *screen)
          info = etna_gpu_get_core_info(screen->npu);
    }
 
-   if (info->type == ETNA_CORE_NPU) {
+   if (etna_core_has_feature(info, ETNA_FEATURE_CORE_NPU)) {
       if (etna_core_has_feature(info, ETNA_FEATURE_NN_XYDP0))
          screen->specs.nn_core_version = 8;
       else if (etna_core_has_feature(info, ETNA_FEATURE_VIP_V7))

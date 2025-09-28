@@ -26,6 +26,7 @@ struct ir3_compiler;
 struct ir3;
 struct ir3_instruction;
 struct ir3_block;
+struct linear_context;
 
 struct ir3_info {
    /* Size in bytes of the shader binary, including NIR constants and
@@ -408,6 +409,14 @@ typedef enum ir3_instruction_flags {
 
    /* a7xx, set on a nop after all cat5/cat6 */
    IR3_INSTR_EOGM = BIT(23),
+
+   /* Residency ChecK. Returns if the equivalent access would've accesssed a
+    * non-resident page. Only allowed for cat5 texture loads and ldib.
+    */
+   IR3_INSTR_RCK = BIT(24),
+
+   /* Clamp computed LOD using the given minimum. Only for cat5. */
+   IR3_INSTR_CLP = BIT(25),
 } ir3_instruction_flags;
 
 struct ir3_instruction {
@@ -633,6 +642,11 @@ struct ir3 {
    struct ir3_compiler *compiler;
    mesa_shader_stage type;
 
+   /* Ralloc linear context we use for instructions and regs, to reduce
+    * allocation overhead and pack better than using ralloc directly.
+    */
+   struct linear_ctx *lin_ctx;
+
    DECLARE_ARRAY(struct ir3_instruction *, inputs);
 
    /* Track bary.f (and ldlv) instructions.. this is needed in
@@ -856,6 +870,7 @@ unsigned ir3_block_get_pred_index(struct ir3_block *block,
 
 void ir3_calc_dominance(struct ir3 *ir);
 bool ir3_block_dominates(struct ir3_block *a, struct ir3_block *b);
+struct ir3_block *ir3_dominance_lca(struct ir3_block *b1, struct ir3_block *b2);
 
 struct ir3_shader_variant;
 

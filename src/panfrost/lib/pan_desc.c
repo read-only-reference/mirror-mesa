@@ -140,6 +140,8 @@ translate_zs_format(enum pipe_format in)
       return MALI_ZS_FORMAT_D24S8;
    case PIPE_FORMAT_Z24X8_UNORM:
       return MALI_ZS_FORMAT_D24X8;
+   case PIPE_FORMAT_Z24_UNORM_PACKED:
+      return MALI_ZS_FORMAT_D24;
    case PIPE_FORMAT_Z32_FLOAT:
       return MALI_ZS_FORMAT_D32;
 #if PAN_ARCH < 9
@@ -698,6 +700,13 @@ GENX(pan_emit_afbc_color_attachment)(const struct pan_fb_info *fb,
       cfg.write_enable = true;
       get_rt_formats(iview->format, &cfg.writeback_format, &cfg.internal_format,
                      &cfg.swizzle);
+
+      /* AFBC+RAW24 is not supported on v9+. Use RAW32 instead, and let the AFBC
+       * compression mode select the actual size.
+       */
+      if (PAN_ARCH >= 9 && cfg.writeback_format == MALI_COLOR_FORMAT_RAW24)
+         cfg.writeback_format = MALI_COLOR_FORMAT_RAW32;
+
       cfg.srgb = util_format_is_srgb(iview->format);
       cfg.writeback_block_format = get_afbc_block_format(image->props.modifier);
       cfg.yuv_transform = image->props.modifier & AFBC_FORMAT_MOD_YTR;
@@ -710,7 +719,8 @@ GENX(pan_emit_afbc_color_attachment)(const struct pan_fb_info *fb,
       cfg.header = header;
       cfg.body_offset = body_offset;
       cfg.row_stride = hdr_row_stride;
-      cfg.compression_mode = pan_afbc_compression_mode(iview->format, 0);
+      cfg.compression_mode = pan_afbc_compression_mode(
+         image->planes[pref.plane_idx]->layout.afbc.mode);
 #else
       cfg.header = header;
       cfg.body = header + body_offset;

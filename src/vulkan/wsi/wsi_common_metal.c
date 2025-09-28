@@ -156,6 +156,19 @@ static const VkFormat available_surface_formats[] = {
    VK_FORMAT_A2B10G10R10_UNORM_PACK32,
 };
 
+static const VkColorSpaceKHR available_surface_color_spaces[] = {
+   VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+   VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT,
+   VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT,
+   VK_COLOR_SPACE_DISPLAY_P3_LINEAR_EXT,
+   VK_COLOR_SPACE_DCI_P3_NONLINEAR_EXT,
+   VK_COLOR_SPACE_BT709_NONLINEAR_EXT,
+   VK_COLOR_SPACE_BT2020_LINEAR_EXT,
+   VK_COLOR_SPACE_ADOBERGB_NONLINEAR_EXT,
+   VK_COLOR_SPACE_PASS_THROUGH_EXT,
+   VK_COLOR_SPACE_EXTENDED_SRGB_NONLINEAR_EXT,
+};
+
 static void
 get_sorted_vk_formats(bool force_bgra8_unorm_first, VkFormat *sorted_formats)
 {
@@ -185,9 +198,11 @@ wsi_metal_surface_get_formats(VkIcdSurfaceBase *icd_surface,
    get_sorted_vk_formats(wsi_device->force_bgra8_unorm_first, sorted_formats);
 
    for (unsigned i = 0; i < ARRAY_SIZE(sorted_formats); i++) {
-      vk_outarray_append_typed(VkSurfaceFormatKHR, &out, f) {
-         f->format = sorted_formats[i];
-         f->colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+      for (unsigned j = 0; j < ARRAY_SIZE(available_surface_color_spaces); j++) {
+         vk_outarray_append_typed(VkSurfaceFormatKHR, &out, f) {
+            f->format = sorted_formats[i];
+            f->colorSpace = available_surface_color_spaces[j];
+         }
       }
    }
 
@@ -375,36 +390,23 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
                                       const VkAllocationCallbacks* pAllocator,
                                       struct wsi_swapchain **swapchain_out)
 {
-   VkResult result;
-
    VkIcdSurfaceMetal *metal_surface = (VkIcdSurfaceMetal *)icd_surface;
    assert(metal_surface->pLayer);
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR);
 
-   MTLPixelFormat metal_format;
-   switch (pCreateInfo->imageFormat)
-   {
-      case VK_FORMAT_B8G8R8A8_SRGB:
-         metal_format = MTLPixelFormatBGRA8Unorm_sRGB;
-         break;
-      case VK_FORMAT_B8G8R8A8_UNORM:
-         metal_format = MTLPixelFormatBGRA8Unorm;
-         break;
-      case VK_FORMAT_R16G16B16A16_SFLOAT:
-         metal_format = MTLPixelFormatRGBA16Float;
-         break;
-      case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
-         metal_format = MTLPixelFormatRGB10A2Unorm;
-         break;
-      case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
-         metal_format = MTLPixelFormatBGR10A2Unorm;
-         break;
-      default:
-         return VK_ERROR_FORMAT_NOT_SUPPORTED;
-   }
+   const int num_images = pCreateInfo->minImageCount;
+   const bool opaque_composition =
+      pCreateInfo->compositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+   const bool immediate_mode =
+      pCreateInfo->presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR;
 
-   int num_images = pCreateInfo->minImageCount;
+   VkResult result = wsi_metal_layer_configure(metal_surface->pLayer,
+      pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height,
+      num_images, pCreateInfo->imageFormat, pCreateInfo->imageColorSpace,
+      opaque_composition, immediate_mode);
+   if (result != VK_SUCCESS)
+      return result;
 
    struct wsi_metal_swapchain *chain;
    size_t size = sizeof(*chain) + num_images * sizeof(chain->images[0]);
@@ -418,10 +420,8 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
 
    result = wsi_swapchain_init(wsi_device, &chain->base, device,
                                pCreateInfo, &cpu_params.base, pAllocator);
-   if (result != VK_SUCCESS) {
-      vk_free(pAllocator, chain);
-      return result;
-   }
+   if (result != VK_SUCCESS)
+      goto fail_chain_alloc;
 
    chain->base.destroy = wsi_metal_swapchain_destroy;
    chain->base.get_wsi_image = wsi_metal_swapchain_get_wsi_image;
@@ -432,21 +432,17 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    chain->extent = pCreateInfo->imageExtent;
    chain->vk_format = pCreateInfo->imageFormat;
    chain->surface = metal_surface;
-
-   wsi_metal_layer_configure(metal_surface->pLayer,
-      pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height,
-      num_images, metal_format,
-      pCreateInfo->compositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-      pCreateInfo->presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR);
-
    chain->current_image_index = 0;
+
+   uint32_t created_image_count = 0;
    for (uint32_t i = 0; i < chain->base.image_count; i++) {
       result = wsi_create_image(&chain->base, &chain->base.image_info,
                                 &chain->images[i].base);
       if (result != VK_SUCCESS)
-         return result;
+         goto fail_init_images;
 
       chain->images[i].drawable = NULL;
+      created_image_count++;
    }
 
    chain->blit_context = wsi_create_metal_layer_blit_context();
@@ -454,6 +450,17 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    *swapchain_out = &chain->base;
 
    return VK_SUCCESS;
+
+fail_init_images:
+   for (uint32_t i = 0; i < created_image_count; i++)
+      wsi_destroy_image(&chain->base, &chain->images[i].base);
+
+   wsi_swapchain_finish(&chain->base);
+
+fail_chain_alloc:
+   vk_free(pAllocator, chain);
+
+   return result;
 }
 
 VkResult

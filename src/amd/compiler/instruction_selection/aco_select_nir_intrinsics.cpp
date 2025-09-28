@@ -9,10 +9,13 @@
 #include "aco_instruction_selection.h"
 #include "aco_ir.h"
 
+#include "nir_range_analysis.h"
+
 #include "ac_descriptors.h"
 #include "ac_nir.h"
 #include "amdgfxregs.h"
 #include <numeric>
+#include <stdint.h>
 
 namespace aco {
 namespace {
@@ -281,6 +284,7 @@ struct LoadEmitInfo {
    unsigned align_mul = 0;
    unsigned align_offset = 0;
    pipe_format format;
+   nir_src* resource_src = NULL; /* should be equal to resource or NULL */
    nir_src* offset_src = NULL; /* should be equal to offset or NULL */
    isel_context* ctx;
 
@@ -306,7 +310,7 @@ add_might_overflow(isel_context* ctx, nir_src* offset, uint32_t const_offset)
    if (!offset)
       return true;
    return nir_addition_might_overflow(ctx->shader, ctx->range_ht, nir_get_scalar(offset->ssa, 0),
-                                      const_offset, &ctx->ub_config);
+                                      const_offset);
 }
 
 void
@@ -350,6 +354,7 @@ emit_load(isel_context* ctx, Builder& bld, const LoadEmitInfo& info,
          if (new_info.resource.id() && new_info.resource.size() == 2 &&
              add_might_overflow(ctx, info.offset_src, to_add)) {
             new_info.resource = add64_32(bld, new_info.resource, Operand::c32(to_add));
+            new_info.resource_src = NULL;
             offset_changed = false;
          } else if (offset.isConstant()) {
             offset = Operand::c32(offset.constantValue() + to_add);
@@ -502,6 +507,12 @@ get_smem_opcode(amd_gfx_level level, unsigned bytes, bool buffer, bool round_dow
       return {buffer ? aco_opcode::s_buffer_load_dwordx16 : aco_opcode::s_load_dwordx16, 64};
 }
 
+unsigned
+src_has_req_lsb(isel_context* ctx, nir_src* src, unsigned req)
+{
+   return src && nir_def_num_lsb_zero(ctx->numlsb_ht, nir_get_scalar(src->ssa, 0)) >= req;
+}
+
 Temp
 smem_load_callback(Builder& bld, const LoadEmitInfo& info, unsigned bytes_needed, unsigned align)
 {
@@ -540,7 +551,32 @@ smem_load_callback(Builder& bld, const LoadEmitInfo& info, unsigned bytes_needed
     */
    RegClass rc(RegType::sgpr, DIV_ROUND_UP(util_next_power_of_two(bytes_needed), 4u));
 
-   aco_ptr<Instruction> load{create_instruction(op, Format::SMEM, 2, 1)};
+   unsigned req_lsb_zero = bytes_needed == 1 ? 0 : (bytes_needed == 2 ? 1 : 2);
+   if (!buffer) {
+      /* We require each offset source and the final address to be aligned, so ensure at least
+       * two sources are aligned. The remaining one can then be assumed to be aligned, otherwise the
+       * final address is unaligned. */
+      // TODO: lower in NIR
+      bool addr_aligned = src_has_req_lsb(info.ctx, info.resource_src, req_lsb_zero);
+      bool offset_aligned =
+         !offset.id() || src_has_req_lsb(info.ctx, info.offset_src, req_lsb_zero);
+      bool const_aligned = !const_offset || ffs(const_offset) > req_lsb_zero;
+
+      if (!offset_aligned && (!addr_aligned || !const_aligned)) {
+         addr = add64_32(bld, addr, Operand(offset));
+         offset = Temp();
+      }
+      if (!const_aligned && (!addr_aligned || !offset_aligned)) {
+         addr = add64_32(bld, addr, Operand::c32(const_offset));
+         const_offset = 0;
+      }
+   } else {
+      /* We assume the buffer resource is also aligned. */
+      assert(!const_offset || ffs(const_offset) > req_lsb_zero);
+   }
+
+   bool soe = !buffer && offset.id() && const_offset && bld.program->gfx_level >= GFX9;
+   aco_ptr<Instruction> load{create_instruction(op, Format::SMEM, 2 + soe, 1)};
    if (buffer) {
       if (const_offset)
          offset = bld.sop2(aco_opcode::s_add_u32, bld.def(s1), bld.def(s1, scc), offset,
@@ -549,13 +585,17 @@ smem_load_callback(Builder& bld, const LoadEmitInfo& info, unsigned bytes_needed
       load->operands[1] = Operand(offset);
    } else {
       load->operands[0] = Operand(addr);
-      if (offset.id() && const_offset)
-         load->operands[1] = bld.sop2(aco_opcode::s_add_u32, bld.def(s1), bld.def(s1, scc), offset,
-                                      Operand::c32(const_offset));
-      else if (offset.id())
-         load->operands[1] = Operand(offset);
-      else
+      if (soe) {
          load->operands[1] = Operand::c32(const_offset);
+         load->operands[2] = Operand(offset);
+      } else if (offset.id() && const_offset) {
+         load->operands[0] = Operand(add64_32(bld, addr, Operand::c32(const_offset)));
+         load->operands[1] = Operand(offset);
+      } else if (offset.id()) {
+         load->operands[1] = Operand(offset);
+      } else {
+         load->operands[1] = Operand::c32(const_offset);
+      }
    }
    Temp val = info.dst.regClass() == rc && rc.bytes() == bytes_needed ? info.dst : bld.tmp(rc);
    load->definitions[0] = Definition(val);
@@ -2329,7 +2369,8 @@ visit_load_global(isel_context* ctx, nir_intrinsic_instr* instr)
    info.align_mul = nir_intrinsic_align_mul(instr);
    info.align_offset = nir_intrinsic_align_offset(instr);
    info.sync = get_memory_sync_info(instr, storage_buffer, 0);
-   info.offset_src = &instr->src[1];
+   info.resource_src = &instr->src[0];
+   info.offset_src = offset.id() ? &instr->src[1] : NULL;
    info.cache = get_cache_flags(ctx, access, ac_access_type_load);
    info.disable_wqm = access & ACCESS_SKIP_HELPERS;
 
@@ -2892,12 +2933,7 @@ visit_load_shared(isel_context* ctx, nir_intrinsic_instr* instr)
    }
 
    unsigned const_offset = nir_intrinsic_base(instr);
-   unsigned const_offset_range = 65536;
-   if (const_offset >= const_offset_range) {
-      unsigned excess = const_offset - (const_offset % const_offset_range);
-      address = bld.vadd32(bld.def(v1), address, Operand::c32(excess));
-      const_offset -= excess;
-   }
+   assert(const_offset <= UINT16_MAX);
 
    Definition def = dst.regClass().type() == RegType::sgpr
                        ? bld.def(RegClass::get(RegType::vgpr, bytes))
@@ -2952,12 +2988,7 @@ visit_store_shared(isel_context* ctx, nir_intrinsic_instr* instr)
    }
 
    unsigned const_offset = nir_intrinsic_base(instr);
-   unsigned const_offset_range = 65536;
-   if (const_offset >= const_offset_range) {
-      unsigned excess = const_offset - (const_offset % const_offset_range);
-      address = bld.vadd32(bld.def(v1), address, Operand::c32(excess));
-      const_offset -= excess;
-   }
+   assert(const_offset <= UINT16_MAX);
 
    Instruction* ds = bld.ds(op, address, data, m, const_offset);
    ds->ds().sync = memory_sync_info(storage_shared);
@@ -3175,11 +3206,18 @@ visit_access_shared2_amd(isel_context* ctx, nir_intrinsic_instr* instr)
    if (!is_store) {
       Temp dst = get_ssa_temp(ctx, &instr->def);
       if (dst.type() == RegType::sgpr) {
+         /* Similar to load_shared. */
+         bool readfirstlane_for_uniform = ctx->options->gfx_level >= GFX10 &&
+                                          ctx->program->wave_size == 64 &&
+                                          ctx->program->workgroup_size > 64;
+
          emit_split_vector(ctx, ds->definitions[0].getTemp(), dst.size());
          Temp comp[4];
          /* Use scalar v_readfirstlane_b32 for better 32-bit copy propagation */
-         for (unsigned i = 0; i < dst.size(); i++)
-            comp[i] = bld.as_uniform(emit_extract_vector(ctx, ds->definitions[0].getTemp(), i, v1));
+         for (unsigned i = 0; i < dst.size(); i++) {
+            Temp val = emit_extract_vector(ctx, ds->definitions[0].getTemp(), i, v1);
+            comp[i] = emit_vector_as_uniform(ctx, val, bld.tmp(s1), readfirstlane_for_uniform);
+         }
          if (is64bit) {
             Temp comp0 = bld.pseudo(aco_opcode::p_create_vector, bld.def(s2), comp[0], comp[1]);
             Temp comp1 = bld.pseudo(aco_opcode::p_create_vector, bld.def(s2), comp[2], comp[3]);

@@ -24,6 +24,7 @@
 #include "v3d_context.h"
 #include "broadcom/common/v3d_tfu.h"
 #include "util/perf/cpu_trace.h"
+#include "v3dx_format_table.h"
 
 bool
 v3dX(tfu)(struct pipe_context *pctx,
@@ -77,7 +78,7 @@ v3dX(tfu)(struct pipe_context *pctx,
                 };
         }
 
-        uint32_t tex_format = v3d_get_tex_format(&screen->devinfo, pformat);
+        enum V3DX(Texture_Data_Formats) tex_format = v3d_get_tex_format(&screen->devinfo, pformat);
 
         if (!v3dX(tfu_supports_tex_format)(tex_format, for_mipmap)) {
                 assert(for_mipmap);

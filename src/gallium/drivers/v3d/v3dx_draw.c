@@ -24,6 +24,7 @@
 #include "util/perf/cpu_trace.h"
 #include "util/u_blitter.h"
 #include "util/u_draw.h"
+#include "util/u_inlines.h"
 #include "util/u_prim.h"
 #include "util/format/u_format.h"
 #include "util/u_helpers.h"
@@ -404,7 +405,7 @@ v3d_emit_tes_gs_common_params(struct v3d_job *job,
         }
 }
 
-static uint8_t
+static enum V3DX(Pack_Mode)
 simd_width_to_gs_pack_mode(uint32_t width)
 {
     switch (width) {
@@ -1071,7 +1072,7 @@ v3d_update_job_tlb_load_store(struct v3d_job *job) {
                 struct v3d_resource *rsc = v3d_resource(job->zsbuf.texture);
                 v3d_job_add_bo(job, rsc->bo);
                 job->load |= PIPE_CLEAR_DEPTH & ~no_load_mask;
-                if (v3d->zsa->base.depth_writemask)
+                if (util_writes_depth(&v3d->zsa->base))
                         job->store |= PIPE_CLEAR_DEPTH;
                 rsc->initialized_buffers |= PIPE_CLEAR_DEPTH;
         }
@@ -1085,8 +1086,8 @@ v3d_update_job_tlb_load_store(struct v3d_job *job) {
                 v3d_job_add_bo(job, rsc->bo);
 
                 job->load |= PIPE_CLEAR_STENCIL & ~no_load_mask;
-                if (v3d->zsa->base.stencil[0].writemask ||
-                    v3d->zsa->base.stencil[1].writemask) {
+                if (util_writes_stencil(&v3d->zsa->base.stencil[0]) ||
+                    util_writes_stencil(&v3d->zsa->base.stencil[1])) {
                         job->store |= PIPE_CLEAR_STENCIL;
                 }
                 rsc->initialized_buffers |= PIPE_CLEAR_STENCIL;
@@ -1290,7 +1291,7 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
                 if (info->has_user_indices) {
                         unsigned start_offset = draws[0].start * info->index_size;
                         prsc = NULL;
-                        u_upload_data(v3d->uploader, start_offset,
+                        u_upload_data_ref(v3d->uploader, start_offset,
                                       draws[0].count * info->index_size, 4,
                                       (char*)info->index.user + start_offset,
                                       &offset, &prsc);
@@ -1747,8 +1748,20 @@ v3d_tlb_clear(struct v3d_job *job, unsigned buffers,
                                         &uc);
                         memcpy(job->clear_color[i], uc.ui, internal_size);
                         break;
-                case V3D_INTERNAL_TYPE_16I:
                 case V3D_INTERNAL_TYPE_16UI:
+                case V3D_INTERNAL_TYPE_16I:
+                        if (util_format_is_unorm(psurf->format)) {
+                            util_pack_color(clamped_color.f, PIPE_FORMAT_R16G16B16A16_UNORM,
+                                            &uc);
+                            memcpy(job->clear_color[i], uc.ui, internal_size);
+                            break;
+                        }
+                        if (util_format_is_snorm(psurf->format)) {
+                            util_pack_color(clamped_color.f, PIPE_FORMAT_R16G16B16A16_SNORM,
+                                            &uc);
+                            memcpy(job->clear_color[i], uc.ui, internal_size);
+                            break;
+                        }
                         job->clear_color[i][0] = ((clamped_color.ui[0] & 0xffff) |
                                                   clamped_color.ui[1] << 16);
                         job->clear_color[i][1] = ((clamped_color.ui[2] & 0xffff) |

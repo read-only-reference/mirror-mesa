@@ -54,6 +54,7 @@
 #include "iris_context.h"
 #include "iris_pipe.h"
 #include "nir/tgsi_to_nir.h"
+#include "git_sha1.h"
 
 static inline enum intel_vue_layout
 vue_layout(bool separate_shader)
@@ -576,10 +577,8 @@ iris_to_brw_fs_key(const struct iris_screen *screen,
    return (struct brw_wm_prog_key) {
       BRW_KEY_INIT(key->base, key->vue_layout),
       .nr_color_regions = key->nr_color_regions,
-      .flat_shade = key->flat_shade,
       .alpha_test_replicate_alpha = key->alpha_test_replicate_alpha,
       .alpha_to_coverage = key->alpha_to_coverage ? INTEL_ALWAYS : INTEL_NEVER,
-      .clamp_fragment_color = key->clamp_fragment_color,
       .persample_interp = key->persample_interp ? INTEL_ALWAYS : INTEL_NEVER,
       .multisample_fbo = key->multisample_fbo ? INTEL_ALWAYS : INTEL_NEVER,
       .force_dual_color_blend = key->force_dual_color_blend,
@@ -663,10 +662,8 @@ iris_to_elk_fs_key(const struct iris_screen *screen,
       ELK_KEY_INIT(screen->devinfo->ver, key->base.program_string_id,
                    key->base.limit_trig_input_range),
       .nr_color_regions = key->nr_color_regions,
-      .flat_shade = key->flat_shade,
       .alpha_test_replicate_alpha = key->alpha_test_replicate_alpha,
       .alpha_to_coverage = key->alpha_to_coverage ? ELK_ALWAYS : ELK_NEVER,
-      .clamp_fragment_color = key->clamp_fragment_color,
       .persample_interp = key->persample_interp ? ELK_ALWAYS : ELK_NEVER,
       .multisample_fbo = key->multisample_fbo ? ELK_ALWAYS : ELK_NEVER,
       .force_dual_color_blend = key->force_dual_color_blend,
@@ -696,7 +693,7 @@ upload_state(struct u_upload_mgr *uploader,
              unsigned alignment)
 {
    void *p = NULL;
-   u_upload_alloc(uploader, 0, size, alignment, &ref->offset, &ref->res, &p);
+   u_upload_alloc_ref(uploader, 0, size, alignment, &ref->offset, &ref->res, &p);
    return p;
 }
 
@@ -1836,6 +1833,38 @@ iris_schedule_compile(struct iris_screen *screen,
    }
 }
 
+static debug_archiver *
+iris_debug_archiver_open(void *tmp_ctx, struct iris_screen *screen,
+                         struct iris_uncompiled_shader *ish, const void *key,
+                         unsigned key_size)
+{
+   if (!INTEL_DEBUG(DEBUG_MDA) || !screen->brw)
+      return NULL;
+
+   char name[SHA1_DIGEST_STRING_LENGTH + 5] = {};
+   {
+      struct mesa_sha1 ctx;
+      unsigned char hash[SHA1_DIGEST_LENGTH];
+
+      _mesa_sha1_init(&ctx);
+      _mesa_sha1_update(&ctx, ish->nir->info.source_blake3, BLAKE3_OUT_LEN);
+      _mesa_sha1_update(&ctx, key, key_size);
+      _mesa_sha1_final(&ctx, hash);
+
+      _mesa_sha1_format(name, hash);
+   }
+   memcpy(&name[SHA1_DIGEST_STRING_LENGTH - 1], ".iris", 5);
+
+   debug_archiver *debug_archiver =
+      debug_archiver_open(tmp_ctx, name, PACKAGE_VERSION MESA_GIT_SHA1);
+
+   if (debug_archiver) {
+      debug_archiver_set_prefix(debug_archiver,
+                                _mesa_shader_stage_to_abbrev(ish->nir->info.stage));
+   }
+   return debug_archiver;
+}
+
 /**
  * Compile a vertex shader, and upload the assembly.
  */
@@ -1854,6 +1883,9 @@ iris_compile_vs(struct iris_screen *screen,
 
    nir_shader *nir = nir_shader_clone(mem_ctx, ish->nir);
    const struct iris_vs_prog_key *const key = &shader->key.vs;
+
+   debug_archiver *debug_archiver =
+      iris_debug_archiver_open(mem_ctx, screen, ish, key, sizeof(*key));
 
    if (key->vue.nr_userclip_plane_consts) {
       nir_function_impl *impl = nir_shader_get_entrypoint(nir);
@@ -1884,10 +1916,6 @@ iris_compile_vs(struct iris_screen *screen,
 
       brw_nir_analyze_ubo_ranges(screen->brw, nir, brw_prog_data->base.base.ubo_ranges);
 
-      brw_compute_vue_map(devinfo,
-                          &brw_prog_data->base.vue_map, nir->info.outputs_written,
-                          key->vue.layout, /* pos_slots */ 1);
-
       struct brw_vs_prog_key brw_key = iris_to_brw_vs_key(screen, key);
 
       struct brw_compile_vs_params params = {
@@ -1896,6 +1924,7 @@ iris_compile_vs(struct iris_screen *screen,
             .nir = nir,
             .log_data = dbg,
             .source_hash = ish->source_hash,
+            .archiver = debug_archiver,
          },
          .key = &brw_key,
          .prog_data = brw_prog_data,
@@ -1945,6 +1974,8 @@ iris_compile_vs(struct iris_screen *screen,
       UNREACHABLE("no elk support");
 #endif
    }
+
+   debug_archiver_close(debug_archiver);
 
    if (program == NULL) {
       dbg_printf("Failed to compile vertex shader: %s\n", error);
@@ -2112,6 +2143,9 @@ iris_compile_tcs(struct iris_screen *screen,
       source_hash = *(uint32_t*)nir->info.source_blake3;
    }
 
+   debug_archiver *debug_archiver =
+      iris_debug_archiver_open(mem_ctx, screen, ish, key, sizeof(*key));
+
    iris_setup_uniforms(devinfo, mem_ctx, nir, &system_values,
                        &num_system_values, &num_cbufs);
    iris_setup_binding_table(devinfo, nir, &bt, /* num_render_targets */ 0,
@@ -2130,6 +2164,7 @@ iris_compile_tcs(struct iris_screen *screen,
             .nir = nir,
             .log_data = dbg,
             .source_hash = source_hash,
+            .archiver = debug_archiver,
          },
          .key = &brw_key,
          .prog_data = brw_prog_data,
@@ -2171,6 +2206,8 @@ iris_compile_tcs(struct iris_screen *screen,
       UNREACHABLE("no elk support");
 #endif
    }
+
+   debug_archiver_close(debug_archiver);
 
    if (program == NULL) {
       dbg_printf("Failed to compile control shader: %s\n", error);
@@ -2295,6 +2332,9 @@ iris_compile_tes(struct iris_screen *screen,
    nir_shader *nir = nir_shader_clone(mem_ctx, ish->nir);
    const struct iris_tes_prog_key *const key = &shader->key.tes;
 
+   debug_archiver *debug_archiver =
+      iris_debug_archiver_open(mem_ctx, screen, ish, key, sizeof(*key));
+
    if (key->vue.nr_userclip_plane_consts) {
       nir_function_impl *impl = nir_shader_get_entrypoint(nir);
       nir_lower_clip_vs(nir, (1 << key->vue.nr_userclip_plane_consts) - 1,
@@ -2323,7 +2363,7 @@ iris_compile_tes(struct iris_screen *screen,
 
       struct intel_vue_map input_vue_map;
       brw_compute_tess_vue_map(&input_vue_map, key->inputs_read,
-                               key->patch_inputs_read);
+                               key->patch_inputs_read, false /* separate */);
 
       struct brw_tes_prog_key brw_key = iris_to_brw_tes_key(screen, key);
 
@@ -2333,6 +2373,7 @@ iris_compile_tes(struct iris_screen *screen,
             .nir = nir,
             .log_data = dbg,
             .source_hash = ish->source_hash,
+            .archiver = debug_archiver,
          },
          .key = &brw_key,
          .prog_data = brw_prog_data,
@@ -2382,6 +2423,8 @@ iris_compile_tes(struct iris_screen *screen,
       UNREACHABLE("no elk support");
 #endif
    }
+
+   debug_archiver_close(debug_archiver);
 
    if (program == NULL) {
       dbg_printf("Failed to compile evaluation shader: %s\n", error);
@@ -2484,6 +2527,9 @@ iris_compile_gs(struct iris_screen *screen,
    nir_shader *nir = nir_shader_clone(mem_ctx, ish->nir);
    const struct iris_gs_prog_key *const key = &shader->key.gs;
 
+   debug_archiver *debug_archiver =
+      iris_debug_archiver_open(mem_ctx, screen, ish, key, sizeof(*key));
+
    if (key->vue.nr_userclip_plane_consts) {
       nir_function_impl *impl = nir_shader_get_entrypoint(nir);
       nir_lower_clip_gs(nir, (1 << key->vue.nr_userclip_plane_consts) - 1,
@@ -2521,6 +2567,7 @@ iris_compile_gs(struct iris_screen *screen,
             .nir = nir,
             .log_data = dbg,
             .source_hash = ish->source_hash,
+            .archiver = debug_archiver,
          },
          .key = &brw_key,
          .prog_data = brw_prog_data,
@@ -2568,6 +2615,8 @@ iris_compile_gs(struct iris_screen *screen,
       UNREACHABLE("no elk support");
 #endif
    }
+
+   debug_archiver_close(debug_archiver);
 
    if (program == NULL) {
       dbg_printf("Failed to compile geometry shader: %s\n", error);
@@ -2667,6 +2716,9 @@ iris_compile_fs(struct iris_screen *screen,
    nir_shader *nir = nir_shader_clone(mem_ctx, ish->nir);
    const struct iris_fs_prog_key *const key = &shader->key.fs;
 
+   debug_archiver *debug_archiver =
+      iris_debug_archiver_open(mem_ctx, screen, ish, key, sizeof(*key));
+
    iris_setup_uniforms(devinfo, mem_ctx, nir, &system_values,
                        &num_system_values, &num_cbufs);
 
@@ -2704,6 +2756,7 @@ iris_compile_fs(struct iris_screen *screen,
             .nir = nir,
             .log_data = dbg,
             .source_hash = ish->source_hash,
+            .archiver = debug_archiver,
          },
          .key = &brw_key,
          .prog_data = brw_prog_data,
@@ -2755,6 +2808,8 @@ iris_compile_fs(struct iris_screen *screen,
       UNREACHABLE("no elk support");
 #endif
    }
+
+   debug_archiver_close(debug_archiver);
 
    if (program == NULL) {
       dbg_printf("Failed to compile fragment shader: %s\n", error);
@@ -3010,6 +3065,9 @@ iris_compile_cs(struct iris_screen *screen,
    nir_shader *nir = nir_shader_clone(mem_ctx, ish->nir);
    const struct iris_cs_prog_key *const key = &shader->key.cs;
 
+   debug_archiver *debug_archiver =
+      iris_debug_archiver_open(mem_ctx, screen, ish, key, sizeof(*key));
+
    if (screen->brw)
       NIR_PASS(_, nir, brw_nir_lower_cs_intrinsics, devinfo, NULL);
    else
@@ -3041,6 +3099,7 @@ iris_compile_cs(struct iris_screen *screen,
             .nir = nir,
             .log_data = dbg,
             .source_hash = ish->source_hash,
+            .archiver = debug_archiver,
          },
          .key = &brw_key,
          .prog_data = brw_prog_data,
@@ -3080,6 +3139,8 @@ iris_compile_cs(struct iris_screen *screen,
       UNREACHABLE("no elk support");
 #endif
    }
+
+   debug_archiver_close(debug_archiver);
 
    if (program == NULL) {
       dbg_printf("Failed to compile compute shader: %s\n", error);
@@ -4006,10 +4067,10 @@ iris_get_compiler_options(struct pipe_screen *pscreen,
    struct iris_screen *screen = (struct iris_screen *) pscreen;
 
 #ifdef INTEL_USE_ELK
-   return screen->brw ? screen->brw->nir_options[stage]
+   return screen->brw ? &screen->brw->nir_options[stage]
                       : screen->elk->nir_options[stage];
 #else
-   return screen->brw->nir_options[stage];
+   return &screen->brw->nir_options[stage];
 #endif
 }
 

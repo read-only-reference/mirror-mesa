@@ -43,7 +43,7 @@ EXPECT_PROGRESS_RESULT(bool should_progress, PASS pass, brw_shader *s)
 
    brw_validate(*s);
 
-   if (progress != should_progress || getenv("TEST_DEBUG")) {
+   if (progress != should_progress || os_get_option("TEST_DEBUG")) {
       fprintf(stderr, "= Before =\n"
                       "%s\n"
                       "\n"
@@ -135,7 +135,7 @@ protected:
       if (dispatch_width == 0)
          dispatch_width = devinfo->ver >= 20 ? 16 : 8;
 
-      nir_shader *nir = nir_shader_create(mem_ctx, stage, NULL, NULL);
+      nir_shader *nir = nir_shader_create(mem_ctx, stage, NULL);
       brw_stage_prog_data *pd =
          (struct brw_stage_prog_data *)rzalloc(mem_ctx, brw_any_prog_data);
 

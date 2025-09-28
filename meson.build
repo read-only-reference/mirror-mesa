@@ -20,10 +20,13 @@ project(
 if host_machine.system() == 'darwin'
   add_languages('objc', native : false)
   add_project_arguments('-fobjc-arc', language : 'objc')
+  libname_prefix = 'lib'
   libname_suffix = 'dylib'
 elif host_machine.system() == 'windows'
+  libname_prefix = ''
   libname_suffix = 'dll'
 else
+  libname_prefix = 'lib'
   libname_suffix = 'so'
 endif
 
@@ -48,10 +51,12 @@ with_mesa_debug = get_option('buildtype') == 'debug'
 with_mesa_ndebug = get_option('b_ndebug') == 'true' or (get_option('buildtype') == 'release' and get_option('b_ndebug') == 'if-release')
 
 # We need to set -fmacro-prefix-map properly for driver CL reproducability.
-relative_dir = fs.relative_to(meson.global_source_root(), meson.global_build_root())
+relative_dir = fs.relative_to(meson.project_source_root(), meson.project_build_root())
 
 cl_args = [
   '-fmacro-prefix-map=@0@/='.format(relative_dir),
+  '-fmacro-prefix-map=@0@/='.format(meson.project_source_root()),
+  '-fmacro-prefix-map=@0@/='.format(meson.project_build_root()),
 
   # Set the OpenCL standard to CL 2.0, enabling everything at a frontend.
   # Drivers may not actually support everything but that's ok.
@@ -235,6 +240,7 @@ with_gallium_kmsro = system_has_kms_drm and [
   with_gallium_panfrost,
   with_gallium_v3d,
   with_gallium_vc4,
+  with_gallium_zink,
 ].contains(true)
 
 _vulkan_drivers = get_option('vulkan-drivers')
@@ -333,11 +339,9 @@ with_any_broadcom = [
   with_broadcom_vk,
 ].contains(true)
 
-intel_vk_can_rt = host_machine.cpu_family() == 'x86_64' or \
-                  host_machine.cpu_family() == 'aarch64'
 with_intel_vk_rt = get_option('intel-rt') \
    .disable_auto_if(not with_intel_vk) \
-   .disable_if(not intel_vk_can_rt, \
+   .disable_if(sizeof_pointer != '8', \
                error_message: 'Intel Ray Tracing requires 64-bit architectures') \
   .allowed()
 
@@ -628,50 +632,32 @@ if with_gallium_d3d12 and not _with_gallium_d3d12_video.disabled()
   pre_args += '-DHAVE_GALLIUM_D3D12_VIDEO'
 endif
 
-_vdpau_drivers = [
-  with_gallium_d3d12_video,
-  with_gallium_nouveau,
-  with_gallium_r600,
-  with_gallium_radeonsi,
-  with_gallium_virgl,
-]
-
-vdpau = get_option('gallium-vdpau') \
-  .require(system_has_kms_drm, error_message : 'VDPAU state tracker can only be build on unix-like OSes.') \
-  .require(with_platform_x11, error_message : 'VDPAU state tracker requires X11 support.') \
-  .require(_vdpau_drivers.contains(true), error_message : 'VDPAU state tracker requires at least one of the following gallium drivers: r600, radeonsi, nouveau, d3d12 (with option gallium-d3d12-video, virgl).')
-
-dep_vdpau = dependency('vdpau', version : '>= 1.5', required : vdpau)
-if dep_vdpau.found()
-  dep_vdpau = dep_vdpau.partial_dependency(compile_args : true)
-  pre_args += '-DHAVE_ST_VDPAU'
-endif
-with_gallium_vdpau = dep_vdpau.found()
-
-vdpau_drivers_path = get_option('vdpau-libs-path')
-if vdpau_drivers_path == ''
-  vdpau_drivers_path = join_paths(get_option('libdir'), 'vdpau')
-endif
+with_bvh = with_amd_vk or with_intel_vk or with_swrast_vk or with_freedreno_vk
+_glslang_preamble_version = '12.2'
 
 # GLSL has interesting version output and Meson doesn't parse it correctly as of
 # Meson 1.4.0
 prog_glslang = find_program(
   'glslangValidator',
   native : true,
-  required : with_vulkan_overlay_layer or with_aco_tests or with_amd_vk or with_intel_vk or with_swrast_vk or with_freedreno_vk
+  required : with_vulkan_overlay_layer or with_aco_tests or with_bvh
 )
 
 if prog_glslang.found()
+  _glslang_version = run_command(prog_glslang, ['--version'], check : false).stdout().split(':')[2]
   # Check if glslang has depfile support. Support was added in 11.3.0, but
   # Windows path support was broken until 11.9.0.
   #
   # It is intentional to check the build machine, since we need to ensure that
   # glslang will output valid paths on the build platform
   _glslang_check = build_machine.system() == 'windows' ? '>= 11.9.0' : '>= 11.3.0'
-  if run_command(prog_glslang, ['--version'], check : false).stdout().split(':')[2].version_compare(_glslang_check)
+  if _glslang_version.version_compare(_glslang_check)
     glslang_depfile = ['--depfile', '@DEPFILE@']
   else
     glslang_depfile = []
+  endif
+  if with_bvh and _glslang_version.version_compare('< ' + _glslang_preamble_version)
+    error('glslang >= ' + _glslang_preamble_version + ' is required.')
   endif
   if run_command(prog_glslang, [ '--quiet', '--version' ], check : false).returncode() == 0
     glslang_quiet = ['--quiet']
@@ -777,6 +763,9 @@ if with_gallium_rusticl or with_nouveau_vk or with_tools.contains('etnaviv') or 
   rustc = meson.get_compiler('rust')
   rust = import('rust')
 
+  # Keep this in sync with the MINIMUM_SUPPORTED_RUST_VERSION in
+  # .gitlab-ci/container/build-rust.sh and the `rustup default` line in
+  # .gitlab-ci/meson/build.sh
   if rustc.version().version_compare('< 1.82')
     error('Mesa requires Rust 1.82.0 or newer')
   endif
@@ -837,9 +826,9 @@ endif
 
 with_driver_using_cl = [
   with_gallium_iris, with_intel_vk,
-  with_gallium_asahi, with_asahi_vk,
+  with_gallium_asahi, with_asahi_vk, with_tools.contains('asahi'),
   with_gallium_panfrost, with_panfrost_vk,
-  with_nouveau_vk,
+  with_nouveau_vk, with_imagination_vk,
 ].contains(true)
 
 if get_option('mesa-clc') == 'system'
@@ -1033,11 +1022,18 @@ foreach b : ['bswap32', 'bswap64', 'clz', 'clzll', 'ctz', 'expect', 'ffs',
   endif
 endforeach
 
+# Check for GCC overflow intrinsics
+foreach b : ['add_overflow', 'add_overflow_p', 'sub_overflow_p']
+  if cc.has_function('__builtin_' + b)
+    pre_args += '-DHAVE___BUILTIN_@0@'.format(b.to_upper())
+  endif
+endforeach
+
 # check for GCC __attribute__
 _attributes = [
   'const', 'flatten', 'malloc', 'pure', 'unused', 'warn_unused_result',
   'weak', 'format', 'packed', 'returns_nonnull', 'alias', 'noreturn',
-  'optimize',
+  'optimize', 'cold',
 ]
 foreach a : cc.get_supported_function_attributes(_attributes)
   pre_args += '-DHAVE_FUNC_ATTRIBUTE_@0@'.format(a.to_upper())
@@ -1080,13 +1076,13 @@ elif host_machine.system() == 'sunos'
   pre_args += '-D__EXTENSIONS__'
 elif host_machine.system() == 'windows'
   pre_args += [
-    '-D_WINDOWS', '-D_WIN32_WINNT=0x0A00', '-DWINVER=0x0A00',
-    '-DPIPE_SUBSYSTEM_WINDOWS_USER',
-    '-D_USE_MATH_DEFINES',  # XXX: scons didn't use this for mingw
+    '-D_WIN32_WINNT=0x0A00',
+    '-DWINVER=0x0A00',
   ]
   if cc.get_argument_syntax() == 'msvc'
     pre_args += [
-      '-DVC_EXTRALEAN',
+      '-D_USE_MATH_DEFINES',
+      '-D_CRT_NONSTDC_NO_DEPRECATE',
       '-D_CRT_SECURE_NO_WARNINGS',
       '-D_CRT_SECURE_NO_DEPRECATE',
       '-D_SCL_SECURE_NO_WARNINGS',
@@ -1097,8 +1093,11 @@ elif host_machine.system() == 'windows'
       '-D_UCRT_NOISY_NAN', # https://developercommunity.visualstudio.com/t/NAN-is-no-longer-compile-time-constant-i/10688907?viewtype=all
     ]
   else
-    # When the target is not mingw/ucrt
-    # NOTE: clang's stddef.h are conflict with mingw/ucrt's stddef.h
+    # MINGW also accept _GNU_SOURCE
+    pre_args += '-D_GNU_SOURCE'
+
+    # When the target is not (mingw with ucrt)
+    # NOTE: clang's stddef.h are conflict with mingw or ucrt's stddef.h
     # So do not include headers that defined in clang for detecting
     # _UCRT
     if cc.compiles('''
@@ -1129,7 +1128,6 @@ if cc.get_argument_syntax() == 'msvc'
     '/wd4351',  # new behavior: elements of array 'array' will be default initialized
     '/wd4756',  # overflow in constant arithmetic
     '/wd4800',  # forcing value to bool 'true' or 'false' (performance warning)
-    '/wd4996',  # disabled deprecated POSIX name warnings
     '/wd4291',  # no matching operator delete found
     '/wd4146',  # unary minus operator applied to unsigned type, result still unsigned
     '/wd4200',  # nonstandard extension used: zero-sized array in struct/union
@@ -1155,6 +1153,7 @@ else
     '-Werror=int-conversion',
     '-Wimplicit-fallthrough',
     '-Wmisleading-indentation',
+    '-Wno-error=maybe-uninitialized',
     '-Wno-missing-field-initializers',
     '-Wno-format-truncation',
     '-Wno-nonnull-compare',
@@ -1171,6 +1170,7 @@ else
     '-Werror=return-type',
     '-Werror=empty-body',
     '-Wmisleading-indentation',
+    '-Wno-error=maybe-uninitialized',
     '-Wno-non-virtual-dtor',
     '-Wno-missing-field-initializers',
     '-Wno-format-truncation',
@@ -1516,7 +1516,7 @@ if cc.links('int main() { return 0; }', args : '-Wl,-Bsymbolic', name : 'Bsymbol
   ld_args_bsymbolic += '-Wl,-Bsymbolic'
 endif
 with_ld_version_script = false
-if cc.links('int main() { return 0; }',
+if host_machine.system() != 'windows' and cc.links('int main() { return 0; }',
             args : '-Wl,--version-script=@0@'.format(
               join_paths(meson.current_source_dir(), 'build-support/conftest.map')),
             name : 'version-script')
@@ -1835,14 +1835,7 @@ if with_clc
   # Require an SPIRV-LLVM-Translator version compatible with the chosen LLVM
   # one.
 
-  # This first version check is still needed as maybe LLVM 8.0 was picked but
-  # we do not want to accept SPIRV-LLVM-Translator 8.0.0.1 as that version
-  # does not have the required API and those are only available starting from
-  # 8.0.1.3.
-  _llvmspirvlib_min_version = '>= 8.0.1.3'
-  if with_clc
-    _llvmspirvlib_min_version = '>= 15.0.0.0'
-  endif
+  _llvmspirvlib_min_version = '>= 15.0.0.0'
 
   _llvmspirvlib_version = [
     _llvmspirvlib_min_version,
@@ -2012,13 +2005,6 @@ endif
 
 with_wayland_bind_display = with_platform_wayland and get_option('legacy-wayland').contains('bind-wayland-display')
 if with_platform_wayland
-  dep_wl_scanner = dependency('wayland-scanner', native: true)
-  prog_wl_scanner = find_program(dep_wl_scanner.get_variable(pkgconfig : 'wayland_scanner'))
-  if dep_wl_scanner.version().version_compare('>= 1.15')
-    wl_scanner_arg = 'private-code'
-  else
-    wl_scanner_arg = 'code'
-  endif
   dep_wl_protocols = dependency('wayland-protocols', version : '>= 1.41', default_options: [ 'tests=false' ])
   dep_wayland_client = dependency('wayland-client', version : '>=1.18')
   dep_wayland_server = dependency('wayland-server', version : '>=1.18')
@@ -2039,6 +2025,8 @@ if with_platform_wayland
       dependencies: dep_wayland_client)
     pre_args += ['-DHAVE_WL_CREATE_QUEUE_WITH_NAME']
   endif
+  # This can be renamed just `wayland` when we require at least 1.8
+  mod_wl = import('unstable-wayland')
 endif
 
 # Even if we find OpenMP, Gitlab CI fails to link with gcc/i386 and clang/anyarch.
@@ -2092,8 +2080,7 @@ if with_platform_x11
     # needed for GL sharing extension
     dep_x11 = dependency('x11', version : dep_xlib_version)
   endif
-  if (with_any_vk or with_glx == 'dri' or with_egl or
-       (with_gallium_vdpau or with_gallium_va))
+  if (with_any_vk or with_glx == 'dri' or with_egl or with_gallium_va)
     dep_xcb = dependency('xcb')
     dep_xcb_keysyms = dependency('xcb-keysyms', required : false)
     with_xcb_keysyms = dep_xcb_keysyms.found()
@@ -2129,8 +2116,7 @@ if with_platform_x11
   endif
   if (with_egl or
       with_dri or
-      with_any_vk or
-      with_gallium_vdpau)
+      with_any_vk)
     dep_xcb_xfixes = dependency('xcb-xfixes')
   endif
   if with_any_vk
@@ -2193,7 +2179,6 @@ endif
 
 with_teflon = get_option('teflon')
 if with_teflon and with_tests
-  dep_xtensor = dependency('xtensor')
   dep_flatbuffers = dependency('flatbuffers')
   prog_flatc = find_program('flatc')
 endif
@@ -2253,11 +2238,18 @@ endif
 
 pkg = import('pkgconfig')
 
-if host_machine.system() == 'windows'
+if host_machine.system() == 'windows' and cc.get_argument_syntax() == 'msvc'
   prog_dumpbin = find_program('dumpbin', required : false)
   with_symbols_check = prog_dumpbin.found() and with_tests
   if with_symbols_check
     symbols_check_args = ['--dumpbin', prog_dumpbin.full_path()]
+  endif
+elif host_machine.system() == 'windows' and cc.get_argument_syntax() != 'msvc'
+  # mingw
+  prog_gendef = find_program('gendef', required : false)
+  with_symbols_check = prog_gendef.found() and with_tests
+  if with_symbols_check
+    symbols_check_args = ['--gendef', prog_gendef.full_path()]
   endif
 else
   prog_nm = find_program('nm')
@@ -2273,6 +2265,12 @@ devenv = environment()
 
 dir_compiler_nir = join_paths(meson.current_source_dir(), 'src/compiler/nir/')
 dir_source_root = meson.project_source_root()
+
+if host_machine.system() == 'windows'
+  vulkan_icd_lib_path = import('fs').relative_to(get_option('bindir'), with_vulkan_icd_dir)
+else
+  vulkan_icd_lib_path = get_option('prefix') / get_option('libdir')
+endif
 
 
 subdir('include')
@@ -2365,9 +2363,6 @@ summary(vulkan_summary, section: 'Vulkan', bool_yn: true, list_sep: ' ')
 
 video_summary = {'Codecs': _codecs.length() != 0 ? _codecs : false}
 video_apis = []
-if with_gallium_vdpau
-  video_apis += 'vdpau'
-endif
 if with_gallium_va
   video_apis += 'va'
 endif
@@ -2392,9 +2387,6 @@ if with_gallium
   gallium_summary += {'Platforms': _platforms}
 
   gallium_frontends = ['mesa']
-  if with_gallium_vdpau
-    gallium_frontends += 'vdpau'
-  endif
   if with_gallium_va
     gallium_frontends += 'va'
   endif

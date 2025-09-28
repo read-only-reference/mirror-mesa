@@ -73,6 +73,7 @@ libintel_compiler_brw_files = files(
   'brw_nir_lower_cs_intrinsics.c',
   'brw_nir_lower_alpha_to_coverage.c',
   'brw_nir_lower_fs_barycentrics.c',
+  'brw_nir_lower_fs_load_output.c',
   'brw_nir_lower_immediate_offsets.c',
   'brw_nir_lower_intersection_shader.c',
   'brw_nir_lower_ray_queries.c',
@@ -141,9 +142,9 @@ brw_nir_lower_fsign = custom_target(
 )
 
 brw_nir_trig = custom_target(
-  'brw_nir_trig_workarounds.c',
-  input : 'brw_nir_trig_workarounds.py',
-  output : 'brw_nir_trig_workarounds.c',
+  'brw_nir_workarounds.c',
+  input : 'brw_nir_workarounds.py',
+  output : 'brw_nir_workarounds.c',
   command : [
     prog_python, '@INPUT@', '-p', dir_compiler_nir,
   ],
@@ -158,7 +159,7 @@ libintel_compiler_brw = static_library(
   c_args : [no_override_init_args],
   cpp_args : ['-Werror=vla'],
   gnu_symbol_visibility : 'hidden',
-  dependencies : [idep_nir_headers, idep_mesautil, idep_intel_dev],
+  dependencies : [idep_nir_headers, idep_mesautil, idep_intel_dev, idep_vtn, idep_mda],
   build_by_default : false,
 )
 

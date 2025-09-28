@@ -12,7 +12,6 @@
 #include "util/hex.h"
 #include "util/os_time.h"
 #include "util/xmlconfig.h"
-#include "vl/vl_decoder.h"
 #include "vl/vl_video_buffer.h"
 
 #include "r300_context.h"
@@ -20,7 +19,6 @@
 #include "r300_screen_buffer.h"
 #include "r300_state_inlines.h"
 #include "r300_public.h"
-#include "r300_meminfo.h"
 
 #include "draw/draw_context.h"
 
@@ -103,34 +101,6 @@ static struct disk_cache* r300_get_disk_shader_cache(struct pipe_screen* pscreen
 {
 	struct r300_screen* r300screen = r300_screen(pscreen);
 	return r300screen->disk_shader_cache;
-}
-
-static int r300_get_video_param(struct pipe_screen *screen,
-				enum pipe_video_profile profile,
-				enum pipe_video_entrypoint entrypoint,
-				enum pipe_video_cap param)
-{
-   switch (param) {
-      case PIPE_VIDEO_CAP_SUPPORTED:
-         return vl_profile_supported(screen, profile, entrypoint);
-      case PIPE_VIDEO_CAP_NPOT_TEXTURES:
-         return 0;
-      case PIPE_VIDEO_CAP_MAX_WIDTH:
-      case PIPE_VIDEO_CAP_MAX_HEIGHT:
-         return vl_video_buffer_max_size(screen);
-      case PIPE_VIDEO_CAP_PREFERRED_FORMAT:
-         return PIPE_FORMAT_NV12;
-      case PIPE_VIDEO_CAP_PREFERS_INTERLACED:
-         return false;
-      case PIPE_VIDEO_CAP_SUPPORTS_INTERLACED:
-         return false;
-      case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
-         return true;
-      case PIPE_VIDEO_CAP_MAX_LEVEL:
-         return vl_level_supported(screen, profile);
-      default:
-         return 0;
-   }
 }
 
 #define COMMON_NIR_OPTIONS                    \
@@ -644,6 +614,34 @@ static int r300_screen_get_fd(struct pipe_screen *screen)
     return rws->get_fd(rws);
 }
 
+static void r300_query_memory_info(struct pipe_screen *pscreen, 
+                                   struct pipe_memory_info *info)
+{
+   struct r300_screen *rscreen = (struct r300_screen*) pscreen;
+   struct radeon_winsys *ws = rscreen->rws;
+
+   info->total_device_memory = rscreen->info.vram_size_kb;
+   info->total_staging_memory = rscreen->info.gart_size_kb;
+
+   /* The real TTM memory usage is somewhat random, because:
+    *
+    * 1) TTM delays freeing memory, because it can only free it after
+    *    fences expire.
+    *
+    * 2) The memory usage can be really low if big VRAM evictions are
+    *    taking place, but the real usage is well above the size of VRAM.
+    *
+    * Instead, return statistics of this process.
+    */
+   unsigned vram_used = ws->query_value(ws, RADEON_VRAM_USAGE) / 1024;
+   unsigned gtt_used = ws->query_value(ws, RADEON_GTT_USAGE) / 1024;
+
+   info->avail_device_memory = (vram_used > info->total_device_memory) ? 0 : info->total_device_memory - vram_used;
+   info->avail_staging_memory = (gtt_used > info->total_staging_memory) ? 0 : info->total_staging_memory - gtt_used;
+   info->device_memory_evicted = ws->query_value(ws, RADEON_NUM_BYTES_MOVED) / 1024;
+   info->nr_device_memory_evictions = ws->query_value(ws, RADEON_NUM_EVICTIONS);
+}
+
 struct pipe_screen* r300_screen_create(struct radeon_winsys *rws,
                                        const struct pipe_screen_config *config)
 {
@@ -687,9 +685,7 @@ struct pipe_screen* r300_screen_create(struct radeon_winsys *rws,
     r300screen->screen.get_device_vendor = r300_get_device_vendor;
     r300screen->screen.get_disk_shader_cache = r300_get_disk_shader_cache;
     r300screen->screen.get_screen_fd = r300_screen_get_fd;
-    r300screen->screen.get_video_param = r300_get_video_param;
     r300screen->screen.is_format_supported = r300_is_format_supported;
-    r300screen->screen.is_video_format_supported = vl_video_buffer_is_format_supported;
     r300screen->screen.context_create = r300_create_context;
     r300screen->screen.fence_reference = r300_fence_reference;
     r300screen->screen.fence_finish = r300_fence_finish;

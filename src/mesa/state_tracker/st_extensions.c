@@ -100,6 +100,12 @@ static unsigned mesa_to_gl_stages(unsigned stages)
    if (stages & BITFIELD_BIT(MESA_SHADER_COMPUTE))
       ret |= GL_COMPUTE_SHADER_BIT;
 
+   if (stages & BITFIELD_BIT(MESA_SHADER_TASK))
+      ret |= GL_TASK_SHADER_BIT_EXT;
+
+   if (stages & BITFIELD_BIT(MESA_SHADER_MESH))
+      ret |= GL_MESH_SHADER_BIT_EXT;
+
    return ret;
 }
 
@@ -1140,6 +1146,7 @@ void st_init_extensions(struct pipe_screen *screen,
    EXT_CAP(NV_conditional_render,            conditional_render);
    EXT_CAP(NV_fill_rectangle,                polygon_mode_fill_rectangle);
    EXT_CAP(NV_primitive_restart,             primitive_restart);
+   EXT_CAP(NV_representative_fragment_test,  representative_fragment_test);
    EXT_CAP(NV_shader_atomic_float,           image_atomic_float_add);
    EXT_CAP(NV_shader_atomic_int64,           shader_atomic_int64);
    EXT_CAP(NV_texture_barrier,               texture_barrier);
@@ -1671,15 +1678,6 @@ void st_init_extensions(struct pipe_screen *screen,
                                    PIPE_BIND_SAMPLER_VIEW)) {
       extensions->ARB_ES3_compatibility = GL_TRUE;
    }
-
-#ifdef HAVE_ST_VDPAU
-   if (screen->get_video_param &&
-       screen->get_video_param(screen, PIPE_VIDEO_PROFILE_UNKNOWN,
-                               PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
-                               PIPE_VIDEO_CAP_SUPPORTS_INTERLACED)) {
-      extensions->NV_vdpau_interop = GL_TRUE;
-   }
-#endif
 
    if (screen->caps.doubles) {
       extensions->ARB_gpu_shader_fp64 = GL_TRUE;

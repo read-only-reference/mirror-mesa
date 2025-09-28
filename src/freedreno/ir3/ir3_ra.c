@@ -1384,6 +1384,34 @@ try_allocate_src(struct ra_ctx *ctx, struct ra_file *file,
    return ~0;
 }
 
+static physreg_t
+try_allocate_src_subreg(struct ra_ctx *ctx, struct ra_file *file,
+                        struct ir3_register *reg,
+                        enum ir3_subreg_move subreg_move)
+{
+   assert(subreg_move != IR3_SUBREG_MOVE_NONE);
+
+   /* Subreg moves always write a half register. */
+   assert(reg_elem_size(reg) == 1);
+
+   struct ir3_register *src = reg->instr->srcs[0];
+   if (!ra_reg_is_src(src) || ra_get_file(ctx, src) != file)
+      return ~0;
+
+   unsigned offset = subreg_move == IR3_SUBREG_MOVE_LOWER ? 0 : 1;
+   struct ra_interval *src_interval = ra_interval_get(ctx, src->def);
+   physreg_t src_physreg = ra_interval_get_physreg(src_interval) + offset;
+   unsigned file_size = reg_file_size(file, reg);
+   unsigned size = reg_size(reg);
+
+   if (src_physreg + size <= file_size &&
+       get_reg_specified(ctx, file, reg, src_physreg, false)) {
+      return src_physreg;
+   }
+
+   return ~0;
+}
+
 static bool
 rpt_has_unique_merge_set(struct ir3_instruction *instr)
 {
@@ -1458,6 +1486,16 @@ get_reg(struct ra_ctx *ctx, struct ra_file *file, struct ir3_register *reg)
          best_reg += reg->merge_set_offset;
          return best_reg;
       }
+   }
+
+   /* For subreg moves (see ir3_is_subreg_move), try to allocate half of their
+    * full src for their dst. If this succeeds, the instruction can be removed.
+    */
+   enum ir3_subreg_move subreg_move = ir3_is_subreg_move(reg->instr);
+   if (subreg_move != IR3_SUBREG_MOVE_NONE) {
+      physreg_t src_reg = try_allocate_src_subreg(ctx, file, reg, subreg_move);
+      if (src_reg != (physreg_t)~0)
+         return src_reg;
    }
 
    /* For ALU and SFU instructions, if the src reg is avail to pick, use it.
@@ -2271,6 +2309,52 @@ handle_block(struct ra_ctx *ctx, struct ir3_block *block)
    ra_file_init(&ctx->full);
    ra_file_init(&ctx->half);
    ra_file_init(&ctx->shared);
+
+   if (block == ir3_after_preamble(block->shader) &&
+       block != ir3_start_block(block->shader)) {
+      /* Reset the file start in the first block after the preamble to make the
+       * main shader independent of the preamble. Without this, the allocated
+       * registers in the main shader will depend on how many registers were
+       * used in the preamble. This in turn may cause more or less copies being
+       * generated or postsched behaving differently due to a difference in
+       * false dependencies. This is undesirable when analyzing compiler changes
+       * that should only affect the preamble as they may also change main
+       * shader stats, generating noise in the shader-db output.
+       */
+      ctx->full.start = 0;
+      ctx->half.start = 0;
+      ctx->shared.start = 0;
+
+      /* However, make sure the file start accounts for defs that are
+       * live-through the preamble (inputs and tex prefetches). If not, this
+       * could introduce unwanted false dependencies.
+       */
+      foreach_instr (input, &ir3_start_block(block->shader)->instr_list) {
+         if (input->opc != OPC_META_INPUT &&
+             input->opc != OPC_META_TEX_PREFETCH) {
+            break;
+         }
+
+         struct ir3_register *dst = input->dsts[0];
+         assert(dst->num != INVALID_REG);
+
+         physreg_t dst_start = ra_reg_get_physreg(dst);
+         physreg_t dst_end;
+
+         if (dst->merge_set) {
+            /* Take the whole merge set into account to prevent its range being
+             * allocated for defs not part of the merge set.
+             */
+            assert(dst_start >= dst->merge_set_offset);
+            dst_end = dst_start - dst->merge_set_offset + dst->merge_set->size;
+         } else {
+            dst_end = dst_start + reg_size(dst);
+         }
+
+         struct ra_file *file = ra_get_file(ctx, dst);
+         file->start = MAX2(file->start, dst_end);
+      }
+   }
 
    /* Handle live-ins, phis, and input meta-instructions. These all appear
     * live at the beginning of the block, and interfere with each other

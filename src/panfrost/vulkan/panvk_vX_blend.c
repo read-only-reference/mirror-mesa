@@ -17,6 +17,7 @@
 #include "panvk_blend.h"
 #include "panvk_cmd_buffer.h"
 #include "panvk_device.h"
+#include "panvk_meta.h"
 #include "panvk_shader.h"
 
 struct panvk_blend_shader_key {
@@ -87,6 +88,7 @@ get_blend_shader(struct panvk_device *dev,
    /* Compile the NIR shader */
    struct pan_compile_inputs inputs = {
       .gpu_id = pdev->kmod.props.gpu_id,
+      .gpu_variant = pdev->kmod.props.gpu_variant,
       .is_blend = true,
       .blend = {
          .nr_samples = key.info.nr_samples,

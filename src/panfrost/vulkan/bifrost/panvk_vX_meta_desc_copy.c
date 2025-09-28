@@ -18,6 +18,7 @@
 #include "panvk_cmd_alloc.h"
 #include "panvk_cmd_buffer.h"
 #include "panvk_device.h"
+#include "panvk_meta.h"
 #include "panvk_shader.h"
 
 struct pan_nir_desc_copy_info {
@@ -296,6 +297,7 @@ panvk_meta_desc_copy_rsd(struct panvk_device *dev)
 
    struct pan_compile_inputs inputs = {
       .gpu_id = phys_dev->kmod.props.gpu_id,
+      .gpu_variant = phys_dev->kmod.props.gpu_variant,
    };
 
    pan_shader_preprocess(b.shader, inputs.gpu_id);

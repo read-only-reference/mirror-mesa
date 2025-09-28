@@ -281,6 +281,7 @@ crocus_init_screen_caps(struct crocus_screen *screen)
    caps->fs_position_is_sysval = true;
    caps->fs_face_is_integer_sysval = true;
    caps->invalidate_buffer = true;
+   caps->surface_no_compress = true;
    caps->surface_reinterpret_blocks = true;
    caps->fence_signal = true;
    caps->demote_to_helper_invocation = true;
@@ -408,6 +409,9 @@ crocus_init_screen_caps(struct crocus_screen *screen)
       PIPE_CONTEXT_PRIORITY_LOW |
       PIPE_CONTEXT_PRIORITY_MEDIUM |
       PIPE_CONTEXT_PRIORITY_HIGH;
+
+   /* Let mesa/st lower for us */
+   caps->flatshade = false;
 
    caps->frontend_noop = true;
    // XXX: don't hardcode 00:00:02.0 PCI here

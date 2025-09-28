@@ -121,9 +121,9 @@ static void pvr_drm_buffer_release(struct pvr_drm_winsys_bo *drm_bo)
        * so we don't want to free the BO pointer, instead we want to reset it
        * to 0, to signal that array entry as being free.
        *
-       * We must do the reset before we actually free the BO in the kernel, since
-       * otherwise there is a chance the application creates another BO in a
-       * different thread and gets the same array entry, causing a race.
+       * We must do the reset before we actually free the BO in the kernel,
+       * since otherwise there is a chance the application creates another BO in
+       * a different thread and gets the same array entry, causing a race.
        */
       memset(drm_bo, 0, sizeof(*drm_bo));
 
@@ -148,7 +148,7 @@ pvr_drm_display_buffer_create(struct pvr_drm_winsys *drm_ws,
    if (result != VK_SUCCESS)
       return result;
 
-   ret = drmPrimeHandleToFD(drm_ws->base.display_fd, handle, DRM_CLOEXEC, &fd);
+   ret = drmPrimeHandleToFD(drm_ws->base.display_fd, handle, DRM_CLOEXEC | DRM_RDWR, &fd);
    pvr_winsys_helper_display_buffer_destroy(&drm_ws->base, handle);
    if (ret)
       return vk_error(NULL, VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -180,10 +180,10 @@ static uint64_t pvr_drm_get_alloc_flags(uint32_t ws_flags)
 }
 
 static inline struct pvr_drm_winsys_bo *
-pvr_drm_winsys_lookup_bo(struct pvr_drm_winsys *drm_ws,
-                         uint32_t handle)
+pvr_drm_winsys_lookup_bo(struct pvr_drm_winsys *drm_ws, uint32_t handle)
 {
-   return (struct pvr_drm_winsys_bo *) util_sparse_array_get(&drm_ws->bo_map, handle);
+   return (struct pvr_drm_winsys_bo *)util_sparse_array_get(&drm_ws->bo_map,
+                                                            handle);
 }
 
 VkResult pvr_drm_winsys_buffer_create(struct pvr_winsys *ws,
@@ -290,7 +290,7 @@ VkResult pvr_drm_winsys_buffer_get_fd(struct pvr_winsys_bo *bo,
 
    ret = drmPrimeHandleToFD(drm_ws->base.render_fd,
                             drm_bo->handle,
-                            DRM_CLOEXEC,
+                            DRM_CLOEXEC | DRM_RDWR,
                             fd_out);
    if (ret)
       return vk_error(NULL, VK_ERROR_OUT_OF_HOST_MEMORY);

@@ -36,6 +36,7 @@ ir3_create(struct ir3_compiler *compiler, struct ir3_shader_variant *v)
 
    shader->compiler = compiler;
    shader->type = v->type;
+   shader->lin_ctx = linear_context(shader);
 
    list_inithead(&shader->block_list);
    list_inithead(&shader->array_list);
@@ -605,7 +606,7 @@ ir3_collect_info(struct ir3_shader_variant *v)
 static struct ir3_register *
 reg_create(struct ir3 *shader, int num, int flags)
 {
-   struct ir3_register *reg = ir3_alloc(shader, sizeof(struct ir3_register));
+   struct ir3_register *reg = linear_zalloc(shader->lin_ctx, struct ir3_register);
    reg->wrmask = 1;
    reg->flags = flags;
    reg->num = num;
@@ -882,7 +883,7 @@ instr_create(struct ir3_block *block, opc_t opc, int ndst, int nsrc)
    struct ir3_instruction *instr;
    unsigned sz = sizeof(*instr) + (ndst * sizeof(instr->dsts[0])) +
                  (nsrc * sizeof(instr->srcs[0]));
-   char *ptr = ir3_alloc(block->shader, sz);
+   char *ptr = linear_zalloc_child(block->shader->lin_ctx, sz);
 
    instr = (struct ir3_instruction *)ptr;
    ptr += sizeof(*instr);
@@ -1011,7 +1012,7 @@ ir3_instr_add_dep(struct ir3_instruction *instr, struct ir3_instruction *dep)
          return;
    }
 
-   array_insert(instr, instr->deps, dep);
+   array_insert(instr->block->shader, instr->deps, dep);
 }
 
 void

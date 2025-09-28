@@ -9,6 +9,7 @@
 #include "brw_generator.h"
 #include "brw_nir.h"
 #include "brw_private.h"
+#include "intel_nir.h"
 #include "dev/intel_debug.h"
 #include "util/macros.h"
 
@@ -65,26 +66,43 @@ brw_compile_tes(const struct brw_compiler *compiler,
    const struct intel_device_info *devinfo = compiler->devinfo;
    nir_shader *nir = params->base.nir;
    const struct brw_tes_prog_key *key = params->key;
-   const struct intel_vue_map *input_vue_map = params->input_vue_map;
+   struct intel_vue_map input_vue_map;
    struct brw_tes_prog_data *prog_data = params->prog_data;
    const unsigned dispatch_width = brw_geometry_stage_dispatch_width(compiler->devinfo);
 
    const bool debug_enabled = brw_should_print_shader(nir, DEBUG_TES, params->base.source_hash);
 
+   brw_debug_archive_nir(params->base.archiver, nir, dispatch_width, "first");
+
    brw_prog_data_init(&prog_data->base.base, &params->base);
 
-   nir->info.inputs_read = key->inputs_read;
-   nir->info.patch_inputs_read = key->patch_inputs_read;
+   if (params->input_vue_map != NULL) {
+      assert(!key->separate_tess_vue_layout);
+      nir->info.inputs_read = key->inputs_read;
+      nir->info.patch_inputs_read = key->patch_inputs_read;
+      memcpy(&input_vue_map, params->input_vue_map,
+             sizeof(input_vue_map));
+   } else {
+      brw_compute_tess_vue_map(&input_vue_map,
+                               nir->info.inputs_read,
+                               nir->info.patch_inputs_read,
+                               key->separate_tess_vue_layout);
+   }
 
    brw_nir_apply_key(nir, compiler, &key->base, dispatch_width);
-   brw_nir_lower_tes_inputs(nir, input_vue_map);
+   brw_nir_lower_tes_inputs(nir, &input_vue_map);
    brw_nir_lower_vue_outputs(nir);
-   brw_postprocess_nir(nir, compiler, debug_enabled,
-                       key->base.robust_flags);
+   NIR_PASS(_, nir, intel_nir_lower_patch_vertices_tes);
+   brw_postprocess_nir(nir, compiler, dispatch_width, params->base.archiver,
+                       debug_enabled, key->base.robust_flags);
+
+   const uint32_t pos_slots =
+      (nir->info.per_view_outputs & VARYING_BIT_POS) ?
+      MAX2(1, util_bitcount(key->base.view_mask)) : 1;
 
    brw_compute_vue_map(devinfo, &prog_data->base.vue_map,
                        nir->info.outputs_written,
-                       key->base.vue_layout, 1);
+                       key->base.vue_layout, pos_slots);
 
    unsigned output_size_bytes = prog_data->base.vue_map.num_slots * 4 * 4;
 
@@ -151,7 +169,7 @@ brw_compile_tes(const struct brw_compiler *compiler,
 
    if (unlikely(debug_enabled)) {
       fprintf(stderr, "TES Input ");
-      brw_print_vue_map(stderr, input_vue_map, MESA_SHADER_TESS_EVAL);
+      brw_print_vue_map(stderr, &input_vue_map, MESA_SHADER_TESS_EVAL);
       fprintf(stderr, "TES Output ");
       brw_print_vue_map(stderr, &prog_data->base.vue_map,
                         MESA_SHADER_TESS_EVAL);
@@ -167,6 +185,7 @@ brw_compile_tes(const struct brw_compiler *compiler,
       .needs_register_pressure = params->base.stats != NULL,
       .log_data                = params->base.log_data,
       .debug_enabled           = debug_enabled,
+      .archiver                = params->base.archiver,
    };
    brw_shader v(&shader_params);
    if (!run_tes(v)) {

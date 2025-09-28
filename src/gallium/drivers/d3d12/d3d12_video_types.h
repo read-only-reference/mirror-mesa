@@ -66,16 +66,7 @@ GetDesc(ID3D12VideoDecoderHeap *heap)
 */
 const bool D3D12_VIDEO_ENC_CBR_FORCE_VBV_EQUAL_BITRATE = debug_get_bool_option("D3D12_VIDEO_ENC_CBR_FORCE_VBV_EQUAL_BITRATE", false);
 
-/**
- * This indicates how many in-flight encode commands can happen before blocking on the next request
- */
-const size_t D3D12_VIDEO_ENC_ASYNC_DEPTH = static_cast<size_t>(debug_get_num_option("D3D12_VIDEO_ENC_ASYNC_DEPTH", 8));
-
-const size_t D3D12_VIDEO_ENC_METADATA_BUFFERS_COUNT = static_cast<size_t>(debug_get_num_option("D3D12_VIDEO_ENC_METADATA_BUFFERS_COUNT", 2 * D3D12_VIDEO_ENC_ASYNC_DEPTH));
-
 constexpr unsigned int D3D12_VIDEO_H264_MB_IN_PIXELS = 16;
-
-constexpr size_t D3D12_DEFAULT_COMPBIT_STAGING_SIZE = (1024 /*1K*/ * 1024/*1MB*/) * 8/*8 MB*/; // 8MB 
 
 /* If enabled, the D3D12 AV1 encoder will use always ...CONFIGURABLE_GRID_PARTITION mode */
 /* If disabled, the D3D12 AV1 encoder will try to use ...UNIFORM_GRID_PARTITION first and then fallback to ...CONFIGURABLE_GRID_PARTITION if not possible */

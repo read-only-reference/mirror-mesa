@@ -243,6 +243,7 @@ optimizations = [
    (('~fadd', a, ('fadd', ('fneg', a), b)), b),
    (('fadd', ('fsat', a), ('fsat', ('fneg', a))), ('fsat', ('fabs', a))),
    (('fadd', a, a), ('fmul', a, 2.0)),
+   (('fadd(contract)', a, ('fadd(is_used_once)', a, b)), ('fadd', b, ('fmul', a, 2.0))),
    (('~fmul', a, 0.0), 0.0),
    # The only effect a*0.0 should have is when 'a' is infinity, -0.0 or NaN
    (('fmul(nsz,nnan)', 'a', 0.0), 0.0),
@@ -336,6 +337,18 @@ optimizations = [
    # (b==0.0 ? 0.0 : a) * (a==0.0 ? 0.0 : b) -> fmulz(a, b)
    *add_fabs_fneg((('fmul@32(nsz)', ('bcsel', ignore_exact('feq', b, 0.0), 0.0, 'ma'), ('bcsel', ignore_exact('feq', a, 0.0), 0.0, 'mb')),
     ('fmulz', 'ma', 'mb'), has_fmulz), {'ma' : a, 'mb' : b}),
+   # (b!=0.0 ? a : 0.0) * (a==0.0 ? 0.0 : b) -> fmulz(a, b)
+   *add_fabs_fneg((('fmul@32(nsz)', ('bcsel', ignore_exact('fneu', b, 0.0), 'ma', 0.0), ('bcsel', ignore_exact('feq', a, 0.0), 0.0, 'mb')),
+    ('fmulz', 'ma', 'mb'), has_fmulz), {'ma' : a, 'mb' : b}),
+   # (b!=0.0 ? a : 0.0) * (a!=0.0 ? b : 0.0) -> fmulz(a, b)
+   *add_fabs_fneg((('fmul@32(nsz)', ('bcsel', ignore_exact('fneu', b, 0.0), 'ma', 0.0), ('bcsel', ignore_exact('fneu', a, 0.0), 'mb', 0.0)),
+    ('fmulz', 'ma', 'mb'), has_fmulz), {'ma' : a, 'mb' : b}),
+
+   # (min(abs(a), abs(b)) == 0.0 ? 0.0 : a * b) -> fmulz(a,b)
+   *add_fabs_fneg((('bcsel', ('feq', ('fmin', ('fabs', a), ('fabs', b)), 0.0), 0.0, ('fmul@32', 'ma', 'mb')),
+    ('fmulz', 'ma', 'mb'), has_fmulz), {'ma': a, 'mb': b}),
+
+   # a * (a == 0.0 ? 0.0 : b(is_non_const_zero))
    *add_fabs_fneg((('fmul@32(nsz)', 'ma', ('bcsel', ignore_exact('feq', a, 0.0), 0.0, '#b(is_not_const_zero)')),
     ('fmulz', 'ma', b), has_fmulz), {'ma' : a}),
 
@@ -521,9 +534,10 @@ optimizations.extend([
    (('ishl', ('iadd', ('imul', a, '#b'), '#c'), '#d'),
     ('iadd', ('imul', a, ('ishl', b, d)), ('ishl', c, d))),
 
-   # (a * #b) << #c
-   # a * (#b << #c)
+   # (a * #b) << #c  =>  a * (#b << #c)
    (('ishl', ('imul', a, '#b'), '#c'), ('imul', a, ('ishl', b, c))),
+   # (a << #b) * #c  =>  a * (#c << #b)
+   (('imul', ('ishl', a, '#b'), '#c'), ('imul', a, ('ishl', c, b))),
 ])
 
 # Care must be taken here.  Shifts in NIR uses only the lower log2(bitsize)
@@ -3636,6 +3650,7 @@ for sz, mulz in itertools.product([16, 32, 64], [False, True]):
 
     fadd = 'fadd@{}(contract)'.format(sz)
     option = 'options->fuse_ffma{}'.format(sz)
+    option_with_abs = 'options->fuse_ffma{}  && !options->avoid_ternary_with_fabs'.format(sz)
 
     late_optimizations.extend([
         ((fadd, (fmul, a, b), c), (ffma, a, b, c), option),
@@ -3644,10 +3659,10 @@ for sz, mulz in itertools.product([16, 32, 64], [False, True]):
          (ffma, ('fneg', a), b, c), option),
 
         ((fadd, ('fabs(is_only_used_by_fadd)', (fmul, a, b)), c),
-         (ffma, ('fabs', a), ('fabs', b), c), option),
+         (ffma, ('fabs', a), ('fabs', b), c), option_with_abs),
 
         ((fadd, ('fneg(is_only_used_by_fadd)', ('fabs', (fmul, a, b))), c),
-         (ffma, ('fneg', ('fabs', a)), ('fabs', b), c), option),
+         (ffma, ('fneg', ('fabs', a)), ('fabs', b), c), option_with_abs),
     ])
 
 late_optimizations.extend([
@@ -3940,6 +3955,14 @@ for op in ['ffma', 'ffmaz']:
         (('bcsel', a, (op, b, c, d), (op + '(is_used_once)', b, e, d)), (op, b, ('bcsel', a, c, e), d)),
     ]
 
+# Lower fmulz using min(abs(a), abs(b))==0.0
+late_optimizations += [
+   (('fmulz@32', a, b),
+    ('bcsel', ('feq', ('fmin', ('fabs', a), ('fabs', b)), 0.0), 0.0, ('fmul', a, b)), 'options->lower_fmulz_with_abs_min'),
+   (('ffmaz@32', a, b, c),
+    ('bcsel', ('feq', ('fmin', ('fabs', a), ('fabs', b)), 0.0), c, ('ffma@32', a, b, c)), 'options->lower_fmulz_with_abs_min')
+]
+
 # mediump: If an opcode is surrounded by conversions, remove the conversions.
 # The rationale is that type conversions + the low precision opcode are more
 # expensive that the same arithmetic opcode at higher precision.
@@ -4001,6 +4024,10 @@ for s in [16, 32, 64]:
         (('bcsel@{}'.format(s), ('ieq', 0, 'a@{}'.format(s)), 'b@{}'.format(s), 'c@{}'.format(s)), ('icsel_eqz', a, b, c), "options->has_icsel_eqz{} && !options->no_integers".format(s)),
         (('bcsel@{}'.format(s), ('ine', 0, 'a@{}'.format(s)), 'b@{}'.format(s), 'c@{}'.format(s)), ('icsel_eqz', a, c, b), "options->has_icsel_eqz{} && !options->no_integers".format(s)),
     ])
+
+late_optimizations += [
+    (('f2i32', ('fround_even(is_used_once)', 'a@32')), ('f2i32_rtne', a), 'options->has_f2i32_rtne'),
+]
 
 distribute_src_mods = [
    # Try to remove some spurious negations rather than pushing them down.

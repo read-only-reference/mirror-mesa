@@ -13,6 +13,7 @@
 #include <sys/sysinfo.h>
 
 #include "util/disk_cache.h"
+#include "util/os_misc.h"
 #include "git_sha1.h"
 
 #include "vk_android.h"
@@ -24,6 +25,7 @@
 
 #include "panvk_device.h"
 #include "panvk_entrypoints.h"
+#include "panvk_image.h"
 #include "panvk_instance.h"
 #include "panvk_physical_device.h"
 #include "panvk_wsi.h"
@@ -267,7 +269,7 @@ panvk_physical_device_init(struct panvk_physical_device *device,
    switch (arch) {
    case 6:
    case 7:
-      if (!getenv("PAN_I_WANT_A_BROKEN_VULKAN_DRIVER")) {
+      if (!os_get_option("PAN_I_WANT_A_BROKEN_VULKAN_DRIVER")) {
          result = panvk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
                                "WARNING: panvk is not well-tested on v%d, "
                                "pass PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1 "
@@ -365,23 +367,42 @@ fail:
 
 static void
 panvk_fill_global_priority(const struct panvk_physical_device *physical_device,
+                           uint32_t family_idx,
                            VkQueueFamilyGlobalPriorityPropertiesKHR *prio)
 {
-   enum pan_kmod_group_allow_priority_flags prio_mask =
-      physical_device->kmod.props.allowed_group_priorities_mask;
+   const unsigned arch = pan_arch(physical_device->kmod.props.gpu_id);
    uint32_t prio_idx = 0;
 
-   if (prio_mask & PAN_KMOD_GROUP_ALLOW_PRIORITY_LOW)
-      prio->priorities[prio_idx++] = VK_QUEUE_GLOBAL_PRIORITY_LOW_KHR;
+   switch (family_idx) {
+   case PANVK_QUEUE_FAMILY_GPU: {
+      enum pan_kmod_group_allow_priority_flags prio_mask =
+         physical_device->kmod.props.allowed_group_priorities_mask;
 
-   if (prio_mask & PAN_KMOD_GROUP_ALLOW_PRIORITY_MEDIUM)
-      prio->priorities[prio_idx++] = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR;
+      /* Non-medium priority context is not hooked-up in the JM backend, even
+       * though the panfrost kmod advertize it. Manually filter non-medium
+       * priority for now.
+       */
+      if (arch < 10)
+         prio_mask &= PAN_KMOD_GROUP_ALLOW_PRIORITY_MEDIUM;
 
-   if (prio_mask & PAN_KMOD_GROUP_ALLOW_PRIORITY_HIGH)
-      prio->priorities[prio_idx++] = VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR;
+      if (prio_mask & PAN_KMOD_GROUP_ALLOW_PRIORITY_LOW)
+         prio->priorities[prio_idx++] = VK_QUEUE_GLOBAL_PRIORITY_LOW_KHR;
+      if (prio_mask & PAN_KMOD_GROUP_ALLOW_PRIORITY_MEDIUM)
+         prio->priorities[prio_idx++] = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR;
+      if (prio_mask & PAN_KMOD_GROUP_ALLOW_PRIORITY_HIGH)
+         prio->priorities[prio_idx++] = VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR;
+      if (prio_mask & PAN_KMOD_GROUP_ALLOW_PRIORITY_REALTIME)
+         prio->priorities[prio_idx++] = VK_QUEUE_GLOBAL_PRIORITY_REALTIME_KHR;
+      break;
+   }
 
-   if (prio_mask & PAN_KMOD_GROUP_ALLOW_PRIORITY_REALTIME)
-      prio->priorities[prio_idx++] = VK_QUEUE_GLOBAL_PRIORITY_REALTIME_KHR;
+   case PANVK_QUEUE_FAMILY_BIND:
+      prio->priorities[prio_idx++] = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM;
+      break;
+
+   default:
+      UNREACHABLE("Unknown queue family");
+   }
 
    prio->priorityCount = prio_idx;
 }
@@ -396,11 +417,10 @@ panvk_GetPhysicalDeviceQueueFamilyProperties2(
                           pQueueFamilyPropertyCount);
    unsigned arch = pan_arch(physical_device->kmod.props.gpu_id);
 
-   vk_outarray_append_typed(VkQueueFamilyProperties2, &out, p)
-   {
-      p->queueFamilyProperties = (VkQueueFamilyProperties){
-         .queueFlags = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT |
-                       VK_QUEUE_TRANSFER_BIT,
+   const VkQueueFamilyProperties qfamily_props[PANVK_QUEUE_FAMILY_COUNT] = {
+      [PANVK_QUEUE_FAMILY_GPU] = {
+         .queueFlags =
+            VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT,
          /* On v10+ we can support up to 127 queues but this causes timeout on
             some CTS tests */
          .queueCount = arch >= 10 ? 2 : 1,
@@ -408,13 +428,27 @@ panvk_GetPhysicalDeviceQueueFamilyProperties2(
             arch >= 10 && physical_device->kmod.props.gpu_can_query_timestamp
                ? 64
                : 0,
-         .minImageTransferGranularity = (VkExtent3D){1, 1, 1},
-      };
+         .minImageTransferGranularity = {1, 1, 1},
+      },
+      [PANVK_QUEUE_FAMILY_BIND] = {
+         .queueFlags = VK_QUEUE_SPARSE_BINDING_BIT,
+         .queueCount = 1,
+      },
+   };
 
-      VkQueueFamilyGlobalPriorityPropertiesKHR *prio =
-         vk_find_struct(p->pNext, QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES_KHR);
-      if (prio)
-         panvk_fill_global_priority(physical_device, prio);
+   for (uint32_t family = 0; family < ARRAY_SIZE(qfamily_props); family++) {
+      if (family == PANVK_QUEUE_FAMILY_BIND &&
+          !physical_device->vk.supported_features.sparseBinding)
+         break;
+
+      vk_outarray_append_typed(VkQueueFamilyProperties2, &out, p) {
+         p->queueFamilyProperties = qfamily_props[family];
+
+         VkQueueFamilyGlobalPriorityPropertiesKHR *prio =
+            vk_find_struct(p->pNext, QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES_KHR);
+         if (prio)
+            panvk_fill_global_priority(physical_device, family, prio);
+      }
    }
 }
 
@@ -557,16 +591,8 @@ get_image_plane_format_features(struct panvk_physical_device *physical_device,
 
    if (fmt.bind & PAN_BIND_RENDER_TARGET) {
       features |= VK_FORMAT_FEATURE_2_BLIT_DST_BIT;
-
-      /* SNORM rendering isn't working yet (nir_lower_blend bugs), disable for
-       * now.
-       *
-       * XXX: Enable once fixed.
-       */
-      if (!util_format_is_snorm(pfmt)) {
-         features |= VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT;
-         features |= VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BLEND_BIT;
-      }
+      features |= VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT;
+      features |= VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BLEND_BIT;
    }
 
    if (fmt.bind & PAN_BIND_STORAGE_IMAGE) {
@@ -1300,36 +1326,4 @@ panvk_GetPhysicalDeviceExternalBufferProperties(
          .exportFromImportedHandleTypes = handle_types,
          .compatibleHandleTypes = handle_types,
       };
-}
-
-static const VkTimeDomainKHR panvk_time_domains[] = {
-   VK_TIME_DOMAIN_DEVICE_KHR,
-   VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR,
-#ifdef CLOCK_MONOTONIC_RAW
-   VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR,
-#endif
-};
-
-VKAPI_ATTR VkResult VKAPI_CALL
-panvk_GetPhysicalDeviceCalibrateableTimeDomainsKHR(
-   VkPhysicalDevice physicalDevice, uint32_t *pTimeDomainCount,
-   VkTimeDomainKHR *pTimeDomains)
-{
-   VK_FROM_HANDLE(panvk_physical_device, pdev, physicalDevice);
-   VK_OUTARRAY_MAKE_TYPED(VkTimeDomainKHR, out, pTimeDomains, pTimeDomainCount);
-
-   int d = 0;
-
-   /* If GPU query timestamp isn't supported, skip device domain */
-   if (!pdev->kmod.props.gpu_can_query_timestamp)
-      d++;
-
-   for (; d < ARRAY_SIZE(panvk_time_domains); d++) {
-      vk_outarray_append_typed(VkTimeDomainKHR, &out, i)
-      {
-         *i = panvk_time_domains[d];
-      }
-   }
-
-   return vk_outarray_status(&out);
 }

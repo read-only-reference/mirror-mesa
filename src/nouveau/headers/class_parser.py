@@ -149,9 +149,9 @@ __${nvcl}_${mthd.name}(uint32_t *val_out, struct nv_${nvcl.lower()}_${mthd.name}
 
 %endfor
 
-const char *P_PARSE_${nvcl}_MTHD(uint16_t idx);
+const char *P_PARSE_${nvcl}_MTHD(uint16_t idx) ATTRIBUTE_COLD;
 void P_DUMP_${nvcl}_MTHD_DATA(FILE *fp, uint16_t idx, uint32_t data,
-                              const char *prefix);
+                              const char *prefix) ATTRIBUTE_COLD;
 """)
 
 TEMPLATE_C = Template("""\
@@ -159,12 +159,49 @@ TEMPLATE_C = Template("""\
 
 #include <stdio.h>
 
+<%def name="cases(mthd)">
+  %if mthd.is_array:
+    %for i in range(mthd.array_size):
+    case ${nvcl}_${mthd.name}(${i}):
+    %endfor
+  % else:
+    case ${nvcl}_${mthd.name}:
+  %endif
+</%def>
+
+<%def name="prev_cases()">
+  %if any_method_removed:
+    %for mthd in methods:
+      %if prev_methods.get(mthd.name, None) == mthd:
+        ${cases(mthd)}
+      %endif
+    %endfor
+  %else:
+    default:
+  %endif
+</%def>
+
+%if prev_nvcl:
+const char *P_PARSE_${prev_nvcl}_MTHD(uint16_t idx) ATTRIBUTE_COLD;
+void P_DUMP_${prev_nvcl}_MTHD_DATA(FILE *fp, uint16_t idx, uint32_t data,
+                                   const char *prefix) ATTRIBUTE_COLD;
+%endif
+
 const char*
 P_PARSE_${nvcl}_MTHD(uint16_t idx)
 {
     switch (idx) {
+
+%if prev_nvcl:
+  ${prev_cases()}
+    return P_PARSE_${prev_nvcl}_MTHD(idx);
+%endif
+
 %for mthd in methods:
   %if mthd.is_array and mthd.array_size == 0:
+    <% continue %>
+  %endif
+  %if prev_methods.get(mthd.name, None) == mthd:
     <% continue %>
   %endif
   %if mthd.is_array:
@@ -177,8 +214,11 @@ P_PARSE_${nvcl}_MTHD(uint16_t idx)
         return "${nvcl}_${mthd.name}";
   %endif
 %endfor
+
+%if not prev_nvcl or any_method_removed:
     default:
         return "unknown method";
+%endif
     }
 }
 
@@ -188,17 +228,21 @@ P_DUMP_${nvcl}_MTHD_DATA(FILE *fp, uint16_t idx, uint32_t data,
 {
     UNUSED uint32_t parsed;
     switch (idx) {
+
+%if prev_nvcl:
+  ${prev_cases()}
+    P_DUMP_${prev_nvcl}_MTHD_DATA(fp, idx, data, prefix);
+    break;
+%endif
+
 %for mthd in methods:
   %if mthd.is_array and mthd.array_size == 0:
     <% continue %>
   %endif
-  %if mthd.is_array:
-    %for i in range(mthd.array_size):
-    case ${nvcl}_${mthd.name}(${i}):
-    %endfor
-  % else:
-    case ${nvcl}_${mthd.name}:
+  %if prev_methods.get(mthd.name, None) == mthd:
+    <% continue %>
   %endif
+  ${cases(mthd)}
   %for field in mthd.fields:
     <% field_width = field.end - field.start + 1 %>
     %if field_width == 32:
@@ -228,9 +272,11 @@ P_DUMP_${nvcl}_MTHD_DATA(FILE *fp, uint16_t idx, uint32_t data,
   %endfor
         break;
 %endfor
+%if not prev_nvcl or any_method_removed:
     default:
         fprintf(fp, "%s.VALUE = 0x%x${bs}n", prefix, data);
         break;
+%endif
     }
 }
 """)
@@ -585,12 +631,15 @@ def main():
 
     prev_mod = None
     prev_methods = {}
+    prev_nvcl = None
     if args.prev_in_h is not None:
         prev_clheader = os.path.basename(args.prev_in_h)
         prev_nvcl = nvcl_for_filename(prev_clheader)
         prev_mod = prev_clheader.removesuffix(".h")
         with open(args.prev_in_h, 'r', encoding='utf-8') as f:
             (prev_version, prev_methods) = parse_header(prev_nvcl, f)
+
+    any_method_removed = any(x not in methods for x in prev_methods)
 
     environment = {
         'clheader': clheader,
@@ -599,6 +648,8 @@ def main():
         'methods': list(methods.values()),
         'prev_mod': prev_mod,
         'prev_methods': prev_methods,
+        'prev_nvcl': prev_nvcl,
+        'any_method_removed': any_method_removed,
         'to_camel': to_camel,
         'bs': '\\'
     }

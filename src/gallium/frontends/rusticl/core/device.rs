@@ -34,13 +34,12 @@ use std::mem::transmute;
 use std::num::NonZeroU64;
 use std::ops::Deref;
 use std::os::raw::*;
-use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
 /// Contains basic stuff we need to partially initialize Device
 pub struct DeviceBase {
-    pub screen: Arc<PipeScreen>,
+    pub screen: PipeScreenWithLdev,
     pub cl_version: CLVersion,
     pub clc_version: CLVersion,
     pub clc_versions: Vec<cl_name_version>,
@@ -501,6 +500,7 @@ impl DeviceBase {
         let exts: Vec<&str> = self.extension_string.split(' ').collect();
         let mut res = CLVersion::Cl3_0;
 
+        #[allow(clippy::collapsible_if)]
         if self.embedded {
             if self.caps.has_images {
                 let supports_array_writes = !FORMATS
@@ -1131,7 +1131,7 @@ impl DeviceBase {
         self.reusable_ctx.lock().unwrap()
     }
 
-    pub fn screen(&self) -> &Arc<PipeScreen> {
+    pub fn screen(&self) -> &PipeScreen {
         &self.screen
     }
 
@@ -1140,7 +1140,7 @@ impl DeviceBase {
         let res = (prio == PipeContextPrio::Med)
             .then(|| self.reusable_ctx().pop())
             .flatten()
-            .or_else(|| self.screen.create_context(prio))?;
+            .or_else(|| PipeContext::new(prio, &self.screen))?;
 
         debug_assert_eq!(res.prio, prio);
 
@@ -1272,15 +1272,14 @@ impl DeviceBase {
 }
 
 impl Device {
-    fn new(screen: PipeScreen) -> Option<Device> {
+    fn new(screen: PipeScreenWithLdev) -> Option<Device> {
         if !Self::check_valid(&screen) {
             return None;
         }
 
-        let screen = Arc::new(screen);
         // Create before loading libclc as llvmpipe only creates the shader cache with the first
         // context being created.
-        let helper_ctx = screen.create_context(PipeContextPrio::Med)?;
+        let helper_ctx = PipeContext::new(PipeContextPrio::Med, &screen)?;
         let mut dev_base = DeviceBase {
             caps: DeviceCaps::new(&screen, &helper_ctx),
             helper_ctx: Mutex::new(helper_ctx),
@@ -1332,7 +1331,11 @@ impl Device {
     }
 
     pub fn all() -> Vec<Device> {
+        #[cfg(not(test))]
         let mut devs: Vec<_> = load_screens().filter_map(Device::new).collect();
+
+        #[cfg(test)]
+        let mut devs: Vec<Device> = Vec::default();
 
         // Pick a default device. One must be the default one no matter what. And custom devices can
         // only be that one if they are the only devices available.

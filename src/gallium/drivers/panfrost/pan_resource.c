@@ -141,11 +141,9 @@ panfrost_resource_init_image(
 
    assert(plane_idx == util_format_get_num_planes(iprops->format));
 
-   plane_idx = 1;
    for (struct panfrost_resource *plane = pan_resource(rsc->base.next);
         plane; plane = pan_resource(plane->base.next)) {
-      memcpy(plane->image.planes, rsc->image.planes,
-             plane_idx * sizeof(plane->image.planes[0]));
+      memcpy(plane->image.planes, rsc->image.planes, sizeof(plane->image.planes));
    }
 
    return true;
@@ -537,7 +535,12 @@ panfrost_resource_get_param(struct pipe_screen *pscreen,
                             enum pipe_resource_param param, unsigned usage,
                             uint64_t *value)
 {
-   struct panfrost_resource *rsrc = pan_resource(prsc);
+   struct panfrost_resource *rsrc =
+      pan_resource(util_resource_at_index(prsc, plane));
+
+   /* Lowered multi plane resource gets each plane allocated independently. */
+   if (!rsrc->image.planes[plane])
+      plane = 0;
 
    switch (param) {
    case PIPE_RESOURCE_PARAM_STRIDE:
@@ -603,8 +606,30 @@ panfrost_should_afbc(struct panfrost_device *dev,
    if (pres->base.bind & PIPE_BIND_CONST_BW)
       return false;
 
+   /* We can't do AFBC(Z32)+S8 on v7- because the AFBC ZS target layout overlaps
+    * the S target layout. Since we don't know at this point if the Z32 buffer
+    * will be attached an S8 buffer, we have to reject AFBC(Z32)
+    * unconditionally. */
+   if (dev->arch <= 7 && fmt == PIPE_FORMAT_Z32_FLOAT)
+      return false;
+
    /* Only a small selection of formats are AFBC'able */
    if (!pan_afbc_supports_format(dev->arch, fmt))
+      return false;
+
+   /* According to the GL spec, -2^(b-1) and -2^(b-1)+1 both map to -1 in the
+    * SNORM representation. The Mali implementation seems to clamp the value
+    * to the [-2^(b-1)+1, 2^(b-1)-1] range, which is problematic in our
+    * staging_resource (LINEAR) -> final_resource (AFBC) transfer path, because
+    * we need a bit-exact copy (typically fails tests like
+    * dEQP-GLES31.functional.copy_image.non_compressed.viewclass_16_bits.rg8_snorm_r16ui.texture2d_to_renderbuffer
+    * if we don't).
+    * FIXME: We could get away with src/dst view format adjustments
+    * (SNORM->UNORM) in our blits, but we'd have to clearly identify which
+    * copies/blits we want to act like that and which ones we don't, and this is
+    * far from obvious when looking at the code, so let's filter out AFBC(SNORM)
+    * for now. */
+   if (util_format_is_snorm(fmt))
       return false;
 
    /* AFBC does not support layered (GLES3 style) multisampling. Use

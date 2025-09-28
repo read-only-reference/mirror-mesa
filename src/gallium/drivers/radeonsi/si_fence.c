@@ -248,7 +248,7 @@ static void si_fine_fence_set(struct si_context *ctx, struct si_fine_fence *fine
    assert(util_bitcount(flags & (PIPE_FLUSH_TOP_OF_PIPE | PIPE_FLUSH_BOTTOM_OF_PIPE)) == 1);
 
    /* Use cached system memory for the fence. */
-   u_upload_alloc(ctx->cached_gtt_allocator, 0, 4, 4, &fine->offset,
+   u_upload_alloc_ref(ctx->cached_gtt_allocator, 0, 4, 4, &fine->offset,
                   (struct pipe_resource **)&fine->buf, (void **)&fence_ptr);
    if (!fine->buf)
       return;
@@ -538,7 +538,12 @@ static void si_flush_all_queues(struct pipe_context *ctx,
    }
    assert(!fine.buf);
 finish:
-   if (!(flags & (PIPE_FLUSH_DEFERRED | PIPE_FLUSH_ASYNC))) {
+   if (!(flags & (PIPE_FLUSH_DEFERRED | PIPE_FLUSH_ASYNC)) ||
+        (flags & PIPE_FLUSH_HINT_FINISH)) {
+      /* sync if PIPE_FLUSH_HINT_FINISH is set: this is required to get the
+       * BOs' num_active_ioctls value updated before the fence status can be
+       * read.
+       */
       ws->cs_sync_flush(&sctx->gfx_cs);
    }
 }

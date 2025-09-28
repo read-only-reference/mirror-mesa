@@ -132,11 +132,9 @@ debug_fs_recompile(const struct brw_compiler *c, void *log,
 {
    bool found = false;
 
-   found |= check("flat shading", flat_shade);
    found |= check("number of color buffers", nr_color_regions);
    found |= check("MRT alpha test", alpha_test_replicate_alpha);
    found |= check("alpha to coverage", alpha_to_coverage);
-   found |= check("fragment color clamping", clamp_fragment_color);
    found |= check("per-sample interpolation", persample_interp);
    found |= check("multisampled FBO", multisample_fbo);
    found |= check("force dual color blending", force_dual_color_blend);

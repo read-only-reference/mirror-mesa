@@ -267,12 +267,23 @@ rogue_get_slc_cache_line_size(const struct pvr_device_info *dev_info)
 static inline uint32_t pvr_get_max_user_vertex_output_components(
    const struct pvr_device_info *dev_info)
 {
+   /* Default value based on the minimum value found in all existing cores. */
    const uint32_t uvs_pba_entries =
-      PVR_GET_FEATURE_VALUE(dev_info, uvs_pba_entries, 0U);
-   const uint32_t uvs_banks = PVR_GET_FEATURE_VALUE(dev_info, uvs_banks, 0U);
+      PVR_GET_FEATURE_VALUE(dev_info, uvs_pba_entries, 160U);
 
-   if (uvs_banks <= 8U && uvs_pba_entries == 160U)
+   /* Default value based on the minimum value found in all existing cores. */
+   const uint32_t uvs_banks = PVR_GET_FEATURE_VALUE(dev_info, uvs_banks, 2U);
+
+   if (uvs_banks <= 8U && uvs_pba_entries == 160U) {
+      ASSERTED const uint32_t tpu_parallel_instances =
+         PVR_GET_FEATURE_VALUE(dev_info, tpu_parallel_instances, 1U);
+
+      /* Cores with > 2 ppc support vertex sizes of >= 128 dwords */
+      assert(tpu_parallel_instances <= 2 ||
+             (dev_info->ident.b <= 36 || dev_info->ident.b == 46));
+
       return 64U;
+   }
 
    return 128U;
 }
@@ -306,6 +317,10 @@ rogue_get_cdm_context_resume_buffer_size(const struct pvr_device_info *dev_info)
       const uint32_t cdm_context_resume_buffer_stride =
          ALIGN_POT(ROGUE_LLS_CDM_CONTEXT_RESUME_BUFFER_SIZE, cache_line_size);
 
+      /*
+       * TODO: Optimise buffer size based on the core_count,
+       * not max_num_cores
+       */
       return cdm_context_resume_buffer_stride * max_num_cores;
    }
 
@@ -466,5 +481,24 @@ rogue_max_wg_temps(const struct pvr_device_info *dev_info,
    }
 
    return temps;
+}
+
+static inline uint32_t
+rogue_num_uscs_per_tile(const struct pvr_device_info *dev_info)
+{
+   if (PVR_HAS_FEATURE(dev_info, tile_per_usc) ||
+       PVR_HAS_FEATURE(dev_info, pbe2_in_xe))
+      return 1;
+
+   return 4;
+}
+
+static inline uint32_t rogue_usc_indexed_pixel_output_index_scale(
+   const struct pvr_device_info *dev_info)
+{
+   if (PVR_HAS_FEATURE(dev_info, tile_per_usc))
+      return 4;
+
+   return 1;
 }
 #endif /* ROGUE_HW_UTILS_H */

@@ -42,7 +42,6 @@
 #include "util/u_memory.h"
 #include "util/u_prim.h"
 #include "util/u_prim_restart.h"
-#include "util/format/u_format_zs.h"
 #include "util/ptralloc.h"
 #include "tgsi/tgsi_from_mesa.h"
 
@@ -93,6 +92,8 @@ struct rendering_state {
    struct u_upload_mgr *uploader;
    struct cso_context *cso;
 
+   struct util_dynarray releasebufs;
+
    bool blend_dirty;
    bool rs_dirty;
    bool dsa_dirty;
@@ -110,6 +111,7 @@ struct rendering_state {
    bool ib_dirty;
    bool sample_mask_dirty;
    bool min_samples_dirty;
+   bool sample_locations_dirty;
    bool poison_mem;
    bool noop_fs_bound;
    struct pipe_draw_indirect_info indirect_info;
@@ -197,6 +199,9 @@ struct rendering_state {
    bool sample_shading;
    bool depth_clamp_sets_clip;
 
+   bool sample_locations_enable;
+   uint8_t sample_locations[8];
+
    uint32_t num_so_targets;
    struct pipe_stream_output_target *so_targets[PIPE_MAX_SO_BUFFERS];
    uint32_t so_offsets[PIPE_MAX_SO_BUFFERS];
@@ -208,7 +213,6 @@ struct rendering_state {
    void *tess_states[2];
 
    struct util_dynarray push_desc_sets;
-   struct util_dynarray internal_buffers;
 
    struct lvp_pipeline *exec_graph;
 
@@ -302,9 +306,12 @@ update_pcbuf(struct rendering_state *state, mesa_shader_stage pstage,
       cbuf.buffer_size = size;
       cbuf.buffer = NULL;
       cbuf.user_buffer = NULL;
-      u_upload_alloc(state->uploader, 0, size, 64, &cbuf.buffer_offset, &cbuf.buffer, (void**)&mem);
+      struct pipe_resource *releasebuf = NULL;
+      u_upload_alloc(state->uploader, 0, size, 64, &cbuf.buffer_offset, &cbuf.buffer, &releasebuf, (void**)&mem);
+      if (releasebuf)
+         util_dynarray_append(&state->releasebufs, struct pipe_resource*, releasebuf);
       memcpy(mem, state->push_constants, size);
-      state->pctx->set_constant_buffer(state->pctx, pstage, 0, true, &cbuf);
+      state->pctx->set_constant_buffer(state->pctx, pstage, 0, &cbuf);
    }
    state->pcbuf_dirty[api_stage] = false;
 }
@@ -317,7 +324,7 @@ static void emit_compute_state(struct rendering_state *state)
    if (state->constbuf_dirty[MESA_SHADER_COMPUTE]) {
       for (unsigned i = 0; i < state->num_const_bufs[MESA_SHADER_COMPUTE]; i++)
          state->pctx->set_constant_buffer(state->pctx, MESA_SHADER_COMPUTE,
-                                          i + 1, false, &state->const_buffer[MESA_SHADER_COMPUTE][i]);
+                                          i + 1, &state->const_buffer[MESA_SHADER_COMPUTE][i]);
       state->constbuf_dirty[MESA_SHADER_COMPUTE] = false;
    }
 
@@ -494,7 +501,7 @@ static void emit_state(struct rendering_state *state)
    }
 
    if (state->vb_dirty) {
-      cso_set_vertex_buffers(state->cso, state->num_vb, false, state->vb);
+      cso_set_vertex_buffers(state->cso, state->num_vb, state->vb);
       state->vb_dirty = false;
    }
 
@@ -502,7 +509,7 @@ static void emit_state(struct rendering_state *state)
       if (state->constbuf_dirty[sh]) {
          for (unsigned idx = 0; idx < state->num_const_bufs[sh]; idx++)
             state->pctx->set_constant_buffer(state->pctx, sh,
-                                             idx + 1, false, &state->const_buffer[sh][idx]);
+                                             idx + 1, &state->const_buffer[sh][idx]);
       }
       state->constbuf_dirty[sh] = false;
    }
@@ -520,6 +527,13 @@ static void emit_state(struct rendering_state *state)
    if (state->scissor_dirty) {
       state->pctx->set_scissor_states(state->pctx, 0, state->num_scissors, state->scissors);
       state->scissor_dirty = false;
+   }
+
+   if (state->sample_locations_dirty) {
+      state->pctx->set_sample_locations(state->pctx,
+                                        state->sample_locations_enable ? sizeof(state->sample_locations) : 0,
+                                        state->sample_locations);
+      state->sample_locations_dirty = false;
    }
 }
 
@@ -606,6 +620,17 @@ update_samples(struct rendering_state *state, VkSampleCountFlags samples)
    state->rs_dirty |= state->rs_state.multisample != (samples > 1);
    state->rs_state.multisample = samples > 1;
    state->min_samples_dirty = true;
+}
+
+static void
+update_samplelocs(struct rendering_state *state,
+                  unsigned num_samples,
+                  const struct VkSampleLocationEXT *locations)
+{
+   for (unsigned i = 0; i < MIN2(num_samples, 8); i++) {
+      state->sample_locations[i] = util_iround(CLAMP(locations[i].x, 0.0f, 0.9375f) * 16.0f);
+      state->sample_locations[i] |= util_iround(CLAMP(locations[i].y, 0.0f, 0.9375f) * 16.0f) << 4;
+   }
 }
 
 static void
@@ -907,6 +932,13 @@ static void handle_graphics_pipeline(struct lvp_pipeline *pipeline,
          state->sample_mask = ps->ms->sample_mask;
          state->sample_mask_dirty = true;
       }
+      if (!BITSET_TEST(ps->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_LOCATIONS_ENABLE))
+         state->sample_locations_enable = ps->ms->sample_locations_enable;
+      if (!BITSET_TEST(ps->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_LOCATIONS))
+         if (ps->ms->sample_locations != NULL)
+            update_samplelocs(state, ps->ms->sample_locations->per_pixel,
+                              ps->ms->sample_locations->locations);
+      state->sample_locations_dirty = true;
       if (!BITSET_TEST(ps->dynamic, MESA_VK_DYNAMIC_MS_ALPHA_TO_COVERAGE_ENABLE)) {
          state->blend_state.alpha_to_coverage = ps->ms->alpha_to_coverage_enable;
          state->blend_state.alpha_to_coverage_dither = state->blend_state.alpha_to_coverage;
@@ -924,6 +956,8 @@ static void handle_graphics_pipeline(struct lvp_pipeline *pipeline,
       if (!BITSET_TEST(ps->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_MASK) &&
           !BITSET_TEST(ps->dynamic, MESA_VK_DYNAMIC_MS_ALPHA_TO_ONE_ENABLE))
          state->rs_state.multisample = false;
+      state->sample_locations_enable = false;
+      state->sample_locations_dirty = true;
       state->sample_shading = false;
       state->force_min_sample = false;
       if (!BITSET_TEST(ps->dynamic, MESA_VK_DYNAMIC_MS_SAMPLE_MASK)) {
@@ -976,7 +1010,7 @@ static void handle_graphics_pipeline(struct lvp_pipeline *pipeline,
    }
 
    if (!BITSET_TEST(ps->dynamic, MESA_VK_DYNAMIC_IA_PRIMITIVE_TOPOLOGY) && ps->ia) {
-      state->info.mode = vk_conv_topology(ps->ia->primitive_topology);
+      state->info.mode = vk_topology_to_mesa(ps->ia->primitive_topology);
       state->rs_dirty = true;
    }
    if (!BITSET_TEST(ps->dynamic, MESA_VK_DYNAMIC_IA_PRIMITIVE_RESTART_ENABLE) && ps->ia)
@@ -1451,6 +1485,7 @@ destroy_multisample_surface(struct rendering_state *state, struct lvp_image_view
 {
    assert(imgv->image->vk.samples > 1);
    struct lvp_image_view *base = imgv->multisample;
+   pipe_resource_reference(&imgv->image->planes[0].bo, NULL);
    base->multisample = NULL;
    free((void*)imgv->image);
    free(imgv);
@@ -2064,122 +2099,6 @@ static void handle_set_stencil_reference(struct vk_cmd_queue_entry *cmd,
    state->stencil_ref_dirty = true;
 }
 
-static void
-copy_depth_rect(uint8_t * dst,
-                enum pipe_format dst_format,
-                unsigned dst_stride,
-                unsigned dst_x,
-                unsigned dst_y,
-                unsigned width,
-                unsigned height,
-                const uint8_t * src,
-                enum pipe_format src_format,
-                int src_stride,
-                unsigned src_x,
-                unsigned src_y)
-{
-   int src_stride_pos = src_stride < 0 ? -src_stride : src_stride;
-   int src_blocksize = util_format_get_blocksize(src_format);
-   int src_blockwidth = util_format_get_blockwidth(src_format);
-   int src_blockheight = util_format_get_blockheight(src_format);
-   int dst_blocksize = util_format_get_blocksize(dst_format);
-   int dst_blockwidth = util_format_get_blockwidth(dst_format);
-   int dst_blockheight = util_format_get_blockheight(dst_format);
-
-   assert(src_blocksize > 0);
-   assert(src_blockwidth > 0);
-   assert(src_blockheight > 0);
-
-   dst_x /= dst_blockwidth;
-   dst_y /= dst_blockheight;
-   width = (width + src_blockwidth - 1)/src_blockwidth;
-   height = (height + src_blockheight - 1)/src_blockheight;
-   src_x /= src_blockwidth;
-   src_y /= src_blockheight;
-
-   dst += dst_x * dst_blocksize;
-   src += src_x * src_blocksize;
-   dst += dst_y * dst_stride;
-   src += src_y * src_stride_pos;
-
-   if (dst_format == PIPE_FORMAT_S8_UINT) {
-      if (src_format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT) {
-         util_format_z32_float_s8x24_uint_unpack_s_8uint(dst, dst_stride,
-                                                         src, src_stride,
-                                                         width, height);
-      } else if (src_format == PIPE_FORMAT_Z24_UNORM_S8_UINT) {
-         util_format_z24_unorm_s8_uint_unpack_s_8uint(dst, dst_stride,
-                                                      src, src_stride,
-                                                      width, height);
-      } else {
-         abort();
-      }
-   } else if (dst_format == PIPE_FORMAT_Z24X8_UNORM) {
-      util_format_z24_unorm_s8_uint_unpack_z24(dst, dst_stride,
-                                               src, src_stride,
-                                               width, height);
-   } else if (dst_format == PIPE_FORMAT_Z32_FLOAT) {
-      if (src_format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT) {
-         util_format_z32_float_s8x24_uint_unpack_z_float((float *)dst, dst_stride,
-                                                         src, src_stride,
-                                                         width, height);
-      } else {
-         abort();
-      }
-   } else if (dst_format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT) {
-      if (src_format == PIPE_FORMAT_Z32_FLOAT)
-         util_format_z32_float_s8x24_uint_pack_z_float(dst, dst_stride,
-                                                       (float *)src, src_stride,
-                                                       width, height);
-      else if (src_format == PIPE_FORMAT_S8_UINT)
-         util_format_z32_float_s8x24_uint_pack_s_8uint(dst, dst_stride,
-                                                       src, src_stride,
-                                                       width, height);
-      else
-         abort();
-   } else if (dst_format == PIPE_FORMAT_Z24_UNORM_S8_UINT) {
-      if (src_format == PIPE_FORMAT_S8_UINT)
-         util_format_z24_unorm_s8_uint_pack_s_8uint(dst, dst_stride,
-                                                    src, src_stride,
-                                                    width, height);
-      else if (src_format == PIPE_FORMAT_Z24X8_UNORM)
-         util_format_z24_unorm_s8_uint_pack_z24(dst, dst_stride,
-                                                src, src_stride,
-                                                width, height);
-      else
-         abort();
-   }
-}
-
-static void
-copy_depth_box(uint8_t *dst,
-               enum pipe_format dst_format,
-               unsigned dst_stride, uint64_t dst_slice_stride,
-               unsigned dst_x, unsigned dst_y, unsigned dst_z,
-               unsigned width, unsigned height, unsigned depth,
-               const uint8_t * src,
-               enum pipe_format src_format,
-               int src_stride, uint64_t src_slice_stride,
-               unsigned src_x, unsigned src_y, unsigned src_z)
-{
-   dst += dst_z * dst_slice_stride;
-   src += src_z * src_slice_stride;
-   for (unsigned z = 0; z < depth; ++z) {
-      copy_depth_rect(dst,
-                      dst_format,
-                      dst_stride,
-                      dst_x, dst_y,
-                      width, height,
-                      src,
-                      src_format,
-                      src_stride,
-                      src_x, src_y);
-
-      dst += dst_slice_stride;
-      src += src_slice_stride;
-   }
-}
-
 static unsigned
 subresource_layercount(const struct lvp_image *image, const VkImageSubresourceLayers *sub)
 {
@@ -2242,7 +2161,7 @@ static void handle_copy_image_to_buffer2(struct vk_cmd_queue_entry *cmd,
       const struct vk_image_buffer_layout buffer_layout =
          vk_image_buffer_copy_layout(&src_image->vk, &copycmd->pRegions[i]);
       if (src_format != dst_format) {
-         copy_depth_box(dst_data, dst_format,
+         lvp_image_copy_depth_box(dst_data, dst_format,
                         buffer_layout.row_stride_B,
                         buffer_layout.image_stride_B,
                         0, 0, 0,
@@ -2262,6 +2181,48 @@ static void handle_copy_image_to_buffer2(struct vk_cmd_queue_entry *cmd,
       }
       state->pctx->texture_unmap(state->pctx, src_t);
       state->pctx->buffer_unmap(state->pctx, dst_t);
+   }
+}
+
+static void
+handle_copy_memory_to_image_indirect(struct vk_cmd_queue_entry *cmd,
+                                     struct rendering_state *state)
+{
+   const VkCopyMemoryToImageIndirectInfoKHR *copycmd = cmd->u.copy_memory_to_image_indirect_khr.copy_memory_to_image_indirect_info;
+   LVP_FROM_HANDLE(lvp_image, image, copycmd->dstImage);
+
+   for (uint32_t i = 0; i < copycmd->copyCount; i++) {
+      uint8_t *ptr = (void*)(uintptr_t)copycmd->copyAddressRange.address;
+      VkCopyMemoryToImageIndirectCommandKHR *copy = (void*)(ptr + i * copycmd->copyAddressRange.stride);
+      VkImageSubresourceLayers sub = copy->imageSubresource;
+      VkOffset3D off = copy->imageOffset;
+      VkExtent3D ext = copy->imageExtent;
+      if (image->vk.image_type == VK_IMAGE_TYPE_3D) {
+         off.z = sub.baseArrayLayer;
+         ext.depth = sub.layerCount;
+         sub.baseArrayLayer = 0;
+         sub.layerCount = 1;
+      }
+      VkMemoryToImageCopy copyregion = {
+         VK_STRUCTURE_TYPE_MEMORY_TO_IMAGE_COPY_EXT,
+         NULL,
+         (void*)(uintptr_t)copy->srcAddress,
+         copy->bufferRowLength,
+         copy->bufferImageHeight,
+         sub,
+         off,
+         ext,
+      };
+      VkCopyMemoryToImageInfoEXT hiccopy = {
+         VK_STRUCTURE_TYPE_COPY_MEMORY_TO_IMAGE_INFO_EXT,
+         NULL,
+         0,
+         copycmd->dstImage,
+         VK_IMAGE_LAYOUT_GENERAL,
+         1,
+         &copyregion
+      };
+      state->device->vk.dispatch_table.CopyMemoryToImageEXT(lvp_device_to_handle(state->device), &hiccopy);
    }
 }
 
@@ -2320,7 +2281,7 @@ static void handle_copy_buffer_to_image(struct vk_cmd_queue_entry *cmd,
       const struct vk_image_buffer_layout buffer_layout =
          vk_image_buffer_copy_layout(&dst_image->vk, &copycmd->pRegions[i]);
       if (src_format != dst_format) {
-         copy_depth_box(dst_data, dst_format,
+         lvp_image_copy_depth_box(dst_data, dst_format,
                         dst_t->stride, dst_t->layer_stride,
                         0, 0, 0,
                         region->imageExtent.width,
@@ -2436,7 +2397,7 @@ static void handle_copy_image(struct vk_cmd_queue_entry *cmd,
                                              PIPE_MAP_WRITE,
                                              &dst_box,
                                              &dst_t);
-         copy_depth_box(dst_data, dst_format,
+         lvp_image_copy_depth_box(dst_data, dst_format,
                         dst_t->stride, dst_t->layer_stride,
                         0, 0, 0,
                         region->extent.width,
@@ -2457,6 +2418,20 @@ static void handle_copy_image(struct vk_cmd_queue_entry *cmd,
                                           region->srcSubresource.mipLevel,
                                           &src_box);
       }
+   }
+}
+
+static void handle_copy_memory_indirect(struct vk_cmd_queue_entry *cmd,
+                                        struct rendering_state *state)
+{
+   const VkCopyMemoryIndirectInfoKHR *copycmd = cmd->u.copy_memory_indirect_khr.copy_memory_indirect_info;
+
+   for (uint32_t i = 0; i < copycmd->copyCount; i++) {
+      uint8_t *ptr = (void*)(uintptr_t)copycmd->copyAddressRange.address;
+      VkCopyMemoryIndirectCommandKHR *copy = (void*)(ptr + i * copycmd->copyAddressRange.stride);
+      void *src = (void*)(uintptr_t)copy->srcAddress;
+      void *dst = (void*)(uintptr_t)copy->dstAddress;
+      memcpy(dst, src, copycmd->copyAddressRange.size);
    }
 }
 
@@ -3523,7 +3498,7 @@ static void handle_set_front_face(struct vk_cmd_queue_entry *cmd,
 static void handle_set_primitive_topology(struct vk_cmd_queue_entry *cmd,
                                           struct rendering_state *state)
 {
-   state->info.mode = vk_conv_topology(cmd->u.set_primitive_topology.primitive_topology);
+   state->info.mode = vk_topology_to_mesa(cmd->u.set_primitive_topology.primitive_topology);
    state->rs_dirty = true;
 }
 
@@ -3721,6 +3696,24 @@ static void handle_set_alpha_to_one(struct vk_cmd_queue_entry *cmd,
    state->blend_state.alpha_to_one = !!cmd->u.set_alpha_to_one_enable_ext.alpha_to_one_enable;
    if (state->blend_state.alpha_to_one)
       state->rs_state.multisample = true;
+}
+
+static void
+handle_set_sample_locations_enable(struct vk_cmd_queue_entry *cmd,
+                                   struct rendering_state *state)
+{
+   state->sample_locations_dirty |=
+      state->sample_locations_enable != !!cmd->u.set_sample_locations_enable_ext.sample_locations_enable;
+   state->sample_locations_enable = !!cmd->u.set_sample_locations_enable_ext.sample_locations_enable;
+}
+
+static void
+handle_set_sample_locations(struct vk_cmd_queue_entry *cmd,
+                            struct rendering_state *state)
+{
+   const struct VkSampleLocationsInfoEXT *sl_info = cmd->u.set_sample_locations_ext.sample_locations_info;
+   update_samplelocs(state, MIN2(sl_info->sampleLocationsCount, 8), sl_info->pSampleLocations);
+   state->sample_locations_dirty = true;
 }
 
 static void handle_set_halfz(struct vk_cmd_queue_entry *cmd,
@@ -4365,11 +4358,12 @@ lvp_push_internal_buffer(struct rendering_state *state, mesa_shader_stage stage,
    };
 
    uint8_t *mem;
-   u_upload_alloc(state->uploader, 0, size, 64, &buffer.buffer_offset, &buffer.buffer, (void**)&mem);
+   struct pipe_resource *releasebuf = NULL;
+   u_upload_alloc(state->uploader, 0, size, 64, &buffer.buffer_offset, &buffer.buffer, &releasebuf, (void**)&mem);
+   if (releasebuf)
+      util_dynarray_append(&state->releasebufs, struct pipe_resource*, releasebuf);
 
    state->pctx->set_shader_buffers(state->pctx, stage, 0, 1, &buffer, 0x1);
-
-   util_dynarray_append(&state->internal_buffers, struct pipe_resource *, buffer.buffer);
 
    return mem;
 }
@@ -4581,7 +4575,7 @@ lvp_trace_rays(struct rendering_state *state, VkTraceRaysIndirectCommand2KHR *co
    if (state->constbuf_dirty[MESA_SHADER_RAYGEN]) {
       for (unsigned i = 0; i < state->num_const_bufs[MESA_SHADER_RAYGEN]; i++)
          state->pctx->set_constant_buffer(state->pctx, MESA_SHADER_COMPUTE,
-                                          i + 1, false, &state->const_buffer[MESA_SHADER_RAYGEN][i]);
+                                          i + 1, &state->const_buffer[MESA_SHADER_RAYGEN][i]);
       state->constbuf_dirty[MESA_SHADER_RAYGEN] = false;
    }
 
@@ -4827,6 +4821,8 @@ void lvp_add_enqueue_cmd_entrypoints(struct vk_device_dispatch_table *disp)
    ENQUEUE_CMD(CmdClearDepthStencilImage)
    ENQUEUE_CMD(CmdClearAttachments)
    ENQUEUE_CMD(CmdResolveImage2)
+   ENQUEUE_CMD(CmdCopyMemoryIndirectKHR)
+   ENQUEUE_CMD(CmdCopyMemoryToImageIndirectKHR)
    ENQUEUE_CMD(CmdBeginQueryIndexedEXT)
    ENQUEUE_CMD(CmdEndQueryIndexedEXT)
    ENQUEUE_CMD(CmdBeginQuery)
@@ -4937,6 +4933,9 @@ void lvp_add_enqueue_cmd_entrypoints(struct vk_device_dispatch_table *disp)
    ENQUEUE_CMD(CmdTraceRaysKHR)
 
    ENQUEUE_CMD(CmdSetDepthBias2EXT)
+
+   ENQUEUE_CMD(CmdSetSampleLocationsEnableEXT)
+   ENQUEUE_CMD(CmdSetSampleLocationsEXT)
 
 #undef ENQUEUE_CMD
 }
@@ -5274,6 +5273,12 @@ static void lvp_execute_cmd_buffer(struct list_head *cmds,
       case VK_CMD_BIND_SHADERS_EXT:
          handle_shaders(cmd, state);
          break;
+      case VK_CMD_COPY_MEMORY_INDIRECT_KHR:
+         handle_copy_memory_indirect(cmd, state);
+         break;
+      case VK_CMD_COPY_MEMORY_TO_IMAGE_INDIRECT_KHR:
+         handle_copy_memory_to_image_indirect(cmd, state);
+         break;
       case VK_CMD_SET_ATTACHMENT_FEEDBACK_LOOP_ENABLE_EXT:
          break;
       case VK_CMD_DRAW_MESH_TASKS_EXT:
@@ -5348,6 +5353,12 @@ static void lvp_execute_cmd_buffer(struct list_head *cmds,
       case VK_CMD_SET_DEPTH_BIAS2_EXT:
          handle_set_depth_bias2(cmd, state);
          break;
+      case VK_CMD_SET_SAMPLE_LOCATIONS_ENABLE_EXT:
+         handle_set_sample_locations_enable(cmd, state);
+         break;
+      case VK_CMD_SET_SAMPLE_LOCATIONS_EXT:
+         handle_set_sample_locations(cmd, state);
+         break;
       default:
          fprintf(stderr, "Unsupported command %s\n", vk_cmd_queue_type_names[cmd->type]);
          UNREACHABLE("Unsupported command");
@@ -5373,6 +5384,7 @@ VkResult lvp_execute_cmds(struct lvp_device *device,
    state->dsa_dirty = true;
    state->rs_dirty = true;
    state->vp_dirty = true;
+   state->sample_locations_dirty = true;
    state->rs_state.point_line_tri_clip = true;
    state->rs_state.unclamped_fragment_depth_values = device->vk.enabled_extensions.EXT_depth_range_unrestricted;
    state->sample_mask_dirty = true;
@@ -5380,7 +5392,7 @@ VkResult lvp_execute_cmds(struct lvp_device *device,
    state->sample_mask = UINT32_MAX;
    state->poison_mem = device->poison_mem;
    util_dynarray_init(&state->push_desc_sets, NULL);
-   util_dynarray_init(&state->internal_buffers, NULL);
+   util_dynarray_init(&state->releasebufs, NULL);
 
    /* default values */
    state->min_sample_shading = 1;
@@ -5418,12 +5430,13 @@ VkResult lvp_execute_cmds(struct lvp_device *device,
    util_dynarray_foreach (&state->push_desc_sets, struct lvp_descriptor_set *, set)
       lvp_descriptor_set_destroy(device, *set);
 
+   struct pipe_resource **pres = state->releasebufs.data;
+   unsigned count = util_dynarray_num_elements(&state->releasebufs, struct pipe_resource*);
+   for (unsigned j = 0; j < count; j++)
+      pipe_resource_release(state->pctx, pres[j]);
+
    util_dynarray_fini(&state->push_desc_sets);
-
-   util_dynarray_foreach (&state->internal_buffers, struct pipe_resource *, buffer)
-      pipe_resource_reference(buffer, NULL);
-
-   util_dynarray_fini(&state->internal_buffers);
+   util_dynarray_fini(&state->releasebufs);
 
    for (unsigned i = 0; i < ARRAY_SIZE(state->desc_buffers); i++)
       pipe_resource_reference(&state->desc_buffers[i], NULL);

@@ -35,7 +35,6 @@ pvr_files = files(
   'pvr_dump_bo.c',
   'pvr_dump_csb.c',
   'pvr_formats.c',
-  'pvr_hardcode.c',
   'pvr_hw_pass.c',
   'pvr_image.c',
   'pvr_job_common.c',
@@ -50,13 +49,10 @@ pvr_files = files(
   'pvr_query_compute.c',
   'pvr_queue.c',
   'pvr_robustness.c',
-  'pvr_shader.c',
   'pvr_spm.c',
   'pvr_tex_state.c',
+  'pvr_usc.c',
   'pvr_wsi.c',
-
-  'usc/pvr_uscgen.c',
-  'usc/pvr_uscgen_tq.c',
 )
 
 pvr_includes = [
@@ -69,6 +65,7 @@ pvr_deps = [
   dep_libdrm,
   dep_valgrind,
   idep_mesautil,
+  idep_pco_uscgen_programs_h,
   idep_vulkan_runtime,
   idep_vulkan_util,
   idep_vulkan_wsi,
@@ -108,7 +105,7 @@ libvulkan_powervr_mesa = shared_library(
     libpowervr_common,
     libpowervr_compiler,
     libpowervr_pds,
-    libpowervr_rogue,
+    libpowervr_uscgen,
     libvulkan_wsi,
   ],
   dependencies : [
@@ -117,6 +114,7 @@ libvulkan_powervr_mesa = shared_library(
   ],
   c_args : pvr_flags,
   link_args : [
+    vulkan_icd_link_args,
     ld_args_build_id,
     ld_args_bsymbolic,
     ld_args_gc_sections
@@ -138,15 +136,17 @@ if with_symbols_check
   )
 endif
 
+icd_file_name = libname_prefix + 'vulkan_powervr_mesa.' + libname_suffix
+
 powervr_mesa_icd = custom_target(
   'powervr_mesa_icd',
   input : [vk_icd_gen, vk_api_xml],
   output : 'powervr_mesa_icd.@0@.json'.format(host_machine.cpu()),
   command : [
     prog_python, '@INPUT0@',
-    '--api-version', '1.0', '--xml', '@INPUT1@',
+    '--api-version', '1.4', '--xml', '@INPUT1@',
     '--sizeof-pointer', sizeof_pointer,
-    '--lib-path', get_option('prefix') / get_option('libdir') / 'libvulkan_powervr_mesa.so',
+    '--lib-path', vulkan_icd_lib_path / icd_file_name,
     '--out', '@OUTPUT@',
   ],
   build_by_default : true,
@@ -161,9 +161,9 @@ _dev_icd = custom_target(
   output : 'powervr_mesa_devenv_icd.@0@.json'.format(host_machine.cpu()),
   command : [
     prog_python, '@INPUT0@',
-    '--api-version', '1.0', '--xml', '@INPUT1@',
+    '--api-version', '1.4', '--xml', '@INPUT1@',
     '--sizeof-pointer', sizeof_pointer,
-    '--lib-path', meson.current_build_dir() / 'libvulkan_powervr_mesa.so',
+    '--lib-path', meson.current_build_dir() / icd_file_name,
     '--out', '@OUTPUT@',
   ],
   build_by_default : true,

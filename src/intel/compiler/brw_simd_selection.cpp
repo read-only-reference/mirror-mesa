@@ -30,11 +30,8 @@
 unsigned
 brw_required_dispatch_width(const struct shader_info *info)
 {
-   if ((int)info->subgroup_size >= (int)SUBGROUP_SIZE_REQUIRE_8) {
-      /* These enum values are expressly chosen to be equal to the subgroup
-       * size that they require.
-       */
-      return (unsigned)info->subgroup_size;
+   if (info->min_subgroup_size == info->max_subgroup_size) {
+      return info->max_subgroup_size;
    } else {
       return 0;
    }
@@ -104,6 +101,13 @@ brw_simd_should_compile(brw_simd_selection_state &state, unsigned simd)
          return false;
       }
 
+      const unsigned min_simd = state.devinfo->ver >= 20 ? 1 : 0;
+
+      if (simd > min_simd && state.beyond_threshold[simd]) {
+         state.error[simd] = "estimated to be beyond the pressure threshold";
+         return false;
+      }
+
       if (cs_prog_data) {
          const unsigned workgroup_size = cs_prog_data->local_size[0] *
                                          cs_prog_data->local_size[1] *
@@ -111,7 +115,6 @@ brw_simd_should_compile(brw_simd_selection_state &state, unsigned simd)
 
          unsigned max_threads = state.devinfo->max_cs_workgroup_threads;
 
-         const unsigned min_simd = state.devinfo->ver >= 20 ? 1 : 0;
          if (simd > min_simd && workgroup_size <= (width / 2)) {
             state.error[simd] = "Workgroup size already fits in smaller SIMD";
             return false;

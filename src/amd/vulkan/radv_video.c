@@ -40,7 +40,7 @@
 
 static void set_reg(struct radv_cmd_buffer *cmd_buffer, unsigned reg, uint32_t val);
 
-static inline bool
+bool
 radv_check_vcn_fw_version(const struct radv_physical_device *pdev, uint32_t dec, uint32_t enc, uint32_t rev)
 {
    return pdev->info.vcn_dec_version > dec || pdev->info.vcn_enc_minor_version > enc ||
@@ -804,7 +804,7 @@ radv_video_is_profile_supported(struct radv_physical_device *pdev, const VkVideo
    return VK_SUCCESS;
 }
 
-static uint32_t
+uint32_t
 radv_video_get_qp_map_texel_size(VkVideoCodecOperationFlagBitsKHR codec)
 {
    switch (codec) {
@@ -902,7 +902,7 @@ radv_GetPhysicalDeviceVideoCapabilitiesKHR(VkPhysicalDevice physicalDevice, cons
          enc_caps->supportedEncodeFeedbackFlags = VK_VIDEO_ENCODE_FEEDBACK_BITSTREAM_BUFFER_OFFSET_BIT_KHR |
                                                   VK_VIDEO_ENCODE_FEEDBACK_BITSTREAM_BYTES_WRITTEN_BIT_KHR;
 
-         if (pdev->info.vcn_ip_version < VCN_5_0_0)
+         if (radv_video_encode_qp_map_supported(pdev))
             enc_caps->flags |= VK_VIDEO_ENCODE_CAPABILITY_QUANTIZATION_DELTA_MAP_BIT_KHR;
       }
       if (intra_refresh_caps) {
@@ -1254,7 +1254,7 @@ radv_GetPhysicalDeviceVideoFormatPropertiesKHR(VkPhysicalDevice physicalDevice,
 
             qp_map_texel_size = profile_qp_map_texel_size;
 
-            profile_format = VK_FORMAT_R32_SINT;
+            profile_format = pdev->enc_hw_ver >= RADV_VIDEO_ENC_HW_5 ? VK_FORMAT_R16_SINT : VK_FORMAT_R32_SINT;
          } else {
             if (profile->lumaBitDepth == VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR)
                profile_format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
@@ -1467,6 +1467,9 @@ radv_BindVideoSessionMemoryKHR(VkDevice _device, VkVideoSessionKHR videoSession,
          break;
       case RADV_BIND_INTRA_ONLY:
          copy_bind(&vid->intra_only_dpb, &pBindSessionMemoryInfos[i]);
+         break;
+      case RADV_BIND_ENCODE_QP_MAP:
+         copy_bind(&vid->qp_map, &pBindSessionMemoryInfos[i]);
          break;
       default:
          assert(0);
@@ -1918,6 +1921,8 @@ get_vp9_msg(struct radv_device *device, struct radv_video_session *vid, struct v
 
       for (unsigned i = 0; i < STD_VIDEO_VP9_MAX_SEGMENTATION_PRED_PROB; ++i)
          prbs->seg.pred_probs[i] = std_pic_info->pSegmentation->segmentation_pred_prob[i];
+
+      prbs->seg.abs_delta = std_pic_info->pSegmentation->flags.segmentation_abs_or_delta_update;
    } else {
       memset(&prbs->seg, 0, 256);
    }
@@ -1987,7 +1992,18 @@ get_vp9_msg(struct radv_device *device, struct radv_video_session *vid, struct v
    int shifted = std_pic_info->pLoopFilter->loop_filter_level >= 32;
 
    for (int i = 0; i < (std_pic_info->flags.segmentation_enabled ? 8 : 1); i++) {
-      uint8_t lvl = std_pic_info->pLoopFilter->loop_filter_level;
+      const uint8_t seg_lvl_alt_l = 1;
+      uint8_t lvl;
+
+      if (std_pic_info->flags.segmentation_enabled &&
+          std_pic_info->pSegmentation->FeatureEnabled[i] & (1 << seg_lvl_alt_l)) {
+         lvl = std_pic_info->pSegmentation->FeatureData[i][seg_lvl_alt_l];
+         if (!std_pic_info->pSegmentation->flags.segmentation_abs_or_delta_update)
+            lvl += std_pic_info->pLoopFilter->loop_filter_level;
+         lvl = CLAMP(lvl, 0, 63);
+      } else {
+         lvl = std_pic_info->pLoopFilter->loop_filter_level;
+      }
 
       if (std_pic_info->pLoopFilter->flags.loop_filter_delta_enabled) {
          result.lf_adj_level[i][0][0] = result.lf_adj_level[i][0][1] =
@@ -2461,8 +2477,8 @@ fill_ref_buffer(rvcn_dec_ref_buffer_t *ref, struct radv_image *img, uint32_t sli
 
 static bool
 rvcn_dec_message_decode(struct radv_cmd_buffer *cmd_buffer, struct radv_video_session *vid,
-                        struct vk_video_session_parameters *params, void *ptr, void *it_probs_ptr, uint32_t *slice_offset,
-                        const struct VkVideoDecodeInfoKHR *frame_info)
+                        struct vk_video_session_parameters *params, void *ptr, void *it_probs_ptr,
+                        uint32_t *slice_offset, const struct VkVideoDecodeInfoKHR *frame_info)
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);

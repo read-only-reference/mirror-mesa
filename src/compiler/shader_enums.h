@@ -74,6 +74,23 @@ typedef enum mesa_shader_stage {
 } mesa_shader_stage;
 
 static inline bool
+mesa_shader_stage_is_graphics(mesa_shader_stage stage)
+{
+   switch (stage) {
+   case MESA_SHADER_VERTEX:
+   case MESA_SHADER_TESS_CTRL:
+   case MESA_SHADER_TESS_EVAL:
+   case MESA_SHADER_GEOMETRY:
+   case MESA_SHADER_FRAGMENT:
+   case MESA_SHADER_TASK:
+   case MESA_SHADER_MESH:
+      return true;
+   default:
+      return false;
+   }
+}
+
+static inline bool
 mesa_shader_stage_is_compute(mesa_shader_stage stage)
 {
    return stage == MESA_SHADER_COMPUTE || stage == MESA_SHADER_KERNEL;
@@ -145,6 +162,13 @@ const char *_mesa_shader_stage_to_string(unsigned stage);
  * for debug printouts and error messages.
  */
 const char *_mesa_shader_stage_to_abbrev(unsigned stage);
+
+
+/**
+ * Translate a gl_shader_stage to a shader stage file extension
+ * that's easily consumed by glslang.
+ */
+const char *_mesa_shader_stage_to_file_ext(unsigned stage);
 
 /**
  * GL related stages (not including CL)
@@ -1041,6 +1065,9 @@ enum gl_access_qualifier
     * This means that the memory scope is the current device. It indicates
     * that reads and writes are coherent with reads and writes from other
     * shader invocations and other workgroups.
+    *
+    * This is not necessary for shared access. It is always workgroup
+    * coherent.
     */
    ACCESS_COHERENT      = (1 << 0),
 
@@ -1510,7 +1537,7 @@ enum float_controls
       FLOAT_CONTROLS_SIGNED_ZERO_PRESERVE_FP64 |
       FLOAT_CONTROLS_INF_PRESERVE_FP64 |
       FLOAT_CONTROLS_NAN_PRESERVE_FP64,
-   
+
    FLOAT_CONTROLS_SIGNED_ZERO_PRESERVE =
       FLOAT_CONTROLS_SIGNED_ZERO_PRESERVE_FP16 |
       FLOAT_CONTROLS_SIGNED_ZERO_PRESERVE_FP32 |
@@ -1581,44 +1608,6 @@ enum cl_sampler_filter_mode {
 #define MAT_BIT_BACK_SHININESS        (1<<MAT_ATTRIB_BACK_SHININESS)
 #define MAT_BIT_FRONT_INDEXES         (1<<MAT_ATTRIB_FRONT_INDEXES)
 #define MAT_BIT_BACK_INDEXES          (1<<MAT_ATTRIB_BACK_INDEXES)
-
-/** An enum representing what kind of input gl_SubgroupSize is. */
-enum ENUM_PACKED gl_subgroup_size
-{
-   /** Actual subgroup size, whatever that happens to be */
-   SUBGROUP_SIZE_VARYING = 0,
-
-   /** Subgroup size must appear to be draw or dispatch-uniform
-    *
-    * This is the OpenGL behavior
-    */
-   SUBGROUP_SIZE_UNIFORM,
-
-   /** Subgroup size must appear to be the API advertised constant
-    *
-    * This is the default Vulkan 1.1 behavior
-    */
-   SUBGROUP_SIZE_API_CONSTANT,
-
-   /** Subgroup size must actually be the API advertised constant
-    *
-    * Not only must the subgroup size match the API advertised constant as
-    * with SUBGROUP_SIZE_API_CONSTANT but it must also be dispatched such that
-    * all the subgroups are full if there are enough invocations.
-    */
-   SUBGROUP_SIZE_FULL_SUBGROUPS,
-
-   /* These enums are specifically chosen so that the value of the enum is
-    * also the subgroup size.  If any new values are added, they must respect
-    * this invariant.
-    */
-   SUBGROUP_SIZE_REQUIRE_4   = 4,   /**< VK_EXT_subgroup_size_control */
-   SUBGROUP_SIZE_REQUIRE_8   = 8,   /**< VK_EXT_subgroup_size_control */
-   SUBGROUP_SIZE_REQUIRE_16  = 16,  /**< VK_EXT_subgroup_size_control */
-   SUBGROUP_SIZE_REQUIRE_32  = 32,  /**< VK_EXT_subgroup_size_control */
-   SUBGROUP_SIZE_REQUIRE_64  = 64,  /**< VK_EXT_subgroup_size_control */
-   SUBGROUP_SIZE_REQUIRE_128 = 128, /**< VK_EXT_subgroup_size_control */
-};
 
 /* Ordered from narrower to wider scope. */
 typedef enum {

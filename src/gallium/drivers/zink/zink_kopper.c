@@ -39,7 +39,17 @@ zink_kopper_set_present_mode_for_interval(struct kopper_displaytarget *cdt, int 
 #else
    assert(interval >= 0); /* TODO: VK_PRESENT_MODE_FIFO_RELAXED_KHR */
    if (interval == 0) {
-      if (cdt->present_modes & BITFIELD_BIT(VK_PRESENT_MODE_IMMEDIATE_KHR))
+      /* Many wayland EGL applications will set SwapInterval 0, and then
+       * use frame callbacks to do their own pacing. These applications
+       * don't want tearing artifacts.
+       *
+       * In Vulkan we enable tearing updates with the wayland tearing
+       * control protocol when in IMMEDIATE mode.
+       *
+       * Let's use MAILBOX on wayland to prevent breaking these applications.
+       */
+      if (cdt->present_modes & BITFIELD_BIT(VK_PRESENT_MODE_IMMEDIATE_KHR) &&
+          cdt->type != KOPPER_WAYLAND)
          cdt->present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
       else
          cdt->present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
@@ -1230,6 +1240,10 @@ void
 zink_kopper_prune_batch_usage(struct kopper_displaytarget *cdt, const struct zink_batch_usage *u)
 {
    struct kopper_swapchain *cswap = cdt->swapchain;
+
+   if (!cswap)
+      return;
+
    swapchain_prune_batch_usage(cswap, u);
    for (cswap = cdt->old_swapchain; cswap; cswap = cswap->next)
       swapchain_prune_batch_usage(cswap, u);

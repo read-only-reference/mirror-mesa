@@ -36,6 +36,7 @@
 #include "compiler/glsl/ir.h"
 #include "compiler/glsl/glsl_parser_extras.h"
 #include "util/bitscan.h"
+#include "util/u_range_remap.h"
 
 #include "state_tracker/st_context.h"
 
@@ -200,25 +201,23 @@ validate_uniform_parameters(GLint location, GLsizei count,
       return NULL;
    }
 
-   /* Check that the given location is in bounds of uniform remap table.
-    * Unlinked programs will have NumUniformRemapTable == 0, so we can take
-    * the shProg->data->LinkStatus check out of the main path.
-    */
-   if (unlikely(location >= (GLint) shProg->NumUniformRemapTable)) {
+   if (location == -1) {
+      if (!shProg->data->LinkStatus)
+         _mesa_error(ctx, GL_INVALID_OPERATION, "%s(program not linked)",
+                     caller);
+
+      return NULL;
+   }
+
+   /* Check that the given location is in bounds of uniform remap table */
+   if (unlikely(location >= 0 &&
+       (shProg->UniformRemapTable == NULL || list_is_empty(shProg->UniformRemapTable)))) {
       if (!shProg->data->LinkStatus)
          _mesa_error(ctx, GL_INVALID_OPERATION, "%s(program not linked)",
                      caller);
       else
          _mesa_error(ctx, GL_INVALID_OPERATION, "%s(location=%d)",
                      caller, location);
-
-      return NULL;
-   }
-
-   if (location == -1) {
-      if (!shProg->data->LinkStatus)
-         _mesa_error(ctx, GL_INVALID_OPERATION, "%s(program not linked)",
-                     caller);
 
       return NULL;
    }
@@ -236,7 +235,14 @@ validate_uniform_parameters(GLint location, GLsizei count,
     *         - if count is greater than one, and the uniform declared in the
     *           shader is not an array variable,
     */
-   if (location < -1 || !shProg->UniformRemapTable[location]) {
+   struct gl_uniform_storage *uni = NULL;
+   if (location >= 0) {
+      struct range_entry *e =
+         util_range_remap(location, shProg->UniformRemapTable);
+      uni = e ? (struct gl_uniform_storage *)e->ptr : NULL;
+   }
+
+   if (!uni) {
       _mesa_error(ctx, GL_INVALID_OPERATION, "%s(location=%d)",
                   caller, location);
       return NULL;
@@ -253,11 +259,8 @@ validate_uniform_parameters(GLint location, GLsizei count,
     *     no error is generated."
     *
     */
-   if (shProg->UniformRemapTable[location] ==
-       INACTIVE_UNIFORM_EXPLICIT_LOCATION)
+   if (uni == INACTIVE_UNIFORM_EXPLICIT_LOCATION)
       return NULL;
-
-   struct gl_uniform_storage *const uni = shProg->UniformRemapTable[location];
 
    /* Even though no location is assigned to a built-in uniform and this
     * function should already have returned NULL, this test makes it explicit
@@ -1267,18 +1270,18 @@ _mesa_flush_vertices_for_uniforms(struct gl_context *ctx,
       return;
    }
 
-   uint64_t new_driver_state = 0;
+   st_state_bitset new_driver_state = {0};
    unsigned mask = uni->active_shader_mask;
 
    while (mask) {
       unsigned index = u_bit_scan(&mask);
 
       assert(index < MESA_SHADER_MESH_STAGES);
-      new_driver_state |= ctx->DriverFlags.NewShaderConstants[index];
+      ST_SET_STATES(new_driver_state, ctx->DriverFlags.NewShaderConstants[index]);
    }
 
-   FLUSH_VERTICES(ctx, new_driver_state ? 0 : _NEW_PROGRAM_CONSTANTS, 0);
-   ctx->NewDriverState |= new_driver_state;
+   FLUSH_VERTICES(ctx, BITSET_IS_EMPTY(new_driver_state) ? _NEW_PROGRAM_CONSTANTS : 0, 0);
+   ST_SET_STATES(ctx->NewDriverState, new_driver_state);
 }
 
 static bool
@@ -1449,10 +1452,10 @@ _mesa_uniform(GLint location, GLsizei count, const GLvoid *values,
       if (location == -1)
          return;
 
-      if (location >= (int)shProg->NumUniformRemapTable)
-         return;
+      struct range_entry *e =
+         util_range_remap(location, shProg->UniformRemapTable);
+      uni = e ? (struct gl_uniform_storage *)e->ptr : NULL;
 
-      uni = shProg->UniformRemapTable[location];
       if (!uni || uni == INACTIVE_UNIFORM_EXPLICIT_LOCATION)
          return;
 
@@ -1615,7 +1618,7 @@ _mesa_uniform(GLint location, GLsizei count, const GLvoid *values,
          }
       }
 
-      ctx->NewDriverState |= ST_NEW_IMAGE_UNITS;
+      ST_SET_SHADER_STATES(ctx->NewDriverState, IMAGES);
    }
 }
 
@@ -2019,7 +2022,10 @@ _mesa_uniform_handle(GLint location, GLsizei count, const GLvoid *values,
       if (location == -1)
          return;
 
-      uni = shProg->UniformRemapTable[location];
+      struct range_entry *e =
+         util_range_remap(location, shProg->UniformRemapTable);
+      uni = e ? (struct gl_uniform_storage *)e->ptr : NULL;
+
       if (!uni || uni == INACTIVE_UNIFORM_EXPLICIT_LOCATION)
          return;
 

@@ -28,11 +28,8 @@
 
 #include "pvr_device_info.h"
 
-static const struct pvr_device_ident pvr_device_ident_4_V_2_51 = {
-   .device_id = 0x6250,
-   .series_name = "Rogue",
-   .public_name = "GX6250",
-};
+#define PVR_DEVICE_IDENT_4_V_2_51 \
+   .device_id = 0x6250, .series_name = "Rogue", .public_name = "GX6250"
 
 static const struct pvr_device_features pvr_device_features_4_V_2_51 = {
    .has_astc = true,
@@ -62,6 +59,7 @@ static const struct pvr_device_features pvr_device_features_4_V_2_51 = {
    .has_tpu_array_textures = true,
    .has_tpu_extended_integer_lookup = true,
    .has_tpu_image_state_v2 = true,
+   .has_tpu_parallel_instances = true,
    .has_unified_store_depth = true,
    .has_usc_f16sop_u8 = true,
    .has_usc_itrsmp = true,
@@ -87,6 +85,7 @@ static const struct pvr_device_features pvr_device_features_4_V_2_51 = {
    .slc_cache_line_size_bits = 512U,
    .tile_size_x = 32U,
    .tile_size_y = 32U,
+   .tpu_parallel_instances = 4U,
    .unified_store_depth = 256U,
    .usc_min_output_registers_per_pix = 2U,
    .usc_slots = 32U,
@@ -125,6 +124,20 @@ static const struct pvr_device_quirks pvr_device_quirks_4_40_2_51 = {
    .has_brn62269 = true,
    .has_brn66011 = true,
    .has_brn70165 = true,
+   .has_brn74056 = true,
+};
+
+static const struct pvr_device_info pvr_device_info_4_40_2_51 = {
+   .ident = {
+      PVR_DEVICE_IDENT_4_V_2_51,
+      .b = 4,
+      .v = 40,
+      .n = 2,
+      .c = 51,
+   },
+   .features = pvr_device_features_4_V_2_51,
+   .enhancements = pvr_device_enhancements_4_40_2_51,
+   .quirks = pvr_device_quirks_4_40_2_51,
 };
 
 #endif /* GX6250_H */

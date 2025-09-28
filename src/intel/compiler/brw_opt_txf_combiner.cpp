@@ -90,53 +90,56 @@ brw_opt_combine_convergent_txf(brw_shader &s)
 
    foreach_block(block, s.cfg) {
       /* Gather a list of convergent TXFs to the same surface in this block */
-      brw_inst *txfs[32] = {};
+      brw_tex_inst *txfs[32] = {};
       unsigned count = 0;
 
       foreach_inst_in_block(brw_inst, inst, block) {
-         if (inst->opcode != SHADER_OPCODE_TXF_LOGICAL)
+         brw_tex_inst *tex = inst->as_tex();
+         if (tex == NULL)
+            continue;
+
+         if (tex->sampler_opcode != SAMPLER_OPCODE_TXF_LOGICAL)
             continue;
 
          /* Only handle buffers or single miplevel 1D images for now */
-         if (inst->src[TEX_LOGICAL_SRC_COORD_COMPONENTS].ud > 1)
+         if (tex->coord_components > 1)
             continue;
 
-         if (inst->src[TEX_LOGICAL_SRC_RESIDENCY].ud != 0)
+         if (tex->residency)
             continue;
 
-         if (inst->predicate || inst->force_writemask_all)
+         if (tex->predicate || tex->force_writemask_all)
             continue;
 
-         if (!is_uniform_def(defs, inst->src[TEX_LOGICAL_SRC_LOD]) ||
-             !is_uniform_def(defs, inst->src[TEX_LOGICAL_SRC_SURFACE]) ||
-             !is_uniform_def(defs, inst->src[TEX_LOGICAL_SRC_SURFACE_HANDLE]))
+         if (!is_uniform_def(defs, tex->src[TEX_LOGICAL_SRC_LOD]) ||
+             !is_uniform_def(defs, tex->src[TEX_LOGICAL_SRC_SURFACE]))
             continue;
 
          /* Only handle immediates for now: we could check is_uniform(),
           * but we'd need to ensure the coordinate's definition reaches
           * txfs[0] which is where we'll insert the combined coordinate.
           */
-         if (inst->src[TEX_LOGICAL_SRC_COORDINATE].file != IMM)
+         if (tex->src[TEX_LOGICAL_SRC_COORDINATE].file != IMM)
             continue;
 
          /* texelFetch from 1D buffers shouldn't have any of these */
-         assert(inst->src[TEX_LOGICAL_SRC_SHADOW_C].file == BAD_FILE);
-         assert(inst->src[TEX_LOGICAL_SRC_LOD2].file == BAD_FILE);
-         assert(inst->src[TEX_LOGICAL_SRC_MIN_LOD].file == BAD_FILE);
-         assert(inst->src[TEX_LOGICAL_SRC_SAMPLE_INDEX].file == BAD_FILE);
-         assert(inst->src[TEX_LOGICAL_SRC_MCS].file == BAD_FILE);
-         assert(inst->src[TEX_LOGICAL_SRC_TG4_OFFSET].file == BAD_FILE);
-         assert(inst->src[TEX_LOGICAL_SRC_GRAD_COMPONENTS].file == IMM &&
-                inst->src[TEX_LOGICAL_SRC_GRAD_COMPONENTS].ud == 0);
+         assert(tex->src[TEX_LOGICAL_SRC_SHADOW_C].file == BAD_FILE);
+         assert(tex->src[TEX_LOGICAL_SRC_LOD2].file == BAD_FILE);
+         assert(tex->src[TEX_LOGICAL_SRC_MIN_LOD].file == BAD_FILE);
+         assert(tex->src[TEX_LOGICAL_SRC_SAMPLE_INDEX].file == BAD_FILE);
+         assert(tex->src[TEX_LOGICAL_SRC_MCS].file == BAD_FILE);
+         assert(tex->src[TEX_LOGICAL_SRC_TG4_OFFSET].file == BAD_FILE);
+         assert(tex->grad_components == 0);
 
          if (count > 0 &&
-             (!sources_match(defs, inst, txfs[0], TEX_LOGICAL_SRC_LOD) ||
-              !sources_match(defs, inst, txfs[0], TEX_LOGICAL_SRC_SURFACE) ||
-              !sources_match(defs, inst, txfs[0],
-                             TEX_LOGICAL_SRC_SURFACE_HANDLE)))
+             (!sources_match(defs, tex, txfs[0], TEX_LOGICAL_SRC_LOD) ||
+              !sources_match(defs, tex, txfs[0], TEX_LOGICAL_SRC_SURFACE) ||
+              tex->surface_bindless != txfs[0]->surface_bindless ||
+              !sources_match(defs, tex, txfs[0], TEX_LOGICAL_SRC_SAMPLER) ||
+              tex->sampler_bindless != txfs[0]->sampler_bindless))
             continue;
 
-         txfs[count++] = inst;
+         txfs[count++] = tex;
 
          if (count == ARRAY_SIZE(txfs))
             break;
@@ -174,14 +177,7 @@ brw_opt_combine_convergent_txf(brw_shader &s)
          srcs[TEX_LOGICAL_SRC_COORDINATE] = coord;
          srcs[TEX_LOGICAL_SRC_LOD] = txfs[0]->src[TEX_LOGICAL_SRC_LOD];
          srcs[TEX_LOGICAL_SRC_SURFACE] = txfs[0]->src[TEX_LOGICAL_SRC_SURFACE];
-         srcs[TEX_LOGICAL_SRC_SURFACE_HANDLE] =
-            txfs[0]->src[TEX_LOGICAL_SRC_SURFACE_HANDLE];
          srcs[TEX_LOGICAL_SRC_SAMPLER] = txfs[0]->src[TEX_LOGICAL_SRC_SAMPLER];
-         srcs[TEX_LOGICAL_SRC_SAMPLER_HANDLE] =
-            txfs[0]->src[TEX_LOGICAL_SRC_SAMPLER_HANDLE];
-         srcs[TEX_LOGICAL_SRC_COORD_COMPONENTS] = brw_imm_ud(1);
-         srcs[TEX_LOGICAL_SRC_GRAD_COMPONENTS] = brw_imm_ud(0);
-         srcs[TEX_LOGICAL_SRC_RESIDENCY] = brw_imm_ud(0);
 
          /* Each of our txf may have a reduced response length if some
           * components are never read.  Use the maximum of the sizes.
@@ -194,9 +190,15 @@ brw_opt_combine_convergent_txf(brw_shader &s)
 
          /* Emit the new divergent TXF */
          brw_reg div = ubld.vgrf(BRW_TYPE_UD, new_dest_comps);
-         brw_inst *div_txf =
-            ubld.emit(SHADER_OPCODE_TXF_LOGICAL, div, srcs,
-                      TEX_LOGICAL_NUM_SRCS);
+         brw_tex_inst *div_txf =
+            ubld.emit(SHADER_OPCODE_SAMPLER, div, srcs,
+                      TEX_LOGICAL_NUM_SRCS)->as_tex();
+         div_txf->surface_bindless = txfs[0]->surface_bindless;
+         div_txf->sampler_bindless = txfs[0]->sampler_bindless;
+         div_txf->sampler_opcode = SAMPLER_OPCODE_TXF_LOGICAL;
+         div_txf->coord_components = 1;
+         div_txf->grad_components = 0;
+         div_txf->residency = false;
 
          /* Update it to also use response length reduction */
          const unsigned per_component_regs =

@@ -434,6 +434,7 @@ EXT(NV_read_buffer                          , dummy_true                        
 EXT(NV_read_depth                           , dummy_true                             ,  x ,  x ,  x , ES2, 2011)
 EXT(NV_read_depth_stencil                   , dummy_true                             ,  x ,  x ,  x , ES2, 2011)
 EXT(NV_read_stencil                         , dummy_true                             ,  x ,  x ,  x , ES2, 2011)
+EXT(NV_representative_fragment_test         , NV_representative_fragment_test        , GLL, GLC,  x ,  32, 2019)
 EXT(NV_sample_locations                     , ARB_sample_locations                   , GLL, GLC,  x , ES2, 2015)
 EXT(NV_shader_atomic_float                  , NV_shader_atomic_float                 , GLL, GLC,  x ,  x , 2012)
 EXT(NV_shader_atomic_int64                  , NV_shader_atomic_int64                 , GLL, GLC,  x ,  x , 2014)
@@ -443,7 +444,6 @@ EXT(NV_texture_barrier                      , NV_texture_barrier                
 EXT(NV_texture_env_combine4                 , NV_texture_env_combine4                , GLL,  x ,  x ,  x , 1999)
 EXT(NV_texture_rectangle                    , NV_texture_rectangle                   , GLL,  x ,  x ,  x , 2000)
 EXT(NV_timeline_semaphore                   , NV_timeline_semaphore                  , GLL, GLC,  x ,  32, 2020)
-EXT(NV_vdpau_interop                        , NV_vdpau_interop                       , GLL, GLC,  x ,  x , 2010)
 EXT(NV_viewport_array2                      , NV_viewport_array2                     , GLL, GLC,  x ,  31, 2015)
 EXT(NV_viewport_swizzle                     , NV_viewport_swizzle                    , GLL, GLC,  x ,  31, 2015)
 

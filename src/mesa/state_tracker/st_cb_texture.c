@@ -1155,7 +1155,7 @@ guess_and_alloc_texture(struct st_context *st,
                                  ptWidth,
                                  ptHeight,
                                  ptDepth,
-                                 ptLayers, nr_samples,
+                                 ptLayers, nr_samples, 0,
                                  bindings,
                                  false,
                                  PIPE_COMPRESSION_FIXED_RATE_NONE);
@@ -1253,7 +1253,7 @@ st_AllocTextureImageBuffer(struct gl_context *ctx,
                                       ptWidth,
                                       ptHeight,
                                       ptDepth,
-                                      ptLayers, 0,
+                                      ptLayers, 0, 0,
                                       bindings,
                                       false,
                                       PIPE_COMPRESSION_FIXED_RATE_NONE);
@@ -1833,9 +1833,8 @@ fail:
    st->state.num_sampler_views[MESA_SHADER_FRAGMENT] = 0;
 
    ctx->Array.NewVertexElements = true;
-   ctx->NewDriverState |= ST_NEW_VERTEX_ARRAYS |
-                          ST_NEW_FS_CONSTANTS |
-                          ST_NEW_FS_SAMPLER_VIEWS;
+   ST_SET_STATE3(ctx->NewDriverState, ST_NEW_VERTEX_ARRAYS,
+                 ST_NEW_FS_CONSTANTS, ST_NEW_FS_SAMPLER_VIEWS);
 
    return success;
 }
@@ -2115,10 +2114,9 @@ fail:
    st->state.num_sampler_views[MESA_SHADER_FRAGMENT] = 0;
 
    st->ctx->Array.NewVertexElements = true;
-   st->ctx->NewDriverState |= ST_NEW_FS_CONSTANTS |
-                              ST_NEW_FS_IMAGES |
-                              ST_NEW_FS_SAMPLER_VIEWS |
-                              ST_NEW_VERTEX_ARRAYS;
+   ST_SET_STATE4(st->ctx->NewDriverState, ST_NEW_FS_CONSTANTS,
+                 ST_NEW_FS_IMAGES, ST_NEW_FS_SAMPLER_VIEWS,
+                 ST_NEW_VERTEX_ARRAYS);
 
    return success;
 }
@@ -2286,6 +2284,7 @@ st_TexSubImage(struct gl_context *ctx, GLuint dims,
    memset(&src_templ, 0, sizeof(src_templ));
    src_templ.target = gl_target_to_pipe(gl_target);
    src_templ.format = src_format;
+   src_templ.flags = PIPE_RESOURCE_FLAG_MAP_UNSYNCHRONIZED;
    src_templ.bind = PIPE_BIND_SAMPLER_VIEW;
    src_templ.usage = PIPE_USAGE_STAGING;
 
@@ -2330,7 +2329,7 @@ st_TexSubImage(struct gl_context *ctx, GLuint dims,
       height = 1;
    }
 
-   map = pipe_texture_map_3d(pipe, src, 0, PIPE_MAP_WRITE, 0, 0, 0,
+   map = pipe_texture_map_3d(pipe, src, 0, PIPE_MAP_WRITE | PIPE_MAP_UNSYNCHRONIZED, 0, 0, 0,
                               width, height, depth, &transfer);
    if (!map) {
       _mesa_unmap_teximage_pbo(ctx, unpack);
@@ -2482,6 +2481,9 @@ st_CompressedTexSubImage(struct gl_context *ctx, GLuint dims,
       goto fallback;
 
    if (st_compressed_format_fallback(st, texImage->TexFormat))
+      goto fallback;
+
+   if (screen->caps.surface_no_compress)
       goto fallback;
 
    if (!dst) {
@@ -3279,7 +3281,7 @@ st_finalize_texture(struct gl_context *ctx,
           */
          pipe_resource_reference(&tObj->pt, NULL);
          st_texture_release_all_sampler_views(st, tObj);
-         ctx->NewDriverState |= ST_NEW_FRAMEBUFFER;
+         ST_SET_FRAMEBUFFER_STATES(ctx->NewDriverState);
       }
    }
 
@@ -3298,7 +3300,7 @@ st_finalize_texture(struct gl_context *ctx,
                                     ptWidth,
                                     ptHeight,
                                     ptDepth,
-                                    ptLayers, ptNumSamples,
+                                    ptLayers, ptNumSamples, 0,
                                     bindings,
                                     false,
                                     PIPE_COMPRESSION_FIXED_RATE_NONE);
@@ -3517,7 +3519,7 @@ st_texture_storage(struct gl_context *ctx,
                                     ptWidth,
                                     ptHeight,
                                     ptDepth,
-                                    ptLayers, num_samples,
+                                    ptLayers, num_samples, 0,
                                     bindings,
                                     texObj->IsSparse,
                                     rate);

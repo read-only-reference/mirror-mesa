@@ -518,7 +518,8 @@ enum pipe_flush_flags
 #define PIPE_RESOURCE_FLAG_UNMAPPABLE            (1 << 8) /* implies staging transfers due to VK interop */
 #define PIPE_RESOURCE_FLAG_FIXED_ADDRESS         (1 << 9) /* virtual memory address never changes */
 #define PIPE_RESOURCE_FLAG_FRONTEND_VM           (1 << 10) /* the frontend assigns addresses */
-#define PIPE_RESOURCE_FLAG_DRV_PRIV              (1 << 11) /* driver/winsys private */
+#define PIPE_RESOURCE_FLAG_MAP_UNSYNCHRONIZED    (1 << 11) /* the texture can be mapped UNSYNCHRONIZED */
+#define PIPE_RESOURCE_FLAG_DRV_PRIV              (1 << 12) /* driver/winsys private */
 #define PIPE_RESOURCE_FLAG_FRONTEND_PRIV         (1 << 24) /* gallium frontend private */
 
 /**
@@ -926,6 +927,7 @@ struct pipe_caps {
    bool invalidate_buffer;
    bool generate_mipmap;
    bool string_marker;
+   bool surface_no_compress;
    bool surface_reinterpret_blocks;
    bool compressed_surface_reinterpret_blocks_layered;
    bool query_buffer_object;
@@ -1042,6 +1044,7 @@ struct pipe_caps {
    bool shader_subgroup_quad_all_stages;
    bool call_finalize_nir_in_linker;
    bool mesh_shader;
+   bool representative_fragment_test;
 
    int accelerated;
    int min_texel_offset;
@@ -1166,6 +1169,8 @@ enum pipe_resource_param
    PIPE_RESOURCE_PARAM_HANDLE_TYPE_KMS,
    PIPE_RESOURCE_PARAM_HANDLE_TYPE_FD,
    PIPE_RESOURCE_PARAM_LAYER_STRIDE,
+   /* If texture/image has separate plane buffers. */
+   PIPE_RESOURCE_PARAM_DISJOINT_PLANES,
 };
 
 /**

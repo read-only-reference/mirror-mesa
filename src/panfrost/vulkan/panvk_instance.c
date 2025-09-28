@@ -12,6 +12,7 @@
 #include "util/build_id.h"
 #include "util/driconf.h"
 #include "util/mesa-sha1.h"
+#include "util/os_misc.h"
 
 #include "vk_alloc.h"
 #include "vk_log.h"
@@ -34,7 +35,7 @@ static const struct debug_control panvk_debug_options[] = {
    {"nir", PANVK_DEBUG_NIR},
    {"trace", PANVK_DEBUG_TRACE},
    {"sync", PANVK_DEBUG_SYNC},
-   {"afbc", PANVK_DEBUG_AFBC},
+   {"noafbc", PANVK_DEBUG_NO_AFBC},
    {"linear", PANVK_DEBUG_LINEAR},
    {"dump", PANVK_DEBUG_DUMP},
    {"no_known_warn", PANVK_DEBUG_NO_KNOWN_WARN},
@@ -42,6 +43,7 @@ static const struct debug_control panvk_debug_options[] = {
    {"copy_gfx", PANVK_DEBUG_COPY_GFX},
    {"force_simultaneous", PANVK_DEBUG_FORCE_SIMULTANEOUS},
    {"implicit_others_inv", PANVK_DEBUG_IMPLICIT_OTHERS_INV},
+   {"force_blackhole", PANVK_DEBUG_FORCE_BLACKHOLE},
    {NULL, 0}};
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -243,7 +245,7 @@ panvk_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    instance->vk.physical_devices.destroy = panvk_destroy_physical_device;
 
    instance->debug_flags =
-      parse_debug_string(getenv("PANVK_DEBUG"), panvk_debug_options);
+      parse_debug_string(os_get_option("PANVK_DEBUG"), panvk_debug_options);
 
    if (instance->debug_flags & PANVK_DEBUG_STARTUP)
       vk_logi(VK_LOG_NO_OBJS(instance), "Created an instance");

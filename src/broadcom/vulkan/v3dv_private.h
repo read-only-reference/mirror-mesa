@@ -334,6 +334,8 @@ struct v3dv_pipeline_key {
            enum pipe_blendfactor alpha_dst_factor;
    } blend[V3D_MAX_DRAW_BUFFERS];
    uint8_t f32_color_rb;
+   uint8_t norm_16;
+   uint8_t snorm;
    uint32_t va_swap_rb_mask;
    bool has_multiview;
    bool line_smooth;
@@ -627,6 +629,12 @@ struct v3dv_format_plane {
 
    /* Whether the return value is 16F/I/UI or 32F/I/UI. */
    uint8_t return_size;
+
+   /* Needs software unorm packing */
+   bool unorm;
+
+   /* Needs software snorm packing */
+   bool snorm;
 };
 
 struct v3dv_format {

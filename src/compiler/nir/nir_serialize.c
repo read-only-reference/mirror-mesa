@@ -751,9 +751,12 @@ write_alu(write_ctx *ctx, const nir_alu_instr *alu)
 
          if (packed) {
             src.alu.swizzle_x = alu->src[i].swizzle[0];
-            src.alu.swizzle_y = alu->src[i].swizzle[1];
-            src.alu.swizzle_z = alu->src[i].swizzle[2];
-            src.alu.swizzle_w = alu->src[i].swizzle[3];
+            if (src_channels >= 2)
+               src.alu.swizzle_y = alu->src[i].swizzle[1];
+            if (src_channels >= 3)
+               src.alu.swizzle_z = alu->src[i].swizzle[2];
+            if (src_channels >= 4)
+               src.alu.swizzle_w = alu->src[i].swizzle[3];
          }
 
          write_src_full(ctx, &alu->src[i].src, src);
@@ -810,9 +813,12 @@ read_alu(read_ctx *ctx, union packed_instr header)
 
          if (packed) {
             alu->src[i].swizzle[0] = src.alu.swizzle_x;
-            alu->src[i].swizzle[1] = src.alu.swizzle_y;
-            alu->src[i].swizzle[2] = src.alu.swizzle_z;
-            alu->src[i].swizzle[3] = src.alu.swizzle_w;
+            if (src_channels >= 2)
+               alu->src[i].swizzle[1] = src.alu.swizzle_y;
+            if (src_channels >= 3)
+               alu->src[i].swizzle[2] = src.alu.swizzle_z;
+            if (src_channels >= 4)
+               alu->src[i].swizzle[3] = src.alu.swizzle_w;
          } else {
             /* Load swizzles for vec8 and vec16. */
             for (unsigned o = 0; o < src_channels; o += 8) {
@@ -2145,15 +2151,8 @@ nir_serialize_function(struct blob *blob, const nir_function *fxn)
    util_dynarray_fini(&ctx.phi_fixups);
 }
 
-/**
- * Serialize NIR into a binary blob.
- *
- * \param strip  Don't serialize information only useful for debugging,
- *               such as variable names, making cache hits from similar
- *               shaders more likely.
- */
-void
-nir_serialize(struct blob *blob, const nir_shader *nir, bool strip)
+static void
+serialize_internal(struct blob *blob, const nir_shader *nir, bool strip, bool serialize_info)
 {
    write_ctx ctx = { 0 };
    _mesa_pointer_hash_table_init(&ctx.remap_table, NULL);
@@ -2166,6 +2165,8 @@ nir_serialize(struct blob *blob, const nir_shader *nir, bool strip)
    size_t idx_size_offset = blob_reserve_uint32(blob);
 
    struct shader_info info = nir->info;
+   if (!serialize_info)
+      memset(&info, 0, sizeof(info));
 
    enum nir_serialize_shader_flags flags = 0;
    if (!strip && info.name)
@@ -2214,6 +2215,19 @@ nir_serialize(struct blob *blob, const nir_shader *nir, bool strip)
    util_dynarray_fini(&ctx.phi_fixups);
 }
 
+/**
+ * Serialize NIR into a binary blob.
+ *
+ * \param strip  Don't serialize information only useful for debugging,
+ *               such as variable names, making cache hits from similar
+ *               shaders more likely.
+ */
+void
+nir_serialize(struct blob *blob, const nir_shader *nir, bool strip)
+{
+   serialize_internal(blob, nir, strip, true);
+}
+
 nir_shader *
 nir_deserialize(void *mem_ctx,
                 const struct nir_shader_compiler_options *options,
@@ -2232,7 +2246,7 @@ nir_deserialize(void *mem_ctx,
    struct shader_info info;
    blob_copy_bytes(blob, (uint8_t *)&info, sizeof(info));
 
-   ctx.nir = nir_shader_create(mem_ctx, info.stage, options, NULL);
+   ctx.nir = nir_shader_create(mem_ctx, info.stage, options);
 
    ctx.nir->has_debug_info = !!(flags & NIR_SERIALIZE_DEBUG_INFO);
    if (ctx.nir->has_debug_info)
@@ -2294,7 +2308,7 @@ nir_deserialize_function(void *mem_ctx,
    ctx.idx_table_len = blob_read_uint32(blob);
    ctx.idx_table = calloc(ctx.idx_table_len, sizeof(uintptr_t));
 
-   ctx.nir = nir_shader_create(mem_ctx, 0 /* stage */, options, NULL);
+   ctx.nir = nir_shader_create(mem_ctx, 0 /* stage */, options);
 
    nir_function *fxn = read_function(&ctx);
    nir_function_set_impl(fxn, read_function_impl(&ctx));
@@ -2329,3 +2343,37 @@ nir_shader_serialize_deserialize(nir_shader *shader)
    nir_shader_replace(shader, copy);
    ralloc_free(dead_ctx);
 }
+
+#ifndef NDEBUG
+struct blob
+nir_validate_progress_setup(nir_shader *shader)
+{
+   if (!NIR_DEBUG(PROGRESS_VALIDATION))
+      return (struct blob){0};
+
+   struct blob blob_before;
+   blob_init(&blob_before);
+   serialize_internal(&blob_before, shader, false, false);
+   return blob_before;
+}
+
+void
+nir_validate_progress_finish(nir_shader *shader, struct blob *setup_blob, bool progress, const char *when)
+{
+   if (!NIR_DEBUG(PROGRESS_VALIDATION))
+      return;
+
+   if (!progress) {
+      struct blob blob_after;
+      blob_init(&blob_after);
+      serialize_internal(&blob_after, shader, false, false);
+      if (setup_blob->size != blob_after.size ||
+          memcmp(setup_blob->data, blob_after.data, setup_blob->size)) {
+         fprintf(stderr, "NIR changed but no progress reported %s\n", when);
+         abort();
+      }
+      blob_finish(&blob_after);
+   }
+   blob_finish(setup_blob);
+}
+#endif

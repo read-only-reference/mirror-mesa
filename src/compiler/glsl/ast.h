@@ -677,6 +677,11 @@ struct ast_type_qualifier {
           * qualifier is used.
           */
          unsigned viewport_relative:1;
+
+         /** GL_EXT_mesh_shader */
+         unsigned task_payload:1;
+         unsigned per_primitive:1;
+         unsigned max_primitives:1;
       }
       /** \brief Set of flags, accessed by name. */
       q;
@@ -724,6 +729,9 @@ struct ast_type_qualifier {
 
    /** Maximum output vertices in GLSL 1.50 geometry shaders. */
    ast_layout_expression *max_vertices;
+
+   /** Maximum output primitives in mesh shader. */
+   ast_layout_expression *max_primitives;
 
    /** Stream in GLSL 1.50 geometry shaders. */
    ast_expression *stream;
@@ -1324,6 +1332,22 @@ public:
 
 
 /**
+ * AST node representing a declaration of the output layout for mesh shaders.
+ */
+class ast_ms_output_layout : public ast_node
+{
+public:
+   ast_ms_output_layout(const struct YYLTYPE &locp)
+   {
+      set_location(locp);
+   }
+
+   virtual ir_rvalue *hir(ir_exec_list *instructions,
+                          struct _mesa_glsl_parse_state *state);
+};
+
+
+/**
  * AST node representing a declaration of the input layout for geometry
  * shaders.
  */
@@ -1345,14 +1369,14 @@ private:
 
 
 /**
- * AST node representing a decalaration of the input layout for compute
- * shaders.
+ * AST node representing a decalaration of the input layout for compute,
+ * task and mesh shaders.
  */
-class ast_cs_input_layout : public ast_node
+class ast_cs_ms_input_layout : public ast_node
 {
 public:
-   ast_cs_input_layout(const struct YYLTYPE &locp,
-                       ast_layout_expression *const *local_size)
+   ast_cs_ms_input_layout(const struct YYLTYPE &locp,
+                          ast_layout_expression *const *local_size)
    {
       for (int i = 0; i < 3; i++) {
          this->local_size[i] = local_size[i];

@@ -112,6 +112,25 @@ brw_compiler_create(void *mem_ctx, const struct intel_device_info *devinfo)
    compiler->lower_dpas = !devinfo->has_systolic ||
                           debug_get_bool_option("INTEL_LOWER_DPAS", false);
 
+   compiler->optimistic_simd_heuristic =
+      debug_get_bool_option("INTEL_SIMD_OPTIMISTIC", false);
+
+   /* We have 128 GRFs on Xe2 and earlier, and up to 256 on Xe3.  But we add
+    * a bit of a fudge factor here to allow shaders that are borderline
+    * allocatable to at least try, so we don't lose out on performance.
+    *
+    * On Xe2, 134 seems to be the sweet spot where we get most of the CPU
+    * gains for discarding expensive compilation, but only a few outliers
+    * have a higher pressure and yet manage to succeed at SIMD32 compilation.
+    *
+    * On Xe3 with VRT we can have double the registers thanks to VRT, and
+    * very few shaders fail to compile.  We set the threshold to ~2x the Xe2
+    * value, which still catches something like 80% of the failing shaders
+    * while letting almost all through to the backend for more detailed
+    * throughput analysis.
+    */
+   compiler->register_pressure_threshold = devinfo->ver >= 30 ? 268 : 134;
+
    nir_lower_int64_options int64_options =
       nir_lower_imul64 |
       nir_lower_isign64 |
@@ -122,7 +141,8 @@ brw_compiler_create(void *mem_ctx, const struct intel_device_info *devinfo)
       nir_lower_bit_count64 |
       nir_lower_iadd3_64 |
       nir_lower_bitfield_extract64 |
-      nir_lower_bitfield_reverse64;
+      nir_lower_bitfield_reverse64 |
+      nir_lower_usub_sat64;
    nir_lower_doubles_options fp64_options =
       nir_lower_drcp |
       nir_lower_dsqrt |
@@ -158,48 +178,47 @@ brw_compiler_create(void *mem_ctx, const struct intel_device_info *devinfo)
                         nir_lower_scan_reduce_iadd64 | nir_lower_subgroup_shuffle64 |
                         nir_lower_iadd_sat64 | nir_lower_uadd_sat64);
 
-   /* We want the GLSL compiler to emit code that uses condition codes */
+   struct nir_shader_compiler_options *nir_options = &compiler->nir_options[0];
+   *nir_options = brw_scalar_nir_options;
+
+   /* Gfx11 loses LRP. */
+   nir_options->lower_flrp32 = devinfo->ver >= 11;
+
+   nir_options->lower_fpow = devinfo->ver >= 12;
+
+   nir_options->has_rotate16 = devinfo->ver >= 11;
+   nir_options->has_rotate32 = devinfo->ver >= 11;
+   nir_options->has_iadd3 = devinfo->verx10 >= 125;
+
+   nir_options->has_sdot_4x8 = devinfo->ver >= 12;
+   nir_options->has_udot_4x8 = devinfo->ver >= 12;
+   nir_options->has_sudot_4x8 = devinfo->ver >= 12;
+   nir_options->has_sdot_4x8_sat = devinfo->ver >= 12;
+   nir_options->has_udot_4x8_sat = devinfo->ver >= 12;
+   nir_options->has_sudot_4x8_sat = devinfo->ver >= 12;
+
+   nir_options->lower_int64_options = int64_options;
+   nir_options->lower_doubles_options = fp64_options;
+
+   if (compiler->use_tcs_multi_patch) {
+      /* TCS MULTI_PATCH mode has multiple patches per subgroup */
+      nir_options->divergence_analysis_options &=
+         ~nir_divergence_single_patch_per_tcs_subgroup;
+   }
+
+   if (devinfo->ver < 12)
+      nir_options->divergence_analysis_options |=
+         nir_divergence_single_prim_per_subgroup;
+
    for (int i = 0; i < MESA_ALL_SHADER_STAGES; i++) {
-      struct nir_shader_compiler_options *nir_options =
-         rzalloc(compiler, struct nir_shader_compiler_options);
-      *nir_options = brw_scalar_nir_options;
-      int64_options |= nir_lower_usub_sat64;
+      struct nir_shader_compiler_options *stage_options =
+         &compiler->nir_options[i];
+      *stage_options = compiler->nir_options[0];
 
-      /* Gfx11 loses LRP. */
-      nir_options->lower_flrp32 = devinfo->ver >= 11;
+      stage_options->unify_interfaces = i < MESA_SHADER_FRAGMENT;
 
-      nir_options->lower_fpow = devinfo->ver >= 12;
-
-      nir_options->has_rotate16 = devinfo->ver >= 11;
-      nir_options->has_rotate32 = devinfo->ver >= 11;
-      nir_options->has_iadd3 = devinfo->verx10 >= 125;
-
-      nir_options->has_sdot_4x8 = devinfo->ver >= 12;
-      nir_options->has_udot_4x8 = devinfo->ver >= 12;
-      nir_options->has_sudot_4x8 = devinfo->ver >= 12;
-      nir_options->has_sdot_4x8_sat = devinfo->ver >= 12;
-      nir_options->has_udot_4x8_sat = devinfo->ver >= 12;
-      nir_options->has_sudot_4x8_sat = devinfo->ver >= 12;
-
-      nir_options->lower_int64_options = int64_options;
-      nir_options->lower_doubles_options = fp64_options;
-
-      nir_options->unify_interfaces = i < MESA_SHADER_FRAGMENT;
-
-      nir_options->force_indirect_unrolling |=
+      stage_options->force_indirect_unrolling |=
          brw_nir_no_indirect_mask(compiler, i);
-
-      if (compiler->use_tcs_multi_patch) {
-         /* TCS MULTI_PATCH mode has multiple patches per subgroup */
-         nir_options->divergence_analysis_options &=
-            ~nir_divergence_single_patch_per_tcs_subgroup;
-      }
-
-      if (devinfo->ver < 12)
-         nir_options->divergence_analysis_options |=
-            nir_divergence_single_prim_per_subgroup;
-
-      compiler->nir_options[i] = nir_options;
    }
 
    /* Build a list of storage format compatible in component bit size &
@@ -243,6 +262,8 @@ brw_get_compiler_config_value(const struct brw_compiler *compiler)
    insert_u64_bit(&config, compiler->precise_trig);
    bits++;
    insert_u64_bit(&config, compiler->lower_dpas);
+   bits++;
+   insert_u64_bit(&config, compiler->optimistic_simd_heuristic);
    bits++;
 
    enum intel_debug_flag debug_bits[] = {
@@ -359,31 +380,6 @@ brw_write_shader_relocs(const struct brw_isa_info *isa,
             break;
          }
       }
-   }
-}
-
-void
-brw_stage_prog_data_add_printf(struct brw_stage_prog_data *prog_data,
-                               void *mem_ctx,
-                               const u_printf_info *print)
-{
-   prog_data->printf_info_count++;
-   prog_data->printf_info = reralloc(mem_ctx, prog_data->printf_info,
-                                     u_printf_info,
-                                     prog_data->printf_info_count);
-
-   prog_data->printf_info[prog_data->printf_info_count - 1] = *print;
-   if (print->string_size > 0) {
-      prog_data->printf_info[prog_data->printf_info_count - 1].strings =
-         ralloc_size(mem_ctx, print->string_size);
-      memcpy(prog_data->printf_info[prog_data->printf_info_count - 1].strings,
-             print->strings, print->string_size);
-   }
-   if (print->num_args > 0) {
-      prog_data->printf_info[prog_data->printf_info_count - 1].arg_sizes =
-         ralloc_array(mem_ctx, __typeof__(*print->arg_sizes), print->num_args);
-      memcpy(prog_data->printf_info[prog_data->printf_info_count - 1].arg_sizes,
-             print->arg_sizes, sizeof(print->arg_sizes[0]) *print->num_args);
    }
 }
 

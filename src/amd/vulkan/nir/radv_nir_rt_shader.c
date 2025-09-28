@@ -132,9 +132,8 @@ lower_rt_derefs(nir_shader *shader)
 
    bool progress = false;
 
-   nir_builder b = nir_builder_at(nir_before_impl(impl));
-
-   nir_def *arg_offset = nir_load_rt_arg_scratch_offset_amd(&b);
+   nir_builder b;
+   nir_def *arg_offset = NULL;
 
    nir_foreach_block (block, impl) {
       nir_foreach_instr_safe (instr, block) {
@@ -149,6 +148,11 @@ lower_rt_derefs(nir_shader *shader)
          progress = true;
 
          if (deref->deref_type == nir_deref_type_var) {
+            if (!arg_offset) {
+               b = nir_builder_at(nir_before_impl(impl));
+               arg_offset = nir_load_rt_arg_scratch_offset_amd(&b);
+            }
+
             b.cursor = nir_before_instr(&deref->instr);
             nir_deref_instr *replacement =
                nir_build_deref_cast(&b, arg_offset, nir_var_function_temp, deref->var->type, 0);
@@ -376,9 +380,11 @@ load_sbt_entry(nir_builder *b, const struct rt_variables *vars, nir_def *idx, en
    nir_def *addr = nir_iadd(b, desc, nir_u2u64(b, nir_iadd_imm(b, nir_imul(b, idx, stride), offset)));
 
    if (offset == SBT_RECURSIVE_PTR) {
-      nir_store_var(b, vars->shader_addr, nir_build_load_global(b, 1, 64, addr), 1);
+      nir_store_var(b, vars->shader_addr,
+                    nir_build_load_global(b, 1, 64, addr, .access = ACCESS_CAN_REORDER | ACCESS_NON_WRITEABLE), 1);
    } else {
-      nir_store_var(b, vars->idx, nir_build_load_global(b, 1, 32, addr), 1);
+      nir_store_var(b, vars->idx,
+                    nir_build_load_global(b, 1, 32, addr, .access = ACCESS_CAN_REORDER | ACCESS_NON_WRITEABLE), 1);
    }
 
    nir_def *record_addr = nir_iadd_imm(b, addr, RADV_RT_HANDLE_SIZE - offset);
@@ -1752,6 +1758,9 @@ radv_build_traversal_shader(struct radv_device *device, struct radv_ray_tracing_
    b.shader->info.internal = false;
    b.shader->info.workgroup_size[0] = 8;
    b.shader->info.workgroup_size[1] = pdev->rt_wave_size == 64 ? 8 : 4;
+   b.shader->info.api_subgroup_size = pdev->rt_wave_size;
+   b.shader->info.max_subgroup_size = pdev->rt_wave_size;
+   b.shader->info.min_subgroup_size = pdev->rt_wave_size;
    b.shader->info.shared_size = pdev->rt_wave_size * MAX_STACK_ENTRY_COUNT * sizeof(uint32_t);
    struct rt_variables vars = create_rt_variables(b.shader, device, create_flags, false);
 
@@ -1960,6 +1969,8 @@ radv_nir_lower_rt_abi(nir_shader *shader, const VkRayTracingPipelineCreateInfoKH
                       bool monolithic, bool has_position_fetch,
                       const struct radv_ray_tracing_stage_info *traversal_info)
 {
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
 
    const VkPipelineCreateFlagBits2 create_flags = vk_rt_pipeline_create_flags(pCreateInfo);
@@ -2011,7 +2022,8 @@ radv_nir_lower_rt_abi(nir_shader *shader, const VkRayTracingPipelineCreateInfoKH
    }
 
    nir_def *traversal_addr = ac_nir_load_arg(&b, &args->ac, args->ac.rt.traversal_shader_addr);
-   nir_store_var(&b, vars.traversal_addr, nir_pack_64_2x32(&b, traversal_addr), 1);
+   nir_store_var(&b, vars.traversal_addr,
+                 nir_pack_64_2x32_split(&b, traversal_addr, nir_imm_int(&b, pdev->info.address32_hi)), 1);
 
    nir_def *shader_addr = ac_nir_load_arg(&b, &args->ac, args->ac.rt.shader_addr);
    shader_addr = nir_pack_64_2x32(&b, shader_addr);
@@ -2063,9 +2075,7 @@ radv_nir_lower_rt_abi(nir_shader *shader, const VkRayTracingPipelineCreateInfoKH
 
    b.cursor = nir_after_impl(impl);
 
-   if (monolithic) {
-      nir_terminate(&b);
-   } else {
+   if (!monolithic) {
       /* select next shader */
       shader_addr = nir_load_var(&b, vars.shader_addr);
       nir_def *next = select_next_shader(&b, shader_addr, info->wave_size);

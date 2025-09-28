@@ -45,6 +45,10 @@
 
 #include <stdio.h>
 
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
 /* Table of all implemented capabilities.  These are the capabilities that are
  * implemented in the spirv_to_nir, not what the device supports.
  *
@@ -339,13 +343,12 @@ vtn_log_err(struct vtn_builder *b,
 }
 
 static void
-vtn_dump_shader(struct vtn_builder *b, const char *path, const char *prefix)
+vtn_dump_shader(struct vtn_builder *b, const char *path, const char *name)
 {
-   static int idx = 0;
-
-   char filename[1024];
-   int len = snprintf(filename, sizeof(filename), "%s/%s-%d.spirv",
-                      path, prefix, idx++);
+   char filename[PATH_MAX];
+   const char* stage_ext = _mesa_shader_stage_to_file_ext(b->entry_point_stage);
+   int len = snprintf(filename, sizeof(filename), "%s/0x%s.%s",
+                      path, name, stage_ext);
    if (len < 0 || len >= sizeof(filename))
       return;
 
@@ -2649,6 +2652,54 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
       vtn_foreach_decoration(b, val, spec_constant_decoration_cb, &u32op);
       SpvOp opcode = u32op.u32;
       switch (opcode) {
+      case SpvOpBitcast: {
+         struct vtn_value *src = &b->values[w[4]];
+
+         vtn_assert(src->value_type == vtn_value_type_constant ||
+                    src->value_type == vtn_value_type_undef);
+
+         unsigned src_len = glsl_get_vector_elements(src->type->type);
+         unsigned dst_len = glsl_get_vector_elements(val->type->type);
+
+         unsigned src_bit_size = glsl_get_bit_size(src->type->type);
+         unsigned dst_bit_size = glsl_get_bit_size(val->type->type);
+
+         vtn_assert(src_len * src_bit_size == dst_len * dst_bit_size);
+
+         /* This will end up being zero */
+         if (src->value_type == vtn_value_type_undef)
+            break;
+
+         if (src_bit_size == dst_bit_size) {
+            /* This is just a copy */
+            for (unsigned i = 0; i < src_len; i++)
+               val->constant->values[i] = src->constant->values[i];
+         } else {
+            /* You can't non-trivially bitcast booleans */
+            vtn_assert(src_bit_size >= 8 && dst_bit_size >= 8);
+            const unsigned src_byte_size = src_bit_size / 8;
+            const unsigned dst_byte_size = dst_bit_size / 8;
+
+            vtn_assert(src_len <= NIR_MAX_VEC_COMPONENTS &&
+                       dst_len <= NIR_MAX_VEC_COMPONENTS);
+
+            uint8_t bits[NIR_MAX_VEC_COMPONENTS * sizeof(nir_const_value)];
+
+            for (unsigned i = 0; i < src_len; i++) {
+               uint64_t v = nir_const_value_as_int(src->constant->values[i],
+                                                   src_bit_size);
+               memcpy(bits + i * src_byte_size, &v, src_byte_size);
+            }
+
+            for (unsigned i = 0; i < dst_len; i++) {
+               uint64_t v = 0;
+               memcpy(&v, bits + i * dst_byte_size, dst_byte_size);
+               val->constant->values[i] =
+                  nir_const_value_for_uint(v, dst_bit_size);
+            }
+         }
+         break;
+      }
       case SpvOpVectorShuffle: {
          struct vtn_value *v0 = &b->values[w[4]];
          struct vtn_value *v1 = &b->values[w[5]];
@@ -3141,6 +3192,18 @@ vtn_translate_scope(struct vtn_builder *b, SpvScope scope)
 }
 
 static void
+optimize_barrier(nir_memory_semantics *semantics, nir_variable_mode *modes)
+{
+   nir_memory_semantics vis_avail = NIR_MEMORY_MAKE_AVAILABLE | NIR_MEMORY_MAKE_VISIBLE;
+
+   /* Shared access is always workgroup coherent in NIR. */
+   if (*modes == nir_var_mem_shared)
+      *semantics &= ~vis_avail;
+   if ((*semantics & vis_avail) == *semantics)
+      *modes &= ~nir_var_mem_shared;
+}
+
+static void
 vtn_emit_scoped_control_barrier(struct vtn_builder *b, SpvScope exec_scope,
                                 SpvScope mem_scope,
                                 SpvMemorySemanticsMask semantics)
@@ -3150,12 +3213,17 @@ vtn_emit_scoped_control_barrier(struct vtn_builder *b, SpvScope exec_scope,
    nir_variable_mode modes = vtn_mem_semantics_to_nir_var_modes(b, semantics);
    mesa_scope nir_exec_scope = vtn_translate_scope(b, exec_scope);
 
+   optimize_barrier(&nir_semantics, &modes);
+
    /* Memory semantics is optional for OpControlBarrier. */
    mesa_scope nir_mem_scope;
    if (nir_semantics == 0 || modes == 0)
       nir_mem_scope = SCOPE_NONE;
    else
       nir_mem_scope = vtn_translate_scope(b, mem_scope);
+
+   if (nir_mem_scope <= SCOPE_INVOCATION && nir_exec_scope <= SCOPE_INVOCATION)
+      return;
 
    nir_barrier(&b->nb, .execution_scope=nir_exec_scope, .memory_scope=nir_mem_scope,
                        .memory_semantics=nir_semantics, .memory_modes=modes);
@@ -3168,6 +3236,8 @@ vtn_emit_memory_barrier(struct vtn_builder *b, SpvScope scope,
    nir_variable_mode modes = vtn_mem_semantics_to_nir_var_modes(b, semantics);
    nir_memory_semantics nir_semantics =
       vtn_mem_semantics_to_nir_mem_semantics(b, semantics);
+
+   optimize_barrier(&nir_semantics, &modes);
 
    /* No barrier to add. */
    if (nir_semantics == 0 || modes == 0)
@@ -3265,22 +3335,6 @@ image_operand_arg(struct vtn_builder *b, const uint32_t *w, uint32_t count,
    return idx;
 }
 
-static void
-non_uniform_decoration_cb(struct vtn_builder *b,
-                          struct vtn_value *val, int member,
-                          const struct vtn_decoration *dec, void *void_ctx)
-{
-   enum gl_access_qualifier *access = void_ctx;
-   switch (dec->decoration) {
-   case SpvDecorationNonUniformEXT:
-      *access |= ACCESS_NON_UNIFORM;
-      break;
-
-   default:
-      break;
-   }
-}
-
 /* Apply SignExtend/ZeroExtend operands to get the actual result type for
  * image read/sample operations and source type for write operations.
  */
@@ -3318,10 +3372,9 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
          "Type of Image operand of OpSampledImage");
 
       enum gl_access_qualifier access = 0;
-      vtn_foreach_decoration(b, vtn_untyped_value(b, w[3]),
-                             non_uniform_decoration_cb, &access);
-      vtn_foreach_decoration(b, vtn_untyped_value(b, w[4]),
-                             non_uniform_decoration_cb, &access);
+      if (vtn_has_decoration(b, vtn_untyped_value(b, w[3]), SpvDecorationNonUniformEXT) ||
+          vtn_has_decoration(b, vtn_untyped_value(b, w[4]), SpvDecorationNonUniformEXT))
+         access |= ACCESS_NON_UNIFORM;
 
       vtn_push_sampled_image(b, w[2], si, access & ACCESS_NON_UNIFORM);
       return;
@@ -3329,8 +3382,8 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
       struct vtn_sampled_image si = vtn_get_sampled_image(b, w[3]);
 
       enum gl_access_qualifier access = 0;
-      vtn_foreach_decoration(b, vtn_untyped_value(b, w[3]),
-                             non_uniform_decoration_cb, &access);
+      if (vtn_has_decoration(b, vtn_untyped_value(b, w[3]), SpvDecorationNonUniformEXT))
+         access |= ACCESS_NON_UNIFORM;
 
       vtn_push_image(b, w[2], si.image, access & ACCESS_NON_UNIFORM);
       return;
@@ -3809,7 +3862,8 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
     * can assume it doesn't exist.
     */
    enum gl_access_qualifier access = 0;
-   vtn_foreach_decoration(b, sampled_val, non_uniform_decoration_cb, &access);
+   if (vtn_has_decoration(b, sampled_val, SpvDecorationNonUniformEXT))
+      access |= ACCESS_NON_UNIFORM;
 
    if (operands & SpvImageOperandsNontemporalMask)
       access |= ACCESS_NON_TEMPORAL;
@@ -4236,7 +4290,8 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
     * chains to find the NonUniform decoration.  It's either right there or we
     * can assume it doesn't exist.
     */
-   vtn_foreach_decoration(b, res_val, non_uniform_decoration_cb, &access);
+   if (vtn_has_decoration(b, res_val, SpvDecorationNonUniformEXT))
+      access |= ACCESS_NON_UNIFORM;
    nir_intrinsic_set_access(intrin, access);
 
    switch (opcode) {
@@ -4539,6 +4594,8 @@ vtn_handle_atomics(struct vtn_builder *b, SpvOp opcode,
 
       if (ptr->mode != vtn_variable_mode_workgroup)
          access |= ACCESS_COHERENT;
+      if (ptr->access & ACCESS_NON_UNIFORM)
+         access |= ACCESS_NON_UNIFORM;
 
       nir_intrinsic_set_access(atomic, access);
 
@@ -5670,8 +5727,10 @@ vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
 
    case SpvExecutionModeSubgroupSize:
       vtn_assert(b->shader->info.stage == MESA_SHADER_KERNEL);
-      vtn_assert(b->shader->info.subgroup_size == SUBGROUP_SIZE_VARYING);
-      b->shader->info.subgroup_size = mode->operands[0];
+      vtn_assert(!b->shader->info.api_subgroup_size);
+      b->shader->info.api_subgroup_size = mode->operands[0];
+      b->shader->info.max_subgroup_size = mode->operands[0];
+      b->shader->info.min_subgroup_size = mode->operands[0];
       break;
 
    case SpvExecutionModeSubgroupsPerWorkgroup:
@@ -7223,16 +7282,81 @@ spirv_to_nir(const uint32_t *words, size_t word_count,
       return NULL;
    }
 
-   const char *dump_path = secure_getenv("MESA_SPIRV_DUMP_PATH");
-   if (dump_path)
-      vtn_dump_shader(b, dump_path, "spirv");
-
-   b->shader = nir_shader_create(b, stage, nir_options, NULL);
-   b->shader->info.subgroup_size = options->subgroup_size;
+   b->shader = nir_shader_create(b, stage, nir_options);
    b->shader->info.float_controls_execution_mode = options->float_controls_execution_mode;
    b->shader->info.cs.shader_index = options->shader_index;
    b->shader->has_debug_info = options->debug_info;
    _mesa_blake3_compute(words, word_count * sizeof(uint32_t), b->shader->info.source_blake3);
+
+   const char *dump_path = secure_getenv("MESA_SPIRV_DUMP_PATH");
+   if (dump_path) {
+      char blake3_str[BLAKE3_HEX_LEN];
+      _mesa_blake3_format(blake3_str, b->shader->info.source_blake3);
+      vtn_dump_shader(b, dump_path, blake3_str);
+   }
+
+   const char *read_path = secure_getenv("MESA_SPIRV_READ_PATH");
+   if (read_path) {
+      char blake3_str[BLAKE3_HEX_LEN];
+      _mesa_blake3_format(blake3_str, b->shader->info.source_blake3);
+
+      char filename[PATH_MAX];
+      const char *stage_ext = _mesa_shader_stage_to_file_ext(stage);
+      int len = snprintf(filename, sizeof(filename), "%s/0x%s.%s",
+                         read_path, blake3_str, stage_ext);
+
+      if (len < 0 || len >= sizeof(filename)) {
+         vtn_err("Invalid replacement SPIR-V shader file path length: %s/%s.%s",
+                 read_path, blake3_str, stage_ext);
+         goto no_shader_replace;
+      }
+
+      FILE *f = fopen(filename, "rb");
+      if (f == NULL) {
+         vtn_info("Replacement SPIR-V shader file %s not found.", filename);
+         goto no_shader_replace;
+      }
+
+      size_t replacement_size = 0;
+      fseek(f, 0, SEEK_END);
+      replacement_size = ftell(f);
+      if (replacement_size == 0) {
+         vtn_info("Replacement SPIR-V shader file %s is empty.", filename);
+         goto no_shader_replace;
+      }
+
+      uint32_t *replacement_words = malloc(replacement_size);
+      if (replacement_words == NULL) {
+         vtn_err("Failed to allocate memory for replacement SPIR-V shader %s", filename);
+         goto no_shader_replace;
+      }
+
+      fseek(f, 0, SEEK_SET);
+      if (fread((void *)replacement_words, 1, replacement_size, f) != replacement_size) {
+         vtn_err("Failed to read replacement SPIR-V shader file %s", filename);
+         free((void *)replacement_words);
+         fclose(f);
+         goto no_shader_replace;
+      }
+
+      fclose(f);
+
+      vtn_info("Replacing shader 0x%s with contents of %s", blake3_str, filename);
+
+      // re-generate with the replacement SPIR-V
+      ralloc_free(b->shader);
+      ralloc_free(b);
+      nir_shader* result = spirv_to_nir(replacement_words, replacement_size / sizeof(uint32_t),
+                                        spec, num_spec,
+                                        stage, entry_point_name, options,
+                                        nir_options);
+
+      free((void *)replacement_words);
+      return result;
+
+      // default (empty) path if shader replacement fails
+      no_shader_replace: ;
+   }
 
    /* Skip the SPIR-V header, handled at vtn_create_builder */
    words+= 5;
@@ -7241,9 +7365,10 @@ spirv_to_nir(const uint32_t *words, size_t word_count,
    words = vtn_foreach_instruction(b, words, word_end,
                                    vtn_handle_preamble_instruction);
 
-   if (b->shader->info.subgroup_size == SUBGROUP_SIZE_UNIFORM &&
-       b->enabled_capabilities.GroupNonUniform)
-      b->shader->info.subgroup_size = SUBGROUP_SIZE_API_CONSTANT;
+   if (b->enabled_capabilities.GroupNonUniform && options->group_non_uniform_subgroup_size) {
+      b->shader->info.api_subgroup_size = options->group_non_uniform_subgroup_size;
+      b->shader->info.max_subgroup_size = options->group_non_uniform_subgroup_size;
+   }
 
    /* DirectXShaderCompiler and glslang/shaderc both create OpKill from HLSL's
     * discard/clip, which uses demote semantics. DirectXShaderCompiler will use

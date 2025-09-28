@@ -11,6 +11,7 @@
 #include "aco_shader_info.h"
 #include "aco_util.h"
 
+#include "util/bitset.h"
 #include "util/compiler.h"
 #include "util/shader_stats.h"
 
@@ -64,11 +65,13 @@ enum memory_semantics : uint8_t {
    semantic_none = 0x0,
    /* for loads: don't move any access after this load to before this load (even other loads)
     * for barriers: don't move any access after the barrier to before any
-    * atomics/control_barriers/sendmsg_gs_done/position-primitive-export before the barrier */
+    * atomic_loads/control_barriers/p_pops_gfx9_add_exiting_wave_id or
+    * certain s_wait_event before the barrier */
    semantic_acquire = 0x1,
    /* for stores: don't move any access before this store to after this store
     * for barriers: don't move any access before the barrier to after any
-    * atomics/control_barriers/sendmsg_gs_done/position-primitive-export after the barrier */
+    * atomic_stores/control_barriers/p_pops_gfx9_ordered_section_done or
+    * certain sendmsg/exports after the barrier */
    semantic_release = 0x2,
 
    /* the rest are for load/stores/atomics only */
@@ -1045,6 +1048,11 @@ struct RegisterDemand {
       return a.vgpr == b.vgpr && a.sgpr == b.sgpr;
    }
 
+   constexpr friend bool operator!=(const RegisterDemand a, const RegisterDemand b) noexcept
+   {
+      return !(a == b);
+   }
+
    constexpr bool exceeds(const RegisterDemand other) const noexcept
    {
       return vgpr > other.vgpr || sgpr > other.sgpr;
@@ -1107,6 +1115,74 @@ struct RegisterDemand {
    }
 };
 
+struct ABI {
+   struct GPRRange {
+      uint16_t sgpr;
+      uint16_t vgpr;
+   };
+
+   struct RegisterBlock {
+      GPRRange clobbered_size;
+      GPRRange preserved_size;
+      bool clobbered_first;
+   };
+
+   RegisterBlock block_size;
+   /* Maximum number of registers allowed to be used by parameters */
+   RegisterDemand max_param_demand;
+
+   void preservedRegisters(BITSET_DECLARE(regs, 512),
+                           RegisterDemand reg_limit = RegisterDemand(256, 256)) const
+   {
+      unsigned size = DIV_ROUND_UP(512, BITSET_WORDBITS) * sizeof(BITSET_WORD);
+      memset(regs, 0, size);
+
+      /* Fill out preserved ranges by repeating the register block across the register file */
+
+      /* SGPR ranges */
+      unsigned gpr_offset = block_size.clobbered_first ? block_size.clobbered_size.sgpr : 0;
+      while (gpr_offset < (unsigned)reg_limit.sgpr) {
+         unsigned end = MIN2((unsigned)reg_limit.sgpr, gpr_offset + block_size.preserved_size.sgpr);
+         BITSET_SET_RANGE(regs, gpr_offset, end - 1);
+         gpr_offset = end + block_size.clobbered_size.sgpr;
+      }
+      /* VGPR ranges */
+      gpr_offset = block_size.clobbered_first ? block_size.clobbered_size.vgpr : 0;
+      while (gpr_offset < (unsigned)reg_limit.vgpr) {
+         unsigned end = MIN2((unsigned)reg_limit.vgpr, gpr_offset + block_size.preserved_size.vgpr);
+         BITSET_SET_RANGE(regs, 256 + gpr_offset, 256 + end - 1);
+         gpr_offset = end + block_size.clobbered_size.vgpr;
+      }
+   }
+};
+
+static constexpr ABI rtRaygenABI = {
+   ABI::RegisterBlock{
+      ABI::GPRRange{128u, 256u}, /* clobbered_size */
+      ABI::GPRRange{0u, 0u},     /* preserved_size */
+      true,                      /* preserved_first */
+   },
+   RegisterDemand(32, 32), /* max_param_demand */
+};
+
+static constexpr ABI rtTraversalABI = {
+   ABI::RegisterBlock{
+      ABI::GPRRange{128u, 256u}, /* clobbered_size */
+      ABI::GPRRange{0u, 0u},     /* preserved_size */
+      true,                      /* preserved_first */
+   },
+   RegisterDemand(32, 32), /* max_param_demand */
+};
+
+static constexpr ABI rtAnyHitABI = {
+   ABI::RegisterBlock{
+      ABI::GPRRange{128u, 256u}, /* clobbered_size */
+      ABI::GPRRange{80u, 80u},   /* preserved_size */
+      false,                     /* preserved_first */
+   },
+   RegisterDemand(32, 32), /* max_param_demand */
+};
+
 struct Block;
 struct Instruction;
 struct Pseudo_instruction;
@@ -1122,6 +1198,7 @@ struct FLAT_instruction;
 struct Pseudo_branch_instruction;
 struct Pseudo_barrier_instruction;
 struct Pseudo_reduction_instruction;
+struct Pseudo_call_instruction;
 struct VALU_instruction;
 struct VINTERP_inreg_instruction;
 struct VINTRP_instruction;
@@ -1322,6 +1399,17 @@ struct Instruction {
       return *(Pseudo_reduction_instruction*)this;
    }
    constexpr bool isReduction() const noexcept { return format == Format::PSEUDO_REDUCTION; }
+   Pseudo_call_instruction& call() noexcept
+   {
+      assert(isCall());
+      return *(Pseudo_call_instruction*)this;
+   }
+   const Pseudo_call_instruction& call() const noexcept
+   {
+      assert(isCall());
+      return *(Pseudo_call_instruction*)this;
+   }
+   constexpr bool isCall() const noexcept { return format == Format::PSEUDO_CALL; }
    constexpr bool isVOP3P() const noexcept { return (uint16_t)format & (uint16_t)Format::VOP3P; }
    VINTERP_inreg_instruction& vinterp_inreg() noexcept
    {
@@ -1809,6 +1897,27 @@ struct Pseudo_reduction_instruction : public Instruction {
 static_assert(sizeof(Pseudo_reduction_instruction) == sizeof(Instruction) + 4,
               "Unexpected padding");
 
+struct Pseudo_call_instruction : public Instruction {
+   /* The amount of "free" preserved registers we can use to stash caller-owned temporaries instead
+    * of needing to spill them. This is equal to the amount of preserved registers given by the ABI,
+    * minus the amount of preserved registers already occupied by call parameters.
+    */
+   RegisterDemand callee_preserved_limit;
+   /* Register demand of caller-owned temporaries we need to preserve a copy of throughout the
+    * callee. This includes all live variables not used by the call instruction as well as clobbered
+    * Operand temporaries (unless the call kills the operand - we don't need to preserve a copy in
+    * that case). Non-clobbered Operand temporaries are not included in this demand - they occupy a
+    * preserved register, which is accounted for in the calculation of callee_preserved_limit
+    * already.
+    *
+    * Iff this demand is higher than callee_preserved_limit, some of the temporaries need to be
+    * spilled to scratch.
+    */
+   RegisterDemand caller_preserved_demand;
+
+   ABI abi;
+};
+
 inline bool
 Instruction::accessesLDS() const noexcept
 {
@@ -1876,13 +1985,19 @@ is_phi(aco_ptr<Instruction>& instr)
 }
 
 bool is_wait_export_ready(amd_gfx_level gfx_level, const Instruction* instr);
+
+class Program;
+
+uint16_t is_atomic_or_control_instr(Program* program, const Instruction* instr,
+                                    memory_sync_info sync, unsigned semantic);
+
 memory_sync_info get_sync_info(const Instruction* instr);
 
 inline bool
 is_dead(const std::vector<uint16_t>& uses, const Instruction* instr)
 {
-   if (instr->definitions.empty() || instr->isBranch() || instr->opcode == aco_opcode::p_startpgm ||
-       instr->opcode == aco_opcode::p_init_scratch ||
+   if (instr->definitions.empty() || instr->isBranch() || instr->isCall() ||
+       instr->opcode == aco_opcode::p_startpgm || instr->opcode == aco_opcode::p_init_scratch ||
        instr->opcode == aco_opcode::p_dual_src_export_gfx11)
       return false;
 
@@ -1968,6 +2083,10 @@ struct depctr_wait {
       };
       unsigned packed = -1;
    };
+
+   bool empty() const { return packed == (unsigned)-1; }
+
+   uint16_t pack() const;
 };
 
 depctr_wait parse_depctr_wait(const Instruction* instr);
@@ -1990,6 +2109,7 @@ enum block_kind {
    block_kind_resume = 1 << 12,
    block_kind_export_end = 1 << 13,
    block_kind_end_with_regs = 1 << 14,
+   block_kind_contains_call = 1 << 15,
 };
 
 /* CFG */
@@ -2201,6 +2321,12 @@ public:
 
    bool should_repair_ssa = false;
 
+   bool is_callee = false;
+   bool has_call = false;
+   bool bypass_reg_preservation = false;
+   ABI callee_abi = {};
+   RegisterDemand callee_param_demand = RegisterDemand();
+
    struct {
       monotonic_buffer_resource memory;
       /* live-in temps per block */
@@ -2314,7 +2440,6 @@ void spill(Program* program);
 void insert_waitcnt(Program* program);
 void insert_delay_alu(Program* program);
 void combine_delay_alu(Program* program);
-bool dealloc_vgprs(Program* program);
 void insert_NOPs(Program* program);
 void form_hard_clauses(Program* program);
 unsigned emit_program(Program* program, std::vector<uint32_t>& code,

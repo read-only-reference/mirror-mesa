@@ -463,11 +463,7 @@ radv_cmd_set_primitive_topology(struct radv_cmd_buffer *cmd_buffer, uint32_t pri
 
    if (radv_primitive_topology_is_line_list(state->dynamic.vk.ia.primitive_topology) !=
        radv_primitive_topology_is_line_list(primitive_topology))
-      state->dirty_dynamic |= RADV_DYNAMIC_LINE_STIPPLE;
-
-   if (radv_prim_is_points_or_lines(state->dynamic.vk.ia.primitive_topology) !=
-       radv_prim_is_points_or_lines(primitive_topology))
-      state->dirty |= RADV_CMD_DIRTY_GUARDBAND;
+      state->dirty |= RADV_CMD_DIRTY_RASTER_STATE;
 
    state->dynamic.vk.ia.primitive_topology = primitive_topology;
 
@@ -1770,7 +1766,11 @@ radv_emit_userdata_address(const struct radv_device *device, struct radv_cmd_str
       return;
 
    radeon_begin(cs);
-   radeon_emit_32bit_pointer(offset, va, &pdev->info);
+   if (pdev->info.gfx_level >= GFX12) {
+      gfx12_push_32bit_pointer(offset, va, &pdev->info);
+   } else {
+      radeon_emit_32bit_pointer(offset, va, &pdev->info);
+   }
    radeon_end();
 }
 
@@ -1848,11 +1848,22 @@ radv_get_vgt_outprim_type(const struct radv_cmd_buffer *cmd_buffer)
    const struct radv_shader *last_vgt_shader = cmd_buffer->state.last_vgt_shader;
    const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
 
+   /* Ignore dynamic primitive topology for TES/GS/MS stages. */
    if (cmd_buffer->state.active_stages &
-       (VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT |
-        VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_MESH_BIT_EXT)) {
-      /* Ignore dynamic primitive topology for TES/GS/MS stages. */
-      return cmd_buffer->state.vgt_outprim_type;
+       (VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_MESH_BIT_EXT)) {
+      if (cmd_buffer->state.shaders[MESA_SHADER_GEOMETRY]) {
+         return radv_conv_gl_prim_to_gs_out(cmd_buffer->state.shaders[MESA_SHADER_GEOMETRY]->info.gs.output_prim);
+      } else if (cmd_buffer->state.shaders[MESA_SHADER_TESS_EVAL]) {
+         if (cmd_buffer->state.shaders[MESA_SHADER_TESS_EVAL]->info.tes.point_mode) {
+            return V_028A6C_POINTLIST;
+         } else {
+            return radv_conv_tess_prim_to_gs_out(
+               cmd_buffer->state.shaders[MESA_SHADER_TESS_EVAL]->info.tes._primitive_mode);
+         }
+      } else {
+         assert(cmd_buffer->state.shaders[MESA_SHADER_MESH]);
+         return radv_conv_gl_prim_to_gs_out(cmd_buffer->state.shaders[MESA_SHADER_MESH]->info.ms.output_prim);
+      }
    }
 
    return radv_conv_prim_to_gs_out(d->vk.ia.primitive_topology, last_vgt_shader->info.is_ngg);
@@ -1863,7 +1874,7 @@ radv_get_line_mode(const struct radv_cmd_buffer *cmd_buffer)
 {
    const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
 
-   const unsigned vgt_outprim_type = radv_get_vgt_outprim_type(cmd_buffer);
+   const unsigned vgt_outprim_type = cmd_buffer->state.vgt_outprim_type;
 
    const bool draw_lines =
       (radv_vgt_outprim_is_line(vgt_outprim_type) && !radv_polygon_mode_is_point(d->vk.rs.polygon_mode)) ||
@@ -1879,7 +1890,7 @@ radv_get_rasterization_samples(struct radv_cmd_buffer *cmd_buffer)
 {
    const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
 
-   VkLineRasterizationModeEXT line_mode = radv_get_line_mode(cmd_buffer);
+   const VkLineRasterizationModeEXT line_mode = cmd_buffer->state.line_rast_mode;
 
    if (line_mode == VK_LINE_RASTERIZATION_MODE_BRESENHAM) {
       /* From the Vulkan spec 1.3.221:
@@ -1901,17 +1912,35 @@ radv_get_rasterization_samples(struct radv_cmd_buffer *cmd_buffer)
    return MAX2(1, d->vk.ms.rasterization_samples);
 }
 
+static ALWAYS_INLINE bool
+radv_is_sample_shading_enabled(struct radv_cmd_buffer *cmd_buffer, float *min_sample_shading)
+{
+   const struct radv_shader *ps = cmd_buffer->state.shaders[MESA_SHADER_FRAGMENT];
+
+   if (min_sample_shading)
+      *min_sample_shading = 1.0f;
+
+   if (cmd_buffer->state.ms.sample_shading_enable) {
+      if (min_sample_shading)
+         *min_sample_shading = cmd_buffer->state.ms.min_sample_shading;
+      return true;
+   }
+
+   return ps ? ps->info.ps.uses_sample_shading : false;
+}
+
 static ALWAYS_INLINE unsigned
 radv_get_ps_iter_samples(struct radv_cmd_buffer *cmd_buffer)
 {
    const struct radv_rendering_state *render = &cmd_buffer->state.render;
    unsigned ps_iter_samples = 1;
+   float min_sample_shading;
 
-   if (cmd_buffer->state.ms.sample_shading_enable) {
-      unsigned rasterization_samples = radv_get_rasterization_samples(cmd_buffer);
+   if (radv_is_sample_shading_enabled(cmd_buffer, &min_sample_shading)) {
+      unsigned rasterization_samples = cmd_buffer->state.num_rast_samples;
       unsigned color_samples = MAX2(render->color_samples, rasterization_samples);
 
-      ps_iter_samples = ceilf(cmd_buffer->state.ms.min_sample_shading * color_samples);
+      ps_iter_samples = ceilf(min_sample_shading * color_samples);
       ps_iter_samples = util_next_power_of_two(ps_iter_samples);
    }
 
@@ -2151,7 +2180,7 @@ radv_gfx10_compute_bin_size(struct radv_cmd_buffer *cmd_buffer)
    const unsigned color_tag_part = (color_tag_count * rb_count / pipe_count) * color_tag_size * pipe_count;
    const unsigned fmask_tag_part = (fmask_tag_count * rb_count / pipe_count) * fmask_tag_size * pipe_count;
 
-   const unsigned total_samples = radv_get_rasterization_samples(cmd_buffer);
+   const unsigned total_samples = cmd_buffer->state.num_rast_samples;
    const unsigned samples_log = util_logbase2_ceil(total_samples);
 
    unsigned color_bytes_per_pixel = 0;
@@ -2435,7 +2464,7 @@ radv_gfx9_compute_bin_size(struct radv_cmd_buffer *cmd_buffer)
    unsigned log_num_rb_per_se = util_logbase2_ceil(pdev->info.max_render_backends / pdev->info.max_se);
    unsigned log_num_se = util_logbase2_ceil(pdev->info.max_se);
 
-   unsigned total_samples = radv_get_rasterization_samples(cmd_buffer);
+   unsigned total_samples = cmd_buffer->state.num_rast_samples;
    unsigned ps_iter_samples = radv_get_ps_iter_samples(cmd_buffer);
    unsigned effective_samples = total_samples;
    unsigned color_bytes_per_pixel = 0;
@@ -2824,23 +2853,23 @@ radv_emit_rbplus_state(struct radv_cmd_buffer *cmd_buffer)
 }
 
 static void
-radv_emit_ps_epilog_state(struct radv_cmd_buffer *cmd_buffer, struct radv_shader_part *ps_epilog)
+radv_emit_ps_epilog_state(struct radv_cmd_buffer *cmd_buffer)
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
    struct radv_shader *ps_shader = cmd_buffer->state.shaders[MESA_SHADER_FRAGMENT];
+   const struct radv_shader_part *ps_epilog = cmd_buffer->state.ps_epilog;
    struct radv_cmd_stream *cs = cmd_buffer->cs;
    uint32_t pgm_rsrc1 = 0;
 
-   if (cmd_buffer->state.emitted_ps_epilog == ps_epilog)
+   /* This state might be dirty with a NULL PS when states are saved/restored for meta operations. */
+   if (!ps_shader || !ps_shader->info.ps.has_epilog)
       return;
 
    assert(ps_shader->config.num_shared_vgprs == 0);
    if (G_00B848_VGPRS(ps_epilog->rsrc1) > G_00B848_VGPRS(ps_shader->config.rsrc1)) {
       pgm_rsrc1 = (ps_shader->config.rsrc1 & C_00B848_VGPRS) | (ps_epilog->rsrc1 & ~C_00B848_VGPRS);
    }
-
-   radv_cs_add_buffer(device->ws, cs->b, ps_epilog->bo);
 
    const uint32_t epilog_pc_offset = radv_get_user_sgpr_loc(ps_shader, AC_UD_EPILOG_PC);
 
@@ -2855,10 +2884,6 @@ radv_emit_ps_epilog_state(struct radv_cmd_buffer *cmd_buffer, struct radv_shader
       radeon_emit_32bit_pointer(epilog_pc_offset, ps_epilog->va, &pdev->info);
    }
    radeon_end();
-
-   cmd_buffer->shader_upload_seq = MAX2(cmd_buffer->shader_upload_seq, ps_epilog->upload_seq);
-
-   cmd_buffer->state.emitted_ps_epilog = ps_epilog;
 }
 
 void
@@ -3109,8 +3134,14 @@ radv_emit_hw_ngg(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *e
 
    radeon_set_uconfig_reg(R_03096C_GE_CNTL, ge_cntl);
 
+   const uint32_t ngg_lds_layout_offset = radv_get_user_sgpr_loc(shader, AC_UD_NGG_LDS_LAYOUT);
+   assert(ngg_lds_layout_offset);
+   assert(!(shader->info.ngg_info.esgs_ring_size & 0xffff0000));
+
    if (pdev->info.gfx_level >= GFX12) {
       radeon_set_uconfig_reg(R_030988_VGT_PRIMITIVEID_EN, shader->info.regs.ngg.vgt_primitiveid_en);
+      gfx12_push_sh_reg(ngg_lds_layout_offset,
+                        SET_SGPR_FIELD(NGG_LDS_LAYOUT_GS_OUT_VERTEX_BASE, shader->info.ngg_info.esgs_ring_size));
    } else {
       if (pdev->info.gfx_level >= GFX7) {
          radeon_set_sh_reg_idx(&pdev->info, R_00B21C_SPI_SHADER_PGM_RSRC3_GS, 3,
@@ -3121,14 +3152,11 @@ radv_emit_hw_ngg(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *e
                             shader->info.regs.spi_shader_pgm_rsrc4_gs);
 
       radeon_set_uconfig_reg(R_030980_GE_PC_ALLOC, shader->info.regs.ge_pc_alloc);
+
+      radeon_set_sh_reg(ngg_lds_layout_offset,
+                        SET_SGPR_FIELD(NGG_LDS_LAYOUT_GS_OUT_VERTEX_BASE, shader->info.ngg_info.esgs_ring_size));
    }
 
-   const uint32_t ngg_lds_layout_offset = radv_get_user_sgpr_loc(shader, AC_UD_NGG_LDS_LAYOUT);
-   assert(ngg_lds_layout_offset);
-   assert(!(shader->info.ngg_info.esgs_ring_size & 0xffff0000));
-
-   radeon_set_sh_reg(ngg_lds_layout_offset,
-                     SET_SGPR_FIELD(NGG_LDS_LAYOUT_GS_OUT_VERTEX_BASE, shader->info.ngg_info.esgs_ring_size));
    radeon_end();
 }
 
@@ -3639,9 +3667,23 @@ radv_emit_fragment_shader(struct radv_cmd_buffer *cmd_buffer)
 {
    const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
-   const struct radv_shader *ps = cmd_buffer->state.shaders[MESA_SHADER_FRAGMENT];
+   struct radv_shader *ps = cmd_buffer->state.shaders[MESA_SHADER_FRAGMENT];
    struct radv_cmd_stream *cs = cmd_buffer->cs;
    const uint64_t va = radv_shader_get_va(ps);
+
+   if (device->pbb_allowed) {
+      const struct radv_binning_settings *settings = &pdev->binning_settings;
+
+      if (cmd_buffer->state.emitted_ps != ps &&
+          (settings->context_states_per_bin > 1 || settings->persistent_states_per_bin > 1)) {
+         /* Break the batch on PS changes. */
+         radeon_begin(cs);
+         radeon_event_write(V_028A90_BREAK_BATCH);
+         radeon_end();
+
+         cmd_buffer->state.emitted_ps = ps;
+      }
+   }
 
    radeon_begin(cs);
    if (pdev->info.gfx_level >= GFX12) {
@@ -3924,27 +3966,11 @@ radv_emit_graphics_pipeline(struct radv_cmd_buffer *cmd_buffer)
 {
    struct radv_graphics_pipeline *pipeline = cmd_buffer->state.graphics_pipeline;
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
-   const struct radv_physical_device *pdev = radv_device_physical(device);
-   struct radv_cmd_stream *cs = cmd_buffer->cs;
 
    if (cmd_buffer->state.emitted_graphics_pipeline == pipeline)
       return;
 
    radv_emit_graphics_shaders(cmd_buffer);
-
-   if (device->pbb_allowed) {
-      const struct radv_binning_settings *settings = &pdev->binning_settings;
-
-      if ((!cmd_buffer->state.emitted_graphics_pipeline ||
-           cmd_buffer->state.emitted_graphics_pipeline->base.shaders[MESA_SHADER_FRAGMENT] !=
-              cmd_buffer->state.graphics_pipeline->base.shaders[MESA_SHADER_FRAGMENT]) &&
-          (settings->context_states_per_bin > 1 || settings->persistent_states_per_bin > 1)) {
-         /* Break the batch on PS changes. */
-         radeon_begin(cs);
-         radeon_event_write(V_028A90_BREAK_BATCH);
-         radeon_end();
-      }
-   }
 
    if (pipeline->sqtt_shaders_reloc) {
       /* Emit shaders relocation because RGP requires them to be contiguous in memory. */
@@ -4218,11 +4244,12 @@ radv_emit_vgt_prim_state(struct radv_cmd_buffer *cmd_buffer)
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
-   const uint32_t vgt_outprim_type = radv_get_vgt_outprim_type(cmd_buffer);
+   const uint32_t vgt_outprim_type = cmd_buffer->state.vgt_outprim_type;
    const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
    struct radv_cmd_stream *cs = cmd_buffer->cs;
 
-   assert(!cmd_buffer->state.mesh_shading);
+   if (cmd_buffer->state.mesh_shading)
+      return;
 
    radeon_begin(cs);
    if (pdev->info.gfx_level >= GFX7) {
@@ -4248,7 +4275,7 @@ radv_should_force_vrs1x1(struct radv_cmd_buffer *cmd_buffer)
    const struct radv_shader *ps = cmd_buffer->state.shaders[MESA_SHADER_FRAGMENT];
 
    return pdev->info.gfx_level >= GFX10_3 &&
-          (cmd_buffer->state.ms.sample_shading_enable || (ps && ps->info.ps.force_sample_iter_shading_rate));
+          (radv_is_sample_shading_enabled(cmd_buffer, NULL) || (ps && ps->info.ps.force_sample_iter_shading_rate));
 }
 
 static void
@@ -4356,27 +4383,16 @@ radv_get_primitive_reset_index(const struct radv_cmd_buffer *cmd_buffer)
 }
 
 static void
-radv_emit_patch_control_points_state(struct radv_cmd_buffer *cmd_buffer)
+radv_emit_ls_hs_config(struct radv_cmd_buffer *cmd_buffer)
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
-   const struct radv_shader *vs = radv_get_shader(cmd_buffer->state.shaders, MESA_SHADER_VERTEX);
    const struct radv_shader *tcs = cmd_buffer->state.shaders[MESA_SHADER_TESS_CTRL];
    const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
    unsigned ls_hs_config;
 
    if (!tcs)
       return;
-
-   /* Compute tessellation info that depends on the number of patch control points when this state
-    * is dynamic.
-    */
-   if (cmd_buffer->state.uses_dynamic_patch_control_points) {
-      radv_get_tess_wg_info(pdev, &tcs->info.tcs.io_info, tcs->info.tcs.tcs_vertices_out, d->vk.ts.patch_control_points,
-                            /* TODO: This should be only inputs in LDS (not VGPR inputs) to reduce LDS usage */
-                            vs->info.vs.num_linked_outputs, &cmd_buffer->state.tess_num_patches,
-                            &cmd_buffer->state.tess_lds_size);
-   }
 
    ls_hs_config = S_028B58_NUM_PATCHES(cmd_buffer->state.tess_num_patches) |
                   /* GFX12 programs patch_vertices in VGT_PRIMITIVE_TYPE.NUM_INPUT_CP. */
@@ -4397,7 +4413,7 @@ radv_emit_rast_samples_state(struct radv_cmd_buffer *cmd_buffer)
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
-   unsigned rasterization_samples = radv_get_rasterization_samples(cmd_buffer);
+   const unsigned rasterization_samples = cmd_buffer->state.num_rast_samples;
    unsigned ps_iter_samples = radv_get_ps_iter_samples(cmd_buffer);
    const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
    unsigned spi_baryc_cntl = S_0286E0_FRONT_FACE_ALL_BITS(0);
@@ -5518,6 +5534,7 @@ radv_emit_framebuffer_state(struct radv_cmd_buffer *cmd_buffer)
       radv_image_view_init(&iview, device,
                            &(VkImageViewCreateInfo){
                               .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                              .flags = VK_IMAGE_VIEW_CREATE_DRIVER_INTERNAL_BIT_MESA,
                               .image = radv_image_to_handle(image),
                               .viewType = radv_meta_get_view_type(image),
                               .format = image->vk.format,
@@ -5575,7 +5592,7 @@ radv_gfx12_override_hiz_enable(struct radv_cmd_buffer *cmd_buffer, bool enable)
 }
 
 static void
-radv_gfx12_emit_alt_hiz_wa(struct radv_cmd_buffer *cmd_buffer)
+radv_gfx12_emit_hiz_wa_full(struct radv_cmd_buffer *cmd_buffer)
 {
    const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_rendering_state *render = &cmd_buffer->state.render;
@@ -5624,7 +5641,7 @@ radv_emit_guardband_state(struct radv_cmd_buffer *cmd_buffer)
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
-   unsigned vgt_outprim_type = radv_get_vgt_outprim_type(cmd_buffer);
+   unsigned vgt_outprim_type = cmd_buffer->state.vgt_outprim_type;
    const bool draw_points =
       radv_vgt_outprim_is_point(vgt_outprim_type) || radv_polygon_mode_is_point(d->vk.rs.polygon_mode);
    const bool draw_lines =
@@ -5735,7 +5752,7 @@ radv_emit_index_buffer(struct radv_cmd_buffer *cmd_buffer)
 }
 
 static void
-radv_flush_occlusion_query_state(struct radv_cmd_buffer *cmd_buffer)
+radv_emit_occlusion_query_state(struct radv_cmd_buffer *cmd_buffer)
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
@@ -5763,7 +5780,7 @@ radv_flush_occlusion_query_state(struct radv_cmd_buffer *cmd_buffer)
       }
 
       if (gfx_level < GFX12) {
-         const uint32_t rasterization_samples = radv_get_rasterization_samples(cmd_buffer);
+         const uint32_t rasterization_samples = cmd_buffer->state.num_rast_samples;
          const uint32_t sample_rate = util_logbase2(rasterization_samples);
 
          db_count_control |= S_028004_SAMPLE_RATE(sample_rate);
@@ -5958,6 +5975,9 @@ static void
 emit_prolog_inputs(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *vs_shader,
                    uint32_t nontrivial_divisors)
 {
+   const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+
    /* no need to re-emit anything in this case */
    if (!nontrivial_divisors && cmd_buffer->state.emitted_vs_prolog &&
        !cmd_buffer->state.emitted_vs_prolog->nontrivial_divisors)
@@ -5996,7 +6016,11 @@ emit_prolog_inputs(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader 
 
    const uint32_t vs_prolog_inputs_offset = radv_get_user_sgpr_loc(vs_shader, AC_UD_VS_PROLOG_INPUTS);
    radeon_begin(cmd_buffer->cs);
-   radeon_emit_64bit_pointer(vs_prolog_inputs_offset, input_va);
+   if (pdev->info.gfx_level >= GFX12) {
+      gfx12_push_64bit_pointer(vs_prolog_inputs_offset, input_va);
+   } else {
+      radeon_emit_64bit_pointer(vs_prolog_inputs_offset, input_va);
+   }
    radeon_end();
 }
 
@@ -6136,26 +6160,23 @@ lookup_ps_epilog(struct radv_cmd_buffer *cmd_buffer)
    }
 
    state.alpha_to_one = d->vk.ms.alpha_to_one_enable;
+   state.colors_written = ps->info.ps.colors_written;
 
-   if (ps) {
-      state.colors_written = ps->info.ps.colors_written;
+   if (ps->info.ps.exports_mrtz_via_epilog) {
+      const bool export_z_stencil_samplemask =
+         ps->info.ps.writes_z || ps->info.ps.writes_stencil || ps->info.ps.writes_sample_mask;
 
-      if (ps->info.ps.exports_mrtz_via_epilog) {
-         const bool export_z_stencil_samplemask =
-            ps->info.ps.writes_z || ps->info.ps.writes_stencil || ps->info.ps.writes_sample_mask;
+      state.export_depth = ps->info.ps.writes_z;
+      state.export_stencil = ps->info.ps.writes_stencil;
+      state.export_sample_mask = ps->info.ps.writes_sample_mask;
 
-         state.export_depth = ps->info.ps.writes_z;
-         state.export_stencil = ps->info.ps.writes_stencil;
-         state.export_sample_mask = ps->info.ps.writes_sample_mask;
-
-         if (d->vk.ms.alpha_to_coverage_enable) {
-            /* We need coverage-to-mask when alpha-to-one is also enabled. On GFX11, it's always
-             * enabled if there's a mrtz export.
-             */
-            const bool coverage_to_mask =
-               d->vk.ms.alpha_to_one_enable || (pdev->info.gfx_level >= GFX11 && export_z_stencil_samplemask);
-            state.alpha_to_coverage_via_mrtz = coverage_to_mask;
-         }
+      if (d->vk.ms.alpha_to_coverage_enable) {
+         /* We need coverage-to-mask when alpha-to-one is also enabled. On GFX11, it's always
+          * enabled if there's a mrtz export.
+          */
+         const bool coverage_to_mask =
+            d->vk.ms.alpha_to_one_enable || (pdev->info.gfx_level >= GFX11 && export_z_stencil_samplemask);
+         state.alpha_to_coverage_via_mrtz = coverage_to_mask;
       }
    }
 
@@ -6303,7 +6324,11 @@ radv_emit_push_constants_per_stage(const struct radv_device *device, struct radv
    if (push_constants_offset) {
       radeon_check_space(device->ws, cs->b, 3);
       radeon_begin(cs);
-      radeon_emit_32bit_pointer(push_constants_offset, push_constants_va, &pdev->info);
+      if (pdev->info.gfx_level >= GFX12) {
+         gfx12_push_32bit_pointer(push_constants_offset, push_constants_va, &pdev->info);
+      } else {
+         radeon_emit_32bit_pointer(push_constants_offset, push_constants_va, &pdev->info);
+      }
       radeon_end();
    }
 }
@@ -6544,11 +6569,11 @@ radv_flush_vertex_descriptors(struct radv_cmd_buffer *cmd_buffer)
    bool uses_dynamic_inputs = vs->info.vs.dynamic_inputs;
    struct radv_cmd_stream *cs = cmd_buffer->cs;
 
-   if (!vs->info.vs.vb_desc_usage_mask)
+   if (!vs)
       return;
 
-   /* Mesh shaders don't have vertex descriptors. */
-   assert(!cmd_buffer->state.mesh_shading);
+   if (!vs->info.vs.vb_desc_usage_mask)
+      return;
 
    unsigned vb_desc_alloc_size =
       (uses_dynamic_inputs ? vs->info.vs.num_attributes : util_bitcount(vs->info.vs.vb_desc_usage_mask)) * 16;
@@ -6674,7 +6699,7 @@ radv_flush_streamout_descriptors(struct radv_cmd_buffer *cmd_buffer)
       radv_emit_streamout_state(cmd_buffer);
 }
 
-static void
+ALWAYS_INLINE static void
 radv_upload_graphics_shader_descriptors(struct radv_cmd_buffer *cmd_buffer)
 {
    struct radv_descriptor_state *descriptors_state =
@@ -7456,8 +7481,10 @@ radv_BeginCommandBuffer(VkCommandBuffer commandBuffer, const VkCommandBufferBegi
    if (cmd_buffer->qf == RADV_QUEUE_COMPUTE || device->vk.enabled_features.taskShader) {
       uint32_t pred_value = 0;
       uint32_t pred_offset;
-      if (!radv_cmd_buffer_upload_data(cmd_buffer, 4, &pred_value, &pred_offset))
+      if (!radv_cmd_buffer_upload_data(cmd_buffer, 4, &pred_value, &pred_offset)) {
          vk_command_buffer_set_error(&cmd_buffer->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
+         return VK_ERROR_OUT_OF_HOST_MEMORY;
+      }
 
       cmd_buffer->state.mec_inv_pred_emitted = false;
       cmd_buffer->state.mec_inv_pred_va = radv_buffer_get_va(cmd_buffer->upload.upload_bo) + pred_offset;
@@ -7468,7 +7495,10 @@ radv_BeginCommandBuffer(VkCommandBuffer commandBuffer, const VkCommandBufferBegi
       unsigned fence_offset, eop_bug_offset;
       void *fence_ptr;
 
-      radv_cmd_buffer_upload_alloc(cmd_buffer, 8, &fence_offset, &fence_ptr);
+      if (!radv_cmd_buffer_upload_alloc(cmd_buffer, 8, &fence_offset, &fence_ptr)) {
+         vk_command_buffer_set_error(&cmd_buffer->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
+         return VK_ERROR_OUT_OF_HOST_MEMORY;
+      }
       memset(fence_ptr, 0, 8);
 
       cmd_buffer->gfx9_fence_va = radv_buffer_get_va(cmd_buffer->upload.upload_bo);
@@ -7478,7 +7508,11 @@ radv_BeginCommandBuffer(VkCommandBuffer commandBuffer, const VkCommandBufferBegi
 
       if (pdev->info.gfx_level == GFX9) {
          /* Allocate a buffer for the EOP bug on GFX9. */
-         radv_cmd_buffer_upload_alloc(cmd_buffer, 16 * num_db, &eop_bug_offset, &fence_ptr);
+         if (!radv_cmd_buffer_upload_alloc(cmd_buffer, 16 * num_db, &eop_bug_offset, &fence_ptr)) {
+            vk_command_buffer_set_error(&cmd_buffer->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+         }
+
          memset(fence_ptr, 0, 16 * num_db);
          cmd_buffer->gfx9_eop_bug_va = radv_buffer_get_va(cmd_buffer->upload.upload_bo);
          cmd_buffer->gfx9_eop_bug_va += eop_bug_offset;
@@ -7530,6 +7564,18 @@ radv_BeginCommandBuffer(VkCommandBuffer commandBuffer, const VkCommandBufferBegi
              * on GFX12.
              */
             render->has_hiz_his = true;
+         }
+
+         const VkRenderingAttachmentLocationInfo *ral_info =
+            vk_find_struct_const(pBeginInfo->pInheritanceInfo->pNext, RENDERING_ATTACHMENT_LOCATION_INFO);
+         if (ral_info) {
+            radv_CmdSetRenderingAttachmentLocations(commandBuffer, ral_info);
+         }
+
+         const VkRenderingInputAttachmentIndexInfo *ria_info =
+            vk_find_struct_const(pBeginInfo->pInheritanceInfo->pNext, RENDERING_INPUT_ATTACHMENT_INDEX_INFO);
+         if (ria_info) {
+            radv_CmdSetRenderingInputAttachmentIndices(commandBuffer, ria_info);
          }
       }
 
@@ -7698,7 +7744,7 @@ radv_bind_descriptor_sets(struct radv_cmd_buffer *cmd_buffer, const VkBindDescri
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const struct radv_instance *instance = radv_physical_device_instance(pdev);
-   const bool no_dynamic_bounds = instance->debug_flags & RADV_DEBUG_NO_DYNAMIC_BOUNDS;
+   const bool no_dynamic_bounds = instance->drirc.debug.no_dynamic_bounds;
    struct radv_descriptor_state *descriptors_state = radv_get_descriptors_state(cmd_buffer, bind_point);
    unsigned dyn_idx = 0;
 
@@ -7978,9 +8024,9 @@ radv_emit_compute_pipeline(struct radv_cmd_buffer *cmd_buffer, struct radv_compu
 
          radeon_begin(cs);
          if (pdev->info.gfx_level >= GFX12) {
-            gfx12_push_64bit_pointer(traversal_shader_addr_offset, traversal_va);
+            gfx12_push_32bit_pointer(traversal_shader_addr_offset, traversal_va, &pdev->info);
          } else {
-            radeon_emit_64bit_pointer(traversal_shader_addr_offset, traversal_va);
+            radeon_emit_32bit_pointer(traversal_shader_addr_offset, traversal_va, &pdev->info);
          }
          radeon_end();
       }
@@ -8007,6 +8053,7 @@ radv_bind_multisample_state(struct radv_cmd_buffer *cmd_buffer, const struct rad
    const struct radv_physical_device *pdev = radv_device_physical(device);
 
    if (cmd_buffer->state.ms.sample_shading_enable != ms->sample_shading_enable) {
+      cmd_buffer->state.ms.sample_shading_enable = ms->sample_shading_enable;
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_RAST_SAMPLES_STATE | RADV_CMD_DIRTY_MSAA_STATE;
       if (pdev->info.gfx_level >= GFX10_3)
          cmd_buffer->state.dirty |= RADV_CMD_DIRTY_FSR_STATE;
@@ -8015,8 +8062,6 @@ radv_bind_multisample_state(struct radv_cmd_buffer *cmd_buffer, const struct rad
    }
 
    if (ms->sample_shading_enable) {
-      cmd_buffer->state.ms.sample_shading_enable = true;
-
       if (cmd_buffer->state.ms.min_sample_shading != ms->min_sample_shading) {
          cmd_buffer->state.ms.min_sample_shading = ms->min_sample_shading;
          cmd_buffer->state.dirty |= RADV_CMD_DIRTY_RAST_SAMPLES_STATE | RADV_CMD_DIRTY_MSAA_STATE;
@@ -8036,6 +8081,79 @@ radv_bind_custom_blend_mode(struct radv_cmd_buffer *cmd_buffer, unsigned custom_
    cmd_buffer->state.custom_blend_mode = custom_blend_mode;
 }
 
+static bool
+radv_can_enable_rbplus_depth_only(const struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *ps,
+                                  uint32_t col_format, uint32_t custom_blend_mode)
+{
+   const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+
+   if (!pdev->info.rbplus_allowed)
+      return false;
+
+   /* Enable RB+ for depth-only rendering. Registers must be programmed as follows:
+    *    CB_COLOR_CONTROL.MODE = CB_DISABLE
+    *    CB_COLOR0_INFO.FORMAT = COLOR_32
+    *    CB_COLOR0_INFO.NUMBER_TYPE = NUMBER_FLOAT
+    *    SPI_SHADER_COL_FORMAT.COL0_EXPORT_FORMAT = SPI_SHADER_32_R
+    *    SX_PS_DOWNCONVERT.MRT0 = SX_RT_EXPORT_32_R
+    *
+    * col_format == 0 implies no color outputs written and no alpha to coverage.
+    */
+
+   /* Do not enable for secondaries because it depends on states that we might not know. */
+   if (cmd_buffer->vk.level == VK_COMMAND_BUFFER_LEVEL_SECONDARY)
+      return false;
+
+   /* Do not enable for internal operations which program CB_MODE differently. */
+   if (custom_blend_mode)
+      return false;
+
+   return !col_format && (!ps || !ps->info.ps.writes_memory);
+}
+
+static void
+radv_bind_fragment_output_state(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *ps,
+                                const struct radv_shader_part *ps_epilog, uint32_t custom_blend_mode)
+{
+   const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+   uint32_t col_format = 0, z_format = 0, cb_shader_mask = 0;
+
+   if (ps) {
+      col_format = ps_epilog ? ps_epilog->spi_shader_col_format : ps->info.ps.spi_shader_col_format;
+      z_format = ps_epilog && ps->info.ps.exports_mrtz_via_epilog ? ps_epilog->spi_shader_z_format
+                                                                  : ps->info.regs.ps.spi_shader_z_format;
+      cb_shader_mask = ps_epilog ? ps_epilog->cb_shader_mask : ps->info.ps.cb_shader_mask;
+   }
+
+   if (custom_blend_mode) {
+      /* According to the CB spec states, CB_SHADER_MASK should be set to enable writes to all four
+       * channels of MRT0.
+       */
+      cb_shader_mask = 0xf;
+   }
+
+   const bool rbplus_depth_only_enabled =
+      radv_can_enable_rbplus_depth_only(cmd_buffer, ps, col_format, custom_blend_mode);
+
+   if ((radv_needs_null_export_workaround(device, ps, custom_blend_mode) && !col_format) || rbplus_depth_only_enabled)
+      col_format = V_028714_SPI_SHADER_32_R;
+
+   if (cmd_buffer->state.spi_shader_col_format != col_format) {
+      cmd_buffer->state.spi_shader_col_format = col_format;
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_FRAGMENT_OUTPUT;
+      if (pdev->info.rbplus_allowed)
+         cmd_buffer->state.dirty |= RADV_CMD_DIRTY_RBPLUS;
+   }
+
+   if (cmd_buffer->state.cb_shader_mask != cb_shader_mask || cmd_buffer->state.spi_shader_z_format != z_format) {
+      cmd_buffer->state.cb_shader_mask = cb_shader_mask;
+      cmd_buffer->state.spi_shader_z_format = z_format;
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_FRAGMENT_OUTPUT;
+   }
+}
+
 static void
 radv_bind_pre_rast_shader(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *shader)
 {
@@ -8052,6 +8170,12 @@ radv_bind_pre_rast_shader(struct radv_cmd_buffer *cmd_buffer, const struct radv_
        radv_get_user_sgpr_info(shader, AC_UD_NGG_QUERY_BUF_VA)->sgpr_idx != -1)
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_NGG_STATE;
 
+   if (radv_get_user_sgpr_info(shader, AC_UD_NGGC_SETTINGS)->sgpr_idx != -1)
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_NGGC_SETTINGS;
+
+   if (radv_get_user_sgpr_info(shader, AC_UD_NGGC_VIEWPORT)->sgpr_idx != -1)
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_NGGC_VIEWPORT;
+
    if (radv_get_user_sgpr_info(shader, AC_UD_STREAMOUT_BUFFERS)->sgpr_idx != -1 ||
        radv_get_user_sgpr_info(shader, AC_UD_STREAMOUT_STATE)->sgpr_idx != -1) {
       /* Re-emit the streamout buffers because the SGPR idx can be different and with NGG streamout
@@ -8067,6 +8191,17 @@ radv_bind_pre_rast_shader(struct radv_cmd_buffer *cmd_buffer, const struct radv_
 
    if (radv_get_user_sgpr_info(shader, AC_UD_FORCE_VRS_RATES)->sgpr_idx != -1)
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_FORCE_VRS_STATE;
+
+   /* Re-emit the VS prolog when a new vertex shader is bound. */
+   if (shader->info.vs.has_prolog) {
+      cmd_buffer->state.emitted_vs_prolog = NULL;
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_VS_PROLOG_STATE;
+   }
+
+   /* Re-emit the vertex buffer descriptors because they are really tied to the pipeline. */
+   if (shader->info.vs.vb_desc_usage_mask) {
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_VERTEX_BUFFER;
+   }
 
    const bool needs_vtx_sgpr =
       shader->info.stage == MESA_SHADER_VERTEX || shader->info.stage == MESA_SHADER_MESH ||
@@ -8098,8 +8233,21 @@ radv_bind_pre_rast_shader(struct radv_cmd_buffer *cmd_buffer, const struct radv_
       /* Re-emit VRS state because the combiner is different (vertex vs primitive). Re-emit
        * primitive topology because the mesh shading pipeline clobbered it.
        */
-      cmd_buffer->state.dirty_dynamic |= RADV_DYNAMIC_PRIMITIVE_TOPOLOGY;
-      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_FSR_STATE;
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_FSR_STATE | RADV_CMD_DIRTY_VGT_PRIM_STATE;
+   }
+
+   /* Determine if this shader is the last VGT shader. */
+   if (shader->info.next_stage == MESA_SHADER_NONE || shader->info.next_stage == MESA_SHADER_FRAGMENT) {
+      if (pdev->info.has_vgt_flush_ngg_legacy_bug &&
+          (!cmd_buffer->state.last_vgt_shader ||
+           (cmd_buffer->state.last_vgt_shader->info.is_ngg && !shader->info.is_ngg))) {
+         /* Transitioning from NGG to legacy GS requires VGT_FLUSH on GFX10 and Navi21. VGT_FLUSH is
+          * also emitted at the beginning of IBs when legacy GS ring pointers are set.
+          */
+         cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_VGT_FLUSH;
+      }
+
+      cmd_buffer->state.last_vgt_shader = (struct radv_shader *)shader;
    }
 
    cmd_buffer->state.mesh_shading = mesh_shading;
@@ -8117,7 +8265,7 @@ radv_bind_vertex_shader(struct radv_cmd_buffer *cmd_buffer, const struct radv_sh
     * because shader configs are combined.
     */
    if (vs->info.merged_shader_compiled_separately && vs->info.next_stage == MESA_SHADER_TESS_CTRL) {
-      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_PATCH_CONTROL_POINTS_STATE | RADV_CMD_DIRTY_TCS_TES_STATE;
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_TCS_TES_STATE;
    }
 
    cmd_buffer->state.can_use_simple_vertex_input = !vs->info.merged_shader_compiled_separately &&
@@ -8136,8 +8284,8 @@ radv_bind_tess_ctrl_shader(struct radv_cmd_buffer *cmd_buffer, const struct radv
    /* Always re-emit patch control points/domain origin when a new pipeline with tessellation is
     * bound because a bunch of parameters (user SGPRs, TCS vertices out, ccw, etc) can be different.
     */
-   cmd_buffer->state.dirty |= RADV_CMD_DIRTY_PATCH_CONTROL_POINTS_STATE | RADV_CMD_DIRTY_TESS_DOMAIN_ORIGIN_STATE |
-                              RADV_CMD_DIRTY_TCS_TES_STATE;
+   cmd_buffer->state.dirty |=
+      RADV_CMD_DIRTY_LS_HS_CONFIG | RADV_CMD_DIRTY_TESS_DOMAIN_ORIGIN_STATE | RADV_CMD_DIRTY_TCS_TES_STATE;
 
    /* Re-emit the VS prolog when the tessellation control shader is compiled separately because
     * shader configs are combined and need to be updated.
@@ -8202,14 +8350,16 @@ radv_bind_fragment_shader(struct radv_cmd_buffer *cmd_buffer, const struct radv_
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const enum amd_gfx_level gfx_level = pdev->info.gfx_level;
    const struct radv_shader *previous_ps = cmd_buffer->state.shaders[MESA_SHADER_FRAGMENT];
-   const float min_sample_shading = 1.0f;
 
    if (ps->info.ps.needs_sample_positions) {
       cmd_buffer->sample_positions_needed = true;
    }
 
+   if (ps->info.ps.has_epilog)
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_PS_EPILOG_SHADER | RADV_CMD_DIRTY_PS_EPILOG_STATE;
+
    if (radv_get_user_sgpr_info(ps, AC_UD_PS_STATE)->sgpr_idx != -1)
-      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_FS_STATE;
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_PS_STATE;
 
    if (!previous_ps || previous_ps->info.ps.reads_fully_covered != ps->info.ps.reads_fully_covered)
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_MSAA_STATE;
@@ -8219,19 +8369,11 @@ radv_bind_fragment_shader(struct radv_cmd_buffer *cmd_buffer, const struct radv_
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_FSR_STATE | RADV_CMD_DIRTY_RAST_SAMPLES_STATE;
    }
 
-   if (cmd_buffer->state.ms.sample_shading_enable != ps->info.ps.uses_sample_shading) {
-      cmd_buffer->state.ms.sample_shading_enable = ps->info.ps.uses_sample_shading;
+   if (!previous_ps || previous_ps->info.ps.uses_sample_shading != ps->info.ps.uses_sample_shading) {
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_RAST_SAMPLES_STATE | RADV_CMD_DIRTY_MSAA_STATE;
       if (gfx_level >= GFX10_3)
          cmd_buffer->state.dirty |= RADV_CMD_DIRTY_FSR_STATE;
       if (gfx_level == GFX9)
-         cmd_buffer->state.dirty |= RADV_CMD_DIRTY_BINNING_STATE;
-   }
-
-   if (cmd_buffer->state.ms.min_sample_shading != min_sample_shading) {
-      cmd_buffer->state.ms.min_sample_shading = min_sample_shading;
-      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_RAST_SAMPLES_STATE | RADV_CMD_DIRTY_MSAA_STATE;
-      if (pdev->info.gfx_level == GFX9)
          cmd_buffer->state.dirty |= RADV_CMD_DIRTY_BINNING_STATE;
    }
 
@@ -8243,10 +8385,6 @@ radv_bind_fragment_shader(struct radv_cmd_buffer *cmd_buffer, const struct radv_
       cmd_buffer->state.uses_fbfetch_output = ps->info.ps.uses_fbfetch_output;
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_FBFETCH_OUTPUT;
    }
-
-   /* Re-emit the PS epilog when a new fragment shader is bound. */
-   if (ps->info.ps.has_epilog)
-      cmd_buffer->state.emitted_ps_epilog = NULL;
 }
 
 static void
@@ -8275,6 +8413,38 @@ radv_bind_rt_prolog(struct radv_cmd_buffer *cmd_buffer, struct radv_shader *rt_p
    cmd_buffer->shader_upload_seq = MAX2(cmd_buffer->shader_upload_seq, rt_prolog->upload_seq);
 
    radv_cs_add_buffer(device->ws, cs->b, rt_prolog->bo);
+}
+
+static void
+radv_bind_ps_epilog(struct radv_cmd_buffer *cmd_buffer)
+{
+   const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
+   const struct radv_shader *ps = cmd_buffer->state.shaders[MESA_SHADER_FRAGMENT];
+   struct radv_cmd_stream *cs = cmd_buffer->cs;
+   struct radv_shader_part *ps_epilog;
+
+   if (!ps || !ps->info.ps.has_epilog)
+      return;
+
+   ps_epilog = lookup_ps_epilog(cmd_buffer);
+   if (!ps_epilog) {
+      vk_command_buffer_set_error(&cmd_buffer->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return;
+   }
+
+   assert(cmd_buffer->state.custom_blend_mode == 0);
+   radv_bind_fragment_output_state(cmd_buffer, ps, ps_epilog, 0);
+
+   if (cmd_buffer->state.ps_epilog == ps_epilog)
+      return;
+
+   cmd_buffer->state.ps_epilog = ps_epilog;
+
+   cmd_buffer->shader_upload_seq = MAX2(cmd_buffer->shader_upload_seq, ps_epilog->upload_seq);
+
+   radv_cs_add_buffer(device->ws, cs->b, ps_epilog->bo);
+
+   cmd_buffer->state.dirty |= RADV_CMD_DIRTY_PS_EPILOG_STATE;
 }
 
 /* This function binds/unbinds a shader to the cmdbuffer state. */
@@ -8361,79 +8531,6 @@ radv_bind_shader(struct radv_cmd_buffer *cmd_buffer, struct radv_shader *shader,
    radv_cs_add_buffer(device->ws, cs->b, shader->bo);
 }
 
-static bool
-radv_can_enable_rbplus_depth_only(const struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *ps,
-                                  uint32_t col_format, uint32_t custom_blend_mode)
-{
-   const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
-   const struct radv_physical_device *pdev = radv_device_physical(device);
-
-   if (!pdev->info.rbplus_allowed)
-      return false;
-
-   /* Enable RB+ for depth-only rendering. Registers must be programmed as follows:
-    *    CB_COLOR_CONTROL.MODE = CB_DISABLE
-    *    CB_COLOR0_INFO.FORMAT = COLOR_32
-    *    CB_COLOR0_INFO.NUMBER_TYPE = NUMBER_FLOAT
-    *    SPI_SHADER_COL_FORMAT.COL0_EXPORT_FORMAT = SPI_SHADER_32_R
-    *    SX_PS_DOWNCONVERT.MRT0 = SX_RT_EXPORT_32_R
-    *
-    * col_format == 0 implies no color outputs written and no alpha to coverage.
-    */
-
-   /* Do not enable for secondaries because it depends on states that we might not know. */
-   if (cmd_buffer->vk.level == VK_COMMAND_BUFFER_LEVEL_SECONDARY)
-      return false;
-
-   /* Do not enable for internal operations which program CB_MODE differently. */
-   if (custom_blend_mode)
-      return false;
-
-   return !col_format && (!ps || !ps->info.ps.writes_memory);
-}
-
-static void
-radv_bind_fragment_output_state(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *ps,
-                                const struct radv_shader_part *ps_epilog, uint32_t custom_blend_mode)
-{
-   const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
-   const struct radv_physical_device *pdev = radv_device_physical(device);
-   uint32_t col_format = 0, z_format = 0, cb_shader_mask = 0;
-
-   if (ps) {
-      col_format = ps_epilog ? ps_epilog->spi_shader_col_format : ps->info.ps.spi_shader_col_format;
-      z_format = ps_epilog && ps->info.ps.exports_mrtz_via_epilog ? ps_epilog->spi_shader_z_format
-                                                                  : ps->info.regs.ps.spi_shader_z_format;
-      cb_shader_mask = ps_epilog ? ps_epilog->cb_shader_mask : ps->info.ps.cb_shader_mask;
-   }
-
-   if (custom_blend_mode) {
-      /* According to the CB spec states, CB_SHADER_MASK should be set to enable writes to all four
-       * channels of MRT0.
-       */
-      cb_shader_mask = 0xf;
-   }
-
-   const bool rbplus_depth_only_enabled =
-      radv_can_enable_rbplus_depth_only(cmd_buffer, ps, col_format, custom_blend_mode);
-
-   if ((radv_needs_null_export_workaround(device, ps, custom_blend_mode) && !col_format) || rbplus_depth_only_enabled)
-      col_format = V_028714_SPI_SHADER_32_R;
-
-   if (cmd_buffer->state.spi_shader_col_format != col_format) {
-      cmd_buffer->state.spi_shader_col_format = col_format;
-      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_FRAGMENT_OUTPUT;
-      if (pdev->info.rbplus_allowed)
-         cmd_buffer->state.dirty |= RADV_CMD_DIRTY_RBPLUS;
-   }
-
-   if (cmd_buffer->state.cb_shader_mask != cb_shader_mask || cmd_buffer->state.spi_shader_z_format != z_format) {
-      cmd_buffer->state.cb_shader_mask = cb_shader_mask;
-      cmd_buffer->state.spi_shader_z_format = z_format;
-      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_FRAGMENT_OUTPUT;
-   }
-}
-
 static void
 radv_reset_shader_object_state(struct radv_cmd_buffer *cmd_buffer, VkPipelineBindPoint pipelineBindPoint)
 {
@@ -8465,7 +8562,6 @@ radv_CmdBindPipeline(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipeline
    VK_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    VK_FROM_HANDLE(radv_pipeline, pipeline, _pipeline);
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
-   const struct radv_physical_device *pdev = radv_device_physical(device);
    struct radv_cmd_stream *cs = cmd_buffer->cs;
 
    radv_reset_shader_object_state(cmd_buffer, pipelineBindPoint);
@@ -8497,8 +8593,11 @@ radv_CmdBindPipeline(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipeline
 
       for (unsigned i = 0; i < rt_pipeline->stage_count; ++i) {
          struct radv_shader *shader = rt_pipeline->stages[i].shader;
-         if (shader)
-            radv_cs_add_buffer(device->ws, cs->b, shader->bo);
+         if (!shader)
+            continue;
+
+         cmd_buffer->shader_upload_seq = MAX2(cmd_buffer->shader_upload_seq, shader->upload_seq);
+         radv_cs_add_buffer(device->ws, cs->b, shader->bo);
       }
 
       cmd_buffer->state.rt_pipeline = rt_pipeline;
@@ -8530,54 +8629,13 @@ radv_CmdBindPipeline(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipeline
 
       radv_bind_gs_copy_shader(cmd_buffer, graphics_pipeline->base.gs_copy_shader);
 
-      cmd_buffer->state.last_vgt_shader = graphics_pipeline->base.shaders[graphics_pipeline->last_vgt_api_stage];
-
       cmd_buffer->state.graphics_pipeline = graphics_pipeline;
 
-      cmd_buffer->state.has_nggc = graphics_pipeline->has_ngg_culling;
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_PIPELINE;
       cmd_buffer->push_constant_stages |= graphics_pipeline->active_stages;
 
       /* Prefetch all pipeline shaders at first draw time. */
       cmd_buffer->state.prefetch_L2_mask |= RADV_PREFETCH_GFX_SHADERS;
-
-      if (pdev->info.has_vgt_flush_ngg_legacy_bug &&
-          (!cmd_buffer->state.emitted_graphics_pipeline ||
-           (cmd_buffer->state.emitted_graphics_pipeline->is_ngg && !cmd_buffer->state.graphics_pipeline->is_ngg))) {
-         /* Transitioning from NGG to legacy GS requires
-          * VGT_FLUSH on GFX10 and Navi21. VGT_FLUSH
-          * is also emitted at the beginning of IBs when legacy
-          * GS ring pointers are set.
-          */
-         cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_VGT_FLUSH;
-      }
-
-      cmd_buffer->state.uses_dynamic_patch_control_points =
-         !!(graphics_pipeline->dynamic_states & RADV_DYNAMIC_PATCH_CONTROL_POINTS);
-
-      if (graphics_pipeline->active_stages & VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT) {
-         if (!cmd_buffer->state.uses_dynamic_patch_control_points) {
-            /* Bind the tessellation state from the pipeline when it's not dynamic. */
-            struct radv_shader *tcs = cmd_buffer->state.shaders[MESA_SHADER_TESS_CTRL];
-
-            cmd_buffer->state.tess_num_patches = tcs->info.num_tess_patches;
-            cmd_buffer->state.tess_lds_size = tcs->info.tcs.num_lds_blocks;
-         }
-      }
-
-      const struct radv_shader *vs = radv_get_shader(graphics_pipeline->base.shaders, MESA_SHADER_VERTEX);
-      if (vs) {
-         /* Re-emit the VS prolog when a new vertex shader is bound. */
-         if (vs->info.vs.has_prolog) {
-            cmd_buffer->state.emitted_vs_prolog = NULL;
-            cmd_buffer->state.dirty |= RADV_CMD_DIRTY_VS_PROLOG_STATE;
-         }
-
-         /* Re-emit the vertex buffer descriptors because they are really tied to the pipeline. */
-         if (vs->info.vs.vb_desc_usage_mask) {
-            cmd_buffer->state.dirty |= RADV_CMD_DIRTY_VERTEX_BUFFER;
-         }
-      }
 
       const struct radv_shader *ps = radv_get_shader(graphics_pipeline->base.shaders, MESA_SHADER_FRAGMENT);
 
@@ -8590,20 +8648,6 @@ radv_CmdBindPipeline(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipeline
       if (cmd_buffer->state.db_render_control != graphics_pipeline->db_render_control) {
          cmd_buffer->state.db_render_control = graphics_pipeline->db_render_control;
          cmd_buffer->state.dirty |= RADV_CMD_DIRTY_FRAMEBUFFER;
-      }
-
-      if (cmd_buffer->state.vgt_outprim_type != graphics_pipeline->vgt_outprim_type) {
-         cmd_buffer->state.dirty_dynamic |= RADV_DYNAMIC_PRIMITIVE_TOPOLOGY;
-
-         if (radv_vgt_outprim_is_point_or_line(cmd_buffer->state.vgt_outprim_type) !=
-             radv_vgt_outprim_is_point_or_line(graphics_pipeline->vgt_outprim_type))
-            cmd_buffer->state.dirty |= RADV_CMD_DIRTY_GUARDBAND;
-
-         if (radv_vgt_outprim_is_line(cmd_buffer->state.vgt_outprim_type) !=
-             radv_vgt_outprim_is_line(graphics_pipeline->vgt_outprim_type))
-            cmd_buffer->state.dirty_dynamic |= RADV_DYNAMIC_RASTERIZATION_SAMPLES;
-
-         cmd_buffer->state.vgt_outprim_type = graphics_pipeline->vgt_outprim_type;
       }
 
       if (cmd_buffer->state.uses_out_of_order_rast != graphics_pipeline->uses_out_of_order_rast ||
@@ -8802,7 +8846,8 @@ radv_CmdSetStencilOp(VkCommandBuffer commandBuffer, VkStencilFaceFlags faceMask,
                      VkStencilOp depthFailOp, VkCompareOp compareOp)
 {
    VK_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
-   radv_cmd_set_stencil_op(cmd_buffer, faceMask, failOp, passOp, depthFailOp, compareOp);
+   radv_cmd_set_stencil_op(cmd_buffer, faceMask, radv_translate_stencil_op(failOp), radv_translate_stencil_op(passOp),
+                           radv_translate_stencil_op(depthFailOp), compareOp);
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -9443,7 +9488,7 @@ radv_CmdExecuteCommands(VkCommandBuffer commandBuffer, uint32_t commandBufferCou
              */
             radv_emit_framebuffer_state(primary);
 
-            if (pdev->info.gfx_level == GFX12 && !pdev->use_gfx12_hiz_his_event_wa) {
+            if (pdev->gfx12_hiz_wa == RADV_GFX12_HIZ_WA_FULL) {
                const struct radv_rendering_state *render = &primary->state.render;
                const struct radv_image_view *iview = render->ds_att.iview;
 
@@ -9828,7 +9873,8 @@ radv_CmdBeginRendering(VkCommandBuffer commandBuffer, const VkRenderingInfo *pRe
    cmd_buffer->state.dirty |= RADV_CMD_DIRTY_FRAMEBUFFER | RADV_CMD_DIRTY_BINNING_STATE |
                               RADV_CMD_DIRTY_FBFETCH_OUTPUT | RADV_CMD_DIRTY_DEPTH_BIAS_STATE |
                               RADV_CMD_DIRTY_DEPTH_STENCIL_STATE | RADV_CMD_DIRTY_CB_RENDER_STATE |
-                              RADV_CMD_DIRTY_MSAA_STATE | RADV_CMD_DIRTY_RAST_SAMPLES_STATE | RADV_CMD_DIRTY_FS_STATE;
+                              RADV_CMD_DIRTY_MSAA_STATE | RADV_CMD_DIRTY_RAST_SAMPLES_STATE | RADV_CMD_DIRTY_PS_STATE |
+                              RADV_CMD_DIRTY_PS_EPILOG_SHADER;
 
    if (pdev->info.rbplus_allowed)
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_RBPLUS;
@@ -10021,11 +10067,7 @@ radv_gfx12_emit_hiz_his_wa(const struct radv_device *device, const struct radv_c
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const struct radv_rendering_state *render = &cmd_state->render;
 
-   /* On GFX12, HiZ/HiS is buggy and can cause random GPU hangs. There are basically two alternatives:
-    * - disable HiZ/HiS completely which is the safest workaround but this is known to decrease performance
-    * - emit a dummy BOTTOM_OF_PIPE_TS after every draw which should workaround the hang and maintain performance
-    */
-   if (pdev->use_gfx12_hiz_his_event_wa && render->has_hiz_his) {
+   if (pdev->gfx12_hiz_wa == RADV_GFX12_HIZ_WA_PARTIAL && render->has_hiz_his) {
       radeon_begin(cs);
       radeon_emit(PKT3(PKT3_RELEASE_MEM, 6, 0));
       radeon_emit(S_490_EVENT_TYPE(V_028A90_BOTTOM_OF_PIPE_TS) | S_490_EVENT_INDEX(5));
@@ -10815,6 +10857,7 @@ radv_need_late_scissor_emission(struct radv_cmd_buffer *cmd_buffer, const struct
    uint64_t used_dynamic_states = radv_get_needed_dynamic_states(cmd_buffer);
 
    used_dynamic_states &= ~RADV_DYNAMIC_VERTEX_INPUT;
+   used_dynamic_states &= ~RADV_DYNAMIC_VERTEX_INPUT_BINDING_STRIDE;
 
    if (cmd_buffer->state.dirty_dynamic & used_dynamic_states)
       return true;
@@ -10829,7 +10872,7 @@ radv_need_late_scissor_emission(struct radv_cmd_buffer *cmd_buffer, const struct
 }
 
 ALWAYS_INLINE static uint32_t
-radv_get_ngg_culling_settings(struct radv_cmd_buffer *cmd_buffer, bool vp_y_inverted)
+radv_get_nggc_settings(struct radv_cmd_buffer *cmd_buffer, bool vp_y_inverted)
 {
    const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
 
@@ -10843,7 +10886,7 @@ radv_get_ngg_culling_settings(struct radv_cmd_buffer *cmd_buffer, bool vp_y_inve
     * because we don't know the primitive topology at compile time, so we should
     * disable it dynamically for points or lines.
     */
-   const unsigned num_vertices_per_prim = radv_conv_prim_to_gs_out(d->vk.ia.primitive_topology, true) + 1;
+   const unsigned num_vertices_per_prim = cmd_buffer->state.vgt_outprim_type + 1;
    if (num_vertices_per_prim != 3)
       return radv_nggc_none;
 
@@ -10878,7 +10921,7 @@ radv_get_ngg_culling_settings(struct radv_cmd_buffer *cmd_buffer, bool vp_y_inve
        * num_samples is also always a power of two, so the small prim precision can only be
        * a power of two between 2^-2 and 2^-6, therefore it's enough to remember the exponent.
        */
-      unsigned rasterization_samples = radv_get_rasterization_samples(cmd_buffer);
+      unsigned rasterization_samples = cmd_buffer->state.num_rast_samples;
       unsigned subpixel_bits = 256;
       int32_t small_prim_precision_log2 = util_logbase2(rasterization_samples) - util_logbase2(subpixel_bits);
       nggc_settings |= ((uint32_t)small_prim_precision_log2 << 24u);
@@ -10888,53 +10931,7 @@ radv_get_ngg_culling_settings(struct radv_cmd_buffer *cmd_buffer, bool vp_y_inve
 }
 
 static void
-radv_emit_ngg_culling_state(struct radv_cmd_buffer *cmd_buffer)
-{
-   const struct radv_shader *last_vgt_shader = cmd_buffer->state.last_vgt_shader;
-
-   assert(last_vgt_shader->info.has_ngg_culling);
-
-   /* Get viewport transform. */
-   float vp_scale[2], vp_translate[2];
-   memcpy(vp_scale, cmd_buffer->state.dynamic.vp_xform[0].scale, 2 * sizeof(float));
-   memcpy(vp_translate, cmd_buffer->state.dynamic.vp_xform[0].translate, 2 * sizeof(float));
-   bool vp_y_inverted = (-vp_scale[1] + vp_translate[1]) > (vp_scale[1] + vp_translate[1]);
-
-   /* Get current culling settings. */
-   uint32_t nggc_settings = radv_get_ngg_culling_settings(cmd_buffer, vp_y_inverted);
-
-   radeon_begin(cmd_buffer->cs);
-
-   if ((cmd_buffer->state.dirty & RADV_CMD_DIRTY_PIPELINE) ||
-       (cmd_buffer->state.dirty_dynamic &
-        (RADV_DYNAMIC_VIEWPORT | RADV_DYNAMIC_VIEWPORT_WITH_COUNT | RADV_DYNAMIC_RASTERIZATION_SAMPLES))) {
-      /* Correction for inverted Y */
-      if (vp_y_inverted) {
-         vp_scale[1] = -vp_scale[1];
-         vp_translate[1] = -vp_translate[1];
-      }
-
-      /* Correction for number of samples per pixel. */
-      for (unsigned i = 0; i < 2; ++i) {
-         vp_scale[i] *= (float)cmd_buffer->state.dynamic.vk.ms.rasterization_samples;
-         vp_translate[i] *= (float)cmd_buffer->state.dynamic.vk.ms.rasterization_samples;
-      }
-
-      uint32_t vp_reg_values[4] = {fui(vp_scale[0]), fui(vp_scale[1]), fui(vp_translate[0]), fui(vp_translate[1])};
-      const uint32_t ngg_viewport_offset = radv_get_user_sgpr_loc(last_vgt_shader, AC_UD_NGG_VIEWPORT);
-
-      radeon_set_sh_reg_seq(ngg_viewport_offset, 4);
-      radeon_emit_array(vp_reg_values, 4);
-   }
-
-   const uint32_t ngg_culling_settings_offset = radv_get_user_sgpr_loc(last_vgt_shader, AC_UD_NGG_CULLING_SETTINGS);
-
-   radeon_set_sh_reg(ngg_culling_settings_offset, nggc_settings);
-   radeon_end();
-}
-
-static void
-radv_emit_fs_state(struct radv_cmd_buffer *cmd_buffer)
+radv_emit_ps_state(struct radv_cmd_buffer *cmd_buffer)
 {
    const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
@@ -10947,13 +10944,14 @@ radv_emit_fs_state(struct radv_cmd_buffer *cmd_buffer)
    if (!ps_state_offset)
       return;
 
-   const unsigned rasterization_samples = radv_get_rasterization_samples(cmd_buffer);
+   const VkLineRasterizationModeEXT line_rast_mode = cmd_buffer->state.line_rast_mode;
+   const unsigned rasterization_samples = cmd_buffer->state.num_rast_samples;
    const unsigned ps_iter_samples = radv_get_ps_iter_samples(cmd_buffer);
    const uint16_t ps_iter_mask = ac_get_ps_iter_mask(ps_iter_samples);
-   const unsigned vgt_outprim_type = radv_get_vgt_outprim_type(cmd_buffer);
+   const unsigned vgt_outprim_type = cmd_buffer->state.vgt_outprim_type;
    const unsigned ps_state = SET_SGPR_FIELD(PS_STATE_NUM_SAMPLES, rasterization_samples) |
                              SET_SGPR_FIELD(PS_STATE_PS_ITER_MASK, ps_iter_mask) |
-                             SET_SGPR_FIELD(PS_STATE_LINE_RAST_MODE, radv_get_line_mode(cmd_buffer)) |
+                             SET_SGPR_FIELD(PS_STATE_LINE_RAST_MODE, line_rast_mode) |
                              SET_SGPR_FIELD(PS_STATE_RAST_PRIM, vgt_outprim_type);
 
    radeon_begin(cmd_buffer->cs);
@@ -10969,11 +10967,10 @@ static uint32_t
 radv_get_ngg_state_num_verts_per_prim(struct radv_cmd_buffer *cmd_buffer)
 {
    const struct radv_shader *last_vgt_shader = cmd_buffer->state.last_vgt_shader;
-   const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
    uint32_t num_verts_per_prim = 0;
 
    if (last_vgt_shader->info.stage == MESA_SHADER_VERTEX)
-      num_verts_per_prim = radv_conv_prim_to_gs_out(d->vk.ia.primitive_topology, last_vgt_shader->info.is_ngg) + 1;
+      num_verts_per_prim = cmd_buffer->state.vgt_outprim_type + 1;
 
    return num_verts_per_prim;
 }
@@ -10988,7 +10985,7 @@ radv_get_ngg_state_provoking_vtx(struct radv_cmd_buffer *cmd_buffer)
 
    if (d->vk.rs.provoking_vertex == VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT) {
       if (stage == MESA_SHADER_VERTEX) {
-         provoking_vtx = radv_conv_prim_to_gs_out(d->vk.ia.primitive_topology, last_vgt_shader->info.is_ngg);
+         provoking_vtx = cmd_buffer->state.vgt_outprim_type;
       } else if (stage == MESA_SHADER_GEOMETRY) {
          provoking_vtx = last_vgt_shader->info.gs.vertices_in - 1;
       }
@@ -11051,6 +11048,68 @@ radv_emit_ngg_state(struct radv_cmd_buffer *cmd_buffer)
       if (ngg_query_buf_va_offset)
          radeon_set_sh_reg(ngg_query_buf_va_offset, cmd_buffer->state.shader_query_buf_va);
    }
+   radeon_end();
+}
+
+static bool
+radv_is_viewport_y_inverted(struct radv_cmd_buffer *cmd_buffer)
+{
+   const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
+   const float y_scale = d->vp_xform[0].scale[1];
+   const float y_translate = d->vp_xform[0].translate[1];
+
+   return (-y_scale + y_translate) > (y_scale + y_translate);
+}
+
+static void
+radv_emit_nggc_settings(struct radv_cmd_buffer *cmd_buffer)
+{
+   const struct radv_shader *last_vgt_shader = cmd_buffer->state.last_vgt_shader;
+
+   const uint32_t nggc_settings_offset = radv_get_user_sgpr_loc(last_vgt_shader, AC_UD_NGGC_SETTINGS);
+   if (!nggc_settings_offset)
+      return;
+
+   const bool vp_y_inverted = radv_is_viewport_y_inverted(cmd_buffer);
+   const uint32_t nggc_settings = radv_get_nggc_settings(cmd_buffer, vp_y_inverted);
+
+   radeon_begin(cmd_buffer->cs);
+   radeon_set_sh_reg(nggc_settings_offset, nggc_settings);
+   radeon_end();
+}
+
+static void
+radv_emit_nggc_viewport(struct radv_cmd_buffer *cmd_buffer)
+{
+   const struct radv_shader *last_vgt_shader = cmd_buffer->state.last_vgt_shader;
+   const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
+
+   const uint32_t nggc_viewport_offset = radv_get_user_sgpr_loc(last_vgt_shader, AC_UD_NGGC_VIEWPORT);
+   if (!nggc_viewport_offset)
+      return;
+
+   /* Get viewport transform. */
+   float vp_scale[2], vp_translate[2];
+   memcpy(vp_scale, d->vp_xform[0].scale, 2 * sizeof(float));
+   memcpy(vp_translate, d->vp_xform[0].translate, 2 * sizeof(float));
+
+   /* Correction for inverted Y */
+   if (radv_is_viewport_y_inverted(cmd_buffer)) {
+      vp_scale[1] = -vp_scale[1];
+      vp_translate[1] = -vp_translate[1];
+   }
+
+   /* Correction for number of samples per pixel. */
+   for (unsigned i = 0; i < 2; ++i) {
+      vp_scale[i] *= (float)d->vk.ms.rasterization_samples;
+      vp_translate[i] *= (float)d->vk.ms.rasterization_samples;
+   }
+
+   const uint32_t vp_reg_values[4] = {fui(vp_scale[0]), fui(vp_scale[1]), fui(vp_translate[0]), fui(vp_translate[1])};
+
+   radeon_begin(cmd_buffer->cs);
+   radeon_set_sh_reg_seq(nggc_viewport_offset, 4);
+   radeon_emit_array(vp_reg_values, 4);
    radeon_end();
 }
 
@@ -11205,14 +11264,29 @@ radv_emit_force_vrs_state(struct radv_cmd_buffer *cmd_buffer)
 static void
 radv_emit_shaders_state(struct radv_cmd_buffer *cmd_buffer)
 {
-   if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_FS_STATE) {
-      radv_emit_fs_state(cmd_buffer);
-      cmd_buffer->state.dirty &= ~RADV_CMD_DIRTY_FS_STATE;
+   if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_PS_STATE) {
+      radv_emit_ps_state(cmd_buffer);
+      cmd_buffer->state.dirty &= ~RADV_CMD_DIRTY_PS_STATE;
+   }
+
+   if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_PS_EPILOG_STATE) {
+      radv_emit_ps_epilog_state(cmd_buffer);
+      cmd_buffer->state.dirty &= ~RADV_CMD_DIRTY_PS_EPILOG_STATE;
    }
 
    if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_NGG_STATE) {
       radv_emit_ngg_state(cmd_buffer);
       cmd_buffer->state.dirty &= ~RADV_CMD_DIRTY_NGG_STATE;
+   }
+
+   if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_NGGC_SETTINGS) {
+      radv_emit_nggc_settings(cmd_buffer);
+      cmd_buffer->state.dirty &= ~RADV_CMD_DIRTY_NGGC_SETTINGS;
+   }
+
+   if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_NGGC_VIEWPORT) {
+      radv_emit_nggc_viewport(cmd_buffer);
+      cmd_buffer->state.dirty &= ~RADV_CMD_DIRTY_NGGC_VIEWPORT;
    }
 
    if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_TASK_STATE) {
@@ -11241,7 +11315,8 @@ radv_emit_db_shader_control(struct radv_cmd_buffer *cmd_buffer)
    const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
    const bool uses_ds_feedback_loop =
       !!(d->feedback_loop_aspects & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT));
-   const unsigned rasterization_samples = radv_get_rasterization_samples(cmd_buffer);
+   const VkLineRasterizationModeEXT line_rast_mode = cmd_buffer->state.line_rast_mode;
+   const unsigned rasterization_samples = cmd_buffer->state.num_rast_samples;
    uint32_t db_dfsm_control = S_028060_PUNCHOUT_MODE(V_028060_FORCE_OFF);
    uint32_t db_shader_control;
 
@@ -11258,7 +11333,7 @@ radv_emit_db_shader_control(struct radv_cmd_buffer *cmd_buffer)
     * Also apply the bug workaround for smoothing (overrasterization) on GFX6.
     */
    if (uses_ds_feedback_loop ||
-       (gpu_info->gfx_level == GFX6 && radv_get_line_mode(cmd_buffer) == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH))
+       (gpu_info->gfx_level == GFX6 && line_rast_mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH))
       db_shader_control = (db_shader_control & C_02880C_Z_ORDER) | S_02880C_Z_ORDER(V_02880C_LATE_Z);
 
    if (ps && ps->info.ps.pops) {
@@ -11338,15 +11413,6 @@ radv_emit_streamout_enable_state(struct radv_cmd_buffer *cmd_buffer)
    radeon_end();
 }
 
-static mesa_shader_stage
-radv_cmdbuf_get_last_vgt_api_stage(const struct radv_cmd_buffer *cmd_buffer)
-{
-   if (cmd_buffer->state.active_stages & VK_SHADER_STAGE_MESH_BIT_EXT)
-      return MESA_SHADER_MESH;
-
-   return util_last_bit(cmd_buffer->state.active_stages & BITFIELD_MASK(MESA_SHADER_FRAGMENT)) - 1;
-}
-
 static unsigned
 radv_compact_spi_shader_col_format(uint32_t spi_shader_col_format)
 {
@@ -11407,18 +11473,15 @@ radv_emit_depth_stencil_state(struct radv_cmd_buffer *cmd_buffer)
    vk_optimize_depth_stencil_state(&ds, render->ds_att_aspects, true);
 
    const uint32_t db_depth_control =
-      S_028800_Z_ENABLE(ds.depth.test_enable ? 1 : 0) | S_028800_Z_WRITE_ENABLE(ds.depth.write_enable ? 1 : 0) |
-      S_028800_ZFUNC(ds.depth.compare_op) | S_028800_DEPTH_BOUNDS_ENABLE(ds.depth.bounds_test.enable ? 1 : 0) |
+      S_028800_Z_ENABLE(ds.depth.test_enable) | S_028800_Z_WRITE_ENABLE(ds.depth.write_enable) |
+      S_028800_ZFUNC(ds.depth.compare_op) | S_028800_DEPTH_BOUNDS_ENABLE(ds.depth.bounds_test.enable) |
       S_028800_STENCIL_ENABLE(ds.stencil.test_enable) | S_028800_BACKFACE_ENABLE(ds.stencil.test_enable) |
       S_028800_STENCILFUNC(ds.stencil.front.op.compare) | S_028800_STENCILFUNC_BF(ds.stencil.back.op.compare);
 
    const uint32_t db_stencil_control =
-      S_02842C_STENCILFAIL(radv_translate_stencil_op(ds.stencil.front.op.fail)) |
-      S_02842C_STENCILZPASS(radv_translate_stencil_op(ds.stencil.front.op.pass)) |
-      S_02842C_STENCILZFAIL(radv_translate_stencil_op(ds.stencil.front.op.depth_fail)) |
-      S_02842C_STENCILFAIL_BF(radv_translate_stencil_op(ds.stencil.back.op.fail)) |
-      S_02842C_STENCILZPASS_BF(radv_translate_stencil_op(ds.stencil.back.op.pass)) |
-      S_02842C_STENCILZFAIL_BF(radv_translate_stencil_op(ds.stencil.back.op.depth_fail));
+      S_02842C_STENCILFAIL(ds.stencil.front.op.fail) | S_02842C_STENCILZPASS(ds.stencil.front.op.pass) |
+      S_02842C_STENCILZFAIL(ds.stencil.front.op.depth_fail) | S_02842C_STENCILFAIL_BF(ds.stencil.back.op.fail) |
+      S_02842C_STENCILZPASS_BF(ds.stencil.back.op.pass) | S_02842C_STENCILZFAIL_BF(ds.stencil.back.op.depth_fail);
 
    const uint32_t depth_bounds_min = fui(ds.depth.bounds_test.min);
    const uint32_t depth_bounds_max = fui(ds.depth.bounds_test.max);
@@ -11485,6 +11548,7 @@ radv_emit_raster_state(struct radv_cmd_buffer *cmd_buffer)
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
    const bool depth_clip_enable = cmd_buffer->state.depth_clip_enable;
+   const VkLineRasterizationModeEXT line_rast_mode = cmd_buffer->state.line_rast_mode;
 
    /* GFX9 chips fail linestrip CTS tests unless this is set to 0 = no reset */
    uint32_t auto_reset_cntl = (pdev->info.gfx_level == GFX9) ? 0 : 2;
@@ -11506,9 +11570,8 @@ radv_emit_raster_state(struct radv_cmd_buffer *cmd_buffer)
       /* Ensure that SC processes the primitive group in the same order as PA produced them.  Needed
        * when either POLY_MODE or PERPENDICULAR_ENDCAP_ENA is set.
        */
-      pa_su_sc_mode_cntl |=
-         S_028814_KEEP_TOGETHER_ENABLE(d->vk.rs.polygon_mode != V_028814_X_DRAW_TRIANGLES ||
-                                       radv_get_line_mode(cmd_buffer) == VK_LINE_RASTERIZATION_MODE_RECTANGULAR);
+      pa_su_sc_mode_cntl |= S_028814_KEEP_TOGETHER_ENABLE(d->vk.rs.polygon_mode != V_028814_X_DRAW_TRIANGLES ||
+                                                          line_rast_mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR);
    }
 
    const uint32_t pa_su_line_cntl = S_028A08_WIDTH(CLAMP(d->vk.rs.line.width * 8, 0, 0xFFFF));
@@ -11517,7 +11580,7 @@ radv_emit_raster_state(struct radv_cmd_buffer *cmd_buffer)
     * performance.
     */
    const uint32_t pa_sc_line_cntl =
-      S_028BDC_PERPENDICULAR_ENDCAP_ENA(radv_get_line_mode(cmd_buffer) == VK_LINE_RASTERIZATION_MODE_RECTANGULAR);
+      S_028BDC_PERPENDICULAR_ENDCAP_ENA(line_rast_mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR);
 
    if (pdev->info.gfx_level >= GFX12) {
       radeon_begin(cmd_buffer->cs);
@@ -11526,8 +11589,7 @@ radv_emit_raster_state(struct radv_cmd_buffer *cmd_buffer)
 
       gfx12_opt_set_context_reg(R_028A0C_PA_SC_LINE_STIPPLE, RADV_TRACKED_PA_SC_LINE_STIPPLE,
                                 S_028A0C_LINE_PATTERN(d->vk.rs.line.stipple.pattern) |
-                                   S_028A0C_REPEAT_COUNT(d->vk.rs.line.stipple.factor - 1) |
-                                   S_028A0C_AUTO_RESET_CNTL(pdev->info.gfx_level < GFX12 ? auto_reset_cntl : 0));
+                                   S_028A0C_REPEAT_COUNT(d->vk.rs.line.stipple.factor - 1));
 
       gfx12_opt_set_context_reg(R_028BDC_PA_SC_LINE_CNTL, RADV_TRACKED_PA_SC_LINE_CNTL, pa_sc_line_cntl);
 
@@ -11549,7 +11611,7 @@ radv_emit_raster_state(struct radv_cmd_buffer *cmd_buffer)
       radeon_opt_set_context_reg(R_028A0C_PA_SC_LINE_STIPPLE, RADV_TRACKED_PA_SC_LINE_STIPPLE,
                                  S_028A0C_LINE_PATTERN(d->vk.rs.line.stipple.pattern) |
                                     S_028A0C_REPEAT_COUNT(d->vk.rs.line.stipple.factor - 1) |
-                                    S_028A0C_AUTO_RESET_CNTL(pdev->info.gfx_level < GFX12 ? auto_reset_cntl : 0));
+                                    S_028A0C_AUTO_RESET_CNTL(auto_reset_cntl));
 
       radeon_opt_set_context_reg(R_028BDC_PA_SC_LINE_CNTL, RADV_TRACKED_PA_SC_LINE_CNTL, pa_sc_line_cntl);
 
@@ -11672,12 +11734,13 @@ radv_emit_msaa_state(struct radv_cmd_buffer *cmd_buffer)
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const struct radv_instance *instance = radv_physical_device_instance(pdev);
    const struct radv_shader *ps = cmd_buffer->state.shaders[MESA_SHADER_FRAGMENT];
-   const unsigned rasterization_samples = radv_get_rasterization_samples(cmd_buffer);
+   const unsigned rasterization_samples = cmd_buffer->state.num_rast_samples;
    const struct radv_rendering_state *render = &cmd_buffer->state.render;
    const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
    const uint32_t sample_mask = d->vk.ms.sample_mask | ((uint32_t)d->vk.ms.sample_mask << 16);
    const bool enable_1x_user_sample_locs =
       d->vk.ms.sample_locations_enable && d->sample_location.count > 0 && d->sample_location.per_pixel == 1;
+   const VkLineRasterizationModeEXT line_rast_mode = cmd_buffer->state.line_rast_mode;
    const bool msaa_enable = rasterization_samples > 1 || enable_1x_user_sample_locs;
    unsigned log_samples = util_logbase2(rasterization_samples);
    unsigned pa_sc_conservative_rast = 0;
@@ -11761,7 +11824,7 @@ radv_emit_msaa_state(struct radv_cmd_buffer *cmd_buffer)
                     S_028804_MASK_EXPORT_NUM_SAMPLES(log_samples) | S_028804_ALPHA_TO_MASK_NUM_SAMPLES(log_samples);
       }
 
-      if (radv_get_line_mode(cmd_buffer) == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH)
+      if (line_rast_mode == VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH)
          db_eqaa |= S_028804_OVERRASTERIZATION_AMOUNT(log_samples);
    }
 
@@ -11893,15 +11956,22 @@ radv_validate_dynamic_states(struct radv_cmd_buffer *cmd_buffer, uint64_t dynami
          cmd_buffer->state.dirty |= RADV_CMD_DIRTY_VIEWPORT_STATE;
    }
 
-   if (dynamic_states & (RADV_DYNAMIC_RASTERIZATION_SAMPLES | RADV_DYNAMIC_LINE_RASTERIZATION_MODE |
-                         RADV_DYNAMIC_PRIMITIVE_TOPOLOGY | RADV_DYNAMIC_POLYGON_MODE))
-      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_FS_STATE;
-
-   if (dynamic_states & (RADV_DYNAMIC_PRIMITIVE_TOPOLOGY | RADV_DYNAMIC_PROVOKING_VERTEX_MODE))
+   if (dynamic_states & RADV_DYNAMIC_PROVOKING_VERTEX_MODE)
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_NGG_STATE;
 
-   if (dynamic_states & RADV_DYNAMIC_PATCH_CONTROL_POINTS)
-      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_TCS_TES_STATE | RADV_CMD_DIRTY_PATCH_CONTROL_POINTS_STATE;
+   if (dynamic_states & (RADV_DYNAMIC_CULL_MODE | RADV_DYNAMIC_FRONT_FACE | RADV_DYNAMIC_RASTERIZER_DISCARD_ENABLE |
+                         RADV_DYNAMIC_VIEWPORT | RADV_DYNAMIC_VIEWPORT_WITH_COUNT |
+                         RADV_DYNAMIC_CONSERVATIVE_RAST_MODE | RADV_DYNAMIC_SAMPLE_LOCATIONS_ENABLE))
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_NGGC_SETTINGS;
+
+   if (dynamic_states & (RADV_DYNAMIC_VIEWPORT | RADV_DYNAMIC_VIEWPORT_WITH_COUNT | RADV_DYNAMIC_RASTERIZATION_SAMPLES))
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_NGGC_VIEWPORT;
+
+   if (dynamic_states & RADV_DYNAMIC_PATCH_CONTROL_POINTS) {
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_TCS_TES_STATE;
+      if (pdev->info.gfx_level < GFX12)
+         cmd_buffer->state.dirty |= RADV_CMD_DIRTY_LS_HS_CONFIG;
+   }
 
    if (dynamic_states &
        (RADV_DYNAMIC_DEPTH_TEST_ENABLE | RADV_DYNAMIC_DEPTH_WRITE_ENABLE | RADV_DYNAMIC_DEPTH_COMPARE_OP |
@@ -11912,15 +11982,13 @@ radv_validate_dynamic_states(struct radv_cmd_buffer *cmd_buffer, uint64_t dynami
 
    if (dynamic_states &
        (RADV_DYNAMIC_LINE_WIDTH | RADV_DYNAMIC_LINE_STIPPLE | RADV_DYNAMIC_CULL_MODE | RADV_DYNAMIC_FRONT_FACE |
-        RADV_DYNAMIC_DEPTH_BIAS_ENABLE | RADV_DYNAMIC_PRIMITIVE_TOPOLOGY | RADV_DYNAMIC_POLYGON_MODE |
-        RADV_DYNAMIC_PROVOKING_VERTEX_MODE | RADV_DYNAMIC_LINE_RASTERIZATION_MODE |
+        RADV_DYNAMIC_DEPTH_BIAS_ENABLE | RADV_DYNAMIC_POLYGON_MODE | RADV_DYNAMIC_PROVOKING_VERTEX_MODE |
         RADV_DYNAMIC_RASTERIZER_DISCARD_ENABLE | RADV_DYNAMIC_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE))
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_RASTER_STATE;
 
-   if (dynamic_states & (RADV_DYNAMIC_LINE_STIPPLE_ENABLE | RADV_DYNAMIC_CONSERVATIVE_RAST_MODE |
-                         RADV_DYNAMIC_SAMPLE_LOCATIONS | RADV_DYNAMIC_SAMPLE_LOCATIONS_ENABLE |
-                         RADV_DYNAMIC_RASTERIZATION_SAMPLES | RADV_DYNAMIC_LINE_RASTERIZATION_MODE |
-                         RADV_DYNAMIC_POLYGON_MODE | RADV_DYNAMIC_ALPHA_TO_COVERAGE_ENABLE | RADV_DYNAMIC_SAMPLE_MASK))
+   if (dynamic_states &
+       (RADV_DYNAMIC_LINE_STIPPLE_ENABLE | RADV_DYNAMIC_CONSERVATIVE_RAST_MODE | RADV_DYNAMIC_SAMPLE_LOCATIONS |
+        RADV_DYNAMIC_SAMPLE_LOCATIONS_ENABLE | RADV_DYNAMIC_ALPHA_TO_COVERAGE_ENABLE | RADV_DYNAMIC_SAMPLE_MASK))
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_MSAA_STATE;
 
    if (dynamic_states &
@@ -11936,27 +12004,18 @@ radv_validate_dynamic_states(struct radv_cmd_buffer *cmd_buffer, uint64_t dynami
        (RADV_DYNAMIC_VIEWPORT | RADV_DYNAMIC_VIEWPORT_WITH_COUNT | RADV_DYNAMIC_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE))
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_VIEWPORT_STATE;
 
-   if (dynamic_states &
-       (RADV_DYNAMIC_COLOR_WRITE_MASK | RADV_DYNAMIC_RASTERIZATION_SAMPLES | RADV_DYNAMIC_LINE_RASTERIZATION_MODE |
-        RADV_DYNAMIC_PRIMITIVE_TOPOLOGY | RADV_DYNAMIC_POLYGON_MODE))
+   if (dynamic_states & RADV_DYNAMIC_COLOR_WRITE_MASK)
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_BINNING_STATE;
 
-   if (pdev->info.gfx_level < GFX12 &&
-       (dynamic_states & (RADV_DYNAMIC_RASTERIZATION_SAMPLES | RADV_DYNAMIC_PRIMITIVE_TOPOLOGY)))
-      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_OCCLUSION_QUERY;
-
    if (dynamic_states &
-       (RADV_DYNAMIC_COLOR_WRITE_MASK | RADV_DYNAMIC_COLOR_BLEND_ENABLE | RADV_DYNAMIC_RASTERIZATION_SAMPLES |
-        RADV_DYNAMIC_LINE_RASTERIZATION_MODE | RADV_DYNAMIC_PRIMITIVE_TOPOLOGY | RADV_DYNAMIC_POLYGON_MODE |
-        RADV_DYNAMIC_ATTACHMENT_FEEDBACK_LOOP_ENABLE | RADV_DYNAMIC_ALPHA_TO_COVERAGE_ENABLE |
-        RADV_DYNAMIC_ALPHA_TO_ONE_ENABLE))
+       (RADV_DYNAMIC_COLOR_WRITE_MASK | RADV_DYNAMIC_COLOR_BLEND_ENABLE | RADV_DYNAMIC_ATTACHMENT_FEEDBACK_LOOP_ENABLE |
+        RADV_DYNAMIC_ALPHA_TO_COVERAGE_ENABLE | RADV_DYNAMIC_ALPHA_TO_ONE_ENABLE))
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_DB_SHADER_CONTROL;
 
    if (dynamic_states & RADV_DYNAMIC_FRAGMENT_SHADING_RATE)
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_FSR_STATE;
 
-   if (dynamic_states & (RADV_DYNAMIC_RASTERIZATION_SAMPLES | RADV_DYNAMIC_LINE_RASTERIZATION_MODE |
-                         RADV_DYNAMIC_POLYGON_MODE | RADV_DYNAMIC_SAMPLE_LOCATIONS_ENABLE))
+   if (dynamic_states & RADV_DYNAMIC_SAMPLE_LOCATIONS_ENABLE)
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_RAST_SAMPLES_STATE;
 
    if (dynamic_states & RADV_DYNAMIC_DEPTH_BIAS)
@@ -11982,6 +12041,11 @@ radv_validate_dynamic_states(struct radv_cmd_buffer *cmd_buffer, uint64_t dynami
    if ((dynamic_states & RADV_DYNAMIC_PRIMITIVE_TOPOLOGY) ||
        (pdev->info.gfx_level >= GFX12 && dynamic_states & RADV_DYNAMIC_PATCH_CONTROL_POINTS))
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_VGT_PRIM_STATE;
+
+   if (dynamic_states &
+       (RADV_DYNAMIC_COLOR_WRITE_MASK | RADV_DYNAMIC_COLOR_BLEND_ENABLE | RADV_DYNAMIC_ALPHA_TO_COVERAGE_ENABLE |
+        RADV_DYNAMIC_COLOR_BLEND_EQUATION | RADV_DYNAMIC_ALPHA_TO_ONE_ENABLE | RADV_DYNAMIC_COLOR_ATTACHMENT_MAP))
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_PS_EPILOG_SHADER;
 }
 
 static void
@@ -11989,40 +12053,76 @@ radv_emit_all_graphics_states(struct radv_cmd_buffer *cmd_buffer, const struct r
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
-   struct radv_shader_part *ps_epilog = NULL;
 
-   if (cmd_buffer->state.shaders[MESA_SHADER_FRAGMENT] &&
-       cmd_buffer->state.shaders[MESA_SHADER_FRAGMENT]->info.ps.has_epilog) {
-      if ((cmd_buffer->state.emitted_graphics_pipeline != cmd_buffer->state.graphics_pipeline ||
-           ((cmd_buffer->state.dirty & (RADV_CMD_DIRTY_GRAPHICS_SHADERS | RADV_CMD_DIRTY_FRAMEBUFFER)) ||
-            (cmd_buffer->state.dirty_dynamic &
-             (RADV_DYNAMIC_COLOR_WRITE_MASK | RADV_DYNAMIC_COLOR_BLEND_ENABLE | RADV_DYNAMIC_ALPHA_TO_COVERAGE_ENABLE |
-              RADV_DYNAMIC_COLOR_BLEND_EQUATION | RADV_DYNAMIC_ALPHA_TO_ONE_ENABLE |
-              RADV_DYNAMIC_COLOR_ATTACHMENT_MAP))))) {
-         ps_epilog = lookup_ps_epilog(cmd_buffer);
-         if (!ps_epilog) {
-            vk_command_buffer_set_error(&cmd_buffer->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
-            return;
+   const uint64_t dynamic_states = cmd_buffer->state.dirty_dynamic & radv_get_needed_dynamic_states(cmd_buffer);
+   if (((cmd_buffer->state.dirty & (RADV_CMD_DIRTY_PIPELINE | RADV_CMD_DIRTY_GRAPHICS_SHADERS)) ||
+        (dynamic_states & RADV_DYNAMIC_PATCH_CONTROL_POINTS))) {
+      if (cmd_buffer->state.active_stages & VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT) {
+         const struct radv_shader *vs = radv_get_shader(cmd_buffer->state.shaders, MESA_SHADER_VERTEX);
+         const struct radv_shader *tcs = cmd_buffer->state.shaders[MESA_SHADER_TESS_CTRL];
+         const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
+         uint32_t tess_num_patches, tess_lds_size;
+
+         radv_get_tess_wg_info(pdev, &tcs->info.tcs.io_info, tcs->info.tcs.tcs_vertices_out,
+                               d->vk.ts.patch_control_points,
+                               /* TODO: This should be only inputs in LDS (not VGPR inputs) to reduce LDS usage */
+                               vs->info.vs.num_linked_outputs, &tess_num_patches, &tess_lds_size);
+
+         if (cmd_buffer->state.tess_lds_size != tess_lds_size) {
+            cmd_buffer->state.tess_lds_size = tess_lds_size;
+            cmd_buffer->state.dirty |= RADV_CMD_DIRTY_TCS_TES_STATE;
          }
 
-         assert(cmd_buffer->state.custom_blend_mode == 0);
-
-         radv_bind_fragment_output_state(cmd_buffer, cmd_buffer->state.shaders[MESA_SHADER_FRAGMENT], ps_epilog, 0);
+         if (cmd_buffer->state.tess_num_patches != tess_num_patches) {
+            cmd_buffer->state.tess_num_patches = tess_num_patches;
+            cmd_buffer->state.dirty |= RADV_CMD_DIRTY_LS_HS_CONFIG | RADV_CMD_DIRTY_TCS_TES_STATE;
+         }
       }
    }
 
-   const uint64_t dynamic_states = cmd_buffer->state.dirty_dynamic & radv_get_needed_dynamic_states(cmd_buffer);
-   if (cmd_buffer->state.has_nggc &&
-       ((cmd_buffer->state.dirty & (RADV_CMD_DIRTY_PIPELINE | RADV_CMD_DIRTY_GRAPHICS_SHADERS)) ||
-        (dynamic_states & (RADV_DYNAMIC_CULL_MODE | RADV_DYNAMIC_FRONT_FACE | RADV_DYNAMIC_RASTERIZER_DISCARD_ENABLE |
-                           RADV_DYNAMIC_VIEWPORT | RADV_DYNAMIC_VIEWPORT_WITH_COUNT |
-                           RADV_DYNAMIC_CONSERVATIVE_RAST_MODE | RADV_DYNAMIC_RASTERIZATION_SAMPLES |
-                           RADV_DYNAMIC_PRIMITIVE_TOPOLOGY | RADV_DYNAMIC_SAMPLE_LOCATIONS_ENABLE)))) {
-      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_NGGC_STATE;
+   if ((cmd_buffer->state.dirty & (RADV_CMD_DIRTY_PIPELINE | RADV_CMD_DIRTY_GRAPHICS_SHADERS)) ||
+       (dynamic_states & (RADV_DYNAMIC_PRIMITIVE_TOPOLOGY | RADV_DYNAMIC_POLYGON_MODE |
+                          RADV_DYNAMIC_LINE_RASTERIZATION_MODE | RADV_DYNAMIC_RASTERIZATION_SAMPLES))) {
+      const uint32_t vgt_outprim_type = radv_get_vgt_outprim_type(cmd_buffer);
+
+      if (cmd_buffer->state.vgt_outprim_type != vgt_outprim_type) {
+         if (radv_vgt_outprim_is_point_or_line(cmd_buffer->state.vgt_outprim_type) !=
+             radv_vgt_outprim_is_point_or_line(vgt_outprim_type))
+            cmd_buffer->state.dirty |= RADV_CMD_DIRTY_GUARDBAND;
+
+         cmd_buffer->state.vgt_outprim_type = vgt_outprim_type;
+         cmd_buffer->state.dirty |= RADV_CMD_DIRTY_PS_STATE | RADV_CMD_DIRTY_NGG_STATE | RADV_CMD_DIRTY_NGGC_SETTINGS |
+                                    RADV_CMD_DIRTY_VGT_PRIM_STATE;
+      }
+
+      const VkLineRasterizationModeEXT line_rast_mode = radv_get_line_mode(cmd_buffer);
+
+      if (cmd_buffer->state.line_rast_mode != line_rast_mode) {
+         cmd_buffer->state.line_rast_mode = line_rast_mode;
+         cmd_buffer->state.dirty |= RADV_CMD_DIRTY_PS_STATE | RADV_CMD_DIRTY_RASTER_STATE | RADV_CMD_DIRTY_MSAA_STATE;
+         if (pdev->info.gfx_level == GFX6)
+            cmd_buffer->state.dirty |= RADV_CMD_DIRTY_DB_SHADER_CONTROL;
+      }
+
+      const uint32_t num_rast_samples = radv_get_rasterization_samples(cmd_buffer);
+
+      if (cmd_buffer->state.num_rast_samples != num_rast_samples) {
+         cmd_buffer->state.num_rast_samples = num_rast_samples;
+         cmd_buffer->state.dirty |= RADV_CMD_DIRTY_BINNING_STATE | RADV_CMD_DIRTY_RAST_SAMPLES_STATE |
+                                    RADV_CMD_DIRTY_PS_STATE | RADV_CMD_DIRTY_DB_SHADER_CONTROL |
+                                    RADV_CMD_DIRTY_MSAA_STATE | RADV_CMD_DIRTY_NGGC_SETTINGS;
+         if (pdev->info.gfx_level < GFX12)
+            cmd_buffer->state.dirty |= RADV_CMD_DIRTY_OCCLUSION_QUERY;
+      }
    }
 
    if (dynamic_states)
       radv_validate_dynamic_states(cmd_buffer, dynamic_states);
+
+   if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_PS_EPILOG_SHADER) {
+      radv_bind_ps_epilog(cmd_buffer);
+      cmd_buffer->state.dirty &= ~RADV_CMD_DIRTY_PS_EPILOG_SHADER;
+   }
 
    /* Determine whether GFX9 late scissor workaround should be applied based on:
     * 1. radv_need_late_scissor_emission
@@ -12031,8 +12131,10 @@ radv_emit_all_graphics_states(struct radv_cmd_buffer *cmd_buffer, const struct r
    const bool late_scissor_emission =
       pdev->info.has_gfx9_scissor_bug ? radv_need_late_scissor_emission(cmd_buffer, info) : false;
 
-   const bool gfx12_emit_alt_hiz_wa =
-      pdev->info.gfx_level == GFX12 && !pdev->use_gfx12_hiz_his_event_wa &&
+   cmd_buffer->state.dirty_dynamic &= ~dynamic_states;
+
+   const bool gfx12_emit_hiz_wa_full =
+      pdev->gfx12_hiz_wa == RADV_GFX12_HIZ_WA_FULL &&
       cmd_buffer->state.dirty & (RADV_CMD_DIRTY_FRAMEBUFFER | RADV_CMD_DIRTY_DEPTH_STENCIL_STATE);
 
    if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_RBPLUS) {
@@ -12041,13 +12143,8 @@ radv_emit_all_graphics_states(struct radv_cmd_buffer *cmd_buffer, const struct r
    }
 
    if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_OCCLUSION_QUERY) {
-      radv_flush_occlusion_query_state(cmd_buffer);
+      radv_emit_occlusion_query_state(cmd_buffer);
       cmd_buffer->state.dirty &= ~RADV_CMD_DIRTY_OCCLUSION_QUERY;
-   }
-
-   if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_NGGC_STATE) {
-      radv_emit_ngg_culling_state(cmd_buffer);
-      cmd_buffer->state.dirty &= ~RADV_CMD_DIRTY_NGGC_STATE;
    }
 
    if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_BINNING_STATE) {
@@ -12062,9 +12159,6 @@ radv_emit_all_graphics_states(struct radv_cmd_buffer *cmd_buffer, const struct r
       radv_emit_graphics_shaders(cmd_buffer);
       cmd_buffer->state.dirty &= ~RADV_CMD_DIRTY_GRAPHICS_SHADERS;
    }
-
-   if (ps_epilog)
-      radv_emit_ps_epilog_state(cmd_buffer, ps_epilog);
 
    if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_FRAGMENT_OUTPUT) {
       radv_emit_fragment_output_state(cmd_buffer);
@@ -12121,9 +12215,9 @@ radv_emit_all_graphics_states(struct radv_cmd_buffer *cmd_buffer, const struct r
       cmd_buffer->state.dirty &= ~RADV_CMD_DIRTY_VGT_PRIM_STATE;
    }
 
-   if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_PATCH_CONTROL_POINTS_STATE) {
-      radv_emit_patch_control_points_state(cmd_buffer);
-      cmd_buffer->state.dirty &= ~RADV_CMD_DIRTY_PATCH_CONTROL_POINTS_STATE;
+   if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_LS_HS_CONFIG) {
+      radv_emit_ls_hs_config(cmd_buffer);
+      cmd_buffer->state.dirty &= ~RADV_CMD_DIRTY_LS_HS_CONFIG;
    }
 
    if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_TESS_DOMAIN_ORIGIN_STATE) {
@@ -12176,8 +12270,8 @@ radv_emit_all_graphics_states(struct radv_cmd_buffer *cmd_buffer, const struct r
       cmd_buffer->state.dirty &= ~RADV_CMD_DIRTY_RAST_SAMPLES_STATE;
    }
 
-   if (gfx12_emit_alt_hiz_wa)
-      radv_gfx12_emit_alt_hiz_wa(cmd_buffer);
+   if (gfx12_emit_hiz_wa_full)
+      radv_gfx12_emit_hiz_wa_full(cmd_buffer);
 
    radv_emit_shaders_state(cmd_buffer);
 
@@ -12187,8 +12281,6 @@ radv_emit_all_graphics_states(struct radv_cmd_buffer *cmd_buffer, const struct r
       radv_emit_scissor_state(cmd_buffer);
       cmd_buffer->cs->context_roll_without_scissor_emitted = false;
    }
-
-   cmd_buffer->state.dirty_dynamic &= ~dynamic_states;
 }
 
 static void
@@ -12237,23 +12329,6 @@ radv_bind_graphics_shaders(struct radv_cmd_buffer *cmd_buffer)
       dynamic_offset_count += shader_obj->dynamic_offset_count;
    }
 
-   /* Determine the last VGT shader. */
-   const mesa_shader_stage last_vgt_api_stage = radv_cmdbuf_get_last_vgt_api_stage(cmd_buffer);
-
-   assume(last_vgt_api_stage != MESA_SHADER_NONE);
-   if (pdev->info.has_vgt_flush_ngg_legacy_bug &&
-       (!cmd_buffer->state.last_vgt_shader || (cmd_buffer->state.last_vgt_shader->info.is_ngg &&
-                                               !cmd_buffer->state.shaders[last_vgt_api_stage]->info.is_ngg))) {
-      /* Transitioning from NGG to legacy GS requires VGT_FLUSH on GFX10 and Navi21. VGT_FLUSH is
-       * also emitted at the beginning of IBs when legacy GS ring pointers are set.
-       */
-      cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_VGT_FLUSH;
-   }
-
-   cmd_buffer->state.last_vgt_shader = cmd_buffer->state.shaders[last_vgt_api_stage];
-
-   cmd_buffer->state.has_nggc = cmd_buffer->state.last_vgt_shader->info.has_ngg_culling;
-
    struct radv_shader *gs_copy_shader = cmd_buffer->state.shader_objs[MESA_SHADER_GEOMETRY]
                                            ? cmd_buffer->state.shader_objs[MESA_SHADER_GEOMETRY]->gs.copy_shader
                                            : NULL;
@@ -12274,27 +12349,6 @@ radv_bind_graphics_shaders(struct radv_cmd_buffer *cmd_buffer)
       radv_precompute_registers_hw_ngg(device, &gs->config, &gs->info);
    }
 
-   /* Determine the rasterized primitive. */
-   if (cmd_buffer->state.active_stages &
-       (VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT |
-        VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_MESH_BIT_EXT)) {
-      cmd_buffer->state.vgt_outprim_type = radv_get_vgt_gs_out(cmd_buffer->state.shaders, 0, false);
-   }
-
-   const struct radv_shader *vs = radv_get_shader(cmd_buffer->state.shaders, MESA_SHADER_VERTEX);
-   if (vs) {
-      /* Re-emit the VS prolog when a new vertex shader is bound. */
-      if (vs->info.vs.has_prolog) {
-         cmd_buffer->state.emitted_vs_prolog = NULL;
-         cmd_buffer->state.dirty |= RADV_CMD_DIRTY_VS_PROLOG_STATE;
-      }
-
-      /* Re-emit the vertex buffer descriptors because they are really tied to the pipeline. */
-      if (vs->info.vs.vb_desc_usage_mask) {
-         cmd_buffer->state.dirty |= RADV_CMD_DIRTY_VERTEX_BUFFER;
-      }
-   }
-
    const struct radv_shader *ps = cmd_buffer->state.shaders[MESA_SHADER_FRAGMENT];
    if (ps && !ps->info.ps.has_epilog) {
       radv_bind_fragment_output_state(cmd_buffer, ps, NULL, 0);
@@ -12312,11 +12366,6 @@ radv_bind_graphics_shaders(struct radv_cmd_buffer *cmd_buffer)
 
    if (pdev->info.gfx_level <= GFX9) {
       cmd_buffer->state.ia_multi_vgt_param = radv_compute_ia_multi_vgt_param(device, cmd_buffer->state.shaders);
-   }
-
-   if (cmd_buffer->state.active_stages &
-       (VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT)) {
-      cmd_buffer->state.uses_dynamic_patch_control_points = true;
    }
 }
 
@@ -12352,53 +12401,38 @@ radv_before_draw(struct radv_cmd_buffer *cmd_buffer, const struct radv_draw_info
       cmd_buffer->state.last_index_type = -1;
    }
 
-   if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_GRAPHICS_SHADERS) {
-      radv_bind_graphics_shaders(cmd_buffer);
-   }
-
    if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_FBFETCH_OUTPUT) {
       radv_handle_fbfetch_output(cmd_buffer);
       cmd_buffer->state.dirty &= ~RADV_CMD_DIRTY_FBFETCH_OUTPUT;
    }
 
-   /* Use optimal packet order based on whether we need to sync the
-    * pipeline.
-    */
-   if (cmd_buffer->state.flush_bits & (RADV_CMD_FLAG_FLUSH_AND_INV_CB | RADV_CMD_FLAG_FLUSH_AND_INV_DB |
-                                       RADV_CMD_FLAG_PS_PARTIAL_FLUSH | RADV_CMD_FLAG_CS_PARTIAL_FLUSH)) {
-      /* If we have to wait for idle, set all states first, so that
-       * all SET packets are processed in parallel with previous draw
-       * calls. Then upload descriptors, set shader pointers, and
-       * draw, and prefetch at the end. This ensures that the time
-       * the CUs are idle is very short. (there are only SET_SH
-       * packets between the wait and the draw)
-       */
-      radv_emit_all_graphics_states(cmd_buffer, info);
-      radv_emit_cache_flush(cmd_buffer);
-      /* <-- CUs are idle here --> */
-
-      radv_upload_graphics_shader_descriptors(cmd_buffer);
-   } else {
-      /* If we don't wait for idle, start prefetches first, then set
-       * states, and draw at the end.
-       */
-      if (cmd_buffer->state.flush_bits)
-         radv_emit_cache_flush(cmd_buffer);
-
-      if (has_prefetch) {
-         /* Only prefetch the vertex shader and VBO descriptors in order to start the draw as soon
-          * as possible.
-          */
-         radv_emit_graphics_prefetch(cmd_buffer, true);
-      }
-
-      radv_upload_graphics_shader_descriptors(cmd_buffer);
-
-      radv_emit_all_graphics_states(cmd_buffer, info);
+   if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_GRAPHICS_SHADERS) {
+      radv_bind_graphics_shaders(cmd_buffer);
    }
+
+   /* This is the optimal packet order:
+    * Set all states first, so that all SET packets are processed in parallel with previous draw
+    * calls. Then flush caches and wait if needed. Then draw and prefetch at the end. It's better
+    * to draw before prefetches because we want to start fetching indices before shaders. The idea
+    * is to minimize the time when the CUs are idle.
+    */
+   radv_emit_all_graphics_states(cmd_buffer, info);
+   radv_upload_graphics_shader_descriptors(cmd_buffer);
 
    if (pdev->info.gfx_level >= GFX12) {
       radv_gfx12_emit_buffered_regs(device, cs);
+   }
+
+   if (cmd_buffer->state.flush_bits)
+      radv_emit_cache_flush(cmd_buffer);
+
+   /* <-- CUs are idle here if shaders are synchronized. */
+
+   if (has_prefetch) {
+      /* Only prefetch the vertex shader and VBO descriptors in order to start the draw as soon as
+       * possible.
+       */
+      radv_emit_graphics_prefetch(cmd_buffer, true);
    }
 
    if (device->sqtt.bo && !dgc)
@@ -12453,17 +12487,6 @@ radv_before_taskmesh_draw(struct radv_cmd_buffer *cmd_buffer, const struct radv_
 
    radv_emit_all_graphics_states(cmd_buffer, info);
 
-   if (cmd_buffer->state.flush_bits)
-      radv_emit_cache_flush(cmd_buffer);
-
-   if (task_shader) {
-      radv_gang_cache_flush(cmd_buffer);
-
-      if (need_task_semaphore) {
-         radv_wait_gang_leader(cmd_buffer);
-      }
-   }
-
    struct radv_descriptor_state *descriptors_state =
       radv_get_descriptors_state(cmd_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS);
 
@@ -12481,6 +12504,17 @@ radv_before_taskmesh_draw(struct radv_cmd_buffer *cmd_buffer, const struct radv_
 
       if (task_shader)
          radv_gfx12_emit_buffered_regs(device, cmd_buffer->gang.cs);
+   }
+
+   if (cmd_buffer->state.flush_bits)
+      radv_emit_cache_flush(cmd_buffer);
+
+   if (task_shader) {
+      radv_gang_cache_flush(cmd_buffer);
+
+      if (need_task_semaphore) {
+         radv_wait_gang_leader(cmd_buffer);
+      }
    }
 
    if (device->sqtt.bo && !dgc)
@@ -12826,8 +12860,10 @@ radv_CmdDrawMeshTasksIndirectCountEXT(VkCommandBuffer commandBuffer, VkBuffer _b
          uint32_t workaround_cond_init = 0;
          uint32_t workaround_cond_off;
 
-         if (!radv_cmd_buffer_upload_data(cmd_buffer, 4, &workaround_cond_init, &workaround_cond_off))
+         if (!radv_cmd_buffer_upload_data(cmd_buffer, 4, &workaround_cond_init, &workaround_cond_off)) {
             vk_command_buffer_set_error(&cmd_buffer->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
+            return;
+         }
 
          workaround_cond_va = radv_buffer_get_va(cmd_buffer->upload.upload_bo) + workaround_cond_off;
       }
@@ -13357,49 +13393,24 @@ radv_before_dispatch(struct radv_cmd_buffer *cmd_buffer, struct radv_compute_pip
    struct radv_shader *compute_shader = bind_point == VK_PIPELINE_BIND_POINT_COMPUTE
                                            ? cmd_buffer->state.shaders[MESA_SHADER_COMPUTE]
                                            : cmd_buffer->state.rt_prolog;
-   const bool has_prefetch = pdev->info.gfx_level >= GFX7;
 
    if (compute_shader->info.cs.regalloc_hang_bug)
       cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_PS_PARTIAL_FLUSH | RADV_CMD_FLAG_CS_PARTIAL_FLUSH;
 
-   if (cmd_buffer->state.flush_bits & (RADV_CMD_FLAG_FLUSH_AND_INV_CB | RADV_CMD_FLAG_FLUSH_AND_INV_DB |
-                                       RADV_CMD_FLAG_PS_PARTIAL_FLUSH | RADV_CMD_FLAG_CS_PARTIAL_FLUSH)) {
-      /* If we have to wait for idle, set all states first, so that
-       * all SET packets are processed in parallel with previous draw
-       * calls. Then upload descriptors, set shader pointers, and
-       * dispatch, and prefetch at the end. This ensures that the
-       * time the CUs are idle is very short. (there are only SET_SH
-       * packets between the wait and the draw)
-       */
-      if (pipeline)
-         radv_emit_compute_pipeline(cmd_buffer, pipeline);
-      if (bind_point == VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR)
-         radv_emit_rt_stack_size(cmd_buffer);
-      radv_emit_cache_flush(cmd_buffer);
-      /* <-- CUs are idle here --> */
+   /* Use the optimal packet order similar to draws. */
+   if (pipeline)
+      radv_emit_compute_pipeline(cmd_buffer, pipeline);
+   if (bind_point == VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR)
+      radv_emit_rt_stack_size(cmd_buffer);
 
-      radv_upload_compute_shader_descriptors(cmd_buffer, bind_point);
-   } else {
-      /* If we don't wait for idle, start prefetches first, then set
-       * states, and dispatch at the end.
-       */
-      radv_emit_cache_flush(cmd_buffer);
+   radv_upload_compute_shader_descriptors(cmd_buffer, bind_point);
 
-      if (has_prefetch) {
-         if (bind_point == VK_PIPELINE_BIND_POINT_COMPUTE) {
-            radv_emit_compute_prefetch(cmd_buffer);
-         } else {
-            radv_emit_ray_tracing_prefetch(cmd_buffer);
-         }
-      }
+   if (pdev->info.gfx_level >= GFX12)
+      radv_gfx12_emit_buffered_regs(device, cmd_buffer->cs);
 
-      radv_upload_compute_shader_descriptors(cmd_buffer, bind_point);
+   radv_emit_cache_flush(cmd_buffer);
 
-      if (pipeline)
-         radv_emit_compute_pipeline(cmd_buffer, pipeline);
-      if (bind_point == VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR)
-         radv_emit_rt_stack_size(cmd_buffer);
-   }
+   /* <-- CUs are idle here if shaders are synchronized. */
 
    if (pipeline_is_dirty) {
       /* Raytracing uses compute shaders but has separate bind points and pipelines.
@@ -13452,21 +13463,29 @@ radv_after_dispatch(struct radv_cmd_buffer *cmd_buffer, VkPipelineBindPoint bind
 
 static void
 radv_dispatch(struct radv_cmd_buffer *cmd_buffer, const struct radv_dispatch_info *info,
-              struct radv_compute_pipeline *pipeline, VkPipelineBindPoint bind_point)
+              struct radv_compute_pipeline *pipeline, const struct radv_shader *shader, VkPipelineBindPoint bind_point)
 {
-   struct radv_shader *compute_shader = bind_point == VK_PIPELINE_BIND_POINT_COMPUTE
-                                           ? cmd_buffer->state.shaders[MESA_SHADER_COMPUTE]
-                                           : cmd_buffer->state.rt_prolog;
-
    radv_before_dispatch(cmd_buffer, pipeline, bind_point);
-   radv_emit_dispatch_packets(cmd_buffer, compute_shader, info);
+   radv_emit_dispatch_packets(cmd_buffer, shader, info);
    radv_after_dispatch(cmd_buffer, bind_point, false);
 }
 
 void
 radv_compute_dispatch(struct radv_cmd_buffer *cmd_buffer, const struct radv_dispatch_info *info)
 {
-   radv_dispatch(cmd_buffer, info, cmd_buffer->state.compute_pipeline, VK_PIPELINE_BIND_POINT_COMPUTE);
+   struct radv_compute_pipeline *pipeline = cmd_buffer->state.compute_pipeline;
+   const struct radv_shader *shader = cmd_buffer->state.shaders[MESA_SHADER_COMPUTE];
+
+   radv_dispatch(cmd_buffer, info, pipeline, shader, VK_PIPELINE_BIND_POINT_COMPUTE);
+}
+
+static void
+radv_rt_dispatch(struct radv_cmd_buffer *cmd_buffer, const struct radv_dispatch_info *info)
+{
+   struct radv_compute_pipeline *pipeline = &cmd_buffer->state.rt_pipeline->base;
+   const struct radv_shader *shader = cmd_buffer->state.rt_prolog;
+
+   radv_dispatch(cmd_buffer, info, pipeline, shader, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR);
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -13621,7 +13640,6 @@ radv_trace_rays(struct radv_cmd_buffer *cmd_buffer, VkTraceRaysIndirectCommand2K
    if (unlikely(device->rra_trace.ray_history_buffer))
       radv_trace_trace_rays(cmd_buffer, tables, indirect_va);
 
-   struct radv_compute_pipeline *pipeline = &cmd_buffer->state.rt_pipeline->base;
    struct radv_shader *rt_prolog = cmd_buffer->state.rt_prolog;
 
    /* Since the workgroup size is 8x4 (or 8x8), 1D dispatches can only fill 8 threads per wave at most. To increase
@@ -13669,20 +13687,28 @@ radv_trace_rays(struct radv_cmd_buffer *cmd_buffer, VkTraceRaysIndirectCommand2K
    const uint32_t sbt_descriptors_offset = radv_get_user_sgpr_loc(rt_prolog, AC_UD_CS_SBT_DESCRIPTORS);
    if (sbt_descriptors_offset) {
       radeon_begin(cs);
-      radeon_emit_64bit_pointer(sbt_descriptors_offset, sbt_va);
+      if (pdev->info.gfx_level >= GFX12) {
+         gfx12_push_64bit_pointer(sbt_descriptors_offset, sbt_va);
+      } else {
+         radeon_emit_64bit_pointer(sbt_descriptors_offset, sbt_va);
+      }
       radeon_end();
    }
 
    const uint32_t ray_launch_size_addr_offset = radv_get_user_sgpr_loc(rt_prolog, AC_UD_CS_RAY_LAUNCH_SIZE_ADDR);
    if (ray_launch_size_addr_offset) {
       radeon_begin(cs);
-      radeon_emit_64bit_pointer(ray_launch_size_addr_offset, launch_size_va);
+      if (pdev->info.gfx_level >= GFX12) {
+         gfx12_push_64bit_pointer(ray_launch_size_addr_offset, launch_size_va);
+      } else {
+         radeon_emit_64bit_pointer(ray_launch_size_addr_offset, launch_size_va);
+      }
       radeon_end();
    }
 
    assert(cs->b->cdw <= cdw_max);
 
-   radv_dispatch(cmd_buffer, &info, pipeline, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR);
+   radv_rt_dispatch(cmd_buffer, &info);
 
    if (remaining_ray_count) {
       info.blocks[0] = remaining_ray_count;
@@ -13694,11 +13720,15 @@ radv_trace_rays(struct radv_cmd_buffer *cmd_buffer, VkTraceRaysIndirectCommand2K
       radv_upload_trace_rays_params(cmd_buffer, tables, mode, &launch_size_va, NULL);
       if (ray_launch_size_addr_offset) {
          radeon_begin(cs);
-         radeon_emit_64bit_pointer(ray_launch_size_addr_offset, launch_size_va);
+         if (pdev->info.gfx_level >= GFX12) {
+            gfx12_push_64bit_pointer(ray_launch_size_addr_offset, launch_size_va);
+         } else {
+            radeon_emit_64bit_pointer(ray_launch_size_addr_offset, launch_size_va);
+         }
          radeon_end();
       }
 
-      radv_dispatch(cmd_buffer, &info, pipeline, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR);
+      radv_rt_dispatch(cmd_buffer, &info);
    }
 
    radv_resume_conditional_rendering(cmd_buffer);
@@ -14426,7 +14456,7 @@ write_event(struct radv_cmd_buffer *cmd_buffer, struct radv_event *event, VkPipe
 
    radv_cp_dma_wait_for_stages(cmd_buffer, stageMask);
 
-   if (!(stageMask & ~top_of_pipe_flags)) {
+   if (!(stageMask & ~top_of_pipe_flags) && cmd_buffer->qf != RADV_QUEUE_COMPUTE) {
       /* Just need to sync the PFP engine. */
       radv_write_data(cmd_buffer, V_370_PFP, va, 1, &value, false);
    } else if (!(stageMask & ~post_index_fetch_flags)) {
@@ -14438,6 +14468,7 @@ write_event(struct radv_cmd_buffer *cmd_buffer, struct radv_event *event, VkPipe
       if (!(stageMask & ~post_ps_flags)) {
          /* Sync previous fragment shaders. */
          event_type = V_028A90_PS_DONE;
+         assert(cmd_buffer->qf == RADV_QUEUE_GENERAL);
       } else if (!(stageMask & ~post_cs_flags)) {
          /* Sync previous compute shaders. */
          event_type = V_028A90_CS_DONE;
@@ -14585,7 +14616,10 @@ radv_begin_conditional_rendering(struct radv_cmd_buffer *cmd_buffer, uint64_t va
           * Based on the conditionalrender demo, it's faster to do the
           * COPY_DATA in ME  (+ sync PFP) instead of PFP.
           */
-         radv_cmd_buffer_upload_data(cmd_buffer, 8, &pred_value, &pred_offset);
+         if (!radv_cmd_buffer_upload_data(cmd_buffer, 8, &pred_value, &pred_offset)) {
+            vk_command_buffer_set_error(&cmd_buffer->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
+            return;
+         }
 
          emulated_va = radv_buffer_get_va(cmd_buffer->upload.upload_bo) + pred_offset;
 
@@ -15238,7 +15272,6 @@ radv_reset_pipeline_state(struct radv_cmd_buffer *cmd_buffer, VkPipelineBindPoin
          cmd_buffer->state.emitted_vs_prolog = NULL;
          cmd_buffer->state.ms.sample_shading_enable = false;
          cmd_buffer->state.ms.min_sample_shading = 1.0f;
-         cmd_buffer->state.vgt_outprim_type = 0;
          cmd_buffer->state.uses_out_of_order_rast = false;
          cmd_buffer->state.uses_vrs_attachment = false;
       }

@@ -105,7 +105,7 @@ impl RegLatencySM80 {
             Op::IAdd3(_) | Op::IAdd3X(_) => CoupledAlu,
 
             Op::BMsk(_) => CoupledAlu,
-            // Sgxt => CoupledAlu,
+            Op::Sgxt(_) => CoupledAlu,
             Op::Lop3(_) => CoupledAlu,
             Op::Flo(_) => Decoupled,
             Op::ISetP(_) => CoupledAlu,
@@ -1072,7 +1072,7 @@ impl URegLatencySM80 {
             Op::PSetP(_) => vcoupled,
             // UR2UP
             Op::Sel(_) => vcoupled,
-            // SGXT
+            Op::Sgxt(_) => vcoupled,
             Op::Shf(_) => vcoupled,
             Op::Shfl(_) => vdecoupled,
 
@@ -1437,7 +1437,7 @@ impl SM80Latency {
     ) -> u32 {
         let dst_file = match &write.dsts_as_slice()[dst_idx] {
             Dst::None => return 0,
-            Dst::SSA(vec) => vec.file().unwrap(),
+            Dst::SSA(vec) => vec.file(),
             Dst::Reg(reg) => reg.file(),
         };
 
@@ -1494,7 +1494,7 @@ impl SM80Latency {
     pub fn war(read: &Op, src_idx: usize, write: &Op, dst_idx: usize) -> u32 {
         let dst_file = match &write.dsts_as_slice()[dst_idx] {
             Dst::None => return 0,
-            Dst::SSA(vec) => vec.file().unwrap(),
+            Dst::SSA(vec) => vec.file(),
             Dst::Reg(reg) => reg.file(),
         };
 
@@ -1546,7 +1546,7 @@ impl SM80Latency {
     ) -> u32 {
         let dst_file = match &a.dsts_as_slice()[a_dst_idx] {
             Dst::None => return 0,
-            Dst::SSA(vec) => vec.file().unwrap(),
+            Dst::SSA(vec) => vec.file(),
             Dst::Reg(reg) => reg.file(),
         };
 

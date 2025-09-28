@@ -107,7 +107,7 @@ INSTANTIATE_TEST_SUITE_P(
 static bool
 validate(struct brw_codegen *p, char **error = nullptr)
 {
-   const bool print = getenv("TEST_DEBUG");
+   const bool print = os_get_option("TEST_DEBUG");
    struct disasm_info *disasm = disasm_initialize(p->isa, NULL);
 
    struct inst_group *group = disasm_new_inst_group(disasm, 0);
@@ -117,7 +117,7 @@ validate(struct brw_codegen *p, char **error = nullptr)
                                         p->next_insn_offset, disasm);
 
    if (print) {
-      dump_assembly(p->store, 0, p->next_insn_offset, disasm, NULL);
+      dump_assembly(p->store, 0, p->next_insn_offset, disasm, NULL, stderr);
    }
 
    if (error)
@@ -3920,4 +3920,35 @@ TEST_P(validation_test, bfloat_restrictions)
 
       clear_instructions(p);
    }
+}
+
+TEST_P(validation_test, srnd_type_and_immediate_restrictions)
+{
+   if (devinfo.ver < 20)
+      return;
+
+   struct brw_reg dst = retype(g0, BRW_TYPE_HF);
+   dst.hstride = 2;
+
+   brw_SRND(p,
+      dst,
+      retype(g0, BRW_TYPE_F),
+      retype(g0, BRW_TYPE_F));
+   EXPECT_TRUE(validate(p));
+   clear_instructions(p);
+
+   brw_SRND(p,
+      dst,
+      retype(g0, BRW_TYPE_F),
+      brw_imm_f(42.0f));
+   EXPECT_TRUE(validate(p));
+   clear_instructions(p);
+
+   /* Invalid type combinations */
+   brw_SRND(p,
+      dst,
+      retype(g0, BRW_TYPE_F),
+      retype(g0, BRW_TYPE_UW));
+   EXPECT_FALSE(validate(p));
+   clear_instructions(p);
 }

@@ -286,9 +286,6 @@ populate_wm_prog_key(const struct anv_graphics_pipeline *pipeline,
     */
    key->input_slots_valid = 0;
 
-   /* XXX Vulkan doesn't appear to specify */
-   key->clamp_fragment_color = false;
-
    key->ignore_sample_mask_out = false;
 
    assert(rp->color_attachment_count <= MAX_RTS);
@@ -1310,7 +1307,7 @@ anv_graphics_pipeline_compile(struct anv_graphics_pipeline *pipeline,
 
       anv_pipeline_lower_nir(&pipeline->base, stage_ctx, &stages[s], layout);
 
-      if (prev_stage && compiler->nir_options[s]->unify_interfaces) {
+      if (prev_stage && s < MESA_SHADER_FRAGMENT) {
          prev_stage->nir->info.outputs_written |= stages[s].nir->info.inputs_read &
                   ~(VARYING_BIT_TESS_LEVEL_INNER | VARYING_BIT_TESS_LEVEL_OUTER);
          stages[s].nir->info.inputs_read |= prev_stage->nir->info.outputs_written &
@@ -1516,21 +1513,12 @@ anv_pipeline_compile_cs(struct anv_compute_pipeline *pipeline,
        */
       if (device->physical->instance->assume_full_subgroups &&
           stage.nir->info.uses_wide_subgroup_intrinsics &&
-          stage.nir->info.subgroup_size == SUBGROUP_SIZE_API_CONSTANT &&
+          stage.nir->info.api_subgroup_size == ELK_SUBGROUP_SIZE &&
           local_size &&
-          local_size % ELK_SUBGROUP_SIZE == 0)
-         stage.nir->info.subgroup_size = SUBGROUP_SIZE_FULL_SUBGROUPS;
-
-      /* If the client requests that we dispatch full subgroups but doesn't
-       * allow us to pick a subgroup size, we have to smash it to the API
-       * value of 32.  Performance will likely be terrible in this case but
-       * there's nothing we can do about that.  The client should have chosen
-       * a size.
-       */
-      if (stage.nir->info.subgroup_size == SUBGROUP_SIZE_FULL_SUBGROUPS)
-         stage.nir->info.subgroup_size =
-            device->physical->instance->assume_full_subgroups != 0 ?
-            device->physical->instance->assume_full_subgroups : ELK_SUBGROUP_SIZE;
+          local_size % ELK_SUBGROUP_SIZE == 0) {
+         stage.nir->info.max_subgroup_size = ELK_SUBGROUP_SIZE;
+         stage.nir->info.min_subgroup_size = ELK_SUBGROUP_SIZE;
+      }
 
       stage.num_stats = 1;
 

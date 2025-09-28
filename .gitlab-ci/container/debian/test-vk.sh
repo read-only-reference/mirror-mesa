@@ -33,6 +33,7 @@ EPHEMERAL=(
     libx11-xcb-dev
     libxcb-dri2-0-dev
     libxcb-ewmh-dev
+    libxcb-glx0-dev
     libxcb-keysyms1-dev
     libxkbcommon-dev
     libxrandr-dev
@@ -43,7 +44,6 @@ EPHEMERAL=(
     patch
     pkgconf
     python3-dev
-    python3-distutils
     python3-pip
     python3-setuptools
     python3-wheel

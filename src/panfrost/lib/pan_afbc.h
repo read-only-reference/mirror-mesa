@@ -79,7 +79,6 @@ enum pan_afbc_mode {
    PAN_AFBC_MODE_R8G8B8A8,
    PAN_AFBC_MODE_R10G10B10A2,
    PAN_AFBC_MODE_R11G11B10,
-   PAN_AFBC_MODE_S8,
 
    /* YUV special modes */
    PAN_AFBC_MODE_YUV420_6C8,
@@ -526,6 +525,14 @@ pan_afbc_format(unsigned arch, enum pipe_format format, unsigned plane_idx)
     */
    format = util_format_linear(format);
 
+   /* AFBC is type agnostic on v9+ (it just doesn't support float types except
+    * for D32 which is mapped to RGBA8 internally), but most of the following
+    * tests are done on UNORM for simplicity, so make sure we convert to _UNORM
+    * first in that case.
+    */
+   if (arch >= 9 && !util_format_is_float(format))
+      format = util_format_any_to_unorm(format);
+
    /* Luminance-alpha not supported for AFBC on v7+ */
    switch (format) {
    case PIPE_FORMAT_A8_UNORM:
@@ -555,9 +562,15 @@ pan_afbc_format(unsigned arch, enum pipe_format format, unsigned plane_idx)
    case PIPE_FORMAT_R4G4B4A4_UNORM:    return PAN_AFBC_MODE_R4G4B4A4;
    case PIPE_FORMAT_Z16_UNORM:         return PAN_AFBC_MODE_R8G8;
 
+   case PIPE_FORMAT_Z32_FLOAT:         return PAN_AFBC_MODE_R8G8B8A8;
    case PIPE_FORMAT_Z24_UNORM_S8_UINT: return PAN_AFBC_MODE_R8G8B8A8;
    case PIPE_FORMAT_Z24X8_UNORM:       return PAN_AFBC_MODE_R8G8B8A8;
    case PIPE_FORMAT_X24S8_UINT:        return PAN_AFBC_MODE_R8G8B8A8;
+   case PIPE_FORMAT_Z24_UNORM_PACKED:  return PAN_AFBC_MODE_R8G8B8;
+
+   /* AFBC(S8) only supported on v9+ */
+   case PIPE_FORMAT_S8_UINT:
+      return arch >= 9 ? PAN_AFBC_MODE_R8 : PAN_AFBC_MODE_INVALID;
 
    default:                            return PAN_AFBC_MODE_INVALID;
    }
@@ -595,8 +608,7 @@ pan_afbc_can_ytr(enum pipe_format format)
 }
 
 static inline bool
-pan_afbc_can_split(unsigned arch, enum pipe_format format, uint64_t modifier,
-                   unsigned plane_idx)
+pan_afbc_can_split(unsigned arch, enum pan_afbc_mode mode, uint64_t modifier)
 {
    unsigned block_width = pan_afbc_superblock_width(modifier);
 
@@ -606,7 +618,6 @@ pan_afbc_can_split(unsigned arch, enum pipe_format format, uint64_t modifier,
    if (block_width == 16) {
       return true;
    } else if (block_width == 32) {
-      enum pan_afbc_mode mode = pan_afbc_format(arch, format, plane_idx);
       return (mode == PAN_AFBC_MODE_R8G8B8A8 ||
               mode == PAN_AFBC_MODE_R10G10B10A2);
    }
@@ -636,19 +647,13 @@ pan_afbc_can_tile(unsigned arch)
 
 #if PAN_ARCH >= 9
 static inline enum mali_afbc_compression_mode
-pan_afbc_compression_mode(enum pipe_format format, unsigned plane_idx)
+pan_afbc_compression_mode(enum pan_afbc_mode mode)
 {
-   /* There's a special case for texturing the stencil part from a combined
-    * depth/stencil texture, handle it separately.
-    */
-   if (format == PIPE_FORMAT_X24S8_UINT)
-      return MALI_AFBC_COMPRESSION_MODE_X24S8;
-
-   /* Otherwise, map canonical formats to the hardware enum. This only
+   /* Map canonical formats to the hardware enum. This only
     * needs to handle the subset of formats returned by
     * pan_afbc_format.
     */
-   switch (pan_afbc_format(PAN_ARCH, format, plane_idx)) {
+   switch (mode) {
    case PAN_AFBC_MODE_R8:
       return MALI_AFBC_COMPRESSION_MODE_R8;
    case PAN_AFBC_MODE_R8G8:
@@ -667,8 +672,6 @@ pan_afbc_compression_mode(enum pipe_format format, unsigned plane_idx)
       return MALI_AFBC_COMPRESSION_MODE_R10G10B10A2;
    case PAN_AFBC_MODE_R11G11B10:
       return MALI_AFBC_COMPRESSION_MODE_R11G11B10;
-   case PAN_AFBC_MODE_S8:
-      return MALI_AFBC_COMPRESSION_MODE_S8;
    case PAN_AFBC_MODE_YUV420_6C8:
       return MALI_AFBC_COMPRESSION_MODE_YUV420_6C8;
    case PAN_AFBC_MODE_YUV420_2C8:
@@ -698,6 +701,20 @@ pan_afbc_compression_mode(enum pipe_format format, unsigned plane_idx)
    }
 
    UNREACHABLE("all AFBC formats handled");
+}
+
+static inline enum mali_afbc_compression_mode
+pan_afbc_decompression_mode(enum pipe_format view_format,
+                            enum pan_afbc_mode img_mode)
+{
+   /* There are special cases for texture views of stencil images. */
+   if (img_mode == PAN_AFBC_MODE_R8G8B8A8 &&
+       view_format == PIPE_FORMAT_X24S8_UINT)
+      return MALI_AFBC_COMPRESSION_MODE_X24S8;
+   else if (view_format == PIPE_FORMAT_S8_UINT)
+      return MALI_AFBC_COMPRESSION_MODE_S8;
+
+   return pan_afbc_compression_mode(img_mode);
 }
 #endif
 

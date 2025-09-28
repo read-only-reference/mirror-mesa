@@ -84,6 +84,8 @@ TEMPLATE_H = Template(COPYRIGHT + """\
 #include <vulkan/vulkan_beta.h>
 #endif
 
+#include "vk_internal_exts.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -489,14 +491,13 @@ def get_pnext_member_copy(builder, struct, src_type, member, types):
     builder.level += 1
     builder.add("switch ((int32_t)pnext->sType) {")
 
-    case_stmts = ""
     for type in types[src_type].extended_by:
         if type.guard is not None:
             builder.code += "#ifdef %s\n" % (type.guard)
 
         builder.add("case %s:" % (type.enum))
         builder.level += 1
-        get_struct_copy(builder, field_name, "pnext", type.name, "sizeof(%s)" % type.name, types)
+        get_struct_copy(builder, field_name, "pnext", type.name, types)
         builder.add("break;")
         builder.level -= 1
 
@@ -537,12 +538,20 @@ def get_pnext_member_free(builder, struct_type, types, field_name):
     builder.level -= 1
     builder.add("}")
 
-def get_struct_copy(builder, dst, src_name, src_type, size, types):
+def get_struct_copy(builder, dst, src_name, src_type, types, parent_name=None, len=None):
     tmp_dst_name = builder.get_variable_name("tmp_dst")
     tmp_src_name = builder.get_variable_name("tmp_src")
     
     builder.add("if (%s) {" % (src_name))
     builder.level += 1
+
+    if src_type == "void":
+        size = "1"
+    else:
+        size = "sizeof(%s)" % src_type
+
+    if len and len != "struct-ptr":
+        size = "%s * %s->%s" % (size, parent_name, len)
 
     builder.add("%s = vk_zalloc(queue->alloc, %s, 8, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);" % (dst, size))
     builder.add("if (%s == NULL) goto err;" % (dst))
@@ -550,18 +559,31 @@ def get_struct_copy(builder, dst, src_name, src_type, size, types):
     builder.add("%s *%s = (void *)%s;" % (src_type, tmp_src_name, src_name))
     builder.add("memcpy(%s, %s, %s);" % (tmp_dst_name, tmp_src_name, size))
 
+    struct_array_copy = len and len != "struct-ptr" and src_type != "void"
+    if struct_array_copy:
+        array_index = builder.get_variable_name("i")
+        builder.add("for (uint32_t %s = 0; %s < %s->%s; %s++) {" % (array_index, array_index, parent_name, len, array_index))
+        builder.level += 1
+        prev_tmp_dst_name = tmp_dst_name
+        prev_tmp_src_name = tmp_src_name
+        tmp_dst_name = builder.get_variable_name("tmp_dst")
+        tmp_src_name = builder.get_variable_name("tmp_src")
+        builder.add("%s *%s = %s + %s; (void)%s;" % (src_type, tmp_dst_name, prev_tmp_dst_name, array_index, tmp_dst_name))
+        builder.add("%s *%s = %s + %s; (void)%s;" % (src_type, tmp_src_name, prev_tmp_src_name, array_index, tmp_src_name))
+
     if src_type in types:
         for member in types[src_type].members:
-            if member.len and member.len == 'struct-ptr':
+            if member.len and member.len != 'null-terminated':
                 get_struct_copy(builder, "%s->%s" % (tmp_dst_name, member.name), "%s->%s" % (
                     tmp_src_name, member.name
-                ), member.type, 'sizeof(%s)' % member.type, types)
+                ), member.type, types, tmp_src_name, member.len)
             elif member.len and member.len == 'null-terminated':
                 builder.add("%s->%s = strdup(%s->%s);" % (tmp_dst_name, member.name, tmp_src_name, member.name))
-            elif member.len:
-                get_array_member_copy(builder, tmp_dst_name, tmp_src_name, member)
             elif member.name == 'pNext':
                 get_pnext_member_copy(builder, tmp_dst_name, src_type, member, types)
+
+    if struct_array_copy:
+        builder.add("}")
 
     builder.level -= 1
     builder.add("} else {")
@@ -633,7 +655,7 @@ def get_param_copy(builder, command, param, types):
         return False
 
     if '*' in param.decl:
-        get_struct_copy(builder, dst, param.name, param.type, 'sizeof(%s)' % param.type, types)
+        get_struct_copy(builder, dst, param.name, param.type, types)
         return True
 
     builder.add("cmd->u.%s.%s = %s;" % (to_struct_field_name(command.name), to_field_name(param.name), param.name))
@@ -681,6 +703,23 @@ def get_types_defines(doc):
             types_to_defines[fullname] = define
 
     return types_to_defines
+
+INTERNAL_STRUCT_EXTENSIONS = {
+    "VkRenderingAttachmentInfo": EntrypointType(
+        name="VkRenderingAttachmentInitialLayoutInfoMESA",
+        enum="VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INITIAL_LAYOUT_INFO_MESA",
+        members=[],
+        extended_by=[],
+        guard=None
+    ),
+    "VkRenderingInfo": EntrypointType(
+        name="VkSampleLocationsInfoEXT",
+        enum=None,
+        members=None,
+        extended_by=None,
+        guard=None
+    )
+}
 
 def get_types(doc, beta, api, types_to_defines):
     """Extract the types from the registry."""
@@ -732,6 +771,12 @@ def get_types(doc, beta, api, types_to_defines):
             if extended not in required:
                 continue
             types[extended].extended_by.append(types[_type.attrib['name']])
+
+    for extended in INTERNAL_STRUCT_EXTENSIONS:
+        extension = INTERNAL_STRUCT_EXTENSIONS[extended]
+        if extension.name in types:
+            extension = types[extension.name]
+        types[extended].extended_by.append(extension)
 
     return types
 

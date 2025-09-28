@@ -292,7 +292,7 @@ struct lvp_image {
 
 struct lvp_image_view {
    struct vk_image_view vk;
-   const struct lvp_image *image; /**< VkImageViewCreateInfo::image */
+   struct lvp_image *image; /**< VkImageViewCreateInfo::image */
 
    enum pipe_format pformat;
 
@@ -841,6 +841,23 @@ enum {
    LVP_CMD_SAVE_STATE,
    LVP_CMD_RESTORE_STATE,
 };
+#define LVP_CMD_WRITE_BUFFER_CP ((enum vk_cmd_type)LVP_CMD_WRITE_BUFFER_CP)
+#define LVP_CMD_DISPATCH_UNALIGNED ((enum vk_cmd_type)LVP_CMD_DISPATCH_UNALIGNED)
+#define LVP_CMD_FILL_BUFFER_ADDR ((enum vk_cmd_type)LVP_CMD_FILL_BUFFER_ADDR)
+#define LVP_CMD_ENCODE_AS ((enum vk_cmd_type)LVP_CMD_ENCODE_AS)
+#define LVP_CMD_SAVE_STATE ((enum vk_cmd_type)LVP_CMD_SAVE_STATE)
+#define LVP_CMD_RESTORE_STATE ((enum vk_cmd_type)LVP_CMD_RESTORE_STATE)
+
+void
+lvp_image_copy_depth_box(uint8_t *dst,
+               enum pipe_format dst_format,
+               unsigned dst_stride, uint64_t dst_slice_stride,
+               unsigned dst_x, unsigned dst_y, unsigned dst_z,
+               unsigned width, unsigned height, unsigned depth,
+               const uint8_t * src,
+               enum pipe_format src_format,
+               int src_stride, uint64_t src_slice_stride,
+               unsigned src_x, unsigned src_y, unsigned src_z);
 
 #ifdef __cplusplus
 }

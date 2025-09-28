@@ -93,8 +93,6 @@ nvk_entrypoints = custom_target(
   depend_files : vk_entrypoints_gen_depend_files,
 )
 
-relative_dir = fs.relative_to(meson.global_source_root(), meson.global_build_root())
-
 nvkcl_spv = custom_target(
   input : nvkcl_files,
   output : 'nvkcl.spv',
@@ -163,12 +161,7 @@ libvulkan_nouveau = shared_library(
   install : true,
 )
 
-icd_lib_path = join_paths(get_option('prefix'), get_option('libdir'))
-icd_file_name = 'libvulkan_nouveau.so'
-if with_platform_windows
-  icd_lib_path = import('fs').relative_to(get_option('bindir'), with_vulkan_icd_dir)
-  icd_file_name = 'vulkan_nouveau.dll'
-endif
+icd_file_name = libname_prefix + 'vulkan_nouveau.' + libname_suffix
 
 nouveau_icd = custom_target(
   'nouveau_icd',
@@ -178,7 +171,7 @@ nouveau_icd = custom_target(
     prog_python, '@INPUT0@',
     '--api-version', '1.4', '--xml', '@INPUT1@',
     '--sizeof-pointer', sizeof_pointer,
-    '--lib-path', join_paths(icd_lib_path, icd_file_name),
+    '--lib-path', vulkan_icd_lib_path / icd_file_name,
     '--out', '@OUTPUT@',
   ],
   build_by_default : true,

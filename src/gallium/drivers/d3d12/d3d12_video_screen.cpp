@@ -2312,10 +2312,6 @@ d3d12_screen_get_video_param_decode(struct pipe_screen *pscreen,
       } break;
       case PIPE_VIDEO_CAP_PREFERRED_FORMAT:
          return (profile == PIPE_VIDEO_PROFILE_UNKNOWN) ? PIPE_FORMAT_NV12 : d3d12_get_pipe_format(d3d12_convert_pipe_video_profile_to_dxgi_format(profile));
-      case PIPE_VIDEO_CAP_PREFERS_INTERLACED:
-         return false;
-      case PIPE_VIDEO_CAP_SUPPORTS_INTERLACED:
-         return true;
       case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
          return true;
       case PIPE_VIDEO_CAP_SUPPORTS_CONTIGUOUS_PLANES_MAP:
@@ -2343,7 +2339,6 @@ d3d12_screen_get_video_param_postproc(struct pipe_screen *pscreen,
       case PIPE_VIDEO_CAP_MIN_HEIGHT:
       case PIPE_VIDEO_CAP_SUPPORTED:
       case PIPE_VIDEO_CAP_PREFERRED_FORMAT:
-      case PIPE_VIDEO_CAP_SUPPORTS_INTERLACED:
       case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
       case PIPE_VIDEO_CAP_SUPPORTS_CONTIGUOUS_PLANES_MAP:
       case PIPE_VIDEO_CAP_VPP_MAX_INPUT_WIDTH:
@@ -2386,8 +2381,6 @@ d3d12_screen_get_video_param_postproc(struct pipe_screen *pscreen,
                return true;
             } else if (param == PIPE_VIDEO_CAP_PREFERRED_FORMAT) {
                return  PIPE_FORMAT_NV12;
-            } else if (param == PIPE_VIDEO_CAP_SUPPORTS_INTERLACED) {
-               return false;
             } else if (param == PIPE_VIDEO_CAP_MIN_WIDTH) {
                return minSupportedInput.Width;
             } else if (param == PIPE_VIDEO_CAP_MIN_HEIGHT) {
@@ -2620,13 +2613,15 @@ d3d12_screen_get_video_param_encode(struct pipe_screen *pscreen,
                } else if (param == PIPE_VIDEO_CAP_ENC_INTRA_REFRESH_MAX_DURATION) {
                   return maxIRDuration;
                } else if (param == PIPE_VIDEO_CAP_ENC_INTRA_REFRESH) {
-                  return (maxIRDuration == 0) ? 0 :
+                  bool bSupportsNSlicedIntraRefresh = (supportedSliceStructures != PIPE_VIDEO_CAP_SLICE_STRUCTURE_NONE) && // IR requires N slices as per DX12 spec
+                                                      (maxIRDuration != 0);
+                  return bSupportsNSlicedIntraRefresh ?
                          (PIPE_VIDEO_ENC_INTRA_REFRESH_ROW |
                           PIPE_VIDEO_ENC_INTRA_REFRESH_ADAPTIVE |
                           PIPE_VIDEO_ENC_INTRA_REFRESH_CYCLIC |
                           PIPE_VIDEO_ENC_INTRA_REFRESH_P_FRAME |
                           PIPE_VIDEO_ENC_INTRA_REFRESH_B_FRAME |
-                          PIPE_VIDEO_ENC_INTRA_REFRESH_MULTI_REF);
+                          PIPE_VIDEO_ENC_INTRA_REFRESH_MULTI_REF) : 0;
                } else if (param == PIPE_VIDEO_CAP_ENC_SUPPORTS_MAX_FRAME_SIZE) {
                   return isRCMaxFrameSizeSupported;
                } else if (param == PIPE_VIDEO_CAP_ENC_HEVC_FEATURE_FLAGS) {
@@ -2699,10 +2694,6 @@ d3d12_screen_get_video_param_encode(struct pipe_screen *pscreen,
       } break;
       case PIPE_VIDEO_CAP_PREFERRED_FORMAT:
          return (profile == PIPE_VIDEO_PROFILE_UNKNOWN) ? PIPE_FORMAT_NV12 : d3d12_get_pipe_format(d3d12_convert_pipe_video_profile_to_dxgi_format(profile));
-      case PIPE_VIDEO_CAP_PREFERS_INTERLACED:
-         return false;
-      case PIPE_VIDEO_CAP_SUPPORTS_INTERLACED:
-         return false;
       case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
          return true;
       case PIPE_VIDEO_CAP_SUPPORTS_CONTIGUOUS_PLANES_MAP:

@@ -565,6 +565,12 @@ r2d_run(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
          cmd->device->physical_device->info->a6xx.magic.RB_DBG_ECO_CNTL_blit);
    }
 
+   /* TODO: try to track when there has been a draw without any intervening
+    * WFI or CP_EVENT_WRITE and only WFI then.
+    */
+   if (cmd->device->physical_device->info->a6xx.blit_wfi_quirk)
+      tu_cs_emit_wfi(cs);
+
    tu_cs_emit_pkt7(cs, CP_BLIT, 1);
    tu_cs_emit(cs, CP_BLIT_0_OP(BLIT_OP_SCALE));
 
@@ -2560,9 +2566,9 @@ tu_copy_memory_to_image(struct tu_device *device,
                                      &device->physical_device->ubwc_config);
       }
 
-      if (dst_image->bo->cached_non_coherent) {
-         tu_bo_sync_cache(device, dst_image->bo,
-                          dst_image->bo_offset + image_offset,
+      if (dst_image->mem->bo->cached_non_coherent) {
+         tu_bo_sync_cache(device, dst_image->mem->bo,
+                          dst_image->mem_offset + image_offset,
                           dst_layer_size, TU_MEM_SYNC_CACHE_TO_GPU);
       }
    }
@@ -2745,9 +2751,9 @@ tu_copy_image_to_memory(struct tu_device *device,
    char *dst = (char *) info->pHostPointer;
    for (unsigned layer = 0; layer < layers; layer++,
         src += src_layer_stride, dst += dst_layer_stride) {
-      if (src_image->bo->cached_non_coherent) {
-         tu_bo_sync_cache(device, src_image->bo,
-                          src_image->bo_offset + image_offset,
+      if (src_image->mem->bo->cached_non_coherent) {
+         tu_bo_sync_cache(device, src_image->mem->bo,
+                          src_image->mem_offset + image_offset,
                           src_layer_size, TU_MEM_SYNC_CACHE_FROM_GPU);
       }
 
@@ -3128,9 +3134,9 @@ tu_copy_image_to_image_cpu(struct tu_device *device,
    char *dst = (char *) dst_image->map + dst_image_offset;
    for (unsigned layer = 0; layer < layers_to_copy; layer++,
         src += src_layer_stride, dst += dst_layer_stride) {
-      if (src_image->bo->cached_non_coherent) {
-         tu_bo_sync_cache(device, src_image->bo,
-                          src_image->bo_offset + src_image_offset,
+      if (src_image->mem->bo->cached_non_coherent) {
+         tu_bo_sync_cache(device, src_image->mem->bo,
+                          src_image->mem_offset + src_image_offset,
                           src_layer_size, TU_MEM_SYNC_CACHE_FROM_GPU);
       }
 
@@ -3208,9 +3214,9 @@ tu_copy_image_to_image_cpu(struct tu_device *device,
          }
       }
 
-      if (dst_image->bo->cached_non_coherent) {
-         tu_bo_sync_cache(device, dst_image->bo,
-                          dst_image->bo_offset + dst_image_offset,
+      if (dst_image->mem->bo->cached_non_coherent) {
+         tu_bo_sync_cache(device, dst_image->mem->bo,
+                          dst_image->mem_offset + dst_image_offset,
                           dst_layer_size, TU_MEM_SYNC_CACHE_TO_GPU);
       }
    }
@@ -3971,8 +3977,12 @@ fdm_apply_sysmem_clear_coords(struct tu_cmd_buffer *cmd,
 
    VkExtent2D frag_area = frag_areas[MIN2(state->view, views - 1)];
    VkRect2D bin = bins[MIN2(state->view, views - 1)];
+   VkOffset2D hw_viewport_offset =
+      hw_viewport_offsets[MIN2(state->view, views - 1)];
 
    VkOffset2D offset = tu_fdm_per_bin_offset(frag_area, bin, common_bin_offset);
+   offset.x -= hw_viewport_offset.x;
+   offset.y -= hw_viewport_offset.y;
 
    unsigned x1 = state->rect.offset.x / frag_area.width + offset.x;
    unsigned x2 = DIV_ROUND_UP(state->rect.offset.x + state->rect.extent.width,
@@ -4012,8 +4022,6 @@ tu_clear_sysmem_attachments(struct tu_cmd_buffer *cmd,
    bool z_clear = false;
    bool s_clear = false;
 
-   trace_start_sysmem_clear_all(&cmd->rp_trace, cs, cmd, mrt_count, rect_count);
-
    for (uint32_t i = 0; i < attachment_count; i++) {
       uint32_t a;
       if (attachments[i].aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) {
@@ -4048,6 +4056,8 @@ tu_clear_sysmem_attachments(struct tu_cmd_buffer *cmd,
     */
    if (clear_rts == 0 && !z_clear && !s_clear)
       return;
+
+   trace_start_sysmem_clear_all(&cmd->rp_trace, cs, cmd, mrt_count, rect_count);
 
    /* disable all draw states so they don't interfere
     * TODO: use and re-use draw states
@@ -4880,11 +4890,16 @@ fdm_apply_load_coords(struct tu_cmd_buffer *cmd,
       (const struct apply_load_coords_state *)data;
    VkExtent2D frag_area = frag_areas[MIN2(state->view, views - 1)];
    VkRect2D bin = bins[MIN2(state->view, views - 1)];
+   VkOffset2D hw_viewport_offset =
+      hw_viewport_offsets[MIN2(state->view, views - 1)];
 
    assert(bin.extent.width % frag_area.width == 0);
    assert(bin.extent.height % frag_area.height == 0);
    uint32_t scaled_width = bin.extent.width / frag_area.width;
    uint32_t scaled_height = bin.extent.height / frag_area.height;
+
+   common_bin_offset.x -= hw_viewport_offset.x;
+   common_bin_offset.y -= hw_viewport_offset.y;
 
    const float coords[] = {
       common_bin_offset.x,                common_bin_offset.y,

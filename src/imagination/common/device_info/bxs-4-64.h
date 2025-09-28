@@ -28,11 +28,8 @@
 
 #include "pvr_device_info.h"
 
-static const struct pvr_device_ident pvr_device_ident_36_V_104_796 = {
-   .device_id = 0x36104796,
-   .series_name = "B-Series",
-   .public_name = "BXS-4-64",
-};
+#define PVR_DEVICE_IDENT_36_V_104_796 \
+   .device_id = 0x36104796, .series_name = "B-Series", .public_name = "BXS-4-64"
 
 static const struct pvr_device_features pvr_device_features_36_V_104_796 = {
    .has_astc = true,
@@ -41,7 +38,7 @@ static const struct pvr_device_features pvr_device_features_36_V_104_796 = {
    .has_compute_overlap = true,
    .has_fbcdc_algorithm = true,
    .has_gpu_multicore_support = true,
-   .has_gs_rta_support = true,
+   /* .has_gs_rta_support = true, */
    .has_ipf_creq_pf = true,
    .has_isp_max_tiles_in_flight = true,
    .has_isp_samples_per_pixel = true,
@@ -69,7 +66,9 @@ static const struct pvr_device_features pvr_device_features_36_V_104_796 = {
    .has_tpu_dm_global_registers = true,
    .has_tpu_extended_integer_lookup = true,
    .has_tpu_image_state_v2 = true,
+   .has_tpu_parallel_instances = true,
    .has_unified_store_depth = true,
+   .has_usc_alu_roundingmode_rne = true,
    .has_usc_f16sop_u8 = true,
    .has_usc_itrsmp = true,
    .has_usc_itrsmp_enhanced = true,
@@ -97,6 +96,7 @@ static const struct pvr_device_features pvr_device_features_36_V_104_796 = {
    .slc_cache_line_size_bits = 512U,
    .tile_size_x = 16U,
    .tile_size_y = 16U,
+   .tpu_parallel_instances = 4U,
    .unified_store_depth = 256U,
    .usc_min_output_registers_per_pix = 2U,
    .usc_slots = 64U,
@@ -123,6 +123,22 @@ static const struct pvr_device_enhancements
 static const struct pvr_device_quirks pvr_device_quirks_36_53_104_796 = {
    .has_brn44079 = true,
    .has_brn70165 = true,
+   .has_brn72168 = true,
+   .has_brn72463 = true,
+   .has_brn74056 = true,
+};
+
+static const struct pvr_device_info pvr_device_info_36_53_104_796 = {
+   .ident = {
+      PVR_DEVICE_IDENT_36_V_104_796,
+      .b = 36,
+      .v = 53,
+      .n = 104,
+      .c = 796,
+   },
+   .features = pvr_device_features_36_V_104_796,
+   .enhancements = pvr_device_enhancements_36_53_104_796,
+   .quirks = pvr_device_quirks_36_53_104_796,
 };
 
 #endif /* BXS_4_64_H */

@@ -81,6 +81,10 @@ Core Mesa environment variables
    purposes (e.g. for driconf option matching, logging, artifact storage,
    etc.).
 
+.. envvar:: MESA_LOG_LEVEL
+
+   specifies the maximum log level
+
 .. envvar:: MESA_LOG_FILE
 
    specifies a file name for logging all errors, warnings, etc., rather
@@ -304,6 +308,14 @@ Core Mesa environment variables
 .. envvar:: MESA_SHADER_READ_PATH
 
    see :ref:`Experimenting with Shader Replacements <replacement>`
+
+.. envvar:: MESA_SPIRV_DUMP_PATH
+
+   see :ref:`SPIR-V Shader Capture <spirv_capture>`
+
+.. envvar:: MESA_SPIRV_READ_PATH
+
+   see :ref:`SPIR-V Shader Replacement <spirv_replacement>`
 
 .. envvar:: MESA_VK_VERSION_OVERRIDE
 
@@ -553,6 +565,9 @@ Intel driver environment variables
       print instruction hex dump with the disassembly
    ``l3``
       emit messages about the new L3 state during transitions
+   ``mda``
+      generate mda.tar files containing shader at each optimization
+      pass and iteration that make progress (Gfx >= 9)
    ``mesh``
       dump shader assembly for mesh shaders
    ``no8``
@@ -576,7 +591,7 @@ Intel driver environment variables
       disable lossless color compression
    ``optimizer``
       dump shader assembly to files at each optimization pass and
-      iteration that make progress
+      iteration that make progress (Gfx < 9)
    ``pc``
       emit messages about PIPE_CONTROL instruction usage
    ``perf``
@@ -870,6 +885,21 @@ Intel driver environment variables
 
    If none of widths for particular shader stage was specified, then all
    widths are allowed.
+
+.. envvar:: MDA_OUTPUT_DIR
+
+   Directory where the mda.tar files generated when using INTEL_DEBUG=mda are
+   going to be written to.  If not set, use the current directory.
+
+.. envvar:: MDA_PREFIX
+
+   Prefix added to the mda.tar filenames generated when using INTEL_DEBUG=mda.
+   If set to ``timestamp`` it will generate the current time/date as prefix.
+
+.. envvar:: MDA_FILTER
+
+   When set, will only generate mda.tar files which names contain any of the
+   comma-separated filter values as substrings.
 
 Anvil(ANV) driver environment variables
 ---------------------------------------
@@ -1363,6 +1393,8 @@ RADV driver environment variables
       enable LLVM compiler backend
    ``allbos``
       force all allocated buffers to be referenced in submissions
+   ``bo_history``
+      dump the BO history to /tmp/radv_bo_history.log after each BO operations
    ``checkir``
       validate the LLVM IR before LLVM compiles the shader
    ``dump_trap_handler``
@@ -1383,7 +1415,7 @@ RADV driver environment variables
       show GPU-related information
    ``invariantgeom``
       Mark geometry-affecting outputs as invariant. This works around a common
-      class of application bugs appearing as flickering.
+      class of application bugs appearing as flickering. (deprecated)
    ``metashaders``
       dump internal meta shaders
    ``noatocdithering``
@@ -1399,7 +1431,7 @@ RADV driver environment variables
    ``nodisplaydcc``
       disable Delta Color Compression (DCC) on displayable images
    ``nodynamicbounds``
-      do not check OOB access for dynamic descriptors
+      do not check OOB access for dynamic descriptors (deprecated)
    ``noeso``
       disable VK_EXT_shader_object
    ``nofastclears``
@@ -1419,7 +1451,7 @@ RADV driver environment variables
    ``nonggc``
       disable NGG culling for GFX10 and GFX10.3
    ``nongg_gs``
-      disable NGG GS for GFX10 and GFX10.3
+      disable NGG GS for GFX10 and GFX10.3 (deprecated)
    ``nort``
       skip executing vkCmdTraceRays and ray queries (RT extensions will still be
       advertised)
@@ -1451,6 +1483,7 @@ RADV driver environment variables
       dump SPIR-V
    ``splitfma``
       split application-provided fused multiply-add in geometry stages
+      (deprecated)
    ``startup``
       display info at startup
    ``syncshaders``
@@ -1642,6 +1675,20 @@ RADV driver environment variables
    ``liveinfo``
       print liveness and register demand information before scheduling
 
+.. envvar:: radv_gfx12_hiz_wa
+
+   choose the specific HiZ workaround to apply on GFX12 (RDNA4). The possible
+   values are:
+
+   ``disabled``
+     no HiZ workaround is enabled, use at your own risk but optimal for performance
+   ``partial``
+     mitigate the issue partially, potentially risky but performance should be
+     mostly optimal
+   ``full``
+     mitigate the issue completely, no risk but performance might be decreased
+     (default value)
+
 RadeonSI driver environment variables
 -------------------------------------
 
@@ -1765,6 +1812,9 @@ RadeonSI driver environment variables
       Disable tier3 for video decode.
    ``noenctier2``
       Disable tier2 for video encode.
+   ``export_modifier``
+      Export real modifier instead of DRM_FORMAT_MOD_INVALID to user. For example
+      by eglExportDMABUFImageQueryMESA.
 
 r600 driver environment variables
 ---------------------------------
@@ -2058,6 +2108,9 @@ PowerVR driver environment variables
 
    ``reindex``
       Reindex IR at the end of each pass.
+
+   ``no_pred_cf``
+      No predicated execution in CF.
 
 .. envvar:: PCO_SKIP_PASSES
 

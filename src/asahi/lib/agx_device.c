@@ -283,8 +283,7 @@ agx_bo_import(struct agx_device *dev, int fd)
        * for zero sized maps and fail nicely too
        */
       if ((bo->size == 0) || (bo->size == (size_t)-1)) {
-         pthread_mutex_unlock(&dev->bo_map_lock);
-         return NULL;
+         goto error;
       }
       if (bo->size & (AIL_PAGESIZE - 1)) {
          fprintf(
@@ -377,7 +376,7 @@ agx_bo_make_shared(struct agx_device *dev, struct agx_bo *bo)
    assert(bo->prime_fd == -1);
 
    int ret =
-      drmPrimeHandleToFD(dev->fd, bo->handle, DRM_CLOEXEC, &bo->prime_fd);
+      drmPrimeHandleToFD(dev->fd, bo->handle, DRM_CLOEXEC | DRM_RDWR, &bo->prime_fd);
    assert(ret == 0);
    assert(bo->prime_fd >= 0);
 

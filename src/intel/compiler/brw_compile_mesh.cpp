@@ -289,9 +289,9 @@ brw_emit_urb_fence(brw_shader &s)
 {
    const brw_builder bld1 = brw_builder(&s).uniform();
    brw_reg dst = bld1.vgrf(BRW_TYPE_UD);
-   brw_inst *fence = bld1.emit(SHADER_OPCODE_MEMORY_FENCE, dst,
-                              brw_vec8_grf(0, 0),
-                              brw_imm_ud(true));
+   brw_send_inst *fence = bld1.emit(SHADER_OPCODE_MEMORY_FENCE, dst,
+                                    brw_vec8_grf(0, 0),
+                                    brw_imm_ud(true))->as_send();
    fence->size_written = REG_SIZE * reg_unit(s.devinfo);
    fence->sfid = BRW_SFID_URB;
    /* The logical thing here would likely be a THREADGROUP fence but that's
@@ -354,6 +354,8 @@ brw_compile_task(const struct brw_compiler *compiler,
    struct brw_task_prog_data *prog_data = params->prog_data;
    const bool debug_enabled = brw_should_print_shader(nir, DEBUG_TASK, params->base.source_hash);
 
+   brw_debug_archive_nir(params->base.archiver, nir, 0, "first");
+
    brw_nir_lower_tue_outputs(nir, &prog_data->map);
 
    NIR_PASS(_, nir, brw_nir_align_launch_mesh_workgroups);
@@ -382,11 +384,23 @@ brw_compile_task(const struct brw_compiler *compiler,
    prog_data->base.uses_inline_data = brw_nir_uses_inline_data(nir) ||
                                       key->base.uses_inline_push_addr;
 
+   brw_postprocess_nir_opts(nir, compiler, key->base.robust_flags);
+
    brw_simd_selection_state simd_state{
       .devinfo = compiler->devinfo,
       .prog_data = &prog_data->base,
       .required_width = brw_required_dispatch_width(&nir->info),
    };
+
+   brw_debug_archive_nir(params->base.archiver, nir, 0, "before-simd");
+
+   unsigned pressure[SIMD_COUNT];
+   brw_nir_quick_pressure_estimate(nir, devinfo, pressure);
+
+   for (unsigned i = 0; i < SIMD_COUNT; i++) {
+      simd_state.beyond_threshold[i] =
+         pressure[i] > compiler->register_pressure_threshold;
+   }
 
    std::unique_ptr<brw_shader> v[3];
 
@@ -401,10 +415,13 @@ brw_compile_task(const struct brw_compiler *compiler,
       nir_shader *shader = nir_shader_clone(params->base.mem_ctx, nir);
       brw_nir_apply_key(shader, compiler, &key->base, dispatch_width);
 
+      brw_debug_archive_nir(params->base.archiver, shader, dispatch_width, "first");
+
       NIR_PASS(_, shader, brw_nir_lower_simd, dispatch_width);
 
-      brw_postprocess_nir(shader, compiler, debug_enabled,
-                          key->base.robust_flags);
+      brw_nir_optimize(shader, devinfo);
+      brw_postprocess_nir_out_of_ssa(shader, dispatch_width,
+                                     params->base.archiver, debug_enabled);
 
       const brw_shader_params shader_params = {
          .compiler                = compiler,
@@ -416,6 +433,7 @@ brw_compile_task(const struct brw_compiler *compiler,
          .needs_register_pressure = params->base.stats != NULL,
          .log_data                = params->base.log_data,
          .debug_enabled           = debug_enabled,
+         .archiver                = params->base.archiver,
       };
       v[simd] = std::make_unique<brw_shader>(&shader_params);
 
@@ -1163,6 +1181,8 @@ brw_compile_mesh(const struct brw_compiler *compiler,
    struct brw_mesh_prog_data *prog_data = params->prog_data;
    const bool debug_enabled = brw_should_print_shader(nir, DEBUG_MESH, params->base.source_hash);
 
+   brw_debug_archive_nir(params->base.archiver, nir, 0, "first");
+
    brw_prog_data_init(&prog_data->base.base, &params->base);
 
    prog_data->base.local_size[0] = nir->info.workgroup_size[0];
@@ -1224,6 +1244,8 @@ brw_compile_mesh(const struct brw_compiler *compiler,
    prog_data->base.uses_inline_data = brw_nir_uses_inline_data(nir) ||
                                       key->base.uses_inline_push_addr;
 
+   brw_postprocess_nir_opts(nir, compiler, key->base.robust_flags);
+
    brw_simd_selection_state simd_state{
       .devinfo = compiler->devinfo,
       .prog_data = &prog_data->base,
@@ -1231,6 +1253,8 @@ brw_compile_mesh(const struct brw_compiler *compiler,
    };
 
    std::unique_ptr<brw_shader> v[3];
+
+   brw_debug_archive_nir(params->base.archiver, nir, 0, "before-simd");
 
    for (unsigned i = 0; i < 3; i++) {
       const unsigned simd = devinfo->ver >= 30 ? 2 - i : i;
@@ -1241,6 +1265,8 @@ brw_compile_mesh(const struct brw_compiler *compiler,
       const unsigned dispatch_width = 8 << simd;
 
       nir_shader *shader = nir_shader_clone(params->base.mem_ctx, nir);
+
+      brw_debug_archive_nir(params->base.archiver, shader, dispatch_width, "first");
 
       /*
        * When Primitive Header is enabled, we may not generates writes to all
@@ -1257,8 +1283,9 @@ brw_compile_mesh(const struct brw_compiler *compiler,
 
       NIR_PASS(_, shader, brw_nir_lower_simd, dispatch_width);
 
-      brw_postprocess_nir(shader, compiler, debug_enabled,
-                          key->base.robust_flags);
+      brw_nir_optimize(shader, devinfo);
+      brw_postprocess_nir_out_of_ssa(shader, dispatch_width,
+                                     params->base.archiver, debug_enabled);
 
       const brw_shader_params shader_params = {
          .compiler                = compiler,
@@ -1270,6 +1297,7 @@ brw_compile_mesh(const struct brw_compiler *compiler,
          .needs_register_pressure = params->base.stats != NULL,
          .log_data                = params->base.log_data,
          .debug_enabled           = debug_enabled,
+         .archiver                = params->base.archiver,
       };
       v[simd] = std::make_unique<brw_shader>(&shader_params);
 

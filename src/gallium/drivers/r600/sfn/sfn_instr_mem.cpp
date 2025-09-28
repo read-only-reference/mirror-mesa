@@ -716,8 +716,7 @@ RatInstr::emit_ssbo_atomic_op(nir_intrinsic_instr *intr, Shader& shader)
 {
    auto& vf = shader.value_factory();
    auto [imageid, image_offset] = shader.evaluate_resource_offset(intr, 0);
-   {
-   }
+   const unsigned res_id = imageid + shader.ssbo_image_offset();
 
    bool read_result = !list_is_empty(&intr->def.uses);
    auto opcode = read_result ? get_rat_opcode(nir_intrinsic_atomic_op(intr))
@@ -749,21 +748,18 @@ RatInstr::emit_ssbo_atomic_op(nir_intrinsic_instr *intr, Shader& shader)
 
    RegisterVec4 out_vec(coord, coord, coord, coord, pin_chgr);
 
-   auto atomic = new RatInstr(cf_mem_rat,
-                              opcode,
-                              data_vec4,
-                              out_vec,
-                              imageid + shader.ssbo_image_offset(),
-                              image_offset,
-                              1,
-                              0xf,
-                              0);
+   auto atomic =
+      new RatInstr(cf_mem_rat, opcode, data_vec4, out_vec, res_id, image_offset, 1, 0xf, 0);
    shader.emit_instruction(atomic);
 
    atomic->set_ack();
    if (read_result) {
       atomic->set_instr_flag(ack_rat_return_write);
       auto dest = vf.dest_vec4(intr->def, pin_group);
+
+      auto wait = new ControlFlowInstr(ControlFlowInstr::cf_wait_ack);
+      wait->add_required_instr(atomic);
+      shader.emit_instruction(wait);
 
       auto fetch = new FetchInstr(vc_fetch,
                                   dest,
@@ -774,14 +770,13 @@ RatInstr::emit_ssbo_atomic_op(nir_intrinsic_instr *intr, Shader& shader)
                                   fmt_32,
                                   vtx_nf_int,
                                   vtx_es_none,
-                                  R600_IMAGE_IMMED_RESOURCE_OFFSET + imageid,
+                                  R600_IMAGE_IMMED_RESOURCE_OFFSET + res_id,
                                   image_offset);
       fetch->set_mfc(15);
       fetch->set_fetch_flag(FetchInstr::srf_mode);
       fetch->set_fetch_flag(FetchInstr::use_tc);
       fetch->set_fetch_flag(FetchInstr::vpm);
-      fetch->set_fetch_flag(FetchInstr::wait_ack);
-      fetch->add_required_instr(atomic);
+      fetch->add_required_instr(wait);
       shader.chain_ssbo_read(fetch);
       shader.emit_instruction(fetch);
    }
@@ -899,11 +894,16 @@ RatInstr::emit_image_load_or_atomic(nir_intrinsic_instr *intrin, Shader& shader)
    auto atomic =
       new RatInstr(cf_mem_rat, opcode, data_vec4, coord, imageid, image_offset, 1, 0xf, 0);
    shader.emit_instruction(atomic);
-
    atomic->set_ack();
+
    if (read_result) {
       atomic->set_instr_flag(ack_rat_return_write);
       auto dest = vf.dest_vec4(intrin->def, pin_group);
+
+      auto wait = new ControlFlowInstr(ControlFlowInstr::cf_wait_ack);
+
+      shader.chain_ssbo_read(wait);
+      shader.emit_instruction(wait);
 
       pipe_format format = nir_intrinsic_format(intrin);
       unsigned fmt = fmt_32;
@@ -926,12 +926,12 @@ RatInstr::emit_image_load_or_atomic(nir_intrinsic_instr *intrin, Shader& shader)
       fetch->set_mfc(3);
       fetch->set_fetch_flag(FetchInstr::use_tc);
       fetch->set_fetch_flag(FetchInstr::vpm);
-      fetch->set_fetch_flag(FetchInstr::wait_ack);
+      fetch->add_required_instr(wait);
       if (format_comp)
          fetch->set_fetch_flag(FetchInstr::format_comp_signed);
 
-      shader.chain_ssbo_read(fetch);
       shader.emit_instruction(fetch);
+      shader.chain_ssbo_read(fetch);
    }
 
    return true;

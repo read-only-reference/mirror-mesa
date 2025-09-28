@@ -137,6 +137,7 @@ struct blitter_context_priv
 
    void *custom_vs;
 
+   bool has_mesh_shader;
    bool has_geometry_shader;
    bool has_tessellation;
    bool has_layered;
@@ -149,6 +150,7 @@ struct blitter_context_priv
    bool cube_as_2darray;
    bool has_texrect;
    bool cached_all_shaders;
+   bool must_unset_vbuf;
 
    /* The Draw module overrides these functions.
     * Always create the blitter before Draw. */
@@ -183,6 +185,8 @@ struct blitter_context *util_blitter_create(struct pipe_context *pipe)
    ctx->base.saved_fs = INVALID_PTR;
    ctx->base.saved_vs = INVALID_PTR;
    ctx->base.saved_gs = INVALID_PTR;
+   ctx->base.saved_ts = INVALID_PTR;
+   ctx->base.saved_ms = INVALID_PTR;
    ctx->base.saved_velem_state = INVALID_PTR;
    ctx->base.saved_fb_state.nr_cbufs = ~0;
    ctx->base.saved_num_sampler_views = ~0;
@@ -194,6 +198,9 @@ struct blitter_context *util_blitter_create(struct pipe_context *pipe)
 
    ctx->has_tessellation =
       pipe->screen->shader_caps[MESA_SHADER_TESS_CTRL].max_instructions > 0;
+
+   ctx->has_mesh_shader =
+      pipe->screen->shader_caps[MESA_SHADER_MESH].max_instructions > 0;
 
    ctx->has_stream_out = pipe->screen->caps.max_stream_output_buffers != 0;
 
@@ -574,12 +581,12 @@ void util_blitter_restore_vertex_states(struct blitter_context *blitter)
       ctx->base.saved_velem_state = INVALID_PTR;
    }
 
-   /* Vertex buffer. */
-   if (ctx->base.saved_num_vb) {
+   /* Vertex buffers: must ensure no internal vbs are left on driver. */
+   if (ctx->base.saved_num_vb || ctx->must_unset_vbuf) {
       pipe->set_vertex_buffers(pipe, ctx->base.saved_num_vb,
-                               ctx->base.saved_vertex_buffers);
-      memset(ctx->base.saved_vertex_buffers, 0,
-             sizeof(ctx->base.saved_vertex_buffers[0]) * ctx->base.saved_num_vb);
+                                 ctx->base.saved_vertex_buffers);
+      for (unsigned i = 0; i < ctx->base.saved_num_vb; i++)
+         pipe_vertex_buffer_unreference(&ctx->base.saved_vertex_buffers[i]);
       ctx->base.saved_num_vb = 0;
    }
 
@@ -598,6 +605,14 @@ void util_blitter_restore_vertex_states(struct blitter_context *blitter)
       pipe->bind_tes_state(pipe, ctx->base.saved_tes);
       ctx->base.saved_tcs = INVALID_PTR;
       ctx->base.saved_tes = INVALID_PTR;
+   }
+
+   /* Driver like llvmpipe may not need to save mesh shader state. */
+   if (ctx->has_mesh_shader && ctx->base.saved_ms != INVALID_PTR) {
+      pipe->bind_ts_state(pipe, ctx->base.saved_ts);
+      pipe->bind_ms_state(pipe, ctx->base.saved_ms);
+      ctx->base.saved_ts = INVALID_PTR;
+      ctx->base.saved_ms = INVALID_PTR;
    }
 
    /* Stream outputs. */
@@ -760,8 +775,8 @@ void util_blitter_restore_constant_buffer_state(struct blitter_context *blitter)
    struct pipe_context *pipe = blitter->pipe;
 
    pipe->set_constant_buffer(pipe, MESA_SHADER_FRAGMENT, blitter->cb_slot,
-                             true, &blitter->saved_fs_constant_buffer);
-   blitter->saved_fs_constant_buffer.buffer = NULL;
+                             &blitter->saved_fs_constant_buffer);
+   pipe_resource_reference(&blitter->saved_fs_constant_buffer.buffer, NULL);
 }
 
 static void blitter_set_rectangle(struct blitter_context_priv *ctx,
@@ -1343,6 +1358,10 @@ static void blitter_set_common_draw_rect_state(struct blitter_context_priv *ctx,
       pipe->bind_tcs_state(pipe, NULL);
       pipe->bind_tes_state(pipe, NULL);
    }
+   if (ctx->has_mesh_shader && ctx->base.saved_ms != INVALID_PTR) {
+      pipe->bind_ts_state(pipe, NULL);
+      pipe->bind_ms_state(pipe, NULL);
+   }
    if (ctx->has_stream_out)
       pipe->set_stream_output_targets(pipe, 0, NULL, NULL, 0);
 }
@@ -1355,11 +1374,12 @@ static void blitter_draw(struct blitter_context_priv *ctx,
 {
    struct pipe_context *pipe = ctx->base.pipe;
    struct pipe_vertex_buffer vb = {0};
+   struct pipe_resource *releasebuf = NULL;
 
    blitter_set_rectangle(ctx, x1, y1, x2, y2, depth);
 
    u_upload_data(pipe->stream_uploader, 0, sizeof(ctx->vertices), 4, ctx->vertices,
-                 &vb.buffer_offset, &vb.buffer.resource);
+                 &vb.buffer_offset, &vb.buffer.resource, &releasebuf);
    if (!vb.buffer.resource)
       return;
    u_upload_unmap(pipe->stream_uploader);
@@ -1367,6 +1387,7 @@ static void blitter_draw(struct blitter_context_priv *ctx,
    pipe->bind_vertex_elements_state(pipe, vertex_elements_cso);
    pipe->set_vertex_buffers(pipe, 1, &vb);
    pipe->bind_vs_state(pipe, get_vs(&ctx->base));
+   ctx->must_unset_vbuf = true;
 
    if (ctx->base.use_index_buffer) {
       /* Note that for V3D,
@@ -1381,6 +1402,7 @@ static void blitter_draw(struct blitter_context_priv *ctx,
       util_draw_arrays_instanced(pipe, MESA_PRIM_TRIANGLE_FAN, 0, 4,
                                  0, num_instances);
    }
+   pipe_resource_release(pipe, releasebuf);
 }
 
 void util_blitter_draw_rectangle(struct blitter_context *blitter,
@@ -1524,7 +1546,7 @@ static void util_blitter_clear_custom(struct blitter_context *blitter,
          .buffer_size = 4 * sizeof(float),
       };
       pipe->set_constant_buffer(pipe, MESA_SHADER_FRAGMENT, blitter->cb_slot,
-                                false, &cb);
+                                &cb);
       bind_fs_clear_color(ctx, true);
    } else {
       bind_fs_empty(ctx);
@@ -2384,7 +2406,7 @@ void util_blitter_clear_render_target(struct blitter_context *blitter,
       .buffer_size = 4 * sizeof(float),
    };
    pipe->set_constant_buffer(pipe, MESA_SHADER_FRAGMENT, blitter->cb_slot,
-                             false, &cb);
+                             &cb);
 
    num_layers = dstsurf->last_layer - dstsurf->first_layer + 1;
 
@@ -2834,7 +2856,7 @@ util_blitter_stencil_fallback(struct blitter_context *blitter,
             .buffer_size = sizeof(mask),
          };
          pipe->set_constant_buffer(pipe, MESA_SHADER_FRAGMENT, blitter->cb_slot,
-                                 false, &cb);
+                                   &cb);
 
          pipe->bind_depth_stencil_alpha_state(pipe,
             get_stencil_blit_fallback_dsa(ctx, i));

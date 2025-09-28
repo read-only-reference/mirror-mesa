@@ -180,11 +180,21 @@ brw_compile_cs(const struct brw_compiler *compiler,
       prog_data->local_size[2] = nir->info.workgroup_size[2];
    }
 
+   brw_postprocess_nir_opts(nir, compiler, key->base.robust_flags);
+
    brw_simd_selection_state simd_state{
       .devinfo = compiler->devinfo,
       .prog_data = prog_data,
       .required_width = brw_required_dispatch_width(&nir->info),
    };
+
+   unsigned pressure[SIMD_COUNT];
+   brw_nir_quick_pressure_estimate(nir, devinfo, pressure);
+
+   for (unsigned i = 0; i < SIMD_COUNT; i++) {
+      simd_state.beyond_threshold[i] =
+         pressure[i] > compiler->register_pressure_threshold;
+   }
 
    prog_data->uses_sampler = brw_nir_uses_sampler(params->base.nir);
 
@@ -199,17 +209,16 @@ brw_compile_cs(const struct brw_compiler *compiler,
       const unsigned dispatch_width = 8u << simd;
 
       nir_shader *shader = nir_shader_clone(params->base.mem_ctx, nir);
+      brw_debug_archive_nir(params->base.archiver, shader, dispatch_width, "first");
+
       brw_nir_apply_key(shader, compiler, &key->base,
                         dispatch_width);
 
       NIR_PASS(_, shader, brw_nir_lower_simd, dispatch_width);
 
-      /* Clean up after the local index and ID calculations. */
-      NIR_PASS(_, shader, nir_opt_constant_folding);
-      NIR_PASS(_, shader, nir_opt_dce);
-
-      brw_postprocess_nir(shader, compiler, debug_enabled,
-                          key->base.robust_flags);
+      brw_nir_optimize(shader, devinfo);
+      brw_postprocess_nir_out_of_ssa(shader, dispatch_width,
+                                     params->base.archiver, debug_enabled);
 
       const brw_shader_params shader_params = {
          .compiler                = compiler,
@@ -221,6 +230,7 @@ brw_compile_cs(const struct brw_compiler *compiler,
          .needs_register_pressure = params->base.stats != NULL,
          .log_data                = params->base.log_data,
          .debug_enabled           = debug_enabled,
+         .archiver                = params->base.archiver,
       };
       v[simd] = std::make_unique<brw_shader>(&shader_params);
       brw_adjust_uniforms(*v[simd]);

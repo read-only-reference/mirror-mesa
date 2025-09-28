@@ -203,6 +203,8 @@ struct pipe_rasterizer_state
     */
    unsigned clip_plane_enable:PIPE_MAX_CLIP_PLANES;
 
+   unsigned representative_fragment_test:1;
+
    unsigned line_stipple_factor:8;  /**< [1..256] actually */
    unsigned line_stipple_pattern:16;
 
@@ -848,11 +850,9 @@ struct pipe_draw_info
    bool index_bounds_valid:1; /**< whether min_index and max_index are valid;
                                    they're always invalid if index_size == 0 */
    bool increment_draw_id:1;  /**< whether drawid increments for direct draws */
-   bool take_index_buffer_ownership:1; /**< callee inherits caller's refcount
-         (no need to reference indexbuf, but still needs to unreference it) */
    bool index_bias_varies:1;   /**< true if index_bias varies between draws */
    bool was_line_loop:1; /**< true if mesa_prim was LINE_LOOP before translation */
-   uint8_t _pad:1;
+   uint8_t _pad:2;
 
    unsigned start_instance; /**< first instance id */
    unsigned instance_count; /**< number of instances */

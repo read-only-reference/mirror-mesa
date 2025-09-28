@@ -1521,54 +1521,6 @@ label_instruction(opt_ctx& ctx, aco_ptr<Instruction>& instr)
          }
       }
 
-      /* DS: combine additions */
-      else if (instr->isDS()) {
-
-         DS_instruction& ds = instr->ds();
-         Temp base;
-         uint32_t offset;
-         bool has_usable_ds_offset = ctx.program->gfx_level >= GFX7;
-         if (has_usable_ds_offset && i == 0 &&
-             parse_base_offset(ctx, instr.get(), i, &base, &offset, false) &&
-             base.regClass() == instr->operands[i].regClass() &&
-             instr->opcode != aco_opcode::ds_swizzle_b32 &&
-             instr->opcode != aco_opcode::ds_bvh_stack_push4_pop1_rtn_b32 &&
-             instr->opcode != aco_opcode::ds_bvh_stack_push8_pop1_rtn_b32 &&
-             instr->opcode != aco_opcode::ds_bvh_stack_push8_pop2_rtn_b64) {
-            if (instr->opcode == aco_opcode::ds_write2_b32 ||
-                instr->opcode == aco_opcode::ds_read2_b32 ||
-                instr->opcode == aco_opcode::ds_write2_b64 ||
-                instr->opcode == aco_opcode::ds_read2_b64 ||
-                instr->opcode == aco_opcode::ds_write2st64_b32 ||
-                instr->opcode == aco_opcode::ds_read2st64_b32 ||
-                instr->opcode == aco_opcode::ds_write2st64_b64 ||
-                instr->opcode == aco_opcode::ds_read2st64_b64) {
-               bool is64bit = instr->opcode == aco_opcode::ds_write2_b64 ||
-                              instr->opcode == aco_opcode::ds_read2_b64 ||
-                              instr->opcode == aco_opcode::ds_write2st64_b64 ||
-                              instr->opcode == aco_opcode::ds_read2st64_b64;
-               bool st64 = instr->opcode == aco_opcode::ds_write2st64_b32 ||
-                           instr->opcode == aco_opcode::ds_read2st64_b32 ||
-                           instr->opcode == aco_opcode::ds_write2st64_b64 ||
-                           instr->opcode == aco_opcode::ds_read2st64_b64;
-               unsigned shifts = (is64bit ? 3 : 2) + (st64 ? 6 : 0);
-               unsigned mask = BITFIELD_MASK(shifts);
-
-               if ((offset & mask) == 0 && ds.offset0 + (offset >> shifts) <= 255 &&
-                   ds.offset1 + (offset >> shifts) <= 255) {
-                  instr->operands[i].setTemp(base);
-                  ds.offset0 += offset >> shifts;
-                  ds.offset1 += offset >> shifts;
-               }
-            } else {
-               if (ds.offset0 + offset <= 65535) {
-                  instr->operands[i].setTemp(base);
-                  ds.offset0 += offset;
-               }
-            }
-         }
-      }
-
       else if (instr->isBranch()) {
          if (ctx.info[instr->operands[0].tempId()].is_scc_invert()) {
             /* Flip the branch instruction to get rid of the scc_invert instruction */
@@ -3445,12 +3397,12 @@ combine_vop3p(opt_ctx& ctx, aco_ptr<Instruction>& instr)
                   continue;
             }
 
-            Operand op[3] = {op_instr->operands[0], op_instr->operands[1], instr->operands[1 - i]};
-            if (ctx.uses[instr->operands[i].tempId()] >= uses || !check_vop3_operands(ctx, 3, op))
-               continue;
-
             /* no clamp allowed between mul and add */
             if (op_instr->valu().clamp)
+               continue;
+
+            Operand op[3] = {op_instr->operands[0], op_instr->operands[1], instr->operands[1 - i]};
+            if (ctx.uses[instr->operands[i].tempId()] >= uses || !check_vop3_operands(ctx, 3, op))
                continue;
 
             mul_instr = op_instr;
@@ -3910,7 +3862,8 @@ combine_instruction(opt_ctx& ctx, aco_ptr<Instruction>& instr)
                         (mad32 && !legacy && !mad_mix && ctx.program->dev.has_fast_fma32) ||
                         (mad_mix && ctx.program->dev.fused_mad_mix);
          bool has_mad = mad_mix ? !ctx.program->dev.fused_mad_mix
-                                : ((mad32 && ctx.program->gfx_level < GFX10_3) ||
+                                : ((mad32 && ctx.program->gfx_level < GFX10_3 &&
+                                    ctx.program->family != CHIP_GFX940) ||
                                    (mad16 && ctx.program->gfx_level <= GFX9));
          bool can_use_fma = has_fma && (!(info.parent_instr->definitions[0].isPrecise() ||
                                           instr->definitions[0].isPrecise()) ||

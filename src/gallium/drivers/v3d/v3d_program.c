@@ -23,6 +23,7 @@
 
 #include <inttypes.h>
 #include "util/format/u_format.h"
+#include "util/u_inlines.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
 #include "util/ralloc.h"
@@ -360,11 +361,9 @@ v3d_uncompiled_shader_create(struct pipe_context *pctx,
         if (s->info.stage == MESA_SHADER_FRAGMENT &&
             s->info.outputs_written & BITFIELD_BIT(FRAG_RESULT_COLOR)) {
                 /* We only support one attachment when doing dual source blending. */
-                if (s->info.fs.color_is_dual_source)
-                        NIR_PASS(_, s, nir_lower_fragcolor, 1);
-                else if (V3D_DBG(SOFT_BLEND))
-                        NIR_PASS(_, s, nir_lower_fragcolor,
-                                 V3D_MAX_DRAW_BUFFERS);
+                unsigned max_rb = s->info.fs.color_is_dual_source ?
+                        1 : V3D_MAX_DRAW_BUFFERS;
+                NIR_PASS(_, s, nir_lower_fragcolor, max_rb);
         }
 
         if (s->info.stage != MESA_SHADER_VERTEX &&
@@ -510,7 +509,7 @@ v3d_get_compiled_shader(struct v3d_context *v3d,
                 ralloc_steal(shader, shader->prog_data.base);
 
                 if (shader->qpu_size) {
-                        u_upload_data(v3d->state_uploader, 0, shader->qpu_size, 8,
+                        u_upload_data_ref(v3d->state_uploader, 0, shader->qpu_size, 8,
                                       qpu_insts, &shader->offset, &shader->resource);
                 }
 
@@ -628,11 +627,10 @@ v3d_update_compiled_fs(struct v3d_context *v3d, uint8_t prim_mode)
         key->can_earlyz_with_discard = s->info.fs.uses_discard &&
                 !s->info.fs.uses_fbfetch_output &&
                 (!v3d->zsa || !job->zsbuf.texture ||
-                !v3d->zsa->base.depth_enabled ||
-                 !v3d->zsa->base.depth_writemask) &&
+                 !util_writes_depth_stencil(&v3d->zsa->base)) &&
                 !(v3d->active_queries && v3d->current_oq);
 
-        key->software_blend = v3d->blend->use_software;
+        key->software_blend = v3d->framebuffer_soft_blend || v3d->blend->use_software;
 
         for (int i = 0; i < v3d->framebuffer.nr_cbufs; i++) {
                 const struct pipe_surface *cbuf = &v3d->framebuffer.cbufs[i];
@@ -684,6 +682,19 @@ v3d_update_compiled_fs(struct v3d_context *v3d, uint8_t prim_mode)
 
                 if (desc->channel[0].type == UTIL_FORMAT_TYPE_FLOAT &&
                     desc->channel[0].size == 32) {
+                        key->f32_color_rb |= 1 << i;
+                }
+
+                if (desc->is_unorm && desc->channel[0].size == 16) {
+                        /* We write as integer */
+                        key->f32_color_rb |= 1 << i;
+                        key->norm_16 |= 1 << i;
+                }
+
+                if (desc->is_snorm) {
+                        if (desc->channel[0].size == 16)
+                                key->norm_16 |= 1 << i;
+                        key->snorm |= 1 << i;
                         key->f32_color_rb |= 1 << i;
                 }
 

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "ac_nir.h"
 #include "ac_rtld.h"
 #include "nir_builder.h"
 #include "nir_serialize.h"
@@ -323,7 +324,7 @@ static void *pre_upload_binary(struct si_screen *sscreen, struct si_shader *shad
       *upload_ctx = si_get_aux_context(&sscreen->aux_context.shader_upload);
 
       void *ret;
-      u_upload_alloc((*upload_ctx)->b.stream_uploader, 0, binary_size, 256,
+      u_upload_alloc_ref((*upload_ctx)->b.stream_uploader, 0, binary_size, 256,
                      staging_offset, staging, &ret);
       if (!ret)
          si_put_aux_context_flush(&sscreen->aux_context.shader_upload);
@@ -1707,7 +1708,9 @@ static void run_late_optimization_and_lowering_passes(struct si_nir_shader_ctx *
    static const nir_opt_offsets_options offset_options = {
       .uniform_max = 0,
       .buffer_max = ~0,
-      .shared_max = ~0,
+      .shared_max = UINT16_MAX,
+      .shared_atomic_max = UINT16_MAX,
+      .allow_offset_wrap_cb = ac_nir_allow_offset_wrap_cb,
    };
    NIR_PASS(_, nir, nir_opt_offsets, &offset_options);
 

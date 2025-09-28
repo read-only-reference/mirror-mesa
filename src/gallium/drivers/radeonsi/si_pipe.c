@@ -84,6 +84,7 @@ static const struct debug_named_value radeonsi_debug_options[] = {
 
    {"tmz", DBG(TMZ), "Force allocation of scanout/depth/stencil buffer as encrypted"},
    {"sqtt", DBG(SQTT), "Enable SQTT"},
+   {"export_modifier", DBG(EXPORT_MODIFIER), "Export real modifier instead of DRM_FORMAT_MOD_INVALID"},
 
    DEBUG_NAMED_VALUE_END /* must be last */
 };
@@ -238,7 +239,6 @@ static void si_destroy_context(struct pipe_context *context)
    si_resource_reference(&sctx->wait_mem_scratch_tmz, NULL);
    si_resource_reference(&sctx->small_prim_cull_info_buf, NULL);
    si_resource_reference(&sctx->pipeline_stats_query_buf, NULL);
-   si_resource_reference(&sctx->last_const_upload_buffer, NULL);
 
    if (sctx->cs_preamble_state)
       si_pm4_free_state(sctx, sctx->cs_preamble_state, ~0);
@@ -773,7 +773,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
       unsigned start_shader = sctx->is_gfx_queue ? 0 : MESA_SHADER_COMPUTE;
       for (shader = start_shader; shader < SI_NUM_SHADERS; shader++) {
          for (i = 0; i < SI_NUM_CONST_BUFFERS; i++) {
-            sctx->b.set_constant_buffer(&sctx->b, shader, i, false, &sctx->null_const_buf);
+            sctx->b.set_constant_buffer(&sctx->b, shader, i, &sctx->null_const_buf);
          }
       }
 
@@ -861,7 +861,8 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
             saux->b.destroy(&saux->b);
 
             saux = (struct si_context *)si_create_context(&sscreen->b, context_flags);
-            saux->b.set_log_context(&saux->b, &sscreen->aux_contexts[i].log);
+            if (sscreen->options.aux_debug)
+               saux->b.set_log_context(&saux->b, &sscreen->aux_contexts[i].log);
 
             sscreen->aux_contexts[i].ctx = &saux->b;
          }

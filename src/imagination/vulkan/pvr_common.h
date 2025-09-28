@@ -40,6 +40,7 @@
  */
 
 #include "hwdef/rogue_hw_defs.h"
+#include "pco/pco_data.h"
 #include "pvr_limits.h"
 #include "pvr_types.h"
 #include "util/list.h"
@@ -87,7 +88,7 @@ enum pvr_sub_cmd_type {
    PVR_SUB_CMD_TYPE_GRAPHICS,
    PVR_SUB_CMD_TYPE_COMPUTE,
    PVR_SUB_CMD_TYPE_TRANSFER,
-   PVR_SUB_CMD_TYPE_OCCLUSION_QUERY,
+   PVR_SUB_CMD_TYPE_QUERY,
    PVR_SUB_CMD_TYPE_EVENT,
 };
 
@@ -109,7 +110,7 @@ enum pvr_job_type {
    PVR_JOB_TYPE_FRAG,
    PVR_JOB_TYPE_COMPUTE,
    PVR_JOB_TYPE_TRANSFER,
-   PVR_JOB_TYPE_OCCLUSION_QUERY,
+   PVR_JOB_TYPE_QUERY,
    PVR_JOB_TYPE_MAX
 };
 
@@ -127,8 +128,7 @@ enum pvr_pipeline_stage_bits {
    /* Note that this doesn't map to VkPipelineStageFlagBits so be careful with
     * this.
     */
-   PVR_PIPELINE_STAGE_OCCLUSION_QUERY_BIT =
-      BITFIELD_BIT(PVR_JOB_TYPE_OCCLUSION_QUERY),
+   PVR_PIPELINE_STAGE_QUERY_BIT = BITFIELD_BIT(PVR_JOB_TYPE_QUERY),
 };
 
 #define PVR_PIPELINE_STAGE_ALL_GRAPHICS_BITS \
@@ -192,37 +192,46 @@ enum pvr_query_type {
 
 struct pvr_buffer_descriptor {
    uint64_t addr;
+   uint32_t size;
+   uint32_t offset;
 } PACKED;
-static_assert(sizeof(struct pvr_buffer_descriptor) == 2 * sizeof(uint32_t),
+static_assert(sizeof(struct pvr_buffer_descriptor) == 4 * sizeof(uint32_t),
               "pvr_buffer_descriptor size is invalid.");
 
 struct pvr_sampler_descriptor {
    uint64_t words[ROGUE_NUM_TEXSTATE_SAMPLER_WORDS];
+   uint32_t meta[PCO_SAMPLER_META_COUNT];
+   uint64_t gather_words[ROGUE_NUM_TEXSTATE_SAMPLER_WORDS];
 } PACKED;
 static_assert(sizeof(struct pvr_sampler_descriptor) ==
-                 ROGUE_NUM_TEXSTATE_SAMPLER_WORDS * sizeof(uint64_t),
+                 ROGUE_NUM_TEXSTATE_SAMPLER_WORDS * sizeof(uint64_t) * 2 +
+                    PCO_SAMPLER_META_COUNT * sizeof(uint32_t),
               "pvr_sampler_descriptor size is invalid.");
 
 struct pvr_image_descriptor {
    uint64_t words[ROGUE_NUM_TEXSTATE_IMAGE_WORDS];
+   uint32_t meta[PCO_IMAGE_META_COUNT];
 } PACKED;
 static_assert(sizeof(struct pvr_image_descriptor) ==
-                 ROGUE_NUM_TEXSTATE_IMAGE_WORDS * sizeof(uint64_t),
+                 ROGUE_NUM_TEXSTATE_IMAGE_WORDS * sizeof(uint64_t) +
+                    PCO_IMAGE_META_COUNT * sizeof(uint32_t),
               "pvr_image_descriptor size is invalid.");
 
 struct pvr_combined_image_sampler_descriptor {
    struct pvr_image_descriptor image;
    struct pvr_sampler_descriptor sampler;
 } PACKED;
-static_assert(sizeof(struct pvr_combined_image_sampler_descriptor) ==
-                 (ROGUE_NUM_TEXSTATE_IMAGE_WORDS +
-                  ROGUE_NUM_TEXSTATE_SAMPLER_WORDS) *
-                    sizeof(uint64_t),
-              "pvr_combined_image_sampler_descriptor size is invalid.");
+static_assert(
+   sizeof(struct pvr_combined_image_sampler_descriptor) ==
+      (ROGUE_NUM_TEXSTATE_IMAGE_WORDS + ROGUE_NUM_TEXSTATE_SAMPLER_WORDS * 2) *
+            sizeof(uint64_t) +
+         (PCO_IMAGE_META_COUNT + PCO_SAMPLER_META_COUNT) * sizeof(uint32_t),
+   "pvr_combined_image_sampler_descriptor size is invalid.");
 
 struct pvr_sampler {
    struct vk_sampler vk;
    struct pvr_sampler_descriptor descriptor;
+   uint32_t border_color_table_index;
 };
 
 struct pvr_descriptor_set_layout_binding {
@@ -236,6 +245,7 @@ struct pvr_descriptor_set_layout_binding {
    struct pvr_sampler **immutable_samplers;
 
    unsigned offset; /** Offset within the descriptor set. */
+   unsigned dynamic_buffer_idx;
    unsigned stride; /** Stride of each descriptor in this binding. */
 };
 
@@ -293,6 +303,7 @@ struct pvr_descriptor {
 
 struct pvr_descriptor_set {
    struct vk_object_base base;
+   struct list_head link; /** Link in pvr_descriptor_pool::desc_sets. */
 
    struct pvr_descriptor_set_layout *layout;
    struct pvr_descriptor_pool *pool;
@@ -301,7 +312,7 @@ struct pvr_descriptor_set {
    pvr_dev_addr_t dev_addr; /** Descriptor set device address. */
    void *mapping; /** Descriptor set CPU mapping. */
 
-   struct list_head link; /** Link in pvr_descriptor_pool::desc_sets. */
+   struct pvr_buffer_descriptor dynamic_buffers[];
 };
 
 struct pvr_event {
@@ -321,5 +332,11 @@ struct pvr_descriptor_state {
 };
 
 #undef PVR_MAX_DYNAMIC_BUFFERS
+
+VK_DEFINE_NONDISP_HANDLE_CASTS(pvr_event, base, VkEvent, VK_OBJECT_TYPE_EVENT)
+VK_DEFINE_NONDISP_HANDLE_CASTS(pvr_sampler,
+                               vk.base,
+                               VkSampler,
+                               VK_OBJECT_TYPE_SAMPLER)
 
 #endif /* PVR_COMMON_H */

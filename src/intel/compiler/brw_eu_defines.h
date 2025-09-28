@@ -154,7 +154,7 @@ enum ENUM_PACKED brw_align1_3src_dst_horizontal_stride {
 #define BRW_WE_ALL		1
 /** @} */
 
-enum opcode {
+enum ENUM_PACKED opcode {
    /* These are the actual hardware instructions. */
    BRW_OPCODE_ILLEGAL,
    BRW_OPCODE_SYNC,
@@ -218,6 +218,7 @@ enum opcode {
    BRW_OPCODE_SUBB,
    BRW_OPCODE_ADD3, /* Gen12+ only */
    BRW_OPCODE_DP4,
+   BRW_OPCODE_SRND, /* Xe2+ only */
    BRW_OPCODE_DPH,
    BRW_OPCODE_DP3,
    BRW_OPCODE_DP2,
@@ -280,31 +281,10 @@ enum opcode {
    SHADER_OPCODE_UNDEF,
 
    /**
-    * Texture sampling opcodes.
-    *
-    * LOGICAL opcodes are eventually translated to SHADER_OPCODE_SEND but
-    * take parameters as individual sources.  See enum tex_logical_srcs.
+    * A sampler instruction, see brw_tex_inst::sampler_opcode enum
+    * sampler_opcode.
     */
-   SHADER_OPCODE_TEX_LOGICAL,
-   SHADER_OPCODE_TXD_LOGICAL,
-   SHADER_OPCODE_TXF_LOGICAL,
-   SHADER_OPCODE_TXL_LOGICAL,
-   SHADER_OPCODE_TXS_LOGICAL,
-   FS_OPCODE_TXB_LOGICAL,
-   SHADER_OPCODE_TXF_CMS_W_LOGICAL,
-   SHADER_OPCODE_TXF_CMS_W_GFX12_LOGICAL,
-   SHADER_OPCODE_TXF_MCS_LOGICAL,
-   SHADER_OPCODE_LOD_LOGICAL,
-   SHADER_OPCODE_TG4_LOGICAL,
-   SHADER_OPCODE_TG4_IMPLICIT_LOD_LOGICAL,
-   SHADER_OPCODE_TG4_EXPLICIT_LOD_LOGICAL,
-   SHADER_OPCODE_TG4_BIAS_LOGICAL,
-   SHADER_OPCODE_TG4_OFFSET_LOGICAL,
-   SHADER_OPCODE_TG4_OFFSET_LOD_LOGICAL,
-   SHADER_OPCODE_TG4_OFFSET_BIAS_LOGICAL,
-   SHADER_OPCODE_SAMPLEINFO_LOGICAL,
-
-   SHADER_OPCODE_IMAGE_SIZE_LOGICAL,
+   SHADER_OPCODE_SAMPLER,
 
    /**
     * Combines multiple sources of size 1 into a larger virtual GRF.
@@ -571,6 +551,35 @@ enum opcode {
    SHADER_OPCODE_LOAD_REG,
 };
 
+enum sampler_opcode {
+   /**
+    * Texture sampling opcodes.
+    *
+    * LOGICAL opcodes are eventually translated to SHADER_OPCODE_SEND but
+    * take parameters as individual sources.  See enum tex_logical_srcs.
+    */
+   SAMPLER_OPCODE_TEX_LOGICAL,
+   SAMPLER_OPCODE_TXD_LOGICAL,
+   SAMPLER_OPCODE_TXF_LOGICAL,
+   SAMPLER_OPCODE_TXL_LOGICAL,
+   SAMPLER_OPCODE_TXS_LOGICAL,
+   SAMPLER_OPCODE_TXB_LOGICAL,
+   SAMPLER_OPCODE_TXF_CMS_W_LOGICAL,
+   SAMPLER_OPCODE_TXF_CMS_W_GFX12_LOGICAL,
+   SAMPLER_OPCODE_TXF_MCS_LOGICAL,
+   SAMPLER_OPCODE_LOD_LOGICAL,
+   SAMPLER_OPCODE_TG4_LOGICAL,
+   SAMPLER_OPCODE_TG4_IMPLICIT_LOD_LOGICAL,
+   SAMPLER_OPCODE_TG4_EXPLICIT_LOD_LOGICAL,
+   SAMPLER_OPCODE_TG4_BIAS_LOGICAL,
+   SAMPLER_OPCODE_TG4_OFFSET_LOGICAL,
+   SAMPLER_OPCODE_TG4_OFFSET_LOD_LOGICAL,
+   SAMPLER_OPCODE_TG4_OFFSET_BIAS_LOGICAL,
+   SAMPLER_OPCODE_SAMPLEINFO_LOGICAL,
+
+   SAMPLER_OPCODE_IMAGE_SIZE_LOGICAL,
+};
+
 enum send_srcs {
    /** The 32-bit message descriptor (can be a register) */
    SEND_SRC_DESC,
@@ -598,10 +607,6 @@ enum fb_write_logical_srcs {
    FB_WRITE_LOGICAL_SRC_SRC_DEPTH,   /* gl_FragDepth */
    FB_WRITE_LOGICAL_SRC_SRC_STENCIL, /* gl_FragStencilRefARB */
    FB_WRITE_LOGICAL_SRC_OMASK,       /* Sample Mask (gl_SampleMask) */
-   FB_WRITE_LOGICAL_SRC_TARGET,      /* REQUIRED */
-   FB_WRITE_LOGICAL_SRC_COMPONENTS,  /* REQUIRED */
-   FB_WRITE_LOGICAL_SRC_NULL_RT,     /* Null RT write */
-   FB_WRITE_LOGICAL_SRC_LAST_RT,     /* Last RT? (bool as UD immediate) */
    FB_WRITE_LOGICAL_NUM_SRCS
 };
 
@@ -624,18 +629,8 @@ enum tex_logical_srcs {
    TEX_LOGICAL_SRC_SURFACE,
    /** Texture sampler index */
    TEX_LOGICAL_SRC_SAMPLER,
-   /** Texture surface bindless handle */
-   TEX_LOGICAL_SRC_SURFACE_HANDLE,
-   /** Texture sampler bindless handle */
-   TEX_LOGICAL_SRC_SAMPLER_HANDLE,
    /** Texel offset for gathers */
    TEX_LOGICAL_SRC_TG4_OFFSET,
-   /** REQUIRED: Number of coordinate components (as UD immediate) */
-   TEX_LOGICAL_SRC_COORD_COMPONENTS,
-   /** REQUIRED: Number of derivative components (as UD immediate) */
-   TEX_LOGICAL_SRC_GRAD_COMPONENTS,
-   /** REQUIRED: request residency (as UD immediate) */
-   TEX_LOGICAL_SRC_RESIDENCY,
 
    TEX_LOGICAL_NUM_SRCS,
 };
@@ -677,7 +672,7 @@ enum get_buffer_size_srcs {
    GET_BUFFER_SIZE_SRCS
 };
 
-enum memory_logical_mode {
+enum ENUM_PACKED memory_logical_mode {
    MEMORY_MODE_TYPED,
    MEMORY_MODE_UNTYPED,
    MEMORY_MODE_SHARED_LOCAL,
@@ -686,17 +681,8 @@ enum memory_logical_mode {
 };
 
 enum memory_logical_srcs {
-   /** enum lsc_opcode (as UD immediate) */
-   MEMORY_LOGICAL_OPCODE,
-
-   /** enum memory_logical_mode (as UD immediate) */
-   MEMORY_LOGICAL_MODE,
-
-   /** enum lsc_addr_surface_type (as UD immediate) */
-   MEMORY_LOGICAL_BINDING_TYPE,
-
    /**
-    * Where to find the surface state.  Depends on BINDING_TYPE above:
+    * Where to find the surface state.  Depends on brw_mem_inst::binding_type:
     *
     * - SS: pointer to surface state (relative to surface base address)
     * - BSS: pointer to surface state (relative to bindless surface base)
@@ -707,24 +693,6 @@ enum memory_logical_srcs {
 
    /** Coordinate/address/offset for where to access memory */
    MEMORY_LOGICAL_ADDRESS,
-
-   /** Xe2+: offset for where to access memory (as UD immediate) */
-   MEMORY_LOGICAL_ADDRESS_OFFSET,
-
-   /** Dimensionality of the "address" source (as UD immediate) */
-   MEMORY_LOGICAL_COORD_COMPONENTS,
-
-   /** Required alignment of address in bytes; 0 for natural alignment */
-   MEMORY_LOGICAL_ALIGNMENT,
-
-   /** Bit-size in the form of enum lsc_data_size (as UD immediate) */
-   MEMORY_LOGICAL_DATA_SIZE,
-
-   /** Number of vector components (as UD immediate) */
-   MEMORY_LOGICAL_COMPONENTS,
-
-   /** memory_flags bitfield (as UD immediate) */
-   MEMORY_LOGICAL_FLAGS,
 
    /** Data to write for stores or the first operand for atomics */
    MEMORY_LOGICAL_DATA0,
@@ -766,7 +734,6 @@ enum urb_logical_srcs {
    URB_LOGICAL_SRC_CHANNEL_MASK,
    /** Data to be written.  BAD_FILE for reads. */
    URB_LOGICAL_SRC_DATA,
-   URB_LOGICAL_SRC_COMPONENTS,
    URB_LOGICAL_NUM_SRCS
 };
 
@@ -1589,7 +1556,7 @@ enum ENUM_PACKED brw_rnd_mode {
  * one or two messages with different bits to control things like address
  * size, how much data is read/written, etc.
  */
-enum lsc_opcode {
+enum ENUM_PACKED lsc_opcode {
    LSC_OP_LOAD            = 0,
    LSC_OP_LOAD_CMASK      = 2,
    LSC_OP_STORE           = 4,

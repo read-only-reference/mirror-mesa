@@ -282,6 +282,14 @@ StringFromCodecAPI( const GUID *Api )
    {
       return "CODECAPI_AVEncVideoInputAbsoluteQPBlockSettings";
    }
+   else if( *Api == CODECAPI_AVEncWorkGlobalPriority )
+   {
+      return "CODECAPI_AVEncWorkGlobalPriority";
+   }
+   else if( *Api == CODECAPI_AVEncWorkProcessPriority )
+   {
+      return "CODECAPI_AVEncWorkProcessPriority";
+   }
    return "Unknown CodecAPI";
 }
 
@@ -334,12 +342,21 @@ CDX12EncHMFT::IsSupported( const GUID *Api )
        *Api == CODECAPI_AVEncVideoSelectLayer || *Api == CODECAPI_AVEncVideoEncodeFrameTypeQP ||
        *Api == CODECAPI_AVEncSliceControlMode || *Api == CODECAPI_AVEncSliceControlSize ||
        *Api == CODECAPI_AVEncVideoMaxNumRefFrame || *Api == CODECAPI_AVEncVideoMeanAbsoluteDifference ||
-       *Api == CODECAPI_AVEncVideoMaxQP || *Api == CODECAPI_AVEncVideoGradualIntraRefresh || *Api == CODECAPI_AVScenarioInfo ||
+       *Api == CODECAPI_AVEncVideoMaxQP || *Api == CODECAPI_AVScenarioInfo ||
        *Api == CODECAPI_AVEncVideoROIEnabled || *Api == CODECAPI_AVEncVideoLTRBufferControl ||
        *Api == CODECAPI_AVEncVideoMarkLTRFrame || *Api == CODECAPI_AVEncVideoUseLTRFrame )
    {
       hr = S_OK;
       return hr;
+   }
+
+   if( m_EncoderCapabilities.m_HWSupportsIntraRefreshModes != PIPE_VIDEO_ENC_INTRA_REFRESH_NONE)
+   {
+      if( *Api == CODECAPI_AVEncVideoGradualIntraRefresh )
+      {
+         hr = S_OK;
+         return hr;
+      }
    }
 
    if( m_EncoderCapabilities.m_HWSupportDirtyRects.bits.supports_info_type_dirty )
@@ -404,6 +421,17 @@ CDX12EncHMFT::IsSupported( const GUID *Api )
          return hr;
       }
    }
+
+#if ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
+      if( (*Api == CODECAPI_AVEncWorkGlobalPriority) || (*Api == CODECAPI_AVEncWorkProcessPriority) )
+      {
+         if(m_EncoderCapabilities.m_bHWSupportsQueuePriorityManagement)
+         {
+            hr = S_OK;
+            return hr;
+         }
+      }
+#endif // ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
 
    if( m_EncoderCapabilities.m_TwoPassSupport.bits.supports_1pass_recon_writing_skip )
    {
@@ -631,17 +659,30 @@ CDX12EncHMFT::GetParameterValues( const GUID *Api, VARIANT **Values, ULONG *Valu
       }
       else if( *Api == CODECAPI_AVEncVideoGradualIntraRefresh )
       {
-         // Our HMFT doesn't support HMFT_INTRA_REFRESH_MODE_PERIODIC
-         *ValuesCount = 2;
-         CHECKNULL_GOTO( *Values = (VARIANT *) CoTaskMemAlloc( ( *ValuesCount ) * sizeof( VARIANT ) ), E_OUTOFMEMORY, done );
-         ( *Values )[0].vt = VT_UI4;
-         ( *Values )[0].ulVal = HMFT_INTRA_REFRESH_MODE_NONE;
-         ( *Values )[1].vt = VT_UI4;
-         ( *Values )[1].ulVal = HMFT_INTRA_REFRESH_MODE_CONTINUAL;
+
+         *ValuesCount = 0; // Assume no support unless reported by driver's capabilities
+
+         if( m_EncoderCapabilities.m_HWSupportsIntraRefreshModes != PIPE_VIDEO_ENC_INTRA_REFRESH_NONE)
+         {
+            // Our HMFT doesn't support HMFT_INTRA_REFRESH_MODE_PERIODIC
+            *ValuesCount = 2;
+            CHECKNULL_GOTO( *Values = (VARIANT *) CoTaskMemAlloc( ( *ValuesCount ) * sizeof( VARIANT ) ), E_OUTOFMEMORY, done );
+            ( *Values )[0].vt = VT_UI4;
+            ( *Values )[0].ulVal = HMFT_INTRA_REFRESH_MODE_NONE;
+            ( *Values )[1].vt = VT_UI4;
+            ( *Values )[1].ulVal = HMFT_INTRA_REFRESH_MODE_CONTINUAL;
+         }
       }
       else if( *Api == CODECAPI_AVEncVideoLTRBufferControl )
       {
-         *ValuesCount = m_EncoderCapabilities.m_uiMaxHWSupportedLongTermReferences + 1;
+         // reserve one dpb spot for short term reference frame.
+         // when m_EncoderCapabilities.m_uiMaxHWSupportedLongTermReferences = m_EncoderCapabilities.m_uiMaxHWSupportedDPBCapacity, we subtract one.
+         ULONG numSupportedLTR = m_EncoderCapabilities.m_uiMaxHWSupportedLongTermReferences;
+         if( numSupportedLTR > 0 && numSupportedLTR == m_EncoderCapabilities.m_uiMaxHWSupportedDPBCapacity )
+         {
+            numSupportedLTR -= 1;
+         }
+         *ValuesCount = numSupportedLTR + 1;
          CHECKNULL_GOTO( *Values = (VARIANT *) CoTaskMemAlloc( ( *ValuesCount ) * sizeof( VARIANT ) ), E_OUTOFMEMORY, done );
          for( ULONG i = 0; i < *ValuesCount; i++ )
          {
@@ -890,6 +931,18 @@ CDX12EncHMFT::GetValue( const GUID *Api, VARIANT *Value )
       Value->vt = VT_BOOL;
       Value->boolVal = m_bRateControlFramePreAnalysisExternalReconDownscale ? VARIANT_TRUE : VARIANT_FALSE;
    }
+#if ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
+   else if( *Api == CODECAPI_AVEncWorkGlobalPriority )
+   {
+      Value->vt = VT_UI4;
+      Value->ulVal = (UINT32) m_WorkGlobalPriority;
+   }
+   else if( *Api == CODECAPI_AVEncWorkProcessPriority )
+   {
+      Value->vt = VT_UI4;
+      Value->ulVal = (UINT32) m_WorkProcessPriority;
+   }
+#endif // ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
    else if( *Api == CODECAPI_AVEncVideoInputDeltaQPBlockSettings )
    {
       InputQPSettings hevcDeltaQPSettings;
@@ -1495,11 +1548,38 @@ CDX12EncHMFT::SetValue( const GUID *Api, VARIANT *Value )
    }
    else if( *Api == CODECAPI_AVEncVideoGradualIntraRefresh )
    {
-      debug_printf( "[dx12 hmft 0x%p] SET CODECAPI_AVEncVideoGradualIntraRefresh - %u\n", this, Value->ulVal );
-      if( Value->vt != VT_UI4 || ( ( Value->ulVal & 0xFFFF ) >= HMFT_INTRA_REFRESH_MODE_MAX ) )
+      UINT uiIntraRefreshMode = Value->ulVal & 0xFFFF;
+      UINT uiIntraRefreshSize = Value->ulVal >> 16 & 0xFFFF;
+
+      if ((uiIntraRefreshMode != 0) && (m_EncoderCapabilities.m_HWSupportsIntraRefreshModes == PIPE_VIDEO_ENC_INTRA_REFRESH_NONE))
       {
+         debug_printf( "[dx12 hmft 0x%p] User tried to set CODECAPI_AVEncVideoGradualIntraRefresh with mode %u, but this "
+                    "encoder does NOT support intra refresh.",
+                    this, uiIntraRefreshMode );
          CHECKHR_GOTO( E_INVALIDARG, done );
       }
+
+      if (uiIntraRefreshSize > m_EncoderCapabilities.m_uiMaxHWSupportedIntraRefreshSize)
+      {
+         debug_printf( "[dx12 hmft 0x%p] User tried to set CODECAPI_AVEncVideoGradualIntraRefresh with size %u, but this "
+                    "exceeds the maximum supported by hardware %u.",
+                    this, uiIntraRefreshSize, m_EncoderCapabilities.m_uiMaxHWSupportedIntraRefreshSize );
+         CHECKHR_GOTO( E_INVALIDARG, done );
+      }
+
+      debug_printf( "[dx12 hmft 0x%p] SET CODECAPI_AVEncVideoGradualIntraRefresh - %u\n", this, Value->ulVal );
+      if( Value->vt != VT_UI4 )
+      {
+         debug_printf( "[dx12 hmft 0x%p] User tried to set CODECAPI_AVEncVideoGradualIntraRefresh with invalid vt %u\n", this, Value->vt );
+         CHECKHR_GOTO( E_INVALIDARG, done );
+      }
+
+      if( uiIntraRefreshMode >= HMFT_INTRA_REFRESH_MODE_MAX )
+      {
+         debug_printf( "[dx12 hmft 0x%p] User tried to set CODECAPI_AVEncVideoGradualIntraRefresh with invalid mode %u\n", this, uiIntraRefreshMode );
+         CHECKHR_GOTO( E_INVALIDARG, done );
+      }
+
       m_uiIntraRefreshMode = Value->ulVal & 0xFFFF;
       m_uiIntraRefreshSize = Value->ulVal >> 16 & 0xFFFF;
    }
@@ -1566,6 +1646,40 @@ CDX12EncHMFT::SetValue( const GUID *Api, VARIANT *Value )
          CHECKHR_GOTO( E_INVALIDARG, done );
       }
       m_bVideoEnableSpatialAdaptiveQuantization = Value->ulVal ? TRUE : FALSE;
+   }
+   else if( *Api == CODECAPI_AVEncWorkProcessPriority )
+   {
+      debug_printf( "[dx12 hmft 0x%p] SET CODECAPI_AVEncWorkProcessPriority - %u\n", this, Value->ulVal );
+      if( Value->vt != VT_UI4 )
+      {
+         CHECKHR_GOTO( E_INVALIDARG, done );
+      }
+
+      if(!m_EncoderCapabilities.m_bHWSupportsQueuePriorityManagement)
+      {
+         CHECKHR_GOTO( E_INVALIDARG, done );
+      }
+#if ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
+      m_WorkProcessPriority = (D3D12_COMMAND_QUEUE_PROCESS_PRIORITY) (Value->ulVal);;
+      m_bWorkProcessPrioritySet = TRUE;
+#endif // ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
+   }
+   else if( *Api == CODECAPI_AVEncWorkGlobalPriority )
+   {
+      debug_printf( "[dx12 hmft 0x%p] SET CODECAPI_AVEncWorkGlobalPriority - %u\n", this, Value->ulVal );
+      if( Value->vt != VT_UI4 )
+      {
+         CHECKHR_GOTO( E_INVALIDARG, done );
+      }
+
+      if(!m_EncoderCapabilities.m_bHWSupportsQueuePriorityManagement)
+      {
+         CHECKHR_GOTO( E_INVALIDARG, done );
+      }
+#if ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
+      m_WorkGlobalPriority = (D3D12_COMMAND_QUEUE_GLOBAL_PRIORITY) Value->ulVal;
+      m_bWorkGlobalPrioritySet = TRUE;
+#endif // ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
    }
    else if( *Api == CODECAPI_AVEncVideoOutputQPMapBlockSize )
    {

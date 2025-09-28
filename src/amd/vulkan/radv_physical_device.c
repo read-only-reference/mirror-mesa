@@ -147,7 +147,19 @@ radv_cooperative_matrix2_nv_enabled(const struct radv_physical_device *pdev)
 
    const struct radv_instance *instance = radv_physical_device_instance(pdev);
 
-   return instance->drirc.cooperative_matrix2_nv;
+   return instance->drirc.features.cooperative_matrix2_nv;
+}
+
+static bool
+radv_shader_fp16_enabled(const struct radv_physical_device *pdev)
+{
+   const struct radv_instance *instance = radv_physical_device_instance(pdev);
+
+   /* GFX8 supports fp16, but not double rate packed math.  We don't enable
+    * that by default because it can sometimes hurt perf.
+    */
+   return pdev->info.has_packed_math_16bit ||
+          (pdev->info.gfx_level == GFX8 && instance->drirc.features.expose_float16_gfx8);
 }
 
 bool
@@ -177,7 +189,7 @@ radv_emulate_rt(const struct radv_physical_device *pdev)
       return true;
 
    /* Do not force emulated RT on GPUs that have native support. */
-   return !pdev->info.has_image_bvh_intersect_ray && instance->drirc.emulate_rt;
+   return !pdev->info.has_image_bvh_intersect_ray && instance->drirc.features.emulate_rt;
 }
 
 bool
@@ -209,25 +221,25 @@ radv_physical_device_init_cache_key(struct radv_physical_device *pdev)
    key->ptr_size = sizeof(void *);
    key->conformant_trunc_coord = pdev->info.conformant_trunc_coord;
 
-   key->clear_lds = instance->drirc.clear_lds;
+   key->clear_lds = instance->drirc.misc.clear_lds;
    key->cs_wave32 = pdev->cs_wave_size == 32;
-   key->disable_aniso_single_level = instance->drirc.disable_aniso_single_level && pdev->info.gfx_level < GFX8;
-   key->disable_shrink_image_store = instance->drirc.disable_shrink_image_store;
-   key->disable_sinking_load_input_fs = instance->drirc.disable_sinking_load_input_fs;
-   key->disable_trunc_coord = instance->drirc.disable_trunc_coord;
+   key->disable_aniso_single_level = instance->drirc.debug.disable_aniso_single_level && pdev->info.gfx_level < GFX8;
+   key->disable_shrink_image_store = instance->drirc.debug.disable_shrink_image_store;
+   key->disable_sinking_load_input_fs = instance->drirc.debug.disable_sinking_load_input_fs;
+   key->disable_trunc_coord = instance->drirc.debug.disable_trunc_coord;
    key->emulate_rt = radv_emulate_rt(pdev);
    key->bvh8 = radv_use_bvh8(pdev);
    key->ge_wave32 = pdev->ge_wave_size == 32;
-   key->invariant_geom = !!(instance->debug_flags & RADV_DEBUG_INVARIANT_GEOM);
+   key->invariant_geom = instance->drirc.debug.invariant_geom;
    key->no_fmask = !!(instance->debug_flags & RADV_DEBUG_NO_FMASK);
-   key->no_ngg_gs = !!(instance->debug_flags & RADV_DEBUG_NO_NGG_GS);
+   key->no_ngg_gs = instance->drirc.performance.disable_ngg_gs;
    key->no_rt = !!(instance->debug_flags & RADV_DEBUG_NO_RT);
    key->ps_wave32 = pdev->ps_wave_size == 32;
    key->rt_wave64 = pdev->rt_wave_size == 64;
-   key->split_fma = !!(instance->debug_flags & RADV_DEBUG_SPLIT_FMA);
-   key->ssbo_non_uniform = instance->drirc.ssbo_non_uniform;
-   key->tex_non_uniform = instance->drirc.tex_non_uniform;
-   key->lower_terminate_to_discard = instance->drirc.lower_terminate_to_discard;
+   key->split_fma = instance->drirc.debug.split_fma;
+   key->ssbo_non_uniform = instance->drirc.debug.ssbo_non_uniform;
+   key->tex_non_uniform = instance->drirc.debug.tex_non_uniform;
+   key->lower_terminate_to_discard = instance->drirc.debug.lower_terminate_to_discard;
    key->use_llvm = pdev->use_llvm;
    key->use_ngg = pdev->use_ngg;
    key->use_ngg_culling = pdev->use_ngg_culling;
@@ -329,7 +341,7 @@ static uint64_t
 radv_get_adjusted_vram_size(struct radv_physical_device *pdev)
 {
    const struct radv_instance *instance = radv_physical_device_instance(pdev);
-   int ov = instance->drirc.override_vram_size;
+   int ov = instance->drirc.misc.override_vram_size;
    if (ov >= 0)
       return MIN2((uint64_t)pdev->info.vram_size_kb * 1024, (uint64_t)ov << 20);
    return (uint64_t)pdev->info.vram_size_kb * 1024;
@@ -363,7 +375,7 @@ radv_physical_device_init_mem_types(struct radv_physical_device *pdev)
    if (!pdev->info.has_dedicated_vram) {
       const uint64_t total_size = gtt_size + visible_vram_size;
 
-      if (instance->drirc.enable_unified_heap_on_apu) {
+      if (instance->drirc.performance.enable_unified_heap_on_apu) {
          /* Some applications seem better when the driver exposes only one heap of VRAM on APUs. */
          visible_vram_size = total_size;
          gtt_size = 0;
@@ -649,7 +661,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .KHR_video_encode_av1 =
          (radv_video_encode_av1_supported(pdev) && VIDEO_CODEC_AV1ENC && pdev->video_encode_enabled),
       .KHR_video_encode_intra_refresh = pdev->video_encode_enabled,
-      .KHR_video_encode_quantization_map = pdev->video_encode_enabled && pdev->info.vcn_ip_version < VCN_5_0_0,
+      .KHR_video_encode_quantization_map = pdev->video_encode_enabled && radv_video_encode_qp_map_supported(pdev),
       .KHR_video_encode_queue = pdev->video_encode_enabled,
       .KHR_vulkan_memory_model = true,
       .KHR_workgroup_memory_explicit_layout = true,
@@ -696,7 +708,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .EXT_host_image_copy = radv_host_image_copy_enabled(pdev),
       .EXT_host_query_reset = true,
       .EXT_image_2d_view_of_3d = true,
-      .EXT_image_compression_control = true,
+      .EXT_image_compression_control = pdev->info.gfx_level < GFX12, /* Not useful on GFX12 */
       .EXT_image_drm_format_modifier = pdev->info.gfx_level >= GFX9,
       .EXT_image_robustness = true,
       .EXT_image_sliced_view_of_3d = pdev->info.gfx_level >= GFX10,
@@ -754,6 +766,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .EXT_transform_feedback = true,
       .EXT_vertex_attribute_divisor = true,
       .EXT_vertex_input_dynamic_state = !pdev->use_llvm,
+      .EXT_ycbcr_2plane_444_formats = true,
       .EXT_ycbcr_image_arrays = true,
       .EXT_zero_initialize_device_memory = true,
       .AMD_buffer_marker = true,
@@ -876,8 +889,7 @@ radv_physical_device_get_features(const struct radv_physical_device *pdev, struc
       .storagePushConstant8 = true,
       .shaderBufferInt64Atomics = true,
       .shaderSharedInt64Atomics = true,
-      .shaderFloat16 =
-         pdev->info.has_packed_math_16bit || (pdev->info.gfx_level == GFX8 && instance->drirc.expose_float16_gfx8),
+      .shaderFloat16 = radv_shader_fp16_enabled(pdev),
       .shaderInt8 = true,
 
       .descriptorIndexing = pdev->info.has_vm_always_valid,
@@ -1268,7 +1280,7 @@ radv_physical_device_get_features(const struct radv_physical_device *pdev, struc
       .cooperativeMatrixRobustBufferAccess = radv_cooperative_matrix_enabled(pdev),
 
       /* VK_EXT_image_compression_control */
-      .imageCompressionControl = true,
+      .imageCompressionControl = pdev->info.gfx_level < GFX12,
 
       /* VK_EXT_device_fault */
       .deviceFault = true,
@@ -1392,6 +1404,9 @@ radv_physical_device_get_features(const struct radv_physical_device *pdev, struc
 
       /* VK_KHR_shader_untyped_pointers */
       .shaderUntypedPointers = true,
+
+      /* VK_EXT_ycbcr_2plane_444_formats */
+      .ycbcr2plane444Formats = true,
    };
 }
 
@@ -1414,7 +1429,7 @@ static uint32_t
 radv_uniform_buffer_offset_alignment(const struct radv_physical_device *pdev)
 {
    const struct radv_instance *instance = radv_physical_device_instance(pdev);
-   uint32_t uniform_offset_alignment = instance->drirc.override_uniform_offset_alignment;
+   uint32_t uniform_offset_alignment = instance->drirc.debug.override_uniform_offset_alignment;
    if (!util_is_power_of_two_or_zero(uniform_offset_alignment)) {
       fprintf(stderr,
               "ERROR: invalid radv_override_uniform_offset_alignment setting %d:"
@@ -1437,7 +1452,7 @@ radv_get_compiler_string(struct radv_physical_device *pdev)
        * version is too old or if the LLVM version string is
        * missing. This gives 2-5% performance with SotTR and ACO.
        */
-      if (instance->drirc.report_llvm9_version_string) {
+      if (instance->drirc.performance.report_llvm9_version_string) {
          return " (LLVM 9.0.1)";
       }
 
@@ -1465,7 +1480,7 @@ radv_get_physical_device_properties(struct radv_physical_device *pdev)
       device_type = VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
    }
 
-   bool has_fp16 = pdev->info.has_packed_math_16bit;
+   const bool has_fp16 = radv_shader_fp16_enabled(pdev);
 
    VkShaderStageFlags taskmesh_stages =
       radv_taskmesh_enabled(pdev) ? VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_TASK_BIT_EXT : 0;
@@ -1691,7 +1706,9 @@ radv_get_physical_device_properties(struct radv_physical_device *pdev)
       .minSubgroupSize = pdev->info.gfx_level >= GFX10 ? 32 : 64,
       .maxSubgroupSize = 64,
       .maxComputeWorkgroupSubgroups = UINT32_MAX,
-      .requiredSubgroupSizeStages = pdev->info.gfx_level >= GFX10 ? VK_SHADER_STAGE_COMPUTE_BIT | taskmesh_stages : 0,
+      .requiredSubgroupSizeStages = pdev->info.gfx_level >= GFX10
+                                       ? VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | taskmesh_stages
+                                       : 0,
       .maxInlineUniformBlockSize = MAX_INLINE_UNIFORM_BLOCK_SIZE,
       .maxPerStageDescriptorInlineUniformBlocks = MAX_INLINE_UNIFORM_BLOCK_SIZE * MAX_SETS,
       .maxPerStageDescriptorUpdateAfterBindInlineUniformBlocks = MAX_INLINE_UNIFORM_BLOCK_SIZE * MAX_SETS,
@@ -1942,7 +1959,7 @@ radv_get_physical_device_properties(struct radv_physical_device *pdev)
       .bufferCaptureReplayDescriptorDataSize = 8,
       .imageCaptureReplayDescriptorDataSize = 8,
       .imageViewCaptureReplayDescriptorDataSize = 1,
-      .samplerCaptureReplayDescriptorDataSize = 1,
+      .samplerCaptureReplayDescriptorDataSize = 4,
       .accelerationStructureCaptureReplayDescriptorDataSize = 1,
       .samplerDescriptorSize = RADV_SAMPLER_DESC_SIZE,
       .combinedImageSamplerDescriptorSize = radv_get_combined_image_sampler_desc_size(pdev),
@@ -2284,8 +2301,8 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
    pdev->emulate_etc2 = !pdev->info.has_etc_support;
    pdev->emulate_astc = true;
 #else
-   pdev->emulate_etc2 = !pdev->info.has_etc_support && instance->drirc.vk_require_etc2;
-   pdev->emulate_astc = instance->drirc.vk_require_astc;
+   pdev->emulate_etc2 = !pdev->info.has_etc_support && instance->drirc.features.vk_require_etc2;
+   pdev->emulate_astc = instance->drirc.features.vk_require_astc;
 #endif
 
    snprintf(pdev->name, sizeof(pdev->name), "AMD RADV %s%s", pdev->info.name, radv_get_compiler_string(pdev));
@@ -2305,11 +2322,25 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
    pdev->use_fmask = pdev->info.gfx_level < GFX11 && !(instance->debug_flags & RADV_DEBUG_NO_FMASK);
 
    pdev->use_hiz = !(instance->debug_flags & RADV_DEBUG_NO_HIZ);
-   if (pdev->info.gfx_level == GFX12 && instance->drirc.disable_hiz_his_gfx12)
-      pdev->use_hiz = false;
 
-   pdev->use_gfx12_hiz_his_event_wa =
-      pdev->info.gfx_level == GFX12 && pdev->use_hiz; /* TODO: Implement the alternative solution. */
+   if (pdev->info.gfx_level == GFX12) {
+      const char *gfx12_hiz_wa_str = instance->drirc.performance.gfx12_hiz_wa;
+
+      pdev->gfx12_hiz_wa = RADV_GFX12_HIZ_WA_FULL; /* Default */
+
+      if (strlen(gfx12_hiz_wa_str) > 0) {
+         if (!strcmp(gfx12_hiz_wa_str, "disabled")) {
+            pdev->gfx12_hiz_wa = RADV_GFX12_HIZ_WA_DISABLED;
+         } else if (!strcmp(gfx12_hiz_wa_str, "partial")) {
+            pdev->gfx12_hiz_wa = RADV_GFX12_HIZ_WA_PARTIAL;
+         } else if (!strcmp(gfx12_hiz_wa_str, "full")) {
+            pdev->gfx12_hiz_wa = RADV_GFX12_HIZ_WA_FULL;
+         } else {
+            fprintf(stderr, "radv: Invalid value found for radv_gfx12_hiz_wa. "
+                            "Accepted values are: disabled, partial or full.\n");
+         }
+      }
+   }
 
    pdev->use_ngg = (pdev->info.gfx_level >= GFX10 && pdev->info.family != CHIP_NAVI14 &&
                     !(instance->debug_flags & RADV_DEBUG_NO_NGG)) ||
@@ -2366,8 +2397,6 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
    radv_physical_device_get_supported_extensions(pdev, &pdev->vk.supported_extensions);
    radv_physical_device_get_features(pdev, &pdev->vk.supported_features);
 
-   radv_get_nir_options(pdev);
-
 #ifndef _WIN32
    if (drm_device) {
       struct stat primary_stat = {0}, render_stat = {0};
@@ -2394,6 +2423,8 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
 #endif
 
    radv_physical_device_init_cache_key(pdev);
+
+   radv_get_nir_options(pdev);
 
    if (radv_device_get_cache_uuid(pdev, pdev->cache_uuid)) {
       result = vk_errorf(instance, VK_ERROR_INITIALIZATION_FAILED, "cannot generate UUID");
@@ -2490,14 +2521,15 @@ create_drm_physical_device(struct vk_instance *vk_instance, struct _drmDevice *d
 #ifndef _WIN32
    bool supported_device = false;
 
-   if (!(device->available_nodes & (1 << DRM_NODE_RENDER)) || device->bustype != DRM_BUS_PCI)
+   if (!(device->available_nodes & (1 << DRM_NODE_RENDER)))
       return VK_ERROR_INCOMPATIBLE_DRIVER;
 
 #ifdef HAVE_AMDGPU_VIRTIO
-   supported_device |= device->deviceinfo.pci->vendor_id == VIRTGPU_PCI_VENDOR_ID;
+   supported_device |= device->bustype == DRM_BUS_PCI && device->deviceinfo.pci->vendor_id == VIRTGPU_PCI_VENDOR_ID;
+   supported_device |= device->bustype == DRM_BUS_PLATFORM; /* virtio-mmio */
 #endif
 
-   supported_device |= device->deviceinfo.pci->vendor_id == ATI_VENDOR_ID;
+   supported_device |= device->bustype == DRM_BUS_PCI && device->deviceinfo.pci->vendor_id == ATI_VENDOR_ID;
 
    if (!supported_device)
       return VK_ERROR_INCOMPATIBLE_DRIVER;
@@ -2644,12 +2676,21 @@ radv_get_physical_device_queue_family_properties(struct radv_physical_device *pd
    *pCount = idx;
 }
 
-static const VkQueueGlobalPriority radv_global_queue_priorities[] = {
-   VK_QUEUE_GLOBAL_PRIORITY_LOW,
-   VK_QUEUE_GLOBAL_PRIORITY_MEDIUM,
-   VK_QUEUE_GLOBAL_PRIORITY_HIGH,
-   VK_QUEUE_GLOBAL_PRIORITY_REALTIME,
-};
+static void
+radv_get_global_queue_priorities(struct radv_physical_device *pdev, VkQueueFamilyGlobalPriorityProperties *prop)
+{
+   struct radeon_winsys *ws = pdev->ws;
+
+   prop->priorityCount = 0;
+
+   for (uint32_t p = VK_QUEUE_GLOBAL_PRIORITY_LOW; p <= VK_QUEUE_GLOBAL_PRIORITY_REALTIME; p <<= 1) {
+      if (ws->ctx_is_priority_permitted(ws, vk_to_radeon_priority(p)) != VK_SUCCESS)
+         continue;
+
+      prop->priorities[prop->priorityCount++] = p;
+      assert(prop->priorityCount < VK_MAX_GLOBAL_PRIORITY_SIZE);
+   }
+}
 
 VKAPI_ATTR void VKAPI_CALL
 radv_GetPhysicalDeviceQueueFamilyProperties2(VkPhysicalDevice physicalDevice, uint32_t *pCount,
@@ -2673,9 +2714,8 @@ radv_GetPhysicalDeviceQueueFamilyProperties2(VkPhysicalDevice physicalDevice, ui
          switch (ext->sType) {
          case VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES: {
             VkQueueFamilyGlobalPriorityProperties *prop = (VkQueueFamilyGlobalPriorityProperties *)ext;
-            STATIC_ASSERT(ARRAY_SIZE(radv_global_queue_priorities) <= VK_MAX_GLOBAL_PRIORITY_SIZE);
-            prop->priorityCount = ARRAY_SIZE(radv_global_queue_priorities);
-            memcpy(&prop->priorities, radv_global_queue_priorities, sizeof(radv_global_queue_priorities));
+
+            radv_get_global_queue_priorities(pdev, prop);
             break;
          }
          case VK_STRUCTURE_TYPE_QUEUE_FAMILY_QUERY_RESULT_STATUS_PROPERTIES_KHR: {
@@ -2737,7 +2777,7 @@ radv_get_memory_budget_properties(VkPhysicalDevice physicalDevice,
     * in presence of shared buffers).
     */
    if (!pdev->info.has_dedicated_vram) {
-      if (instance->drirc.enable_unified_heap_on_apu) {
+      if (instance->drirc.performance.enable_unified_heap_on_apu) {
          /* When the heaps are unified, only the visible VRAM heap is exposed on APUs. */
          assert(pdev->heaps == RADV_HEAP_VRAM_VIS);
          assert(pdev->memory_properties.memoryHeaps[0].flags == VK_MEMORY_HEAP_DEVICE_LOCAL_BIT);
@@ -3007,29 +3047,28 @@ struct matrix_prop {
    bool saturate;
 };
 
-static void fill_matrix_prop_khr(struct __vk_outarray *base,
-                                 struct matrix_prop *prop)
+static void
+fill_matrix_prop_khr(struct __vk_outarray *base, struct matrix_prop *prop)
 {
    vk_outarray(VkCooperativeMatrixPropertiesKHR) *out = (void *)base;
 
    vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, out, p)
    {
-      *p = (struct VkCooperativeMatrixPropertiesKHR){
-         .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
-         .MSize = 16,
-         .NSize = 16,
-         .KSize = 16,
-         .AType = prop->a_type,
-         .BType = prop->b_type,
-         .CType = prop->c_type,
-         .ResultType = prop->r_type,
-         .saturatingAccumulation = prop->saturate,
-         .scope = VK_SCOPE_SUBGROUP_KHR};
+      *p = (struct VkCooperativeMatrixPropertiesKHR){.sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
+                                                     .MSize = 16,
+                                                     .NSize = 16,
+                                                     .KSize = 16,
+                                                     .AType = prop->a_type,
+                                                     .BType = prop->b_type,
+                                                     .CType = prop->c_type,
+                                                     .ResultType = prop->r_type,
+                                                     .saturatingAccumulation = prop->saturate,
+                                                     .scope = VK_SCOPE_SUBGROUP_KHR};
    }
 }
 
-static void fill_flexible_matrix_prop_nv(struct __vk_outarray *base,
-                                         struct matrix_prop *prop)
+static void
+fill_flexible_matrix_prop_nv(struct __vk_outarray *base, struct matrix_prop *prop)
 {
    vk_outarray(VkCooperativeMatrixFlexibleDimensionsPropertiesNV) *out = (void *)base;
 
@@ -3049,9 +3088,9 @@ static void fill_flexible_matrix_prop_nv(struct __vk_outarray *base,
    }
 }
 
-static void fill_array_sizes_structs(const struct radv_physical_device *pdev,
-                                     struct __vk_outarray *base,
-                                     void (*array_size_cb)(struct __vk_outarray *base, struct matrix_prop *prop))
+static void
+fill_array_sizes_structs(const struct radv_physical_device *pdev, struct __vk_outarray *base,
+                         void (*array_size_cb)(struct __vk_outarray *base, struct matrix_prop *prop))
 {
    /* The Vulkan spec says:
     * If some types are preferred over other types (e.g. for performance),
@@ -3115,8 +3154,9 @@ radv_GetPhysicalDeviceCooperativeMatrixPropertiesKHR(VkPhysicalDevice physicalDe
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
-radv_GetPhysicalDeviceCooperativeMatrixFlexibleDimensionsPropertiesNV(VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount,
-                                                                      VkCooperativeMatrixFlexibleDimensionsPropertiesNV *pProperties)
+radv_GetPhysicalDeviceCooperativeMatrixFlexibleDimensionsPropertiesNV(
+   VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount,
+   VkCooperativeMatrixFlexibleDimensionsPropertiesNV *pProperties)
 {
    VK_FROM_HANDLE(radv_physical_device, pdev, physicalDevice);
    VK_OUTARRAY_MAKE_TYPED(VkCooperativeMatrixFlexibleDimensionsPropertiesNV, out, pProperties, pPropertyCount);

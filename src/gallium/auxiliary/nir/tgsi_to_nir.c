@@ -1693,7 +1693,7 @@ static const nir_op op_trans[TGSI_OPCODE_LAST] = {
 
    /* No function calls, yet. */
    [TGSI_OPCODE_CAL] = 0, /* XXX */
-   [TGSI_OPCODE_RET] = 0, /* XXX */
+   [TGSI_OPCODE_RET] = 0, /* Handled with nir_lower_returns */
 
    [TGSI_OPCODE_SSG] = nir_op_fsign,
    [TGSI_OPCODE_CMP] = 0,
@@ -2030,6 +2030,16 @@ ttn_emit_instruction(struct ttn_compile *c)
       dst = nir_ddy_fine(b, src[0]);
       break;
 
+   case TGSI_OPCODE_RET:
+      /* NIR returns must be at the end of the block, while TGSI returns may not
+       * be. Guarantee that by putting it inside a trivial if, which will be
+       * cleaned up by nir_opt_dead_cf.
+       */
+      nir_push_if(b, nir_imm_true(b));
+      nir_jump(b, nir_jump_return);
+      nir_pop_if(b, NULL);
+      break;
+
    default:
       if (op_trans[tgsi_op] != 0 || tgsi_op == TGSI_OPCODE_MOV) {
          dst = ttn_alu(b, op_trans[tgsi_op], dst_bitsize, src);
@@ -2259,8 +2269,6 @@ ttn_compile_init(const void *tgsi_tokens,
       c->cap_face_is_sysval = true;
    }
 
-   s->info.subgroup_size = SUBGROUP_SIZE_UNIFORM;
-
    if (s->info.stage == MESA_SHADER_FRAGMENT)
       s->info.fs.untyped_color_outputs = true;
 
@@ -2341,6 +2349,8 @@ ttn_compile_init(const void *tgsi_tokens,
          }
       }
    }
+
+   s->info.api_subgroup_size_draw_uniform = s->info.stage != MESA_SHADER_COMPUTE;
 
    if (s->info.stage == MESA_SHADER_COMPUTE &&
        (!s->info.workgroup_size[0] ||
@@ -2530,6 +2540,7 @@ ttn_finalize_nir(struct ttn_compile *c, struct pipe_screen *screen)
 
    MESA_TRACE_FUNC();
 
+   NIR_PASS(_, nir, nir_lower_returns);
    NIR_PASS(_, nir, nir_lower_vars_to_ssa);
    NIR_PASS(_, nir, nir_lower_reg_intrinsics_to_ssa);
 

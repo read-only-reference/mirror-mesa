@@ -383,6 +383,7 @@ struct _mesa_glsl_parse_state {
    struct gl_context *const ctx; /* only to be used for debug callback. */
    const struct gl_extensions *exts;
    const struct gl_constants *consts;
+   const struct pipe_caps *caps;
    gl_api api;
    void *scanner;
    ir_exec_list translation_unit;
@@ -449,19 +450,19 @@ struct _mesa_glsl_parse_state {
    struct ast_type_qualifier *in_qualifier;
 
    /**
-    * True if a compute shader input local size was specified using a layout
-    * directive.
+    * True if a compute, task or mesh shader input local size was specified
+    * using a layout directive.
     *
     * Note: this value is computed at ast_to_hir time rather than at parse
     * time.
     */
-   bool cs_input_local_size_specified;
+   bool cs_ms_input_local_size_specified;
 
    /**
-    * If cs_input_local_size_specified is true, the local size that was
+    * If cs_ms_input_local_size_specified is true, the local size that was
     * specified.  Otherwise ignored.
     */
-   unsigned cs_input_local_size[3];
+   unsigned cs_ms_input_local_size[3];
 
    /**
     * True if a compute shader input local variable size was specified using
@@ -484,6 +485,13 @@ struct _mesa_glsl_parse_state {
    bool bindless_image_specified;
    bool bound_sampler_specified;
    bool bound_image_specified;
+
+   /**
+    * True if mesh shader max_vertices or max_primitives was specified
+    * using a layout directive.
+    */
+   bool ms_output_max_vertices_specified;
+   bool ms_output_max_primitives_specified;
 
    /**
     * Output layout qualifiers from GLSL 1.50 (geometry shader controls),
@@ -876,6 +884,8 @@ struct _mesa_glsl_parse_state {
    bool EXT_gpu_shader4_warn;
    bool EXT_gpu_shader5_enable;
    bool EXT_gpu_shader5_warn;
+   bool EXT_mesh_shader_enable;
+   bool EXT_mesh_shader_warn;
    bool EXT_primitive_bounding_box_enable;
    bool EXT_primitive_bounding_box_warn;
    bool EXT_separate_shader_objects_enable;
@@ -982,6 +992,16 @@ struct _mesa_glsl_parse_state {
     * Unused for other shader types.
     */
    unsigned tcs_output_size;
+
+   /**
+    * For mesh shaders, size of the most recently seen per-vertex/primitive output
+    * declaration that was a sized array, or 0 if no sized output array
+    * declarations have been seen.
+    *
+    * Unused for other shader types.
+    */
+   unsigned ms_per_vertex_output_size;
+   unsigned ms_per_primitive_output_size;
 
    /** Atomic counter offsets by binding */
    unsigned atomic_counter_offsets[MAX_COMBINED_ATOMIC_BUFFERS];

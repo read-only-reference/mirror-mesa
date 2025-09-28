@@ -143,6 +143,10 @@ def has_access(format):
         'y8_unorm',
         'y8u8v8_420_unorm_packed',
         'y10u10v10_420_unorm_packed',
+        'g8_b8r8_444_unorm',
+        'x6g10_x6b10x6r10_444_unorm',
+        'x4g12_x4b12x4r12_444_unorm',
+        'y16_u16v16_444_unorm',
     ]
     if format.short_name() in noaccess_formats:
         return False
@@ -431,16 +435,27 @@ def write_get_plane_format(formats):
         'X4B12X4R12': 'X4R12X4G12',
     }
 
+    # On some YUV formats, we don't want RGB lowering
+    no_rgb_lowering = ['Y8_UNORM']
+
     print('static inline enum pipe_format', file=sys.stdout3)
     print('util_format_get_plane_format(enum pipe_format format, unsigned plane)', file=sys.stdout3)
     print('{', file=sys.stdout3)
     print('   switch (format) {', file=sys.stdout3)
     unhandled_formats = []
     for f in formats:
-        if f.layout not in ['planar2', 'planar3']:
+        if f.layout not in ['planar2', 'planar3'] and f.colorspace != 'YUV':
             continue
-        nplanes = 3 if f.layout == 'planar3' else 2
+
+        if f.short_name().upper() in no_rgb_lowering:
+            unhandled_formats += [f.name]
+            continue
+
+        nplanes = int(f.layout[-1]) if f.layout.startswith('planar') else 1
         planes = f.short_name().upper().split('_')
+        if planes[-1] == 'PACKED':
+            planes.pop(-1)
+
         assert(planes[-1] == 'UNORM')
         planes.pop(-1)
         if planes[-1] in CHROMA_SUBSAMP:
@@ -479,6 +494,47 @@ def write_get_plane_format(formats):
     print('}', file=sys.stdout3)
     print(file=sys.stdout3)
 
+def write_type_conv_helper(formats, in_type, out_type):
+    print('static inline enum pipe_format', file=sys.stdout3)
+    print('util_format_%s_to_%s(enum pipe_format format)' % (in_type, out_type), file=sys.stdout3)
+    print('{', file=sys.stdout3)
+    print('   switch (format) {', file=sys.stdout3)
+    for out_fmt in formats:
+        if out_fmt.colorspace != 'RGB':
+            continue
+        if out_type not in out_fmt.short_name():
+            continue
+
+        match = []
+        if in_type != 'any':
+            match += [out_fmt.short_name().replace(out_type, in_type)]
+        else:
+            for fmt_type in ['unorm', 'snorm', 'uint', 'sint', 'float']:
+                if fmt_type != in_type:
+                    match += [out_fmt.short_name().replace(out_type, fmt_type)]
+
+        found_match = False
+        for in_fmt in formats:
+            if in_fmt.short_name() in match:
+                print('   case %s:' % in_fmt.name, file=sys.stdout3)
+                found_match = True
+
+        if found_match:
+            print('      return %s;' % out_fmt.name, file=sys.stdout3)
+    print('   default:', file=sys.stdout3)
+    print('      return format;', file=sys.stdout3)
+    print('   }', file=sys.stdout3)
+    print('}', file=sys.stdout3)
+
+def write_type_conv_helpers(formats):
+    out_types = ['unorm', 'snorm', 'uint', 'sint', 'float']
+    in_types = out_types + ['any']
+    for in_type in in_types:
+        for out_type in out_types:
+            if in_type != out_type:
+                write_type_conv_helper(formats, in_type, out_type)
+                print(file=sys.stdout3)
+
 def write_format_inline_helpers(formats):
     write_to_chroma_format(formats)
     print(file=sys.stdout3)
@@ -486,6 +542,7 @@ def write_format_inline_helpers(formats):
     print(file=sys.stdout3)
     write_get_plane_width_height(formats)
     print(file=sys.stdout3)
+    write_type_conv_helpers(formats)
 
 def write_format_table(formats):
     write_format_table_header(sys.stdout)

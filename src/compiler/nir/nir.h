@@ -41,6 +41,7 @@
 #include "util/log.h"
 #include "util/macros.h"
 #include "util/ralloc.h"
+#include "util/range_minimum_query.h"
 #include "util/set.h"
 #include "util/u_math.h"
 #include "nir_defines.h"
@@ -92,6 +93,7 @@ extern bool nir_debug_print_shader[MESA_SHADER_KERNEL + 1];
 #define NIR_DEBUG_PRINT_PASS_FLAGS       (1u << 22)
 #define NIR_DEBUG_INVALIDATE_METADATA    (1u << 23)
 #define NIR_DEBUG_PRINT_STRUCT_DECLS     (1u << 24)
+#define NIR_DEBUG_PROGRESS_VALIDATION    (1u << 25)
 
 #define NIR_DEBUG_PRINT (NIR_DEBUG_PRINT_VS |  \
                          NIR_DEBUG_PRINT_TCS | \
@@ -3476,6 +3478,17 @@ typedef enum {
     */
    nir_metadata_divergence = 0x40,
 
+   /** Indicates that block dominance lca information is valid
+    *
+    * This includes:
+    *
+    *   - nir_function_impl::dom_lca_info
+    *
+    * A pass can preserve this metadata type if it preserves
+    * nir_metadata_dominance.
+    */
+   nir_metadata_dominance_lca = 0x80,
+
    /** All control flow metadata
     *
     * This includes all metadata preserved by a pass that preserves control flow
@@ -3486,7 +3499,8 @@ typedef enum {
     * This is the most common metadata set to preserve, so it has its own alias.
     */
    nir_metadata_control_flow = nir_metadata_block_index |
-                               nir_metadata_dominance,
+                               nir_metadata_dominance |
+                               nir_metadata_dominance_lca,
 
    /** All metadata
     *
@@ -3523,6 +3537,12 @@ typedef struct nir_function_impl {
 
    /* total number of basic blocks, only valid when block_index_dirty = false */
    unsigned num_blocks;
+
+   /** Information used for LCA queries */
+   struct nir_dom_lca_info {
+      struct range_minimum_query_table table;
+      nir_block **block_from_idx;
+   } dom_lca_info;
 
    /** True if this nir_function_impl uses structured control-flow
     *
@@ -3953,8 +3973,7 @@ void nir_fixup_is_exported(nir_shader *shader);
 
 nir_shader *nir_shader_create(void *mem_ctx,
                               mesa_shader_stage stage,
-                              const nir_shader_compiler_options *options,
-                              shader_info *si);
+                              const nir_shader_compiler_options *options);
 
 /** Adds a variable to the appropriate list in nir_shader */
 void nir_shader_add_variable(nir_shader *shader, nir_variable *var);
@@ -4698,7 +4717,9 @@ void nir_validate_shader(nir_shader *shader, const char *when);
 void nir_validate_ssa_dominance(nir_shader *shader, const char *when);
 void nir_metadata_set_validation_flag(nir_shader *shader);
 void nir_metadata_check_validation_flag(nir_shader *shader);
-void nir_metadata_require_all(nir_shader *shader);
+void nir_metadata_require_most(nir_shader *shader);
+struct blob nir_validate_progress_setup(nir_shader *shader);
+void nir_validate_progress_finish(nir_shader *shader, struct blob *setup_blob, bool progress, const char *when);
 
 static inline bool
 should_skip_nir(const char *name)
@@ -4751,9 +4772,23 @@ nir_metadata_check_validation_flag(nir_shader *shader)
    (void)shader;
 }
 static inline void
-nir_metadata_require_all(nir_shader *shader)
+nir_metadata_require_most(nir_shader *shader)
 {
    (void)shader;
+}
+static inline struct blob
+nir_validate_progress_setup(nir_shader *shader)
+{
+   struct blob b = {0};
+   return b;
+}
+static inline void
+nir_validate_progress_finish(nir_shader *shader, struct blob *setup_blob, bool progress, const char *when)
+{
+   (void)shader;
+   (void)setup_blob;
+   (void)progress;
+   (void)when;
 }
 static inline bool
 should_skip_nir(UNUSED const char *pass_name)
@@ -4776,7 +4811,7 @@ should_print_nir(UNUSED nir_shader *shader)
       if (NIR_DEBUG(INVALIDATE_METADATA))                               \
          nir_metadata_invalidate(nir);                                  \
       else if (NIR_DEBUG(EXTENDED_VALIDATION))                          \
-         nir_metadata_require_all(nir);                                 \
+         nir_metadata_require_most(nir);                                \
       do_pass if (NIR_DEBUG(CLONE))                                     \
       {                                                                 \
          nir_shader *_clone = nir_shader_clone(ralloc_parent(nir), nir);\
@@ -4790,20 +4825,25 @@ should_print_nir(UNUSED nir_shader *shader)
 #define NIR_STRINGIZE_INNER(x) #x
 #define NIR_STRINGIZE(x)       NIR_STRINGIZE_INNER(x)
 
-#define NIR_PASS(progress, nir, pass, ...) _PASS(pass, nir, {                               \
-   nir_metadata_set_validation_flag(nir);                                                   \
-   if (should_print_nir(nir))                                                               \
-      printf("%s\n", #pass);                                                                \
-   if (pass(nir, ##__VA_ARGS__)) {                                                          \
-      nir_validate_shader(nir, "after " #pass " in " __FILE__ ":" NIR_STRINGIZE(__LINE__)); \
-      UNUSED bool _;                                                                        \
-      progress = true;                                                                      \
-      if (should_print_nir(nir))                                                            \
-         nir_print_shader(nir, stdout);                                                     \
-      nir_metadata_check_validation_flag(nir);                                              \
-   } else if (NIR_DEBUG(EXTENDED_VALIDATION)) {                                             \
-      nir_validate_shader(nir, "after " #pass " in " __FILE__ ":" NIR_STRINGIZE(__LINE__)); \
-   }                                                                                        \
+#define NIR_PASS(progress, nir, pass, ...) _PASS(pass, nir, {                            \
+   nir_metadata_set_validation_flag(nir);                                                \
+   if (should_print_nir(nir))                                                            \
+      printf("%s\n", #pass);                                                             \
+   static const char *when = "after " #pass " in " __FILE__ ":" NIR_STRINGIZE(__LINE__); \
+   struct blob blob_before = nir_validate_progress_setup(nir);                           \
+   if (pass(nir, ##__VA_ARGS__)) {                                                       \
+      nir_validate_shader(nir, when);                                                    \
+      UNUSED bool _;                                                                     \
+      progress = true;                                                                   \
+      if (should_print_nir(nir))                                                         \
+         nir_print_shader(nir, stdout);                                                  \
+      nir_metadata_check_validation_flag(nir);                                           \
+      nir_validate_progress_finish(nir, &blob_before, true, when);                       \
+   } else {                                                                              \
+      if (NIR_DEBUG(EXTENDED_VALIDATION))                                                \
+         nir_validate_shader(nir, when);                                                 \
+      nir_validate_progress_finish(nir, &blob_before, false, when);                      \
+   }                                                                                     \
 })
 
 #define _NIR_LOOP_PASS(progress, idempotent, skip, nir, pass, ...)   \
@@ -4921,8 +4961,18 @@ bool nir_shader_lower_instructions(nir_shader *shader,
 
 void nir_calc_dominance_impl(nir_function_impl *impl);
 void nir_calc_dominance(nir_shader *shader);
+void nir_calc_dominance_lca_impl(nir_function_impl *impl);
 
+/**
+ * Computes the lowest common ancestor of two blocks in the dominator tree.
+ *
+ * If one of the blocks is null or unreachable, the other block is returned or
+ * NULL if it's unreachable.
+ *
+ * Requires nir_metadata_dominance_lca
+ */
 nir_block *nir_dominance_lca(nir_block *b1, nir_block *b2);
+
 bool nir_block_dominates(nir_block *parent, nir_block *child);
 bool nir_block_is_unreachable(nir_block *block);
 
@@ -5402,13 +5452,11 @@ bool nir_move_vec_src_uses_to_dest(nir_shader *shader, bool skip_const_srcs);
 bool nir_move_output_stores_to_end(nir_shader *nir);
 bool nir_lower_vec_to_regs(nir_shader *shader, nir_instr_writemask_filter_cb cb,
                            const void *_data);
-bool nir_lower_alpha_test(nir_shader *shader, enum compare_func func,
-                          bool alpha_to_one,
-                          const gl_state_index16 *alpha_ref_state_tokens);
 
 bool nir_lower_alpha_to_coverage(nir_shader *shader,
                                  uint8_t nr_samples,
-                                 bool has_intrinsic);
+                                 bool has_intrinsic,
+                                 nir_def *dyn_enable);
 
 bool nir_lower_alpha_to_one(nir_shader *shader);
 
@@ -5476,7 +5524,7 @@ typedef struct nir_lower_subgroups_options {
     * will filter instructions for lowering if non-NULL. The data passed will be
     * filter_data.
     */
-   nir_instr_filter_cb filter;
+   nir_intrin_filter_cb filter;
 
    /* Extra data passed to the filter. */
    const void *filter_data;
@@ -5489,7 +5537,6 @@ typedef struct nir_lower_subgroups_options {
    uint8_t ballot_bit_size;
    uint8_t ballot_components;
    bool lower_to_scalar : 1;
-   bool lower_fp64 : 1;
    bool lower_vote_trivial : 1;
    bool lower_vote_feq : 1;
    bool lower_vote_ieq : 1;
@@ -5919,9 +5966,6 @@ bool nir_lower_clip_cull_distance_to_vec4s(nir_shader *shader);
 bool nir_lower_clip_cull_distance_array_vars(nir_shader *nir);
 bool nir_lower_clip_disable(nir_shader *shader, unsigned clip_plane_enable);
 
-bool nir_lower_point_size_mov(nir_shader *shader,
-                              const gl_state_index16 *pointsize_state_tokens);
-
 bool nir_lower_frexp(nir_shader *nir);
 
 bool nir_lower_two_sided_color(nir_shader *shader, bool face_sysval);
@@ -5952,19 +5996,6 @@ bool nir_lower_pntc_ytransform(nir_shader *shader,
 bool nir_lower_wrmasks(nir_shader *shader, nir_instr_filter_cb cb, const void *data);
 
 bool nir_lower_fb_read(nir_shader *shader);
-
-typedef struct nir_lower_drawpixels_options {
-   gl_state_index16 texcoord_state_tokens[STATE_LENGTH];
-   gl_state_index16 scale_state_tokens[STATE_LENGTH];
-   gl_state_index16 bias_state_tokens[STATE_LENGTH];
-   unsigned drawpix_sampler;
-   unsigned pixelmap_sampler;
-   bool pixel_maps : 1;
-   bool scale_and_bias : 1;
-} nir_lower_drawpixels_options;
-
-bool nir_lower_drawpixels(nir_shader *shader,
-                          const nir_lower_drawpixels_options *options);
 
 typedef struct nir_lower_bitmap_options {
    unsigned sampler;
@@ -6332,14 +6363,14 @@ typedef struct nir_opt_offsets_options {
     */
    uint32_t (*max_offset_cb)(nir_intrinsic_instr *intr, const void *data);
 
-   /** Data to pass to max_offset_cb. */
-   const void *max_offset_data;
+   /** Data to pass to callbacks. */
+   const void *cb_data;
 
    /**
     * Allow the offset calculation to wrap. If false, constant additions that
     * might wrap will not be folded into the offset.
     */
-   bool allow_offset_wrap;
+   bool (*allow_offset_wrap_cb)(nir_intrinsic_instr *intr, const void *data);
 } nir_opt_offsets_options;
 
 bool nir_opt_offsets(nir_shader *shader, const nir_opt_offsets_options *options);
@@ -6466,27 +6497,13 @@ nir_deref_count_slots(nir_deref_instr *deref, nir_variable *var)
    }
    return glsl_count_attribute_slots(deref->type, false);
 }
-
-/* See default_ub_config in nir_range_analysis.c for documentation. */
-typedef struct nir_unsigned_upper_bound_config {
-   unsigned min_subgroup_size;
-   unsigned max_subgroup_size;
-   unsigned max_workgroup_invocations;
-   unsigned max_workgroup_count[3];
-   unsigned max_workgroup_size[3];
-
-   uint32_t vertex_attrib_max[32];
-} nir_unsigned_upper_bound_config;
-
 uint32_t
 nir_unsigned_upper_bound(nir_shader *shader, struct hash_table *range_ht,
-                         nir_scalar scalar,
-                         const nir_unsigned_upper_bound_config *config);
+                         nir_scalar scalar);
 
 bool
 nir_addition_might_overflow(nir_shader *shader, struct hash_table *range_ht,
-                            nir_scalar ssa, unsigned const_val,
-                            const nir_unsigned_upper_bound_config *config);
+                            nir_scalar ssa, unsigned const_val);
 
 typedef struct nir_opt_preamble_options {
    /* True if gl_DrawID is considered uniform, i.e. if the preamble is run
@@ -6754,6 +6771,8 @@ void nir_gather_output_clipper_var_groups(nir_shader *nir,
                                           nir_output_clipper_var_groups *groups);
 
 bool nir_lower_cooperative_matrix_flexible_dimensions(nir_shader *shader, unsigned m_gran, unsigned n_gran, unsigned k_gran);
+
+bool nir_unlower_io_to_vars(nir_shader *nir, bool keep_intrinsics);
 
 #include "nir_inline_helpers.h"
 

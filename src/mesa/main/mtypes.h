@@ -52,8 +52,10 @@
 #include "main/formats.h"       /* MESA_FORMAT_COUNT */
 #include "util/u_idalloc.h"
 #include "util/simple_mtx.h"
+#include "util/set.h"
 #include "util/u_dynarray.h"
 #include "vbo/vbo.h"
+#include "state_tracker/st_atom.h"
 
 #include "pipe/p_state.h"
 
@@ -1048,9 +1050,8 @@ struct gl_texture_object
    /* When non-negative, samplers should use this layer instead of the one
     * specified by the GL state.
     *
-    * This is used for EGL images and VDPAU interop, where imported
-    * pipe_resources may be cube, 3D, or array textures (containing layers
-    * with different fields in the case of VDPAU) even though the GL state
+    * This is used for EGL images interop, where imported pipe_resources
+    * may be cube, 3D, or array textures even though the GL state
     * describes one non-array texture per field.
     */
    int layer_override;
@@ -1442,22 +1443,6 @@ struct gl_buffer_object
    gl_buffer_usage UsageHistory; /**< How has this buffer been used so far? */
 
    struct pipe_resource *buffer;
-   struct gl_context *private_refcount_ctx;
-   /* This mechanism allows passing buffer references to the driver without
-    * using atomics to increase the reference count.
-    *
-    * This private refcount can be decremented without atomics but only one
-    * context (ctx above) can use this counter to be thread-safe.
-    *
-    * This number is atomically added to buffer->reference.count at
-    * initialization. If it's never used, the same number is atomically
-    * subtracted from buffer->reference.count before destruction. If this
-    * number is decremented, we can pass that reference to the driver without
-    * touching reference.count. At buffer destruction we only subtract
-    * the number of references we did not return. This can possibly turn
-    * a million atomic increments into 1 add and 1 subtract atomic op.
-    */
-   int private_refcount;
 
    GLbitfield StorageFlags; /**< GL_MAP_PERSISTENT_BIT, etc. */
 
@@ -2202,6 +2187,30 @@ struct gl_compute_program_state
 
 
 /**
+ * Context state for task programs.
+ */
+struct gl_task_program_state
+{
+   /** Currently enabled and valid program (including internal programs
+    * and compiled shader programs).
+    */
+   struct gl_program *_Current;
+};
+
+
+/**
+ * Context state for mesh programs.
+ */
+struct gl_mesh_program_state
+{
+   /** Currently enabled and valid program (including internal programs
+    * and compiled shader programs).
+    */
+   struct gl_program *_Current;
+};
+
+
+/**
  * ATI_fragment_shader runtime state
  */
 
@@ -2400,6 +2409,9 @@ struct gl_shared_state
    simple_mtx_t Mutex;		   /**< for thread safety */
    GLint RefCount;			   /**< Reference count */
    bool DisplayListsAffectGLThread;
+
+   struct list_head Contexts;   /**< gl_context objects */
+   struct set ReleaseResources; /**< in use by some context */
 
    struct _mesa_HashTable DisplayList;	   /**< Display lists hash table */
    struct _mesa_HashTable TexObjects;	   /**< Texture objects hash table */
@@ -2890,28 +2902,28 @@ struct gl_driver_flags
    /**
     * gl_context::AtomicBufferBindings
     */
-   uint64_t NewAtomicBuffer;
+   st_state_bitset NewAtomicBuffer;
 
    /** gl_context::Color::Alpha* */
-   uint64_t NewAlphaTest;
+   st_state_bitset NewAlphaTest;
 
    /** gl_context::Multisample::Enabled */
-   uint64_t NewMultisampleEnable;
+   st_state_bitset NewMultisampleEnable;
 
    /** gl_context::Multisample::(Min)SampleShading */
-   uint64_t NewSampleShading;
+   st_state_bitset NewSampleShading;
 
    /** gl_context::Transform::ClipPlanesEnabled */
-   uint64_t NewClipPlaneEnable;
+   st_state_bitset NewClipPlaneEnable;
 
    /** gl_context::Color::ClampFragmentColor */
-   uint64_t NewFragClamp;
+   st_state_bitset NewFragClamp;
 
    /** Shader constants (uniforms, program parameters, state constants) */
-   uint64_t NewShaderConstants[MESA_SHADER_MESH_STAGES];
+   st_state_bitset NewShaderConstants[MESA_SHADER_MESH_STAGES];
 
    /** For GL_CLAMP emulation */
-   uint64_t NewSamplersWithClamp;
+   st_state_bitset NewSamplersWithClamp;
 };
 
 struct gl_buffer_binding
@@ -3248,6 +3260,10 @@ struct gl_context
 {
    /** State possibly shared with other contexts in the address space */
    struct gl_shared_state *Shared;
+   struct list_head SharedLink;
+
+   /** Only accessible while Shared->Mutex is held */
+   struct util_dynarray ReleaseResources;
 
    /** Whether Shared->BufferObjects has already been locked for this context. */
    bool BufferObjectsLocked;
@@ -3414,6 +3430,8 @@ struct gl_context
    struct gl_tess_ctrl_program_state TessCtrlProgram;
    struct gl_tess_eval_program_state TessEvalProgram;
    struct gl_ati_fragment_shader_state ATIFragmentShader;
+   struct gl_task_program_state TaskProgram;
+   struct gl_mesh_program_state MeshProgram;
 
    struct gl_pipeline_shader_state Pipeline; /**< GLSL pipeline shader object state */
    struct gl_pipeline_object Shader; /**< GLSL shader object state */
@@ -3534,7 +3552,7 @@ struct gl_context
    GLenum16 RenderMode;      /**< either GL_RENDER, GL_SELECT, GL_FEEDBACK */
    GLbitfield NewState;      /**< bitwise-or of _NEW_* flags */
    GLbitfield PopAttribState; /**< Updated state since glPushAttrib */
-   uint64_t NewDriverState;  /**< bitwise-or of flags from DriverFlags */
+   st_state_bitset NewDriverState;  /**< bitwise-or of flags from DriverFlags */
 
    struct gl_driver_flags DriverFlags;
 
@@ -3571,6 +3589,8 @@ struct gl_context
    GLfloat ConservativeRasterDilate;
    GLenum16 ConservativeRasterMode;
 
+   GLboolean RepresentativeFragmentTest; /**< GL_REPRESENTATIVE_FRAGMENT_TEST_NV */
+
    GLboolean IntelBlackholeRender; /**< GL_INTEL_blackhole_render */
 
    /** Does glVertexAttrib(0) alias glVertex()? */
@@ -3604,15 +3624,6 @@ struct gl_context
     */
    bool invalidate_on_gl_viewport;
 
-   /*@}*/
-
-   /**
-    * \name NV_vdpau_interop
-    */
-   /*@{*/
-   const void *vdpDevice;
-   const void *vdpGetProcAddress;
-   struct set *vdpSurfaces;
    /*@}*/
 
    /**
@@ -3680,7 +3691,8 @@ enum _debug
    DEBUG_ALWAYS_FLUSH		= (1 << 1),
    DEBUG_INCOMPLETE_TEXTURE     = (1 << 2),
    DEBUG_INCOMPLETE_FBO         = (1 << 3),
-   DEBUG_CONTEXT                = (1 << 4)
+   DEBUG_CONTEXT                = (1 << 4),
+   DEBUG_FALLBACK_TEXTURE       = (1 << 5),
 };
 
 #ifdef __cplusplus

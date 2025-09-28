@@ -646,6 +646,9 @@ typedef struct nir_shader_compiler_options {
    /** Backend supports load_global_bounded intrinsics. */
    bool has_load_global_bounded;
 
+   /** Backend supports f2i32_rtne opcode. */
+   bool has_f2i32_rtne;
+
    /**
     * Is this the Intel vec4 backend?
     *
@@ -661,6 +664,11 @@ typedef struct nir_shader_compiler_options {
     * have immediates, so two to three instructions may eventually be needed.
     */
    bool avoid_ternary_with_two_constants;
+
+   /* Avoid using fabs on sources to ternary operations
+    * r600 can't use source modifiers for these
+    */
+   bool avoid_ternary_with_fabs;
 
    /** Whether 8-bit ALU is supported. */
    bool support_8bit_alu;
@@ -712,6 +720,11 @@ typedef struct nir_shader_compiler_options {
    uint8_t support_indirect_inputs;
    uint8_t support_indirect_outputs;
 
+   /**
+    * Lower fmulz to `min(abs(a), abs(b)) == 0.0 ? 0.0 : a * b`.
+    */
+   bool lower_fmulz_with_abs_min;
+
    /** store the variable offset into the instrinsic range_base instead
     *  of adding it to the image index.
     */
@@ -744,13 +757,6 @@ typedef struct nir_shader_compiler_options {
     * Otherwise, nir_intrinsic_terminate is being used.
     */
    bool discard_is_demote;
-
-   /**
-    * Whether the new-style derivative intrinsics are supported. If false,
-    * legacy ALU derivative ops will be emitted. This transitional option will
-    * be removed once all drivers are converted to derivative intrinsics.
-    */
-   bool has_ddx_intrinsics;
 
    /** Whether derivative intrinsics must be scalarized. */
    bool scalarize_ddx;
@@ -786,14 +792,6 @@ typedef struct nir_shader_compiler_options {
     * nir_lower_packing().
     */
    unsigned skip_lower_packing_ops;
-
-   /* In case the exact subgroup size is not known, subgroup_size should be
-    * set to 0. In that case, the maximum subgroup size will be calculated by
-    * ballot_components * ballot_bit_size.
-    */
-   uint8_t subgroup_size;
-   uint8_t ballot_bit_size;
-   uint8_t ballot_components;
 
    /** Driver callback where drivers can define how to lower mediump.
     *  Used by nir_lower_io_passes.
@@ -851,6 +849,12 @@ typedef struct nir_shader_compiler_options {
     * Passed to the callbacks that accept a data pointer.
     */
    const void *cb_data;
+
+   /** Maximum amount of invocations per workgroup. */
+   unsigned max_workgroup_invocations;
+
+   /** Maximum compute shader / kernel dispatchable work size. */
+   unsigned max_workgroup_count[3];
 } nir_shader_compiler_options;
 
 #ifdef __cplusplus
