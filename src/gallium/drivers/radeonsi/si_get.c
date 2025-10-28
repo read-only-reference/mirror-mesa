@@ -133,10 +133,6 @@ static int si_get_video_param(struct pipe_screen *screen, enum pipe_video_profil
          /* true: VPP flush function will be called within vaEndPicture() */
          /* false: VPP flush function will be skipped */
          return false;
-      case PIPE_VIDEO_CAP_VPP_SUPPORT_HDR_INPUT:
-         if (debug_get_bool_option("AMDGPU_SIVPE_SUPPORT_HDR_INPUT", false))
-            return true;
-         return false;
       default:
          return 0;
       }
@@ -841,9 +837,6 @@ void si_init_screen_get_functions(struct si_screen *sscreen)
     * TCS outputs                        | Yes
     * VS/TES outputs before GS           | No
     */
-   options->support_indirect_inputs = BITFIELD_BIT(MESA_SHADER_TESS_CTRL) |
-                                      BITFIELD_BIT(MESA_SHADER_TESS_EVAL);
-   options->support_indirect_outputs = BITFIELD_BIT(MESA_SHADER_TESS_CTRL);
    options->varying_expression_max_cost = si_varying_expression_max_cost;
 
    for (unsigned i = 0; i < MESA_SHADER_STAGES; i++)

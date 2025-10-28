@@ -96,7 +96,9 @@ struct radeon_info {
    bool has_accelerated_dot_product;
    bool cpdma_prefetch_writes_memory;
    bool has_gfx9_scissor_bug;
-   bool has_tc_compat_zrange_bug;
+   bool has_htile_stencil_mipmap_bug;
+   bool has_htile_tc_z_clear_bug_without_stencil;
+   bool has_htile_tc_z_clear_bug_with_stencil;
    bool has_small_prim_filter_sample_loc_bug;
    bool has_ls_vgpr_init_bug;
    bool has_pops_missed_overlap_bug;
@@ -190,11 +192,10 @@ struct radeon_info {
    bool cp_dma_use_L2;
    unsigned pc_lines;
    uint32_t lds_size_per_workgroup;
-   uint32_t lds_alloc_granularity;
-   uint32_t lds_encode_granularity;
 
    /* CP info. */
    bool gfx_ib_pad_with_type2;
+   bool can_chain_ib2;
    bool has_cp_dma;
    uint32_t me_fw_version;
    uint32_t me_fw_feature;

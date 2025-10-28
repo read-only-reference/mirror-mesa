@@ -24,6 +24,8 @@
  * Copyright © 2015 Intel Corporation
  */
 
+#include "pvr_query.h"
+
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -31,9 +33,14 @@
 #include <vulkan/vulkan.h>
 
 #include "pvr_bo.h"
+#include "pvr_cmd_buffer.h"
 #include "pvr_csb.h"
+#include "pvr_device.h"
 #include "pvr_device_info.h"
-#include "pvr_private.h"
+#include "pvr_entrypoints.h"
+#include "pvr_hw_pass.h"
+#include "pvr_macros.h"
+#include "pvr_pass.h"
 #include "util/macros.h"
 #include "util/os_time.h"
 #include "vk_log.h"
@@ -464,8 +471,9 @@ void pvr_CmdBeginQuery(VkCommandBuffer commandBuffer,
    state->dirty.vis_test = true;
 
    /* Add the index to the list for this render. */
-   for (uint32_t i = 0; i < view_count; i++)
-      util_dynarray_append(&state->query_indices, __typeof__(query), query);
+   for (uint32_t i = 0; i < view_count; i++) {
+      util_dynarray_append(&state->query_indices, query);
+   }
 }
 
 void pvr_CmdEndQuery(VkCommandBuffer commandBuffer,

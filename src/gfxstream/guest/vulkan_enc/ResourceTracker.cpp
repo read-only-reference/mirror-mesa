@@ -37,7 +37,11 @@
 #include <unordered_set>
 
 #ifdef HAVE_PERFETTO
+#ifndef ANDROID_LIBPERFETTO
+#include <perfetto.h>
+#else
 #include <perfetto/tracing.h>
+#endif
 
 #define GFXSTREAM_TRACE_DEFAULT_CATEGORY "gfxstream.default"
 
@@ -1742,7 +1746,7 @@ VkResult ResourceTracker::on_vkEnumerateInstanceExtensionProperties(
 
     // Spec:
     //
-    // https://registry.khronos.org/vulkan/specs/latest/man/html/vkEnumerateInstanceExtensionProperties.html
+    // https://docs.vulkan.org/refpages/latest/refpages/source/vkEnumerateInstanceExtensionProperties.html
     //
     // If pProperties is NULL, then the number of extensions properties
     // available is returned in pPropertyCount. Otherwise, pPropertyCount
@@ -1968,27 +1972,37 @@ VkResult ResourceTracker::on_vkEnumerateDeviceExtensionProperties(
     }
 #endif
 
+    // TODO: query ExternalMemoryMode from vkEmulation directly to compansate for the host platform
+    // correctly, instead of host extension checks, or make this support mandatory for Android.
     bool win32ExtMemAvailable = getHostDeviceExtensionIndex("VK_KHR_external_memory_win32") != -1;
     bool posixExtMemAvailable = getHostDeviceExtensionIndex("VK_KHR_external_memory_fd") != -1;
-    bool metalExtMemAvailable = getHostDeviceExtensionIndex("VK_EXT_external_memory_metal") != -1 ||
-                                getHostDeviceExtensionIndex("VK_MVK_moltenvk") != -1;
+    bool metalExtMemAvailable = getHostDeviceExtensionIndex("VK_EXT_external_memory_metal") != -1;
+    bool hostAllocationExtMemAvailable =
+        getHostDeviceExtensionIndex("VK_EXT_external_memory_host") != -1;
     bool qnxExtMemAvailable =
         getHostDeviceExtensionIndex("VK_QNX_external_memory_screen_buffer") != -1;
 
-    bool hostHasExternalMemorySupport =
-        win32ExtMemAvailable || posixExtMemAvailable || metalExtMemAvailable || qnxExtMemAvailable;
+    bool hostHasExternalMemorySupport = win32ExtMemAvailable || posixExtMemAvailable ||
+                                        metalExtMemAvailable || hostAllocationExtMemAvailable ||
+                                        qnxExtMemAvailable;
 
     if (hostHasExternalMemorySupport) {
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
         filteredExts.push_back(
             VkExtensionProperties{"VK_ANDROID_external_memory_android_hardware_buffer", 7});
-        filteredExts.push_back(VkExtensionProperties{"VK_EXT_queue_family_foreign", 1});
 #endif
 #ifdef VK_USE_PLATFORM_FUCHSIA
         filteredExts.push_back(VkExtensionProperties{"VK_FUCHSIA_external_memory", 1});
         filteredExts.push_back(VkExtensionProperties{"VK_FUCHSIA_buffer_collection", 1});
 #endif
+        filteredExts.push_back(VkExtensionProperties{"VK_EXT_queue_family_foreign", 1});
     } else {
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
+        mesa_loge(
+            "%s: Did not recognize any form of external memory support on the host device/driver. "
+            "Guest won't support VK_ANDROID_external_memory_android_hardware_buffer!",
+            __func__);
+#endif
 #ifdef LINUX_GUEST_BUILD
         // Note: Linux gfxstream-vulkan driver automatically assumes some form of external memory
         // support on the host, and advertises VK_KHR_external_memory_fd and
@@ -2021,14 +2035,14 @@ VkResult ResourceTracker::on_vkEnumerateDeviceExtensionProperties(
 
     // Spec:
     //
-    // https://registry.khronos.org/vulkan/specs/latest/man/html/vkEnumerateDeviceExtensionProperties.html
+    // https://docs.vulkan.org/refpages/latest/refpages/source/vkEnumerateDeviceExtensionProperties.html
     //
     // pPropertyCount is a pointer to an integer related to the number of
     // extension properties available or queried, and is treated in the
     // same fashion as the
     // vkEnumerateInstanceExtensionProperties::pPropertyCount parameter.
     //
-    // https://registry.khronos.org/vulkan/specs/latest/man/html/vkEnumerateInstanceExtensionProperties.html
+    // https://docs.vulkan.org/refpages/latest/refpages/source/vkEnumerateInstanceExtensionProperties.html
     //
     // If pProperties is NULL, then the number of extensions properties
     // available is returned in pPropertyCount. Otherwise, pPropertyCount
@@ -2083,7 +2097,7 @@ VkResult ResourceTracker::on_vkEnumeratePhysicalDevices(void* context, VkResult,
     // even if the guest did not ask for it
     // - Serve the guest query according to the spec:
     //
-    // https://registry.khronos.org/vulkan/specs/latest/man/html/vkEnumeratePhysicalDevices.html
+    // https://docs.vulkan.org/refpages/latest/refpages/source/vkEnumeratePhysicalDevices.html
 
     auto it = info_VkInstance.find(instance);
 
@@ -2126,7 +2140,7 @@ VkResult ResourceTracker::on_vkEnumeratePhysicalDevices(void* context, VkResult,
 
     // Serve the guest query according to the spec.
     //
-    // https://registry.khronos.org/vulkan/specs/latest/man/html/vkEnumeratePhysicalDevices.html
+    // https://docs.vulkan.org/refpages/latest/refpages/source/vkEnumeratePhysicalDevices.html
     //
     // If pPhysicalDevices is NULL, then the number of physical devices
     // available is returned in pPhysicalDeviceCount. Otherwise,
@@ -5842,7 +5856,7 @@ void ResourceTracker::on_vkDestroySemaphore(void* context, VkDevice device, VkSe
     enc->vkDestroySemaphore(device, semaphore, pAllocator, true /* do lock */);
 }
 
-// https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#vkGetSemaphoreFdKHR
+// https://docs.vulkan.org/refpages/latest/refpages/source/vkGetSemaphoreFdKHR.html
 // Each call to vkGetSemaphoreFdKHR must create a new file descriptor and transfer ownership
 // of it to the application. To avoid leaking resources, the application must release ownership
 // of the file descriptor when it is no longer needed.
@@ -6440,7 +6454,7 @@ VkResult ResourceTracker::on_vkQueueSubmitTemplate(void* context, VkResult input
 #endif
 #if defined(VK_USE_PLATFORM_ANDROID_KHR) || DETECT_OS_LINUX
     for (auto fd : preSignalSyncFds) {
-        // https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkImportSemaphoreFdInfoKHR.html
+        // https://docs.vulkan.org/refpages/latest/refpages/source/VkImportSemaphoreFdInfoKHR.html
         // fd == -1 is treated as already signaled
         if (fd != -1) {
             mSyncHelper->wait(fd, 3000);

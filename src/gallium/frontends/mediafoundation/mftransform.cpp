@@ -22,6 +22,8 @@
  */
 
 #include <numeric>
+#include "d3d12_suballoc_mediabuffer.h"
+#include "dpb_buffer_manager.h"
 #include "hmft_entrypoints.h"
 #include "mfbufferhelp.h"
 #include "mfpipeinterop.h"
@@ -439,7 +441,12 @@ CDX12EncHMFT::OnInputTypeChanged()
       CHECKHR_GOTO( hr, done );
    }
 
-   CHECKHR_GOTO( ConfigureSampleAllocator(), done );
+   // when input type changes, clear m_spVideoSampleAllocator so we can recreate it later.
+   if( m_spVideoSampleAllocator )
+   {
+      m_spVideoSampleAllocator->UninitializeSampleAllocator();
+      m_spVideoSampleAllocator = nullptr;
+   }
 
 done:
    if( hr != S_OK )
@@ -560,15 +567,10 @@ CDX12EncHMFT::OnOutputTypeChanged()
 
    if( bResolutionChange )
    {
-      ConfigureMapSampleAllocatorHelper( m_spSATDMapAllocator,
-                                         m_EncoderCapabilities.m_HWSupportStatsSATDMapOutput,
-                                         m_uiVideoSatdMapBlockSize,
-                                         m_bUseSATDMapAllocator );
-
-      ConfigureMapSampleAllocatorHelper( m_spBitsusedMapAllocator,
-                                         m_EncoderCapabilities.m_HWSupportStatsRCBitAllocationMapOutput,
-                                         m_uiVideoOutputBitsUsedMapBlockSize,
-                                         m_bUseBitsusedMapAllocator );
+      m_spSatdStatsBufferPool.Reset();
+      m_spBitsUsedStatsBufferPool.Reset();
+      m_spQPMapStatsBufferPool.Reset();
+      m_spReconstructedPictureBufferPool.Reset();
    }
 
    // Indicate that we'll be adding MF_NALU_LENGTH_INFORMATION on each output sample that comes
@@ -812,24 +814,20 @@ done:
 
 // Helper function to calculate the max output bitstream size based on width, height, and format
 // This function uses an approach based on common video formats and their typical compression ratios
-UINT CalculateMaxOutputBitstreamSize(
-   UINT uiWidth,
-   UINT uiHeight,
-   enum pipe_format format
-)
+UINT
+CalculateMaxOutputBitstreamSize( UINT uiWidth, UINT uiHeight, enum pipe_format format )
 {
-   assert((uiHeight > 16) &&
-         (uiWidth > 16) &&
-         (format != PIPE_FORMAT_NONE));
+   assert( ( uiHeight > 16 ) && ( uiWidth > 16 ) && ( format != PIPE_FORMAT_NONE ) );
 
-   const UINT MIN_BUFFER_SIZE = 128 * 128 * 2; // Minimum buffer size for very small frames: 128x128 pixels at 2 bytes/pixel
-   const UINT MAX_BUFFER_SIZE = 20 * 1024 * 1024; // Maximum buffer size of 20MB
-   const float EXPECTED_COMPRESSION_FACTOR = 2.0f; // Assume 50% of calculated size after compression of raw pixel sizes
+   const UINT MIN_BUFFER_SIZE = 128 * 128 * 2;       // Minimum buffer size for very small frames: 128x128 pixels at 2 bytes/pixel
+   const UINT MAX_BUFFER_SIZE = 20 * 1024 * 1024;    // Maximum buffer size of 20MB
+   const float EXPECTED_COMPRESSION_FACTOR = 2.0f;   // Assume 50% of calculated size after compression of raw pixel sizes
 
-   UINT alignedWidth = (uiWidth + 15) & ~15;
-   UINT alignedHeight = (uiHeight + 15) & ~15;
+   UINT alignedWidth = ( uiWidth + 15 ) & ~15;
+   UINT alignedHeight = ( uiHeight + 15 ) & ~15;
    UINT bufferSize = 0;
-   switch (format) {
+   switch( format )
+   {
       case PIPE_FORMAT_NV12:
          // NV12: Y plane (1 byte/pixel) + UV plane (1/2 byte/pixel) = 1.5 bytes/pixel
          bufferSize = alignedWidth * alignedHeight * 3 / 2;
@@ -844,15 +842,15 @@ UINT CalculateMaxOutputBitstreamSize(
          break;
       default:
          // Fallback formula for other formats: assume 15 bits/pixel (1.875 bytes/pixel)
-         bufferSize = (((alignedHeight) * (alignedWidth) * 15) >> 3);
+         bufferSize = ( ( ( alignedHeight ) * ( alignedWidth ) * 15 ) >> 3 );
          break;
    }
 
    // Apply EXPECTED_COMPRESSION_FACTOR constant (% of calculated size)
-   bufferSize = static_cast<UINT>(std::ceil(bufferSize / EXPECTED_COMPRESSION_FACTOR));
+   bufferSize = static_cast<UINT>( std::ceil( bufferSize / EXPECTED_COMPRESSION_FACTOR ) );
 
    // Clamp buffer size between minimum and maximum limits
-   bufferSize = std::max(MIN_BUFFER_SIZE, std::min(bufferSize, MAX_BUFFER_SIZE));
+   bufferSize = std::max( MIN_BUFFER_SIZE, std::min( bufferSize, MAX_BUFFER_SIZE ) );
 
    return bufferSize;
 }
@@ -930,46 +928,40 @@ CDX12EncHMFT::InitializeEncoder( pipe_video_profile videoProfile, UINT32 Width, 
 #endif   // ENCODE_WITH_TWO_PASS_LOWEST_RES
 
          encoderSettings.two_pass.skip_1st_dpb_texture = m_bRateControlFramePreAnalysisExternalReconDownscale ? true : false;
-
-         if( encoderSettings.two_pass.enable && ( encoderSettings.two_pass.pow2_downscale_factor > 0 ) )
-         {
-            struct pipe_video_codec blitterSettings = {};
-            blitterSettings.entrypoint = PIPE_VIDEO_ENTRYPOINT_PROCESSING;
-            blitterSettings.width = Width;
-            blitterSettings.height = Height;
-            CHECKNULL_GOTO( m_pPipeVideoBlitter = m_pPipeContext->create_video_codec( m_pPipeContext, &blitterSettings ),
-                            MF_E_UNEXPECTED,
-                            done );
-         }
       }
 
-#if ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
-      struct d3d12_interop_device_info1 screen_interop_info = {};
-      if ((m_pPipeContext->screen->interop_query_device_info(m_pPipeContext->screen, sizeof(d3d12_interop_device_info1), &screen_interop_info) != 0) &&
-          (screen_interop_info.set_video_encoder_max_async_queue_depth != nullptr))
+      if( ( encoderSettings.two_pass.enable && ( encoderSettings.two_pass.pow2_downscale_factor > 0 ) ) ||
+          ( m_VideoReconstructedPictureMode == RECON_PIC_OUTPUT_MODE_BLIT_COPY ) )
       {
-         screen_interop_info.set_video_encoder_max_async_queue_depth(m_pPipeContext, (m_bLowLatency ? 1 : MFT_INPUT_QUEUE_DEPTH));
+         struct pipe_video_codec blitterSettings = {};
+         blitterSettings.entrypoint = PIPE_VIDEO_ENTRYPOINT_PROCESSING;
+         blitterSettings.width = Width;
+         blitterSettings.height = Height;
+         CHECKNULL_GOTO( m_pPipeVideoBlitter = m_pPipeContext->create_video_codec( m_pPipeContext, &blitterSettings ),
+                         MF_E_UNEXPECTED,
+                         done );
       }
-#endif // ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
+
+      assert( m_ScreenInteropInfo.set_video_encoder_max_async_queue_depth != nullptr );
+      m_ScreenInteropInfo.set_video_encoder_max_async_queue_depth( m_pPipeContext, ( m_bLowLatency ? 1 : MFT_INPUT_QUEUE_DEPTH ) );
 
       CHECKNULL_GOTO( m_pPipeVideoCodec = m_pPipeContext->create_video_codec( m_pPipeContext, &encoderSettings ),
                       MF_E_UNEXPECTED,
                       done );
 
       // Calculate and cache the expected output buffer max bitstream size for a single frame
-      m_uiMaxOutputBitstreamSize = CalculateMaxOutputBitstreamSize(
-         encoderSettings.width,
-         encoderSettings.height,
-         ConvertProfileToFormat(encoderSettings.profile));
+      m_uiMaxOutputBitstreamSize = CalculateMaxOutputBitstreamSize( encoderSettings.width,
+                                                                    encoderSettings.height,
+                                                                    ConvertProfileToFormat( encoderSettings.profile ) );
 
-      debug_printf("[dx12 hmft 0x%p] Calculated max output bitstream size: %u bytes (%u Kb, %u Mb) for %ux%u pipe_format %u\n",
-                   this,
-                   m_uiMaxOutputBitstreamSize,
-                   m_uiMaxOutputBitstreamSize / 1024,
-                   m_uiMaxOutputBitstreamSize / (1024 * 1024),
-                   encoderSettings.width,
-                   encoderSettings.height,
-                   ConvertProfileToFormat(encoderSettings.profile));
+      debug_printf( "[dx12 hmft 0x%p] Calculated max output bitstream size: %u bytes (%u Kb, %u Mb) for %ux%u pipe_format %u\n",
+                    this,
+                    m_uiMaxOutputBitstreamSize,
+                    m_uiMaxOutputBitstreamSize / 1024,
+                    m_uiMaxOutputBitstreamSize / ( 1024 * 1024 ),
+                    encoderSettings.width,
+                    encoderSettings.height,
+                    ConvertProfileToFormat( encoderSettings.profile ) );
 
       // Create DX12 fence and share it as handle for using it with DX11/create_fence_win32
       CHECKHR_GOTO( m_spDevice->CreateFence( 0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS( &m_spStagingFence12 ) ), done );
@@ -1074,11 +1066,8 @@ done:
 
 // Utility function to configure the sample allocator to allocate map samples
 HRESULT
-CDX12EncHMFT::ConfigureMapSampleAllocator( IMFVideoSampleAllocatorEx *spAllocator,
-                                           UINT32 width,
-                                           UINT32 height,
-                                           GUID subtype,
-                                           UINT32 poolSize )
+CDX12EncHMFT::ConfigureMapSampleAllocator(
+   IMFVideoSampleAllocatorEx *spAllocator, UINT32 width, UINT32 height, GUID subtype, UINT32 poolSize )
 {
    if( !spAllocator )
       return E_POINTER;
@@ -1134,6 +1123,325 @@ CDX12EncHMFT::ConfigureMapSampleAllocatorHelper( ComPtr<IMFVideoSampleAllocatorE
    }
 }
 
+HRESULT
+CDX12EncHMFT::ConfigureBitstreamOutputSampleAttributes( IMFSample *pSample,
+                                                        const LPDX12EncodeContext pDX12EncodeContext,
+                                                        DWORD dwReceivedInput,
+                                                        BOOL bIsLastSlice,
+                                                        struct codec_unit_location_t *pCodecUnitMetadata,
+                                                        unsigned CodecUnitMetadataCount )
+{
+   HRESULT hr = S_OK;
+   UINT32 uiFrameRateNumerator = pDX12EncodeContext->GetFrameRateNumerator();
+   UINT32 uiFrameRateDenominator = pDX12EncodeContext->GetFrameRateDenominator();
+   UINT64 frameDuration = 0;
+   GUID guidMajorType = { 0 };
+   GUID guidSubType = { 0 };
+   DWORD naluInfo[MAX_NALU_LENGTH_INFO_ENTRIES] = {};
+
+   // Set media type GUIDs
+   CHECKHR_GOTO( m_spOutputType->GetMajorType( &guidMajorType ), done );
+   CHECKHR_GOTO( pSample->SetGUID( MF_MT_MAJOR_TYPE, guidMajorType ), done );
+   CHECKHR_GOTO( m_spOutputType->GetGUID( MF_MT_SUBTYPE, &guidSubType ), done );
+   CHECKHR_GOTO( pSample->SetGUID( MF_MT_SUBTYPE, guidSubType ), done );
+
+   // Set frame size
+   CHECKHR_GOTO( MFSetAttributeSize( pSample,
+                                     MF_MT_FRAME_SIZE,
+                                     pDX12EncodeContext->pPipeVideoBuffer->width,
+                                     pDX12EncodeContext->pPipeVideoBuffer->height ),
+                 done );
+
+   // Set frame rate and timing
+   CHECKHR_GOTO( MFSetAttributeRatio( pSample, MF_MT_FRAME_RATE, uiFrameRateNumerator, uiFrameRateDenominator ), done );
+   CHECKHR_GOTO( MFFrameRateToAverageTimePerFrame( uiFrameRateNumerator, uiFrameRateDenominator, &frameDuration ), done );
+   CHECKHR_GOTO( pSample->SetSampleTime( dwReceivedInput * frameDuration ), done );
+   CHECKHR_GOTO( pSample->SetSampleDuration( frameDuration ), done );
+   CHECKHR_GOTO( pSample->SetUINT64( MFSampleExtension_DecodeTimestamp, dwReceivedInput * frameDuration ), done );
+
+   // Set picture type and clean point
+   CHECKHR_GOTO( pSample->SetUINT32( MFSampleExtension_VideoEncodePictureType, pDX12EncodeContext->GetPictureType() ), done );
+   CHECKHR_GOTO(
+      pSample->SetUINT32( MFSampleExtension_CleanPoint, pDX12EncodeContext->IsPicTypeCleanPoint() || ( dwReceivedInput == 1 ) ),
+      done );
+
+   // Set video format attributes
+   CHECKHR_GOTO( pSample->SetUINT32( MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive ), done );
+   CHECKHR_GOTO(
+      pSample->SetUINT32( MF_MT_VIDEO_PROFILE, ConvertPipeProfileToSpecProfile( pDX12EncodeContext->encoderPicInfo.base.profile ) ),
+      done );
+   CHECKHR_GOTO( pSample->SetUINT32( MF_MT_VIDEO_LEVEL, m_pPipeVideoCodec->level ), done );
+
+   // Set last slice flag
+   CHECKHR_GOTO( pSample->SetUINT32( MFSampleExtension_LastSlice, bIsLastSlice ? 1 : 0 ), done );
+
+   // Set long-term reference frame info if applicable
+   if( m_uiMaxLongTermReferences > 0 )
+   {
+      CHECKHR_GOTO(
+         pSample->SetUINT32( MFSampleExtension_LongTermReferenceFrameInfo, pDX12EncodeContext->longTermReferenceFrameInfo ),
+         done );
+   }
+
+   // Set NALU length information
+   for( unsigned i = 0; i < CodecUnitMetadataCount; i++ )
+   {
+      if( i < MAX_NALU_LENGTH_INFO_ENTRIES )
+         naluInfo[i] = static_cast<DWORD>( pCodecUnitMetadata[i].size );
+   }
+
+   CHECKHR_GOTO( pSample->SetBlob( MFSampleExtension_NALULengthInfo,   // same as MF_NALU_LENGTH_INFORMATION
+                                   (LPBYTE) &naluInfo,
+                                   std::min( MAX_NALU_LENGTH_INFO_ENTRIES, CodecUnitMetadataCount ) * sizeof( DWORD ) ),
+                 done );
+
+   CHECKHR_GOTO( pSample->SetUINT32( MF_NALU_LENGTH_SET, 1 ), done );
+
+done:
+   return hr;
+}
+
+HRESULT
+CDX12EncHMFT::ConfigureAsyncStatsMetadataOutputSampleAttributes( IMFSample *pSample,
+                                                                 pipe_resource *pPipeResourcePSNRStats,
+                                                                 pipe_resource *pPipeResourceQPMapStats,
+                                                                 pipe_resource *pPipeResourceRCBitAllocMapStats,
+                                                                 pipe_resource *pPipeResourceSATDMapStats,
+                                                                 ComPtr<ID3D12Fence> &pResolveStatsCompletionFence,
+                                                                 UINT64 ResolveStatsCompletionFenceValue,
+                                                                 pipe_resource *pPipeResourceReconstructedPicture,
+                                                                 UINT PipeResourceReconstructedPictureSubresource,
+                                                                 ComPtr<ID3D12Fence> &spReconstructedPictureCompletionFence,
+                                                                 UINT64 ReconstructedPictureCompletionFenceValue,
+                                                                 ID3D12CommandQueue *pSyncObjectQueue )
+{
+   HRESULT hr = S_OK;
+
+   // Enqueue completion of Resolve step for readiness of the DXGIBuffers attached below
+   // if any of the stats outputs are enabled
+   if( ( m_bVideoEnableFramePsnrYuv && pPipeResourcePSNRStats != nullptr ) ||
+       ( m_uiVideoOutputQPMapBlockSize && pPipeResourceQPMapStats != nullptr ) ||
+       ( m_uiVideoOutputBitsUsedMapBlockSize && pPipeResourceRCBitAllocMapStats != nullptr ) ||
+       ( m_uiVideoSatdMapBlockSize && pPipeResourceSATDMapStats != nullptr ) )
+   {
+      pSyncObjectQueue->Wait( pResolveStatsCompletionFence.Get(), ResolveStatsCompletionFenceValue );
+   }
+
+   // Conditionally attach frame PSNR
+   if( m_bVideoEnableFramePsnrYuv && pPipeResourcePSNRStats != nullptr )
+   {
+      CHECKHR_GOTO( MFAttachPipeResourceAsSampleExtension( m_pPipeContext,
+                                                           pPipeResourcePSNRStats,
+                                                           0 /*subresource*/,
+                                                           pSyncObjectQueue,
+                                                           MFSampleExtension_FramePsnrYuv,
+                                                           pSample ),
+                    done );
+   }
+
+   // Conditionally attach output QP map (d3d12resource), tracking will be added to the d3d12resource and when the app
+   // releases the MF sample, the d3d12resource will be returned back to the pool
+   if( m_uiVideoOutputQPMapBlockSize && pPipeResourceQPMapStats != nullptr )
+   {
+      CHECKHR_GOTO(
+         m_spQPMapStatsBufferPool->AttachPipeResourceAsSampleExtension( pPipeResourceQPMapStats, pSyncObjectQueue, pSample ),
+         done );
+   }
+
+   // Conditionally attach output bits used map (d3d12resource), tracking will be added to the d3d12resource and when
+   // the app releases the MF sample, the d3d12resource will be returned back to the pool
+   if( m_uiVideoOutputBitsUsedMapBlockSize && pPipeResourceRCBitAllocMapStats != nullptr )
+   {
+      CHECKHR_GOTO( m_spBitsUsedStatsBufferPool->AttachPipeResourceAsSampleExtension( pPipeResourceRCBitAllocMapStats,
+                                                                                      pSyncObjectQueue,
+                                                                                      pSample ),
+                    done );
+   }
+
+   // Conditionally attach SATD map (d3d12resource), tracking will be added to the d3d12resource and when the app
+   // releases the MF sample, the d3d12resource will be returned back to the pool
+   if( m_uiVideoSatdMapBlockSize && pPipeResourceSATDMapStats != nullptr )
+   {
+      CHECKHR_GOTO(
+         m_spSatdStatsBufferPool->AttachPipeResourceAsSampleExtension( pPipeResourceSATDMapStats, pSyncObjectQueue, pSample ),
+         done );
+   }
+
+   // Conditionally attach reconstructed picture copy (d3d12resource), gated by the completion fence
+   // of the recon picture copy operation if any
+   if( pPipeResourceReconstructedPicture )
+   {
+      if( m_VideoReconstructedPictureMode == RECON_PIC_OUTPUT_MODE_READ_ONLY_SHARED_RESOURCE )
+      {
+         assert( pPipeResourceReconstructedPicture );
+         assert( !spReconstructedPictureCompletionFence );   // No fence in this mode
+
+         CHECKHR_GOTO( MFAttachPipeResourceAsSampleExtension( m_pPipeContext,
+                                                              pPipeResourceReconstructedPicture,
+                                                              PipeResourceReconstructedPictureSubresource,
+                                                              pSyncObjectQueue,
+                                                              MFSampleExtension_VideoEncodeReconstructedPicture,
+                                                              pSample ),
+                       done );
+      }
+      else if( m_VideoReconstructedPictureMode == RECON_PIC_OUTPUT_MODE_BLIT_COPY )
+      {
+         assert( PipeResourceReconstructedPictureSubresource == 0 );   // Only single subresource in the copy output texture
+         assert( pPipeResourceReconstructedPicture );
+         assert( spReconstructedPictureCompletionFence );   // Copy completion fence must be valid in this mode
+         pSyncObjectQueue->Wait( spReconstructedPictureCompletionFence.Get(), ReconstructedPictureCompletionFenceValue );
+         CHECKHR_GOTO( m_spReconstructedPictureBufferPool->AttachPipeResourceAsSampleExtension( pPipeResourceReconstructedPicture,
+                                                                                                pSyncObjectQueue,
+                                                                                                pSample ),
+                       done );
+      }
+   }
+
+done:
+   return hr;
+}
+
+bool
+CDX12EncHMFT::ProcessSliceBitstreamZeroCopy( LPDX12EncodeContext pDX12EncodeContext,
+                                             uint32_t slice_idx,
+                                             ComPtr<IMFMediaBuffer> &spMediaBuffer,
+                                             std::vector<struct codec_unit_location_t> &mfsample_codec_unit_metadata )
+{
+   std::vector<struct codec_unit_location_t> codec_unit_metadata;
+   if (!GetSliceBitstreamMetadata( pDX12EncodeContext, slice_idx, codec_unit_metadata ))
+   {
+      debug_printf( "[dx12 hmft 0x%p] Failed to get slice %u bitstream metadata\n", this, slice_idx );
+      return false;
+   }
+
+   // Store codec unit metadata for NALU length information
+   mfsample_codec_unit_metadata.insert( mfsample_codec_unit_metadata.end(), codec_unit_metadata.begin(), codec_unit_metadata.end() );
+   uint64_t total_slice_size =
+      std::accumulate( codec_unit_metadata.begin(), codec_unit_metadata.end(), 0ull, []( uint64_t sum, const auto &nal ) {
+         return sum + nal.size;
+      } );
+
+   // Create IMFMediaBuffer from the D3D12Resource (zero-copy)
+   spMediaBuffer.Attach(
+      new CD3D12BitstreamMFBuffer( this,
+                                   m_pPipeContext,
+                                   pDX12EncodeContext->pOutputBitRes[slice_idx],
+                                   static_cast<DWORD>( total_slice_size ),
+                                   static_cast<DWORD>( codec_unit_metadata[0 /*offset to first NAL*/].offset ) ) );
+   return true;
+}
+
+// Helper function to get slice bitstream metadata
+bool
+CDX12EncHMFT::GetSliceBitstreamMetadata( LPDX12EncodeContext pDX12EncodeContext,
+                                         uint32_t slice_idx,
+                                         std::vector<struct codec_unit_location_t> &codec_unit_metadata )
+{
+   HMFT_ETW_EVENT_START( "GPUIndividualSliceStatsRead", this );
+   unsigned codec_unit_metadata_count = 0u;
+   m_pPipeVideoCodec->get_slice_bitstream_data( m_pPipeVideoCodec,
+                                                pDX12EncodeContext->pAsyncCookie,
+                                                slice_idx,
+                                                NULL /*get size*/,
+                                                &codec_unit_metadata_count );
+
+   if( codec_unit_metadata_count == 0 )
+   {
+      assert( false );
+      debug_printf( "[dx12 hmft 0x%p] Slice %u has zero codec units", this, slice_idx );
+      MFE_ERROR( "[dx12 hmft 0x%p] Slice %u has zero codec units", this, slice_idx );
+      HMFT_ETW_EVENT_STOP( "GPUIndividualSliceStatsRead", this );
+      return false;
+   }
+
+   codec_unit_metadata.resize( codec_unit_metadata_count, {} );
+   m_pPipeVideoCodec->get_slice_bitstream_data( m_pPipeVideoCodec,
+                                                pDX12EncodeContext->pAsyncCookie,
+                                                slice_idx,
+                                                codec_unit_metadata.data(),
+                                                &codec_unit_metadata_count );
+
+   // Check for slice size overflow flag
+   for( unsigned unit_idx = 0; unit_idx < codec_unit_metadata_count; unit_idx++ )
+   {
+      if( codec_unit_metadata[unit_idx].flags & PIPE_VIDEO_CODEC_UNIT_LOCATION_FLAG_MAX_SLICE_SIZE_OVERFLOW )
+      {
+         debug_printf( "[dx12 hmft 0x%p] Slice %u unit %u has size overflow flag set - check the output bitstream buffer size\n",
+                       this,
+                       slice_idx,
+                       unit_idx );
+         MFE_ERROR( "[dx12 hmft 0x%p] Slice %u unit %u has size overflow flag set - check the output bitstream buffer size", this, slice_idx, unit_idx );
+         HMFT_ETW_EVENT_STOP( "GPUIndividualSliceStatsRead", this );
+         return false;
+      }
+   }
+
+   HMFT_ETW_EVENT_STOP( "GPUIndividualSliceStatsRead", this );
+   return true;
+}
+
+void
+CDX12EncHMFT::FinalizeAndEmitOutputSample( LPDX12EncodeContext pDX12EncodeContext,
+                                           ComPtr<IMFMediaBuffer> &spMediaBuffer,
+                                           ComPtr<IMFSample> &spOutputSample,
+                                           struct codec_unit_location_t *pCodecUnitMetadata,
+                                           unsigned CodecUnitMetadataCount,
+                                           DWORD dwReceivedInput,
+                                           BOOL bIsLastSlice,
+                                           uint64_t ResolveStatsCompletionFenceValue )
+{
+   // Add buffer to the sample
+   spOutputSample->AddBuffer( spMediaBuffer.Get() );
+
+   if( FAILED( ConfigureBitstreamOutputSampleAttributes( spOutputSample.Get(),
+                                                         pDX12EncodeContext,
+                                                         dwReceivedInput,
+                                                         bIsLastSlice,
+                                                         pCodecUnitMetadata,
+                                                         CodecUnitMetadataCount ) ) )
+   {
+      MFE_ERROR( "[dx12 hmft 0x%p] ConfigureBitstreamOutputSampleAttributes failed", this );
+   }
+
+   // Attach the async stats DXGIBuffers to the MFSample output gated by pAsyncFence completion
+   // Only to the last slice (or full frame) sample.
+   if( bIsLastSlice )
+   {
+      // Set stats metadata buffers to the sample here. As we are returning the dxgi buffers gated by the completion fence
+      // for the resolved stats we do not need to wait for the pAsyncFence completion on the CPU.
+      if( FAILED( ConfigureAsyncStatsMetadataOutputSampleAttributes( spOutputSample.Get(),
+                                                                     pDX12EncodeContext->pPipeResourcePSNRStats,
+                                                                     pDX12EncodeContext->pPipeResourceQPMapStats,
+                                                                     pDX12EncodeContext->pPipeResourceRCBitAllocMapStats,
+                                                                     pDX12EncodeContext->pPipeResourceSATDMapStats,
+                                                                     pDX12EncodeContext->spAsyncFence,
+                                                                     ResolveStatsCompletionFenceValue,
+                                                                     pDX12EncodeContext->pPipeResourceReconstructedPicture,
+                                                                     pDX12EncodeContext->PipeResourceReconstructedPictureSubresource,
+                                                                     pDX12EncodeContext->spReconstructedPictureCompletionFence,
+                                                                     pDX12EncodeContext->ReconstructedPictureCompletionFenceValue,
+                                                                     pDX12EncodeContext->pSyncObjectQueue ) ) )
+      {
+         MFE_ERROR( "[dx12 hmft 0x%p] ConfigureAsyncStatsMetadataOutputSampleAttributes failed", this );
+      }
+   }
+
+   // Issue a new METransformHaveOutput event for the async slices mode
+   // with the combined MFSample with all slices
+   // This is done before pAsyncFence is waited on below
+   // as we already have all the slice info and the async stats
+   // are attached gated by the pAsyncFence completion
+   {
+      std::lock_guard<std::mutex> lock( m_OutputQueueLock );
+      HMFT_ETW_EVENT_INFO( "METransformHaveOutput", this );
+      if( SUCCEEDED( QueueEvent( METransformHaveOutput, GUID_NULL, S_OK, nullptr ) ) )
+      {
+         m_OutputQueue.push( spOutputSample.Detach() );
+         m_dwHaveOutputCount++;
+      }
+   }
+}
+
 // internal thread function to handle encoding and output
 void WINAPI
 CDX12EncHMFT::xThreadProc( void *pCtx )
@@ -1159,10 +1467,12 @@ CDX12EncHMFT::xThreadProc( void *pCtx )
 
             if( !bHasEncodingError )
             {
+               HMFT_ETW_EVENT_START( "GPUGetFrameFeedback", pThis );
                pThis->m_pPipeVideoCodec->get_feedback( pThis->m_pPipeVideoCodec,
                                                        pDX12EncodeContext->pAsyncCookie,
                                                        &encoded_bitstream_bytes,
                                                        NULL );
+               HMFT_ETW_EVENT_STOP( "GPUGetFrameFeedback", pThis );
             }
             delete pDX12EncodeContext;
             dwReceivedInput++;
@@ -1173,125 +1483,258 @@ CDX12EncHMFT::xThreadProc( void *pCtx )
       std::lock_guard<std::mutex> lock( pThis->m_lock );
       while( !bHasEncodingError && pThis->m_EncodingQueue.try_pop( pDX12EncodeContext ) )
       {
+         HMFT_ETW_EVENT_START( "TimeToProcessOutput", pThis );
+         HMFT_ETW_EVENT_START( "TimeToEmitMFSampleOutput", pThis );
          pipe_enc_feedback_metadata metadata = {};
          unsigned int encoded_bitstream_bytes = 0u;
-         ComPtr<IMFSample> spOutputSample;
-         MFCreateSample( &spOutputSample );
+         uint64_t ResolveStatsCompletionFenceValue = 0;
+         HANDLE fence_handle = (HANDLE) pThis->m_pPipeContext->screen->fence_get_win32_handle( pThis->m_pPipeContext->screen,
+                                                                                               pDX12EncodeContext->pAsyncFence,
+                                                                                               &ResolveStatsCompletionFenceValue );
+         if( fence_handle )
+            CloseHandle( fence_handle );
+
          {
             std::lock_guard<std::mutex> lock( pThis->m_encoderLock );
-            // ... wait until resource is finished writing by the GPU encoder...
             dwReceivedInput++;
 
             metadata.encode_result = PIPE_VIDEO_FEEDBACK_METADATA_ENCODE_FLAG_FAILED;   // default to failure
 
-#if ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
             // If sliced fences supported, we asynchronously copy here every slice as it is ready
             // Otherwise, let's copy all the sliced together here after full frame completion (see below)
-            if( pDX12EncodeContext->sliceNotificationMode == D3D12_VIDEO_ENCODER_COMPRESSED_BITSTREAM_NOTIFICATION_MODE_SUBREGIONS )
+            if( !pThis->m_bFlushing && ( pDX12EncodeContext->sliceNotificationMode ==
+                                         D3D12_VIDEO_ENCODER_COMPRESSED_BITSTREAM_NOTIFICATION_MODE_SUBREGIONS ) )
             {
                //
                // Wait for each slice fence and resolve offset/size as each slice is ready
                //
-               ComPtr<IMFMediaBuffer> spMemoryBuffer;
-               // Create a single large buffer to hold all slices using the max output bitstream size for the whole frame
-               // it can be possible that slices have padding between them so more size may be needed.
-               // TODO: or even better allow multiple buffers (one per slice) in the MFSample or multiple MFSamples (one per slice)
-               // with tight allocations
-               MFCreateMemoryBuffer( pThis->m_uiMaxOutputBitstreamSize, &spMemoryBuffer );
-               uint64_t output_buffer_offset = 0u;
-               LPBYTE lpBuffer;
-               spMemoryBuffer->Lock( &lpBuffer, NULL, NULL );
-
                uint32_t num_slice_buffers = static_cast<uint32_t>( pDX12EncodeContext->pSliceFences.size() );
-               for( uint32_t slice_idx = 0; slice_idx < num_slice_buffers; slice_idx++ )
-               {
-                  assert( pDX12EncodeContext->pSliceFences[slice_idx] );
 
-                  bool fenceWaitResult = pThis->m_pPipeVideoCodec->fence_wait( pThis->m_pPipeVideoCodec,
-                                                                               pDX12EncodeContext->pSliceFences[slice_idx],
-                                                                               OS_TIMEOUT_INFINITE ) != 0;
-                  assert( fenceWaitResult );
-                  pThis->m_pPipeVideoCodec->destroy_fence( pThis->m_pPipeVideoCodec, pDX12EncodeContext->pSliceFences[slice_idx] );
-                  if( fenceWaitResult )
+               auto WaitForFence = [&]( pipe_fence_handle *pFence, uint64_t timeout ) -> bool {
+                  assert( pFence );
+                  HMFT_ETW_EVENT_START( "GPUIndividualSliceCompletionWait", pThis );
+                  bool result = pThis->m_pPipeVideoCodec->fence_wait( pThis->m_pPipeVideoCodec, pFence, timeout ) != 0;
+                  HMFT_ETW_EVENT_STOP( "GPUIndividualSliceCompletionWait", pThis );
+                  if( !result )
                   {
-                     std::vector<struct codec_unit_location_t> codec_unit_metadata;
-                     unsigned codec_unit_metadata_count = 0u;
-                     pThis->m_pPipeVideoCodec->get_slice_bitstream_data( pThis->m_pPipeVideoCodec,
-                                                                         pDX12EncodeContext->pAsyncCookie,
-                                                                         slice_idx,
-                                                                         NULL /*get size*/,
-                                                                         &codec_unit_metadata_count );
-                     assert( codec_unit_metadata_count > 0 );
-                     codec_unit_metadata.resize( codec_unit_metadata_count, {} );
-                     pThis->m_pPipeVideoCodec->get_slice_bitstream_data( pThis->m_pPipeVideoCodec,
-                                                                         pDX12EncodeContext->pAsyncCookie,
-                                                                         slice_idx,
-                                                                         codec_unit_metadata.data(),
-                                                                         &codec_unit_metadata_count );
-                     //
-                     // Copy all the NALs produced in this slice and add a new buffer to the MFSample
-                     //
-
-                     struct pipe_box box = { 0 };
-                     box.width = 0;
-                     for( auto &nal : codec_unit_metadata )
-                        box.width += static_cast<int32_t>( nal.size );
-                     box.height = pDX12EncodeContext->pOutputBitRes[slice_idx]->height0;
-                     box.depth = pDX12EncodeContext->pOutputBitRes[slice_idx]->depth0;
-                     struct pipe_transfer *transfer_data = NULL;
-                     uint8_t *pMappedBuffer =
-                        (uint8_t *) pThis->m_pPipeContext->buffer_map( pThis->m_pPipeContext,
-                                                                       pDX12EncodeContext->pOutputBitRes[slice_idx],
-                                                                       0,
-                                                                       PIPE_MAP_READ,
-                                                                       &box,
-                                                                       &transfer_data );
-                     assert( pMappedBuffer );
-                     if( pMappedBuffer )
+                     if( timeout == OS_TIMEOUT_INFINITE )
                      {
-                        for( auto &nal : codec_unit_metadata )
-                        {
-                           memcpy( lpBuffer + static_cast<size_t>( output_buffer_offset ),
-                                   pMappedBuffer + static_cast<size_t>( nal.offset ),
-                                   static_cast<size_t>( nal.size ) );
-                           output_buffer_offset += nal.size;
-                        }
-                        pipe_buffer_unmap( pThis->m_pPipeContext, transfer_data );
+                        assert( false );
+                        MFE_ERROR( "[dx12 hmft 0x%p] Fence wait failed", pThis );
+                     }
+                     else
+                     {
+                        MFE_INFO( "[dx12 hmft 0x%p] Fence wait timed out (timeout=%llu)", pThis, timeout );
                      }
                   }
+                  return result;
+               };
+
+               //
+               // We can assume pLastSliceFence is signaled after the last pSliceFences[slice_idx] is signaled
+               // but there may still be a race condition there in between these last two signals
+               //
+               // If we are using PIPE_SLICE_AUTO_MODE, we need to wait on pLastSliceFence to know when all actual slices are done
+               // and what pSliceFences[] after that point are unused and must not be waited on.
+               //
+               // When emitting the MFSamples asynchronously for each slice, we need to mark MFSample_LastSlice
+               // on the last actual slice. In auto mode, we only know which one is the last actual slice after pLastSliceFence is
+               // signaled and by that time, it is too late to mark MFSample_LastSlice on the last slice only (as it may have been
+               // already emitted), so in PIPE_SLICE_AUTO_MODE, we gather all completed slices here and emit them together after
+               // pLastSliceFence is signaled.
+               //
+               if( !pDX12EncodeContext->IsSliceAutoModeEnabled() )
+               {
+                  std::vector<struct codec_unit_location_t> codec_unit_metadata;
+                  codec_unit_metadata.reserve( 16 );
+                  for( uint32_t slice_idx = 0; slice_idx < num_slice_buffers; slice_idx++ )
+                  {
+                     codec_unit_metadata.clear();
+
+                     ComPtr<IMFSample> spOutputSample;
+                     ComPtr<IMFMediaBuffer> spMediaBuffer;
+                     MFCreateSample( &spOutputSample );
+
+                     if( WaitForFence( pDX12EncodeContext->pSliceFences[slice_idx], OS_TIMEOUT_INFINITE ) )
+                     {
+                        if (!pThis->ProcessSliceBitstreamZeroCopy( pDX12EncodeContext, slice_idx, spMediaBuffer, codec_unit_metadata ))
+                        {
+                           debug_printf( "[dx12 hmft 0x%p] Failed to process slice %u bitstream\n", pThis, slice_idx );
+                           MFE_ERROR( "[dx12 hmft 0x%p] Failed to process slice %u bitstream", pThis, slice_idx );
+                           assert( false );
+                           pThis->QueueEvent( MEError, GUID_NULL, E_FAIL, nullptr );
+                           bHasEncodingError = TRUE;
+                           delete pDX12EncodeContext;
+                           break;
+                        }
+
+                        pThis->FinalizeAndEmitOutputSample( pDX12EncodeContext,
+                                                            spMediaBuffer,
+                                                            spOutputSample,
+                                                            codec_unit_metadata.data(),
+                                                            static_cast<unsigned>( codec_unit_metadata.size() ),
+                                                            dwReceivedInput,
+                                                            ( slice_idx == ( num_slice_buffers - 1 ) ),
+                                                            ResolveStatsCompletionFenceValue );
+                        HMFT_ETW_EVENT_STOP( "TimeToEmitMFSampleOutput", pThis );
+                     }
+                  }
+               }
+               else
+               {
+                  std::vector<ComPtr<IMFMediaBuffer>> spMediaBuffers;
+                  spMediaBuffers.reserve( num_slice_buffers );
+                  std::vector<ComPtr<IMFSample>> spOutputSamples;
+                  spOutputSamples.reserve( num_slice_buffers );
+                  std::vector<std::vector<struct codec_unit_location_t>> codec_unit_metadatas;
+                  codec_unit_metadatas.reserve( num_slice_buffers );
+
+                  std::vector<struct codec_unit_location_t> cur_slice_codec_unit_metadata;
+                  cur_slice_codec_unit_metadata.reserve( 16 );
+
+                  for( uint32_t slice_idx = 0; slice_idx < num_slice_buffers; slice_idx++ )
+                  {
+                     cur_slice_codec_unit_metadata.clear();
+
+                     // Wait for the current slice fence to complete, using pLastSliceFence as a short-circuit.
+                     // pLastSliceFence signals when ALL slices are complete, so once it's signaled, we can
+                     // stop polling individual slice fences and assume those are all done.
+                     // Note: In auto slice mode, some slice fences may never signal if fewer slices were
+                     // actually generated than the max allocated buffers (num_slice_buffers is max number of supported slices in
+                     // auto slice mode). pLastSliceFence acts as a "cancel token" to exit the wait loop when all actual slices are
+                     // ready to process.
+                     uint32_t slice_fence_wait_iteration = 0u;
+                     constexpr uint32_t slice_fence_wait_max_iterations =
+                        1000u;   // 1 second max wait (1ms timeout per iteration below)
+                     while( slice_fence_wait_iteration++ < slice_fence_wait_max_iterations &&
+                            !WaitForFence( pDX12EncodeContext->pSliceFences[slice_idx], 1000000ULL /* 1ms timeout */ ) &&
+                            !WaitForFence( pDX12EncodeContext->pLastSliceFence, 0 /* No wait, just poll */ ) )
+                     {
+                        // Keep polling with 1ms timeout until either:
+                        // 1. slice_fence_wait_iteration reaches max iterations (timeout), OR
+                        // 2. The current slice fence signals, OR
+                        // 3. pLastSliceFence signals (all actual slices are ready to process - short-circuit)
+                     }
+
+                     if( slice_fence_wait_iteration >= slice_fence_wait_max_iterations )
+                     {
+                        assert( false );
+                        MFE_ERROR( "[dx12 hmft 0x%p] Timeout waiting for slice %u fence OR pLastSliceFence to complete",
+                                   pThis,
+                                   slice_idx );
+                        break;
+                     }
+                     else if( WaitForFence( pDX12EncodeContext->pSliceFences[slice_idx], 0 /* No wait, just check */ ) )
+                     {
+                        //
+                        // The current slice_idx fence is completed - process this slice
+                        //
+
+                        ComPtr<IMFSample> spOutputSample;
+                        MFCreateSample( &spOutputSample );
+                        spOutputSamples.push_back( spOutputSample );
+                        ComPtr<IMFMediaBuffer> spMediaBuffer;
+
+                        // Reset codec unit metadata for this slice as it will be wrapped on its own IMFSample
+                        if (!pThis->ProcessSliceBitstreamZeroCopy( pDX12EncodeContext,
+                                                              slice_idx,
+                                                              spMediaBuffer,
+                                                              cur_slice_codec_unit_metadata ))
+                        {
+                           debug_printf( "[dx12 hmft 0x%p] Failed to process slice %u bitstream\n", pThis, slice_idx );
+                           MFE_ERROR( "[dx12 hmft 0x%p] Failed to process slice %u bitstream", pThis, slice_idx );
+                           assert( false );
+                           pThis->QueueEvent( MEError, GUID_NULL, E_FAIL, nullptr );
+                           bHasEncodingError = TRUE;
+                           delete pDX12EncodeContext;
+                           break;
+                        }
+
+                        spMediaBuffers.push_back( spMediaBuffer );
+                        codec_unit_metadatas.push_back( cur_slice_codec_unit_metadata );
+                     }
+                     else if( WaitForFence( pDX12EncodeContext->pLastSliceFence, 0 /* No wait, just check */ ) )
+                     {
+                        //
+                        // If pLastSliceFence is completed but the slice_idx fence didn't, it means this pSliceFences slot
+                        // slice_idx was never used (e.g., we are in auto mode with fewer slices than max buffers), so break.
+                        //
+                        break;
+                     }
+                     else
+                     {
+                        // Unexpected: neither fence signaled after exiting wait loop - this should not happen
+                        assert( false );
+                        MFE_ERROR( "[dx12 hmft 0x%p] Slice fence wait loop exited but neither fence signaled for slice %u",
+                                   pThis,
+                                   slice_idx );
+                        break;
+                     }
+                  }
+
+                  // At the end of the loop, we always have in spOutputSamples.size() the actual number of slices processed
+                  // which may be less than num_slice_buffers in auto slice mode
+                  // so adjust accordingly num_slice_buffers here so we only emit the actual processed slices
+                  num_slice_buffers = static_cast<uint32_t>( spOutputSamples.size() );
+
+                  for( uint32_t emission_idx = 0; emission_idx < num_slice_buffers; emission_idx++ )
+                  {
+                     pThis->FinalizeAndEmitOutputSample( pDX12EncodeContext,
+                                                         spMediaBuffers[emission_idx],
+                                                         spOutputSamples[emission_idx],
+                                                         codec_unit_metadatas[emission_idx].data(),
+                                                         static_cast<unsigned>( codec_unit_metadatas[emission_idx].size() ),
+                                                         dwReceivedInput,
+                                                         ( emission_idx == ( num_slice_buffers - 1 ) ),
+                                                         ResolveStatsCompletionFenceValue );
+                  }
+                  HMFT_ETW_EVENT_STOP( "TimeToEmitMFSampleOutput", pThis );
+               }
+
+               // Cleanup fences
+               for( unsigned slice_idx = 0; slice_idx < pDX12EncodeContext->pSliceFences.size(); slice_idx++ )
+               {
+                  if( pDX12EncodeContext->pSliceFences[slice_idx] )
+                  {
+                     pThis->m_pPipeVideoCodec->destroy_fence( pThis->m_pPipeVideoCodec,
+                                                              pDX12EncodeContext->pSliceFences[slice_idx] );
+                  }
+               }
+               if( pDX12EncodeContext->pLastSliceFence )
+               {
+                  pThis->m_pPipeVideoCodec->destroy_fence( pThis->m_pPipeVideoCodec, pDX12EncodeContext->pLastSliceFence );
+                  pDX12EncodeContext->pLastSliceFence = nullptr;
                }
 
                memset( pDX12EncodeContext->pSliceFences.data(),
                        0,
                        pDX12EncodeContext->pSliceFences.size() * sizeof( pipe_fence_handle * ) );
-
-               spMemoryBuffer->Unlock();
-               spMemoryBuffer->SetCurrentLength( static_cast<DWORD>( output_buffer_offset ) );
-               spOutputSample->AddBuffer( spMemoryBuffer.Get() );
             }
-#endif   // (USE_D3D12_PREVIEW_HEADERS && (D3D12_PREVIEW_SDK_VERSION >= 717))
 
-            // Still wait for pAsyncFence (full frame fence) before calling get_feedback for full frame stats
-            // First wait on the D3D12 encoder_fence
+            // Wait for pAsyncFence (full frame fence) before calling get_feedback for full frame stats
             assert( pDX12EncodeContext->pAsyncFence );   // NULL returned pDX12EncodeContext->pAsyncFence indicates encode error
             if( pDX12EncodeContext->pAsyncFence )
             {
+               HMFT_ETW_EVENT_START( "GPUFrameResolveCompletionWait", pThis );
                int wait_res = pThis->m_pPipeVideoCodec->fence_wait( pThis->m_pPipeVideoCodec,
                                                                     pDX12EncodeContext->pAsyncFence,
                                                                     OS_TIMEOUT_INFINITE );
-               HRESULT hr = wait_res > 0 ? S_OK : E_FAIL;   // Based on p_video_codec interface
-               pThis->m_pPipeVideoCodec->destroy_fence( pThis->m_pPipeVideoCodec, pDX12EncodeContext->pAsyncFence );
-               pDX12EncodeContext->pAsyncFence = nullptr;
+               // pAsyncFence signals both encode completion and resolve completion
+               // as the resolve is queued right after the encode in the same command queue
+               HMFT_ETW_EVENT_STOP( "GPUFrameResolveCompletionWait", pThis );
 
+               HRESULT hr = wait_res > 0 ? S_OK : E_FAIL;   // Based on p_video_codec interface
                assert( SUCCEEDED( hr ) );
                if( SUCCEEDED( hr ) )
                {
                   // Now do get_feedback, fence is already signaled so the call won't block on the CPU
                   // and the output metadata will be readable
+                  HMFT_ETW_EVENT_START( "GPUGetFrameFeedback", pThis );
                   pThis->m_pPipeVideoCodec->get_feedback( pThis->m_pPipeVideoCodec,
                                                           pDX12EncodeContext->pAsyncCookie,
                                                           &encoded_bitstream_bytes,
                                                           &metadata );
+                  HMFT_ETW_EVENT_STOP( "GPUGetFrameFeedback", pThis );
 
 #if ( MFT_CODEC_H264ENC || MFT_CODEC_H265ENC )
                   if( pThis->m_pPipeVideoCodec->two_pass.enable &&
@@ -1331,13 +1774,19 @@ CDX12EncHMFT::xThreadProc( void *pCtx )
                      vpblit_params.dst_region.x1 = cur_pic_dpb_entry.downscaled_buffer->width;
                      vpblit_params.dst_region.y1 = cur_pic_dpb_entry.downscaled_buffer->height;
 
+                     HMFT_ETW_EVENT_START( "TwoPassReconPicDownscaleBeginFrame", pThis );
                      pThis->m_pPipeVideoBlitter->begin_frame( pThis->m_pPipeVideoBlitter,
                                                               cur_pic_dpb_entry.downscaled_buffer,
                                                               &vpblit_params.base );
+                     HMFT_ETW_EVENT_STOP( "TwoPassReconPicDownscaleBeginFrame", pThis );
 
-                     if( pThis->m_pPipeVideoBlitter->process_frame( pThis->m_pPipeVideoBlitter,
-                                                                    cur_pic_dpb_entry.buffer,
-                                                                    &vpblit_params ) != 0 )
+                     HMFT_ETW_EVENT_START( "TwoPassReconPicDownscaleProcessFrame", pThis );
+                     auto proc_frame_result = pThis->m_pPipeVideoBlitter->process_frame( pThis->m_pPipeVideoBlitter,
+                                                                                         cur_pic_dpb_entry.buffer,
+                                                                                         &vpblit_params );
+
+                     HMFT_ETW_EVENT_STOP( "TwoPassReconPicDownscaleProcessFrame", pThis );
+                     if( proc_frame_result != 0 )
                      {
                         assert( false );
                         pThis->QueueEvent( MEError, GUID_NULL, E_FAIL, nullptr );
@@ -1346,9 +1795,12 @@ CDX12EncHMFT::xThreadProc( void *pCtx )
                         break;   // break out of while try_pop
                      }
 
-                     if( pThis->m_pPipeVideoBlitter->end_frame( pThis->m_pPipeVideoBlitter,
-                                                                cur_pic_dpb_entry.downscaled_buffer,
-                                                                &vpblit_params.base ) != 0 )
+                     HMFT_ETW_EVENT_START( "TwoPassReconPicDownscaleEndFrame", pThis );
+                     auto end_frame_result = pThis->m_pPipeVideoBlitter->end_frame( pThis->m_pPipeVideoBlitter,
+                                                                                    cur_pic_dpb_entry.downscaled_buffer,
+                                                                                    &vpblit_params.base );
+                     HMFT_ETW_EVENT_STOP( "TwoPassReconPicDownscaleEndFrame", pThis );
+                     if( end_frame_result != 0 )
                      {
                         assert( false );
                         pThis->QueueEvent( MEError, GUID_NULL, E_FAIL, nullptr );
@@ -1357,7 +1809,9 @@ CDX12EncHMFT::xThreadProc( void *pCtx )
                         break;   // break out of while try_pop
                      }
 
+                     HMFT_ETW_EVENT_START( "TwoPassReconPicDownscaleFlush", pThis );
                      pThis->m_pPipeVideoBlitter->flush( pThis->m_pPipeVideoBlitter );
+                     HMFT_ETW_EVENT_STOP( "TwoPassReconPicDownscaleFlush", pThis );
 
                      assert( dst_surface_fence );   // Driver must have returned the completion fence
                      // Wait for downscaling completion before encode can proceed
@@ -1367,9 +1821,11 @@ CDX12EncHMFT::xThreadProc( void *pCtx )
                      // Instead of waiting on the CPU here for the fence, can probably
                      // queue the fence wait into the next frame's encode GPU fence wait
 
+                     HMFT_ETW_EVENT_START( "TwoPassReconPicDownscaleFenceWait", pThis );
                      ASSERTED bool finished =
                         pThis->m_pPipeVideoCodec->fence_wait( pThis->m_pPipeVideoCodec, dst_surface_fence, OS_TIMEOUT_INFINITE ) !=
                         0;
+                     HMFT_ETW_EVENT_STOP( "TwoPassReconPicDownscaleFenceWait", pThis );
                      assert( finished );
                      pThis->m_pPipeVideoCodec->destroy_fence( pThis->m_pPipeVideoCodec, dst_surface_fence );
                   }
@@ -1399,173 +1855,60 @@ CDX12EncHMFT::xThreadProc( void *pCtx )
 
          assert( encoded_bitstream_bytes );
          if( !pThis->m_bFlushing && ( ( metadata.encode_result & PIPE_VIDEO_FEEDBACK_METADATA_ENCODE_FLAG_FAILED ) == 0 ) &&
-             encoded_bitstream_bytes )
+             encoded_bitstream_bytes &&
+             ( pDX12EncodeContext->sliceNotificationMode == D3D12_VIDEO_ENCODER_COMPRESSED_BITSTREAM_NOTIFICATION_MODE_FULL_FRAME ) )
          {
+            ComPtr<IMFSample> spOutputSample;
+            ComPtr<IMFMediaBuffer> spMemoryBuffer;
+            MFCreateSample( &spOutputSample );
 
             if( metadata.encode_result & PIPE_VIDEO_FEEDBACK_METADATA_ENCODE_FLAG_MAX_FRAME_SIZE_OVERFLOW )
                debug_printf( "[dx12 hmft 0x%p] PIPE_VIDEO_FEEDBACK_METADATA_ENCODE_FLAG_MAX_FRAME_SIZE_OVERFLOW set\n", pThis );
 
+            // Set encoding quality metrics (only available after get_feedback on full frame encode)
             debug_printf( "[dx12 hmft 0x%p] Frame AverageQP: %d\n", pThis, metadata.average_frame_qp );
-
+            if( FAILED( spOutputSample->SetUINT64( MFSampleExtension_VideoEncodeQP, (UINT64) metadata.average_frame_qp ) ) )
             {
-               UINT32 uiFrameRateNumerator = pDX12EncodeContext->GetFrameRateNumerator();
-               UINT32 uiFrameRateDenominator = pDX12EncodeContext->GetFrameRateDenominator();
-               DWORD naluInfo[MAX_NALU_LENGTH_INFO_ENTRIES] = {};
-               UINT64 frameDuration = 0;
-               GUID guidMajorType = { 0 };
-               GUID guidSubType = { 0 };
-
-               pThis->m_spOutputType->GetMajorType( &guidMajorType );
-               spOutputSample->SetGUID( MF_MT_MAJOR_TYPE, guidMajorType );
-               pThis->m_spOutputType->GetGUID( MF_MT_SUBTYPE, &guidSubType );
-               spOutputSample->SetGUID( MF_MT_SUBTYPE, guidSubType );
-               MFSetAttributeSize( spOutputSample.Get(),
-                                   MF_MT_FRAME_SIZE,
-                                   pDX12EncodeContext->pPipeVideoBuffer->width,
-                                   pDX12EncodeContext->pPipeVideoBuffer->width );
-               MFSetAttributeRatio( spOutputSample.Get(), MF_MT_FRAME_RATE, uiFrameRateNumerator, uiFrameRateDenominator );
-               MFFrameRateToAverageTimePerFrame( uiFrameRateNumerator, uiFrameRateDenominator, &frameDuration );
-               spOutputSample->SetSampleTime( dwReceivedInput * frameDuration );
-               spOutputSample->SetSampleDuration( frameDuration );
-               spOutputSample->SetUINT64( MFSampleExtension_DecodeTimestamp, dwReceivedInput * frameDuration );
-               spOutputSample->SetUINT32( MFSampleExtension_VideoEncodePictureType, pDX12EncodeContext->GetPictureType() );
-               spOutputSample->SetUINT32( MFSampleExtension_CleanPoint,
-                                          pDX12EncodeContext->IsPicTypeCleanPoint() || ( dwReceivedInput == 1 ) );
-               spOutputSample->SetUINT32( MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive );
-               spOutputSample->SetUINT32( MF_MT_VIDEO_PROFILE,
-                                          ConvertPipeProfileToSpecProfile( pDX12EncodeContext->encoderPicInfo.base.profile ) );
-               spOutputSample->SetUINT32( MF_MT_VIDEO_LEVEL, pThis->m_pPipeVideoCodec->level );
-               spOutputSample->SetUINT64( MFSampleExtension_VideoEncodeQP, (UINT64) metadata.average_frame_qp );
-               spOutputSample->SetUINT32( MFSampleExtension_LastSlice, 1 );
-
-               if( pThis->m_uiMaxLongTermReferences > 0 )
-               {
-                  spOutputSample->SetUINT32( MFSampleExtension_LongTermReferenceFrameInfo,
-                                             pDX12EncodeContext->longTermReferenceFrameInfo );
-               }
-
-               // Conditionally attach frame PSNR
-               if( pThis->m_bVideoEnableFramePsnrYuv && pDX12EncodeContext->pPipeResourcePSNRStats != nullptr )
-               {
-                  HRESULT hr = MFAttachPipeResourceAsSampleExtension( pThis->m_pPipeContext,
-                                                                      pDX12EncodeContext->pPipeResourcePSNRStats,
-                                                                      pDX12EncodeContext->pSyncObjectQueue,
-                                                                      MFSampleExtension_FramePsnrYuv,
-                                                                      spOutputSample.Get() );
-
-                  if( FAILED( hr ) )
-                  {
-                     MFE_INFO( "[dx12 hmft 0x%p] PSNR: MFAttachPipeResourceAsSampleExtension failed - hr=0x%08x", pThis, hr );
-                  }
-               }
-
-               // Conditionally attach output QP map
-               if( pThis->m_uiVideoOutputQPMapBlockSize && pDX12EncodeContext->pPipeResourceQPMapStats != nullptr )
-               {
-                  HRESULT hr = MFAttachPipeResourceAsSampleExtension( pThis->m_pPipeContext,
-                                                                      pDX12EncodeContext->pPipeResourceQPMapStats,
-                                                                      pDX12EncodeContext->pSyncObjectQueue,
-                                                                      MFSampleExtension_VideoEncodeQPMap,
-                                                                      spOutputSample.Get() );
-
-                  if( FAILED( hr ) )
-                  {
-                     MFE_INFO( "[dx12 hmft 0x%p] QPMap: MFAttachPipeResourceAsSampleExtension failed - hr=0x%08x", pThis, hr );
-                  }
-               }
-
-               // Conditionally attach output bits used map
-               if( pThis->m_uiVideoOutputBitsUsedMapBlockSize && pDX12EncodeContext->pPipeResourceRCBitAllocMapStats != nullptr )
-               {
-                  HRESULT hr = MFAttachPipeResourceAsSampleExtension( pThis->m_pPipeContext,
-                                                                      pDX12EncodeContext->pPipeResourceRCBitAllocMapStats,
-                                                                      pDX12EncodeContext->pSyncObjectQueue,
-                                                                      MFSampleExtension_VideoEncodeBitsUsedMap,
-                                                                      spOutputSample.Get() );
-
-                  if( FAILED( hr ) )
-                  {
-                     MFE_INFO( "[dx12 hmft 0x%p] BitsUsed: MFAttachPipeResourceAsSampleExtension failed - hr=0x%08x", pThis, hr );
-                  }
-               }
-
-               // Conditionally attach SATD map
-               if( pThis->m_uiVideoSatdMapBlockSize && pDX12EncodeContext->pPipeResourceSATDMapStats != nullptr )
-               {
-                  HRESULT hr = MFAttachPipeResourceAsSampleExtension( pThis->m_pPipeContext,
-                                                                      pDX12EncodeContext->pPipeResourceSATDMapStats,
-                                                                      pDX12EncodeContext->pSyncObjectQueue,
-                                                                      MFSampleExtension_VideoEncodeSatdMap,
-                                                                      spOutputSample.Get() );
-
-                  if( FAILED( hr ) )
-                  {
-                     MFE_INFO( "[dx12 hmft 0x%p] SATDMap: MFAttachPipeResourceAsSampleExtension failed - hr=0x%08x", pThis, hr );
-                  }
-               }
-
-               // If sliced fences supported, we asynchronously copied every slice as it was ready (see above)
-               // into spMemoryBuffer. Otherwise, let's copy all the sliced together here after full frame completion
-#if ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
-               if( pDX12EncodeContext->sliceNotificationMode ==
-                   D3D12_VIDEO_ENCODER_COMPRESSED_BITSTREAM_NOTIFICATION_MODE_FULL_FRAME )
-#endif   // (USE_D3D12_PREVIEW_HEADERS && (D3D12_PREVIEW_SDK_VERSION >= 717))
-               {
-                  // Readback full encoded frame bitstream from GPU memory onto CPU buffer
-                  struct pipe_box box = { 0 };
-                  box.width = encoded_bitstream_bytes;
-                  box.height = pDX12EncodeContext->pOutputBitRes[0]->height0;
-                  box.depth = pDX12EncodeContext->pOutputBitRes[0]->depth0;
-                  struct pipe_transfer *transfer_data;
-                  uint8_t *pMappedBuffer = (uint8_t *) pThis->m_pPipeContext->buffer_map( pThis->m_pPipeContext,
-                                                                                          pDX12EncodeContext->pOutputBitRes[0],
-                                                                                          0,
-                                                                                          PIPE_MAP_READ,
-                                                                                          &box,
-                                                                                          &transfer_data );
-                  assert( pMappedBuffer );
-                  if( pMappedBuffer )
-                  {
-                     ComPtr<IMFMediaBuffer> spMemoryBuffer;
-                     LPBYTE lpBuffer;
-                     MFCreateMemoryBuffer( box.width, &spMemoryBuffer );
-                     spMemoryBuffer->Lock( &lpBuffer, NULL, NULL );
-                     size_t copied_bytes = 0;
-                     for( unsigned i = 0; i < metadata.codec_unit_metadata_count; i++ )
-                     {
-                        memcpy( lpBuffer + copied_bytes,
-                                pMappedBuffer + metadata.codec_unit_metadata[i].offset,
-                                static_cast<size_t>( metadata.codec_unit_metadata[i].size ) );
-                        copied_bytes += static_cast<size_t>( metadata.codec_unit_metadata[i].size );
-                     }
-                     spMemoryBuffer->Unlock();
-                     spMemoryBuffer->SetCurrentLength( static_cast<DWORD>( copied_bytes ) );
-                     pipe_buffer_unmap( pThis->m_pPipeContext, transfer_data );
-                     spOutputSample->AddBuffer( spMemoryBuffer.Get() );
-                  }
-               }
-
-               for( unsigned i = 0; i < metadata.codec_unit_metadata_count; i++ )
-               {
-                  if( i < MAX_NALU_LENGTH_INFO_ENTRIES )
-                     naluInfo[i] = static_cast<DWORD>( metadata.codec_unit_metadata[i].size );
-               }
-               spOutputSample->SetBlob(
-                  MFSampleExtension_NALULengthInfo,   // same as MF_NALU_LENGTH_INFORMATION
-                  (LPBYTE) &naluInfo,
-                  std::min( MAX_NALU_LENGTH_INFO_ENTRIES, metadata.codec_unit_metadata_count ) * sizeof( DWORD ) );
-               spOutputSample->SetUINT32( MF_NALU_LENGTH_SET, 1 );
-               {
-                  std::lock_guard<std::mutex> lock( pThis->m_OutputQueueLock );
-                  HMFT_ETW_EVENT_INFO( "METransformHaveOutput", pThis );
-                  if( SUCCEEDED( pThis->QueueEvent( METransformHaveOutput, GUID_NULL, S_OK, nullptr ) ) )
-                  {
-                     pThis->m_OutputQueue.push( spOutputSample.Detach() );
-                     pThis->m_dwHaveOutputCount++;
-                  }
-               }
+               debug_printf( "[dx12 hmft 0x%p] WARNING: could not set MFSampleExtension_VideoEncodeQP\n", pThis );
             }
+
+            // Create IMFMediaBuffer from the D3D12Resource (zero-copy)
+            spMemoryBuffer.Attach( new CD3D12BitstreamMFBuffer( pThis,
+                                                                pThis->m_pPipeContext,
+                                                                pDX12EncodeContext->pOutputBitRes[0],
+                                                                static_cast<DWORD>( encoded_bitstream_bytes ),
+                                                                static_cast<DWORD>( metadata.codec_unit_metadata[0].offset ) ) );
+
+            // Use FinalizeAndEmitOutputSample to configure attributes and emit output
+            pThis->FinalizeAndEmitOutputSample( pDX12EncodeContext,
+                                                spMemoryBuffer,
+                                                spOutputSample,
+                                                &metadata.codec_unit_metadata[0],
+                                                metadata.codec_unit_metadata_count,
+                                                dwReceivedInput,
+                                                TRUE,
+                                                ResolveStatsCompletionFenceValue );
+            HMFT_ETW_EVENT_STOP( "TimeToEmitMFSampleOutput", pThis );
          }
+
+         // Destroy fence
+         pThis->m_pPipeVideoCodec->destroy_fence( pThis->m_pPipeVideoCodec, pDX12EncodeContext->pAsyncFence );
+         pDX12EncodeContext->pAsyncFence = nullptr;
+         pDX12EncodeContext->spAsyncFence.Reset();
+
+         // CPU wait and destroy reconstructed picture copy fence if not null
+         if( pDX12EncodeContext->pPipeFenceReconstructedPictureCompletionFence )
+         {
+            HMFT_ETW_EVENT_START( "ReconstructedPictureFenceWait", pThis );
+            ASSERTED int wait_res =
+               pThis->m_pPipeVideoCodec->fence_wait( pThis->m_pPipeVideoCodec,
+                                                     pDX12EncodeContext->pPipeFenceReconstructedPictureCompletionFence,
+                                                     OS_TIMEOUT_INFINITE );
+            HMFT_ETW_EVENT_STOP( "ReconstructedPictureFenceWait", pThis );
+            assert( wait_res );
+         }
+
+         HMFT_ETW_EVENT_STOP( "TimeToProcessOutput", pThis );
          delete pDX12EncodeContext;
       }   // while try_pop
       if( pThis->m_bDraining )
@@ -2073,21 +2416,10 @@ CDX12EncHMFT::ProcessMessage( MFT_MESSAGE_TYPE eMessage, ULONG_PTR ulParam )
          std::lock_guard<std::mutex> lock( m_lock );
          CleanupEncoder();
          CHECKHR_GOTO( xOnSetD3DManager( ulParam ), done );
-         CHECKHR_GOTO( ConfigureSampleAllocator(), done );
          if( m_pPipeContext )
          {
             m_EncoderCapabilities.initialize( m_pPipeContext->screen, m_outputPipeProfile );
          }
-
-         ConfigureMapSampleAllocatorHelper( m_spSATDMapAllocator,
-                                            m_EncoderCapabilities.m_HWSupportStatsSATDMapOutput,
-                                            m_uiVideoSatdMapBlockSize,
-                                            m_bUseSATDMapAllocator );
-
-         ConfigureMapSampleAllocatorHelper( m_spBitsusedMapAllocator,
-                                            m_EncoderCapabilities.m_HWSupportStatsRCBitAllocationMapOutput,
-                                            m_uiVideoOutputBitsUsedMapBlockSize,
-                                            m_bUseBitsusedMapAllocator );
          break;
       }
    }
@@ -2100,6 +2432,38 @@ done:
    return hr;
 }
 
+static HRESULT
+GetQPMapBufferFromSampleLockHeld( IMFSample *pSample, BYTE **ppData, DWORD *pSize, ComPtr<IMFMediaBuffer> &outBuffer )
+{
+   if( !pSample || !ppData || !pSize )
+      return E_POINTER;
+
+   ComPtr<IMFAttributes> attrs;
+   HRESULT hr = pSample->QueryInterface( IID_PPV_ARGS( &attrs ) );
+   if( FAILED( hr ) || !attrs )
+      return hr;
+
+   ComPtr<IUnknown> unk;
+   hr = attrs->GetUnknown( MFSampleExtension_VideoEncodeInputDeltaQPMap, IID_PPV_ARGS( &unk ) );
+   if( FAILED( hr ) || !unk )
+      return hr;
+
+   hr = unk.As( &outBuffer );
+   if( FAILED( hr ) || !outBuffer )
+      return hr;
+
+   BYTE *pData = nullptr;
+   DWORD maxLen = 0, curLen = 0;
+   hr = outBuffer->Lock( &pData, &maxLen, &curLen );
+   if( FAILED( hr ) )
+      return hr;
+
+   *ppData = pData;
+   *pSize = curLen;
+
+   return S_OK;
+}
+
 // IMFTransform::ProcessInput
 // https://learn.microsoft.com/en-us/windows/win32/api/mftransform/nf-mftransform-imftransform-processinput
 HRESULT
@@ -2109,6 +2473,9 @@ CDX12EncHMFT::ProcessInput( DWORD dwInputStreamIndex, IMFSample *pSample, DWORD 
    HRESULT hr = S_OK;
    UINT32 unChromaOnly = 0;
    LPDX12EncodeContext pDX12EncodeContext = nullptr;
+   BYTE *qpData = nullptr;
+   DWORD qpSize = 0;
+   ComPtr<IMFMediaBuffer> qpMapBuffer;
    std::lock_guard<std::mutex> lock( m_lock );
 
    CHECKHR_GOTO( IsUnlocked(), done );
@@ -2143,6 +2510,17 @@ CDX12EncHMFT::ProcessInput( DWORD dwInputStreamIndex, IMFSample *pSample, DWORD 
 
    // setup the source buffer
    CHECKHR_HRGOTO( PrepareForEncode( pSample, &pDX12EncodeContext ), MF_E_INVALIDMEDIATYPE, done );
+   if( SUCCEEDED( GetQPMapBufferFromSampleLockHeld( pSample, &qpData, &qpSize, qpMapBuffer ) ) && qpMapBuffer )
+   {
+      pDX12EncodeContext->SetPipeQPMapBufferInfo( qpData, qpSize );
+   }
+   else
+   {
+      // make sure it's null/zero if we failed to get it
+      qpData = nullptr;
+      qpSize = 0;
+      qpMapBuffer = nullptr;
+   }
 
    // Submit work
    {
@@ -2154,23 +2532,26 @@ CDX12EncHMFT::ProcessInput( DWORD dwInputStreamIndex, IMFSample *pSample, DWORD 
                                       pDX12EncodeContext->pPipeVideoBuffer,
                                       &pDX12EncodeContext->encoderPicInfo.base );
 
-#if ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
       if( pDX12EncodeContext->sliceNotificationMode == D3D12_VIDEO_ENCODER_COMPRESSED_BITSTREAM_NOTIFICATION_MODE_SUBREGIONS )
       {
+         HMFT_ETW_EVENT_START( "PipeSubmitFrameSliced", this );
          m_pPipeVideoCodec->encode_bitstream_sliced( m_pPipeVideoCodec,
                                                      pDX12EncodeContext->pPipeVideoBuffer,
                                                      static_cast<unsigned>( pDX12EncodeContext->pOutputBitRes.size() ),
                                                      pDX12EncodeContext->pOutputBitRes.data(),
                                                      pDX12EncodeContext->pSliceFences.data(),   // driver outputs the fences
+                                                     &pDX12EncodeContext->pLastSliceFence,   // driver outputs the last slice fence
                                                      &pDX12EncodeContext->pAsyncCookie );
+         HMFT_ETW_EVENT_STOP( "PipeSubmitFrameSliced", this );
       }
       else
-#endif   // (USE_D3D12_PREVIEW_HEADERS && (D3D12_PREVIEW_SDK_VERSION >= 717))
       {
+         HMFT_ETW_EVENT_START( "PipeSubmitFullFrame", this );
          m_pPipeVideoCodec->encode_bitstream( m_pPipeVideoCodec,
                                               pDX12EncodeContext->pPipeVideoBuffer,
                                               pDX12EncodeContext->pOutputBitRes[0],
                                               &pDX12EncodeContext->pAsyncCookie );
+         HMFT_ETW_EVENT_STOP( "PipeSubmitFullFrame", this );
       }
 
       HMFT_ETW_EVENT_STOP( "PipeSubmitFrame", this );
@@ -2184,6 +2565,16 @@ CDX12EncHMFT::ProcessInput( DWORD dwInputStreamIndex, IMFSample *pSample, DWORD 
                                                  &pDX12EncodeContext->encoderPicInfo.base );
       HMFT_ETW_EVENT_STOP( "PipeEndFrame", this );
 
+      uint64_t AsyncFenceValue = 0;
+      HANDLE fence_handle = (HANDLE) m_pPipeContext->screen->fence_get_win32_handle( m_pPipeContext->screen,
+                                                                                     pDX12EncodeContext->pAsyncFence,
+                                                                                     &AsyncFenceValue );
+      CHECKNULL_GOTO( fence_handle, E_FAIL, done );
+      CHECKHR_GOTO(
+         m_spDevice->OpenSharedHandle( fence_handle, IID_PPV_ARGS( pDX12EncodeContext->spAsyncFence.ReleaseAndGetAddressOf() ) ),
+         done );
+      CloseHandle( fence_handle );
+
       CHECKBOOL_GOTO( ( m_spDevice->GetDeviceRemovedReason() == S_OK ), DXGI_ERROR_DEVICE_REMOVED, done );
       // NULL returned fence indicates encode error
       CHECKNULL_GOTO( pDX12EncodeContext->pAsyncFence, MF_E_UNEXPECTED, done );
@@ -2193,6 +2584,136 @@ CDX12EncHMFT::ProcessInput( DWORD dwInputStreamIndex, IMFSample *pSample, DWORD 
       HMFT_ETW_EVENT_START( "PipeFlush", this );
       m_pPipeVideoCodec->flush( m_pPipeVideoCodec );
       HMFT_ETW_EVENT_STOP( "PipeFlush", this );
+
+      // Handle reconstructed picture copy if enabled
+      if( m_VideoReconstructedPictureMode != RECON_PIC_OUTPUT_MODE_DISABLED )
+      {
+         HMFT_ETW_EVENT_START( "ReconstructedPictureSubmit", this );
+
+         // Get last slice completion fence
+         pipe_fence_handle *fence_to_wait = nullptr;
+         uint64_t fence_value = 0;
+         assert( m_ScreenInteropInfo.get_video_enc_last_slice_completion_fence );
+
+         m_ScreenInteropInfo.get_video_enc_last_slice_completion_fence( m_pPipeVideoCodec,
+                                                                        pDX12EncodeContext->pAsyncCookie,
+                                                                        &fence_to_wait );
+
+         if( fence_to_wait )
+         {
+            HANDLE fence_handle =
+               (HANDLE) m_pPipeContext->screen->fence_get_win32_handle( m_pPipeContext->screen, fence_to_wait, &fence_value );
+            if( fence_handle )
+               CloseHandle( fence_handle );
+         }
+
+         struct pipe_video_buffer *src_buffer = pDX12EncodeContext->get_current_dpb_pic_buffer();
+         assert( src_buffer );
+
+         // TODO: Readonly flags for get handle
+
+         // We only support zero copy read only reconstructed picture in low latency mode
+         // and guarantee the src_buffer won't be modified until the next ProcessInput.
+         // While technically we could guarantee the recon pic buffer will not be reused/
+         // or rewritten by longer, it gets complicated to track and manage with all possible
+         // LTR/SVC/NumRef combinations, so we limit it to the next ProcessInput in LowLatency mode.
+         if( m_VideoReconstructedPictureMode == RECON_PIC_OUTPUT_MODE_READ_ONLY_SHARED_RESOURCE )
+         {
+            // We only support this mode in low latency mode for lifetime management reasons
+            if( !m_bLowLatency )
+            {
+               debug_printf( "[dx12 hmft 0x%p] Zero copy read only reconstructed picture is ONLY supported in low latency mode\n",
+                             this );
+               assert( m_bLowLatency );
+               CHECKHR_GOTO( E_FAIL, done );
+            }
+
+            // Get read-only handle directly from the video buffer
+            HANDLE readOnlyHandle = nullptr;
+            HRESULT hr =
+               dpb_buffer_manager::get_read_only_handle( src_buffer,
+                                                         m_pPipeContext,
+                                                         m_spDevice,
+                                                         &readOnlyHandle,
+                                                         &pDX12EncodeContext->PipeResourceReconstructedPictureSubresource );
+            CHECKHR_GOTO( hr, done );
+            CHECKNULL_GOTO( readOnlyHandle, E_FAIL, done );
+            if( !readOnlyHandle )
+               debug_printf( "[dx12 hmft 0x%p] Failed to get read-only handle from video buffer\n", this );
+
+            struct winsys_handle src_wshandle = {};
+            src_wshandle.type = WINSYS_HANDLE_TYPE_FD;
+            src_wshandle.handle = readOnlyHandle;
+
+            assert( src_wshandle.handle );
+            if( !src_wshandle.handle )
+            {
+               debug_printf( "[dx12 hmft 0x%p] Invalid handle for reconstructed picture resource\n", this );
+               CHECKHR_GOTO( E_FAIL, done );
+            }
+            // Import the reconstructed picture resource from handle
+            pDX12EncodeContext->pPipeResourceReconstructedPicture =
+               m_pPipeContext->screen->resource_from_handle( m_pPipeContext->screen, NULL, &src_wshandle, 0 /*usage*/ );
+            assert( pDX12EncodeContext->pPipeResourceReconstructedPicture );
+            if( !pDX12EncodeContext->pPipeResourceReconstructedPicture )
+            {
+               debug_printf( "[dx12 hmft 0x%p] Failed to import reconstructed picture resource\n", this );
+               CHECKHR_GOTO( E_FAIL, done );
+            }
+            CloseHandle( readOnlyHandle );
+         }
+         else
+         {
+            assert( m_pPipeVideoBlitter );
+
+            struct winsys_handle whandle = {};
+            whandle.type = WINSYS_HANDLE_TYPE_D3D12_RES;
+            whandle.modifier = 2;   // Expected by video_buffer_from_handle to place a pipe_resource in the pipe_video_buffer
+            whandle.com_obj = (void *) pDX12EncodeContext->pPipeResourceReconstructedPicture;
+            struct pipe_video_buffer *dst_buffer =
+               m_pPipeContext->video_buffer_from_handle( m_pPipeContext, src_buffer, &whandle, 0 );
+            assert( dst_buffer );
+            pDX12EncodeContext->PipeResourceReconstructedPictureSubresource = 0;
+
+            struct pipe_vpp_desc vpblit_params = {};
+            vpblit_params.base.in_fence = fence_to_wait;
+            vpblit_params.base.in_fence_value = fence_value;
+            vpblit_params.base.out_fence = &pDX12EncodeContext->pPipeFenceReconstructedPictureCompletionFence;
+            vpblit_params.base.input_format = src_buffer->buffer_format;
+            vpblit_params.base.output_format = dst_buffer->buffer_format;
+            vpblit_params.src_region.x1 = src_buffer->width;
+            vpblit_params.src_region.y1 = src_buffer->height;
+            vpblit_params.dst_region.x1 = dst_buffer->width;
+            vpblit_params.dst_region.y1 = dst_buffer->height;
+
+            m_pPipeVideoBlitter->begin_frame( m_pPipeVideoBlitter, dst_buffer, &vpblit_params.base );
+            m_pPipeVideoBlitter->process_frame( m_pPipeVideoBlitter, src_buffer, &vpblit_params );
+            m_pPipeVideoBlitter->end_frame( m_pPipeVideoBlitter, dst_buffer, &vpblit_params.base );
+            m_pPipeVideoBlitter->flush( m_pPipeVideoBlitter );
+
+            // Get D3D12 fence handle for synchronization
+            HANDLE fence_handle = (HANDLE) m_pPipeContext->screen->fence_get_win32_handle(
+               m_pPipeContext->screen,
+               pDX12EncodeContext->pPipeFenceReconstructedPictureCompletionFence,
+               &pDX12EncodeContext->ReconstructedPictureCompletionFenceValue );
+            if( fence_handle )
+            {
+               CHECKHR_GOTO(
+                  m_spDevice->OpenSharedHandle(
+                     fence_handle,
+                     IID_PPV_ARGS( pDX12EncodeContext->spReconstructedPictureCompletionFence.ReleaseAndGetAddressOf() ) ),
+                  done );
+               CloseHandle( fence_handle );
+            }
+         }
+
+         HMFT_ETW_EVENT_STOP( "ReconstructedPictureSubmit", this );
+      }
+   }
+   // Release the QP map buffer after encode_bitstream call returns.
+   if( qpMapBuffer && qpSize != 0 && qpData != nullptr )
+   {
+      qpMapBuffer->Unlock();
    }
    m_EncodingQueue.push( pDX12EncodeContext );
    // Moves the GOP tracker state to the next frame for having next

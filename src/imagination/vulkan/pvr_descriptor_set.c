@@ -21,6 +21,8 @@
  * SOFTWARE.
  */
 
+#include "pvr_descriptor_set.h"
+
 #include <assert.h>
 #include <limits.h>
 #include <stdint.h>
@@ -30,8 +32,11 @@
 
 #include "hwdef/rogue_hw_utils.h"
 #include "pvr_bo.h"
+#include "pvr_buffer.h"
 #include "pvr_debug.h"
-#include "pvr_private.h"
+#include "pvr_device.h"
+#include "pvr_entrypoints.h"
+#include "pvr_image.h"
 #include "pvr_types.h"
 #include "util/compiler.h"
 #include "util/list.h"

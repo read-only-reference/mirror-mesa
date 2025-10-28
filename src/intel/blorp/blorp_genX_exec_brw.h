@@ -31,7 +31,7 @@
 #include "common/intel_sample_positions.h"
 #include "common/intel_l3_config.h"
 #include "genxml/gen_macros.h"
-#include "intel/compiler/brw_compiler.h"
+#include "compiler/brw/brw_compiler.h"
 
 /**
  * This file provides the blorp pipeline setup and execution functionality.
@@ -1265,7 +1265,7 @@ blorp_emit_surface_state(struct blorp_batch *batch,
 
    if (aux_usage != ISL_AUX_USAGE_NONE && surface->clear_color_addr.buffer) {
 #if GFX_VER >= 10
-      assert((surface->clear_color_addr.offset & 0x3f) == 0);
+      assert(util_is_aligned(surface->clear_color_addr.offset, 64));
       uint32_t *clear_addr = state + isl_dev->ss.clear_color_state_offset;
       blorp_surface_reloc(batch, state_offset +
                           isl_dev->ss.clear_color_state_offset,
@@ -1835,9 +1835,18 @@ blorp_exec_compute(struct blorp_batch *batch, const struct blorp_params *params)
    /*
     * TDOD: Add INTEL_NEEDS_WA_14025112257 check once HSD is propogated for all
     * other impacted platforms.
+    *
+    * BSpec 47112 (xe), 56551 (xe2): Instruction_PIPE_CONTROL (ComputeCS):
+    * SW must follow below programming restrictions when programming
+    * PIPE_CONTROL command:
+    *
+    * "Command Streamer Stall Enable" must be always set.
+    * ...
     */
    if (devinfo->ver >= 20) {
       blorp_emit(batch, GENX(PIPE_CONTROL), pc) {
+         pc.CommandStreamerStallEnable =
+            batch->flags & BLORP_BATCH_COMPUTE_ENGINE;
          pc.StateCacheInvalidationEnable = true;
       }
    }

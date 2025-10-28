@@ -863,22 +863,13 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
    }
    info->r600_has_virtual_memory = true;
 
-   /* LDS is 64KB per CU (4 SIMDs on GFX6-9), which is 16KB per SIMD (usage above
-    * 16KB makes some SIMDs unoccupied).
+   /* LDS is 64KB per CU (4 SIMDs on GFX6-9, which is 16KB per SIMD).
     *
-    * GFX10+: LDS is 128KB in WGP mode and 64KB in CU mode. Assume the WGP mode is used.
-    * GFX7+: Workgroups can use up to 64KB.
-    * GFX6: There is 64KB LDS per CU, but a workgroup can only use up to 32KB.
+    * GFX10+: LDS is 128KB in WGP mode, but a workgroup can only use up to 64KB.
+    * GFX7+:  Workgroups can use up to 64KB.
+    * GFX6:   There is 64KB LDS per CU, but a workgroup can only use up to 32KB.
     */
-   info->lds_size_per_workgroup = info->gfx_level >= GFX10  ? 128 * 1024
-                                  : info->gfx_level >= GFX7 ? 64 * 1024
-                                                            : 32 * 1024;
-
-   /* lds_encode_granularity is the block size used for encoding registers.
-    * lds_alloc_granularity is what the hardware will align the LDS size to.
-    */
-   info->lds_encode_granularity = info->gfx_level >= GFX7 ? 128 * 4 : 64 * 4;
-   info->lds_alloc_granularity = info->gfx_level >= GFX10_3 ? 256 * 4 : info->lds_encode_granularity;
+   info->lds_size_per_workgroup = info->gfx_level >= GFX7 ? 64 * 1024 : 32 * 1024;
 
    /* The mere presence of CLEAR_STATE in the IB causes random GPU hangs on GFX6. CLEAR_STATE
     * causes GPU hangs with the radeon kernel driver, so only enable GFX7 CLEAR_STATE on amdgpu.
@@ -935,7 +926,33 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
 
    info->has_gfx9_scissor_bug = info->family == CHIP_VEGA10 || info->family == CHIP_RAVEN;
 
-   info->has_tc_compat_zrange_bug = info->gfx_level >= GFX8 && info->gfx_level <= GFX9;
+   /* Stencil texturing with HTILE doesn't work with mipmapping on Navi10-14. */
+   info->has_htile_stencil_mipmap_bug = info->gfx_level == GFX10;
+
+   /* When drawing, if all samples covered in a cleared tile in HTILE are discarded (by the fragment
+    * shader, alpha to coverage, etc.), the tile stays cleared, but on the chips with this bug, the
+    * Z range in the tile still gets expanded by the depth test, and that may flip the upper bit of
+    * the HTILE encoding (of the maximum Z without stencil, or the base Z with stencil), inverting
+    * the clear value that texture reads will use for the tile.
+    *
+    * has_htile_tc_z_clear_bug_without/with_stencil indicate whether the TILE_STENCIL_DISABLE =
+    * 1 and 0 HTILE encodings respectively are subject to this bug.
+    *
+    * One possible workaround is to use the depth/stencil HTILE that encodes the Z range as base and
+    * delta, setting ZRANGE_PRECISION to 0 (base Z is min Z) when the depth is cleared to 0, and to
+    * 1 (base Z is max Z) when it's cleared to 1, so the Z delta gets expanded, but the base Z,
+    * which contains the TC clear value bit, stays the same.
+    * See DepthStencilView::UpdateZRangePrecision in PAL.
+    *
+    * Affects dEQP-VK.dynamic_state.*.discard.depth on has_htile_tc_z_clear_bug_without_stencil = 1
+    * chips as of the CTS commit 698abf5f6b7073562cc951617a58e5803c7ead3f (clearing a depth-only
+    * image to 0, drawing geometry with Z = 1 to it discarding all fragments in the shader, then
+    * reading it in vkCmdCopyImageToBuffer fetching 1 where 0 is supposed to be).
+    */
+   info->has_htile_tc_z_clear_bug_without_stencil = info->gfx_level == GFX8 ||
+                                                    info->family == CHIP_GFX1013;
+   info->has_htile_tc_z_clear_bug_with_stencil = info->has_htile_tc_z_clear_bug_without_stencil ||
+                                                 info->gfx_level == GFX9;
 
    info->has_small_prim_filter_sample_loc_bug =
       (info->family >= CHIP_POLARIS10 && info->family <= CHIP_POLARIS12) ||
@@ -1153,6 +1170,10 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
    info->gart_page_size = device_info.gart_page_size;
 
    info->gfx_ib_pad_with_type2 = info->gfx_level == GFX6;
+
+   /* GFX6 supports IB2, but not chaining inside IB2. See waCpIb2ChainingUnsupported in PAL */
+   info->can_chain_ib2 = info->gfx_level >= GFX7;
+
    /* CDNA starting with GFX940 shouldn't use CP DMA. */
    info->has_cp_dma = info->has_graphics || info->family < CHIP_GFX940;
 
@@ -1710,7 +1731,9 @@ void ac_print_gpu_info(const struct radeon_info *info, FILE *f)
    fprintf(f, "    has_out_of_order_rast = %u\n", info->has_out_of_order_rast);
    fprintf(f, "    cpdma_prefetch_writes_memory = %u\n", info->cpdma_prefetch_writes_memory);
    fprintf(f, "    has_gfx9_scissor_bug = %i\n", info->has_gfx9_scissor_bug);
-   fprintf(f, "    has_tc_compat_zrange_bug = %i\n", info->has_tc_compat_zrange_bug);
+   fprintf(f, "    has_htile_stencil_mipmap_bug = %i\n", info->has_htile_stencil_mipmap_bug);
+   fprintf(f, "    has_htile_tc_z_clear_bug_without_stencil = %i\n", info->has_htile_tc_z_clear_bug_without_stencil);
+   fprintf(f, "    has_htile_tc_z_clear_bug_with_stencil = %i\n", info->has_htile_tc_z_clear_bug_with_stencil);
    fprintf(f, "    has_small_prim_filter_sample_loc_bug = %i\n", info->has_small_prim_filter_sample_loc_bug);
    fprintf(f, "    has_ls_vgpr_init_bug = %i\n", info->has_ls_vgpr_init_bug);
    fprintf(f, "    has_pops_missed_overlap_bug = %i\n", info->has_pops_missed_overlap_bug);
@@ -1756,12 +1779,12 @@ void ac_print_gpu_info(const struct radeon_info *info, FILE *f)
    fprintf(f, "    cp_sdma_ge_use_system_memory_scope = %u\n", info->cp_sdma_ge_use_system_memory_scope);
    fprintf(f, "    pc_lines = %u\n", info->pc_lines);
    fprintf(f, "    lds_size_per_workgroup = %u\n", info->lds_size_per_workgroup);
-   fprintf(f, "    lds_alloc_granularity = %i\n", info->lds_alloc_granularity);
-   fprintf(f, "    lds_encode_granularity = %i\n", info->lds_encode_granularity);
+   fprintf(f, "    lds_alloc_granularity = %i\n", ac_shader_get_lds_alloc_granularity(info->gfx_level));
    fprintf(f, "    max_memory_clock = %i MHz\n", info->memory_freq_mhz);
 
    fprintf(f, "CP info:\n");
    fprintf(f, "    gfx_ib_pad_with_type2 = %i\n", info->gfx_ib_pad_with_type2);
+   fprintf(f, "    can_chain_ib2 = %i\n", info->can_chain_ib2);
    fprintf(f, "    has_cp_dma = %i\n", info->has_cp_dma);
    fprintf(f, "    me_fw_version = %i\n", info->me_fw_version);
    fprintf(f, "    me_fw_feature = %i\n", info->me_fw_feature);

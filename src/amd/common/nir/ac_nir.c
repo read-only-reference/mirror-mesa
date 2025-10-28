@@ -90,10 +90,16 @@ void ac_nir_set_options(struct radeon_info *info, bool use_llvm,
    options->has_shfr32 = true;
    options->has_mul24_relaxed = true;
    options->has_f2e4m3fn_satfn = !use_llvm && info->gfx_level >= GFX12;
+   options->has_atomic_isub = true;
+   options->has_atomic_load_store = true;
    options->lower_int64_options = nir_lower_imul64 | nir_lower_imul_high64 | nir_lower_imul_2x32_64 | nir_lower_divmod64 |
                                   nir_lower_minmax64 | nir_lower_iabs64 | nir_lower_iadd_sat64 | nir_lower_conv64 |
                                   nir_lower_bitfield_extract64;
    options->divergence_analysis_options = nir_divergence_view_index_uniform;
+   options->support_indirect_inputs = BITFIELD_BIT(MESA_SHADER_TESS_CTRL) |
+                                      BITFIELD_BIT(MESA_SHADER_TESS_EVAL);
+   options->support_indirect_outputs = BITFIELD_BIT(MESA_SHADER_TESS_CTRL) |
+                                       BITFIELD_BIT(MESA_SHADER_MESH);
    options->optimize_quad_vote_to_reduce = !use_llvm;
    options->lower_fisnormal = true;
    options->support_16bit_alu = info->gfx_level >= GFX8;
@@ -109,6 +115,7 @@ void ac_nir_set_options(struct radeon_info *info, bool use_llvm,
                          nir_io_compaction_rotates_color_channels;
    options->lower_layer_fs_input_to_sysval = true;
    options->scalarize_ddx = true;
+   options->coarse_ddx = true;
    options->skip_lower_packing_ops =
       BITFIELD_BIT(nir_lower_packing_op_unpack_64_2x32) |
       BITFIELD_BIT(nir_lower_packing_op_unpack_64_4x16) |
@@ -321,10 +328,14 @@ ac_nir_load_smem(nir_builder *b, unsigned num_components, nir_def *addr, nir_def
    /* Only 1 flag is allowed. */
    assert(!(access & ~ACCESS_CAN_SPECULATE));
    assert(align_mul >= 4 && util_is_power_of_two_nonzero(align_mul));
+   if (addr->bit_size == 32)
+      addr = nir_iadd_nuw(b, addr, offset);
+   else
+      addr = nir_iadd(b, addr, nir_u2u64(b, offset));
 
-   return nir_load_smem_amd(b, num_components, addr, offset,
+   return nir_load_global(b, num_components, 32, addr,
                             .align_mul = align_mul,
-                            .access = access | ACCESS_CAN_REORDER | ACCESS_NON_WRITEABLE);
+                            .access = access | ACCESS_CAN_REORDER | ACCESS_NON_WRITEABLE | ACCESS_SMEM_AMD);
 }
 
 unsigned
@@ -485,7 +496,6 @@ ac_nir_mem_vectorize_callback(unsigned align_mul, unsigned align_offset, unsigne
    bool uses_smem = (nir_intrinsic_has_access(low) &&
                      nir_intrinsic_access(low) & ACCESS_SMEM_AMD) ||
                     /* These don't have the "access" field. */
-                    low->intrinsic == nir_intrinsic_load_smem_amd ||
                     low->intrinsic == nir_intrinsic_load_push_constant;
    bool is_store = !nir_intrinsic_infos[low->intrinsic].has_dest;
    bool swizzled = low->intrinsic == nir_intrinsic_load_stack ||
@@ -508,12 +518,11 @@ ac_nir_mem_vectorize_callback(unsigned align_mul, unsigned align_offset, unsigne
           nir_deref_mode_is(nir_src_as_deref(low->src[0]), nir_var_mem_shared));
 
    /* Don't vectorize descriptor loads for LLVM due to excessive SGPR and VGPR spilling. */
-   if (!config->uses_aco && low->intrinsic == nir_intrinsic_load_smem_amd)
+   if (!config->uses_aco && low->intrinsic == nir_intrinsic_load_global && uses_smem)
       return false;
 
    /* Reject opcodes we don't vectorize. */
    switch (low->intrinsic) {
-   case nir_intrinsic_load_smem_amd:
    case nir_intrinsic_load_push_constant:
    case nir_intrinsic_load_ubo:
    case nir_intrinsic_load_stack:
@@ -898,12 +907,16 @@ ac_nir_lower_phis_to_scalar_cb(const nir_instr *instr, const void *_)
 bool
 ac_nir_allow_offset_wrap_cb(nir_intrinsic_instr *instr, const void *data)
 {
+   enum amd_gfx_level gfx_level = *(enum amd_gfx_level *)data;
    switch (instr->intrinsic) {
    case nir_intrinsic_load_shared:
    case nir_intrinsic_store_shared:
    case nir_intrinsic_shared_atomic:
    case nir_intrinsic_shared_atomic_swap:
-      return true;
+   case nir_intrinsic_load_shared2_amd:
+   case nir_intrinsic_store_shared2_amd:
+      /* GFX6 uses a 16-bit adder and can't handle unsigned wrap. */
+      return gfx_level >= GFX7;
    default: return false;
    }
 }

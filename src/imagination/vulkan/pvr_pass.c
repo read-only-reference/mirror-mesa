@@ -21,16 +21,21 @@
  * SOFTWARE.
  */
 
+#include "pvr_pass.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
 #include "hwdef/rogue_hw_utils.h"
 #include "pvr_bo.h"
+#include "pvr_device.h"
 #include "pvr_device_info.h"
+#include "pvr_entrypoints.h"
 #include "pvr_formats.h"
 #include "pvr_hw_pass.h"
+#include "pvr_macros.h"
 #include "pvr_pds.h"
-#include "pvr_private.h"
+#include "pvr_pipeline.h"
 #include "pvr_types.h"
 #include "pvr_usc.h"
 #include "util/macros.h"

@@ -73,7 +73,6 @@ build_triangle(inout vk_aabb bounds, VOID_REF dst_ptr, vk_bvh_geometry_data geom
    DEREF(node).base.aabb = bounds;
    DEREF(node).triangle_id = global_id;
    DEREF(node).geometry_id_and_flags = geom_data.geometry_id;
-   DEREF(node).id = 9;
 
    return is_valid;
 }
@@ -147,6 +146,9 @@ build_instance(inout vk_aabb bounds, VOID_REF src_ptr, VOID_REF dst_ptr, uint32_
    DEREF(node).otw_matrix = mat3x4(transform);
 
    vk_aabb blas_aabb = DEREF(REF(vk_aabb)(instance.accelerationStructureReference + BVH_BOUNDS_OFFSET));
+
+   if (any(isnan(blas_aabb.min)) || any(isnan(blas_aabb.max)))
+      return false;
 
    bounds = calculate_instance_node_bounds(blas_aabb, mat3x4(transform));
 

@@ -1251,6 +1251,7 @@ nir_op nir_type_conversion_op(nir_alu_type src, nir_alu_type dst,
  */
 typedef enum {
    nir_atomic_op_iadd,
+   nir_atomic_op_isub,
    nir_atomic_op_imin,
    nir_atomic_op_umin,
    nir_atomic_op_imax,
@@ -1284,6 +1285,7 @@ nir_atomic_op_type(nir_atomic_op op)
       return nir_type_float;
 
    case nir_atomic_op_iadd:
+   case nir_atomic_op_isub:
    case nir_atomic_op_iand:
    case nir_atomic_op_ior:
    case nir_atomic_op_ixor:
@@ -2224,6 +2226,13 @@ typedef enum nir_tex_src_type {
     * mip-mapping.
     */
    nir_tex_src_min_lod,
+
+   /** Max LOD
+    *
+    * The computed LOD is clamped to be at most as large as max_lod before
+    * mip-mapping.
+    */
+   nir_tex_src_max_lod_kk,
 
    /** LOD bias + min LOD packed together into 32-bits. This is the common case
     * for texturing on Honeykrisp with DX12, where both LOD bias and min LOD are
@@ -3974,6 +3983,8 @@ void nir_fixup_is_exported(nir_shader *shader);
 nir_shader *nir_shader_create(void *mem_ctx,
                               mesa_shader_stage stage,
                               const nir_shader_compiler_options *options);
+
+bool nir_shader_bisect_select(nir_shader *s);
 
 /** Adds a variable to the appropriate list in nir_shader */
 void nir_shader_add_variable(nir_shader *shader, nir_variable *var);
@@ -5767,28 +5778,10 @@ typedef struct nir_lower_tex_options {
    bool lower_txb_shadow_clamp;
 
    /**
-    * If true, lower nir_texop_txd on shadow samplers when it uses min_lod
-    * with nir_texop_txl.  This includes cube maps.
+    * A generic callback to nir_texop_txd.
     */
-   bool lower_txd_shadow_clamp;
-
-   /**
-    * If true, lower nir_texop_txd on when it uses both offset and min_lod
-    * with nir_texop_txl.  This includes cube maps.
-    */
-   bool lower_txd_offset_clamp;
-
-   /**
-    * If true, lower nir_texop_txd with min_lod to a nir_texop_txl if the
-    * sampler is bindless.
-    */
-   bool lower_txd_clamp_bindless_sampler;
-
-   /**
-    * If true, lower nir_texop_txd with min_lod to a nir_texop_txl if the
-    * sampler index is not statically determinable to be less than 16.
-    */
-   bool lower_txd_clamp_if_sampler_index_not_lt_16;
+   bool (*lower_txd_cb)(const nir_tex_instr *tex, const void *data);
+   const void *lower_txd_data;
 
    /**
     * If true, lower nir_texop_txs with a non-0-lod into nir_texop_txs with
@@ -5850,11 +5843,16 @@ typedef struct nir_lower_tex_options {
     */
    bool lower_index_to_offset;
 
+   /* Optimize txd(coord, ddxy_coarse(coord)) to tex(coord). */
+   bool optimize_txd;
+
    /**
     * Payload data to be sent to callback / filter functions.
     */
    void *callback_data;
 } nir_lower_tex_options;
+
+unsigned nir_tex_parse_txd_coords(nir_shader *shader, nir_tex_instr *tex, nir_instr **ddxy_instrs);
 
 /** Lowers complex texture instructions to simpler ones */
 bool nir_lower_tex(nir_shader *shader,
@@ -5873,6 +5871,9 @@ nir_lower_tex_shadow(nir_shader *s,
                      enum compare_func *compare_func,
                      nir_lower_tex_shadow_swizzle *tex_swizzles,
                      bool is_fixed_point_format);
+
+bool
+nir_update_image_intrinsic_from_var(nir_shader *nir);
 
 typedef struct nir_lower_image_options {
    /**
@@ -6239,6 +6240,8 @@ bool nir_opt_algebraic_integer_promotion(nir_shader *shader);
 bool nir_opt_reassociate_matrix_mul(nir_shader *shader);
 bool nir_opt_constant_folding(nir_shader *shader);
 
+nir_def *nir_try_constant_fold_alu(nir_builder *b, nir_alu_instr *alu);
+
 /* Try to combine a and b into a.  Return true if combination was possible,
  * which will result in b being removed by the pass.  Return false if
  * combination wasn't possible.
@@ -6330,7 +6333,7 @@ typedef enum {
    nir_move_load_buffer_amd =          BITFIELD_BIT(21),
    nir_move_load_frag_coord =          BITFIELD_BIT(22),
 
-   /* The following options only impact load_global/ubo/ssbo/smem_amd. */
+   /* The following options only impact load_global/ubo/ssbo. */
    nir_move_only_convergent =          BITFIELD_BIT(30),
    nir_move_only_divergent =           BITFIELD_BIT(31),
 } nir_move_options;
@@ -6773,6 +6776,8 @@ void nir_gather_output_clipper_var_groups(nir_shader *nir,
 bool nir_lower_cooperative_matrix_flexible_dimensions(nir_shader *shader, unsigned m_gran, unsigned n_gran, unsigned k_gran);
 
 bool nir_unlower_io_to_vars(nir_shader *nir, bool keep_intrinsics);
+
+bool nir_opt_barycentric(nir_shader *shader, bool lower_sample_to_pos);
 
 #include "nir_inline_helpers.h"
 

@@ -255,6 +255,8 @@ struct tu6_global
 
    uint32_t vsc_state[32];
 
+   uint64_t bv_predicate;
+
    volatile uint32_t vtx_stats_query_not_running;
 
    /* To know when renderpass stats for autotune are valid */
@@ -363,6 +365,11 @@ struct tu_device
    struct tu_suballocator *trace_suballoc;
    mtx_t trace_mutex;
 
+   /* VSC patchpoint BO suballocator.
+    */
+   struct tu_suballocator vis_stream_suballocator;
+   mtx_t vis_stream_suballocator_mtx;
+
    /* the blob seems to always use 8K factor and 128K param sizes, copy them */
 #define TU_TESS_FACTOR_SIZE (8 * 1024)
 #define TU_TESS_PARAM_SIZE (128 * 1024)
@@ -431,7 +438,10 @@ struct tu_device
 
    struct tu_cs_entry cmdbuf_start_a725_quirk_entry;
 
-   struct tu_cs_entry bin_preamble_entry;
+   struct tu_cs_entry bin_preamble_entry, bin_preamble_bv_entry;
+
+   struct tu_bo *vis_stream_bo;
+   mtx_t vis_stream_mtx;
 
    struct util_dynarray dynamic_rendering_pending;
    VkCommandPool dynamic_rendering_pool;
@@ -458,8 +468,15 @@ struct tu_device
    /* Address space and global fault count for this local_fd with DRM backend */
    uint64_t fault_count;
 
+   /* Temporary storage for multisampled attachments backed by a
+    * single-sampled image view in sysmem mode.
+    */
+   struct tu_device_memory *msrtss_color_temporary;
+   struct tu_device_memory *msrtss_depth_temporary;
+
    struct u_trace_context trace_context;
    struct list_head copy_timestamp_cs_pool;
+   mtx_t copy_timestamp_cs_pool_mutex;
 
    #ifdef HAVE_PERFETTO
    struct tu_perfetto_state perfetto;
@@ -472,6 +489,9 @@ struct tu_device
 
    /* This is an internal queue for mapping/unmapping non-sparse BOs */
    uint32_t vm_bind_queue_id;
+
+   uint32_t vis_stream_count;
+   uint32_t vis_stream_size;
 };
 VK_DEFINE_HANDLE_CASTS(tu_device, vk.base, VkDevice, VK_OBJECT_TYPE_DEVICE)
 
@@ -481,6 +501,8 @@ struct tu_device_memory
 
    uint64_t iova;
    uint64_t size;
+
+   uint32_t refcnt;
 
    /* For lazy memory */
    bool lazy;
@@ -496,14 +518,13 @@ struct tu_device_memory
 VK_DEFINE_NONDISP_HANDLE_CASTS(tu_device_memory, vk.base, VkDeviceMemory,
                                VK_OBJECT_TYPE_DEVICE_MEMORY)
 
+void
+tu_destroy_memory(struct tu_device *device,
+                  struct tu_device_memory *mem);
+
 VkResult
 tu_allocate_lazy_memory(struct tu_device *dev,
                         struct tu_device_memory *mem);
-
-struct tu_attachment_info
-{
-   struct tu_image_view *attachment;
-};
 
 struct tu_vsc_config {
    /* number of tiles */
@@ -542,10 +563,12 @@ struct tu_framebuffer
    uint32_t height;
    uint32_t layers;
 
+   struct tu_device_memory *depth_mem, *color_mem;
+
    struct tu_tiling_config tiling[TU_GMEM_LAYOUT_COUNT];
 
    uint32_t attachment_count;
-   struct tu_attachment_info attachments[0];
+   const struct tu_image_view *attachments[0];
 };
 VK_DEFINE_NONDISP_HANDLE_CASTS(tu_framebuffer, base, VkFramebuffer,
                                VK_OBJECT_TYPE_FRAMEBUFFER)
@@ -585,6 +608,9 @@ tu_get_scratch_bo(struct tu_device *dev, uint64_t size, struct tu_bo **bo);
 
 void tu_setup_dynamic_framebuffer(struct tu_cmd_buffer *cmd_buffer,
                                   const VkRenderingInfo *pRenderingInfo);
+
+VkResult
+tu_setup_dynamic_msrtss(struct tu_cmd_buffer *cmd_buffer);
 
 void
 tu_copy_buffer(struct u_trace_context *utctx, void *cmdstream,
@@ -672,6 +698,5 @@ tu_bo_init_new_cached(struct tu_device *dev, struct vk_object_base *base,
           VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0),
       flags, NULL, name);
 }
-
 
 #endif /* TU_DEVICE_H */

@@ -37,6 +37,7 @@
 #include <codecapi.h>
 #include <combaseapi.h>
 #include <concrt.h>
+#include <d3d9types.h>
 #include <initguid.h>
 #include <mfapi.h>
 #include <mfd3d12.h>   // For IMFD3D12SynchronizationObjectCommands
@@ -55,7 +56,6 @@
 #include <d3d11_3.h>
 #include <d3d11_4.h>
 #include <dxgi1_2.h>
-#include <d3d9types.h>
 
 #include "context.h"
 #include "encoder_capabilities.h"
@@ -388,6 +388,33 @@ DEFINE_GUID( MFSampleExtension_VideoEncodeSatdMap, 0xadf61d96, 0xc2d3, 0x4b57, 0
 
 #endif
 
+// MFSampleExtension_VideoEncodeReconstructedPicture {3E8A1B7F-5C92-4D6E-B834-F0A729E65C48}
+// Type: IMFMediaBuffer
+// The reconstructed picture data of an encoded video frame (Experimental).
+DEFINE_GUID(
+   MFSampleExtension_VideoEncodeReconstructedPicture, 0x3e8a1b7f, 0x5c92, 0x4d6e, 0xb8, 0x34, 0xf0, 0xa7, 0x29, 0xe6, 0x5c, 0x48 );
+
+#ifndef CODECAPI_AVEncVideoReconstructedPictureOutputMode
+// AVEncVideoReconstructedPictureOutputMode (VT_UI4) (Experimental, Testing only)
+// Specifies the reconstructed picture output mode for video encoding.
+// 0: disable; 1: blit copy; 2: read-only shared resource
+DEFINE_CODECAPI_GUID( AVEncVideoReconstructedPictureOutputMode,
+                      "4A7B2E8F-1D93-4C6A-B548-91E2F8C5A7D3",
+                      0x4a7b2e8f,
+                      0x1d93,
+                      0x4c6a,
+                      0xb5,
+                      0x48,
+                      0x91,
+                      0xe2,
+                      0xf8,
+                      0xc5,
+                      0xa7,
+                      0xd3 )
+#define CODECAPI_AVEncVideoReconstructedPictureOutputMode DEFINE_CODECAPI_GUIDNAMED( AVEncVideoReconstructedPictureOutputMode )
+
+#endif
+
 #ifndef CODECAPI_AVEncVideoInputDeltaQPBlockSettings
 // AVEncVideoInputDeltaQPSettings (VT_BLOB)
 // Read-only parameter that specifies the settings that the encoder MFT supports with respect to delta QP values as input.
@@ -559,6 +586,8 @@ DEFINE_CODECAPI_GUID( AVEncWorkProcessPriority,
 #endif
 
 #define MFT_INPUT_QUEUE_DEPTH 8
+#define MFT_STAT_POOL_MIN_SIZE                                                                                                     \
+   2   // when MFSample is destroyed, the stat texture is returned via some other threads and it could be after ProcessInput.
 
 class __declspec( uuid( HMFT_GUID ) ) CDX12EncHMFT : CMFD3DManager,
                                                      public RuntimeClass<RuntimeClassFlags<RuntimeClassType::WinRtClassicComMix>,
@@ -600,8 +629,46 @@ class __declspec( uuid( HMFT_GUID ) ) CDX12EncHMFT : CMFD3DManager,
    HRESULT OnFlush();
 
    HRESULT ConfigureSampleAllocator();
-   HRESULT ConfigureMapSampleAllocator( IMFVideoSampleAllocatorEx *spAllocator, UINT32 width, UINT32 height, GUID subtype, UINT32 poolSize );
-   void ConfigureMapSampleAllocatorHelper( ComPtr<IMFVideoSampleAllocatorEx> &allocator, const union pipe_enc_cap_gpu_stats_map &outputStatsMap, uint32_t blockSize, BOOL &useAllocatorFlag );
+   HRESULT ConfigureMapSampleAllocator(
+      IMFVideoSampleAllocatorEx *spAllocator, UINT32 width, UINT32 height, GUID subtype, UINT32 poolSize );
+   void ConfigureMapSampleAllocatorHelper( ComPtr<IMFVideoSampleAllocatorEx> &allocator,
+                                           const union pipe_enc_cap_gpu_stats_map &outputStatsMap,
+                                           uint32_t blockSize,
+                                           BOOL &useAllocatorFlag );
+   HRESULT ConfigureBitstreamOutputSampleAttributes( IMFSample *pSample,
+                                                     const LPDX12EncodeContext pDX12EncodeContext,
+                                                     DWORD dwReceivedInput,
+                                                     BOOL bIsLastSlice,
+                                                     struct codec_unit_location_t *pCodecUnitMetadata,
+                                                     unsigned CodecUnitMetadataCount );
+   HRESULT ConfigureAsyncStatsMetadataOutputSampleAttributes( IMFSample *pSample,
+                                                              pipe_resource *pPipeResourcePSNRStats,
+                                                              pipe_resource *pPipeResourceQPMapStats,
+                                                              pipe_resource *pPipeResourceRCBitAllocMapStats,
+                                                              pipe_resource *pPipeResourceSATDMapStats,
+                                                              ComPtr<ID3D12Fence> &pResolveStatsCompletionFence,
+                                                              UINT64 ResolveStatsCompletionFenceValue,
+                                                              pipe_resource *pPipeResourceReconstructedPicture,
+                                                              UINT PipeResourceReconstructedPictureSubresource,
+                                                              ComPtr<ID3D12Fence> &spReconstructedPictureCompletionFence,
+                                                              UINT64 ReconstructedPictureCompletionFenceValue,
+                                                              ID3D12CommandQueue *pSyncObjectQueue );
+   bool GetSliceBitstreamMetadata( LPDX12EncodeContext pDX12EncodeContext,
+                                   uint32_t slice_idx,
+                                   std::vector<struct codec_unit_location_t> &codec_unit_metadata );
+   bool ProcessSliceBitstreamZeroCopy( LPDX12EncodeContext pDX12EncodeContext,
+                                       uint32_t slice_idx,
+                                       ComPtr<IMFMediaBuffer> &spMediaBuffer,
+                                       std::vector<struct codec_unit_location_t> &mfsample_codec_unit_metadata );
+   void FinalizeAndEmitOutputSample( LPDX12EncodeContext pDX12EncodeContext,
+                                     ComPtr<IMFMediaBuffer> &spMediaBuffer,
+                                     ComPtr<IMFSample> &spOutputSample,
+                                     struct codec_unit_location_t *pCodecUnitMetadata,
+                                     unsigned CodecUnitMetadataCount,
+                                     DWORD dwReceivedInput,
+                                     BOOL bIsLastSlice,
+                                     uint64_t ResolveStatsCompletionFenceValue );
+
    HRESULT UpdateAvailableInputType();
    HRESULT InternalCheckInputType( IMFMediaType *pType );
    HRESULT InternalCheckOutputType( IMFMediaType *pType );
@@ -739,15 +806,25 @@ class __declspec( uuid( HMFT_GUID ) ) CDX12EncHMFT : CMFD3DManager,
    UINT32 m_uiVideoOutputBitsUsedMapBlockSize = 0;
    UINT32 m_uiVideoSatdMapBlockSize = 0;
 
+   typedef enum RECON_PIC_OUTPUT_MODE
+   {
+      RECON_PIC_OUTPUT_MODE_DISABLED = 0,
+      RECON_PIC_OUTPUT_MODE_BLIT_COPY = 1,
+      RECON_PIC_OUTPUT_MODE_READ_ONLY_SHARED_RESOURCE = 2,
+   } RECON_PIC_OUTPUT_MODE;
+
+   RECON_PIC_OUTPUT_MODE m_VideoReconstructedPictureMode = RECON_PIC_OUTPUT_MODE_DISABLED;
+
+   UINT32 m_uiSliceGenerationMode = 0;
+   BOOL m_bSliceGenerationModeSet = FALSE;
+
    BOOL m_bRateControlFramePreAnalysis = FALSE;
    BOOL m_bRateControlFramePreAnalysisExternalReconDownscale = FALSE;
 
-#if ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
    D3D12_COMMAND_QUEUE_PROCESS_PRIORITY m_WorkProcessPriority = {};
    BOOL m_bWorkProcessPrioritySet = FALSE;
    D3D12_COMMAND_QUEUE_GLOBAL_PRIORITY m_WorkGlobalPriority = {};
    BOOL m_bWorkGlobalPrioritySet = FALSE;
-#endif // ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
 
    UINT m_uiMaxOutputBitstreamSize = 0u;
    struct pipe_video_codec *m_pPipeVideoCodec = nullptr;

@@ -2,6 +2,7 @@
  * Copyright 2023-2024 Alyssa Rosenzweig
  * Copyright 2023-2024 Valve Corporation
  * Copyright 2022,2025 Collabora Ltd.
+ * Copyright 2025 Arm Ltd.
  * SPDX-License-Identifier: MIT
  */
 
@@ -178,6 +179,9 @@ struct spill_ctx {
     */
    BITSET_WORD *S;
 
+   /* Widths of vectors */
+   uint32_t *size;
+
    /* Mapping of rematerializable values to their definitions, or NULL for nodes
     * that are not materializable.
     */
@@ -218,12 +222,11 @@ spill_block(struct spill_ctx *ctx, bi_block *block)
 
 /* Calculate the register demand of a node. This should be rounded up to
  * a power-of-two to match the equivalent calculations in RA.
- * For now just punt and return 1, but we'll want to revisit this later.
  */
 static inline unsigned
 node_size(struct spill_ctx *ctx, unsigned node)
 {
-   return 1;
+   return ctx->size[node];
 }
 
 /*
@@ -307,14 +310,36 @@ reconstruct_index(struct spill_ctx *ctx, unsigned node)
 }
 
 static bool
+only_const_sources(bi_instr *I)
+{
+   bool res = true;
+   for (uint32_t s = 0; s < I->nr_srcs && res; ++s) {
+      bi_index src = I->src[s];
+      enum bi_index_type t = src.type;
+      res &= t == BI_INDEX_CONSTANT || t == BI_INDEX_FAU;
+   }
+   return res;
+}
+
+static bool
 can_remat(bi_instr *I)
 {
    switch (I->op) {
+   case BI_OPCODE_IADD_IMM_I32:
+   case BI_OPCODE_IADD_IMM_V2I16:
+      return only_const_sources(I);
+   case BI_OPCODE_LD_BUFFER_I8:
+   case BI_OPCODE_LD_BUFFER_I16:
+   case BI_OPCODE_LD_BUFFER_I24:
+   case BI_OPCODE_LD_BUFFER_I32:
+      /* TODO: Allow loads that write >1 reg. */
+      return only_const_sources(I);
    case BI_OPCODE_MOV_I32:
       assert(!I->src[0].memory);
       assert(!I->dest[0].memory);
       assert(I->dest[0].type == BI_INDEX_NORMAL);
-      return (I->src[0].type == BI_INDEX_CONSTANT); // || (I->src[0].type == BI_INDEX_REGISTER);
+      enum bi_index_type t = I->src[0].type;
+      return t == BI_INDEX_CONSTANT || t == BI_INDEX_FAU;
    default:
       return false;
    }
@@ -323,14 +348,27 @@ can_remat(bi_instr *I)
 static bi_instr *
 remat_to(bi_builder *b, bi_index dst, struct spill_ctx *ctx, unsigned node)
 {
+   assert(dst.type == BI_INDEX_NORMAL);
    assert(node < ctx->spill_max);
    bi_instr *I = ctx->remat[node];
    assert(can_remat(I));
 
    switch (I->op) {
+   case BI_OPCODE_IADD_IMM_I32:
+      return bi_iadd_imm_i32_to(b, dst, I->src[0], I->index);
+   case BI_OPCODE_IADD_IMM_V2I16:
+      return bi_iadd_imm_v2i16_to(b, dst, I->src[0], I->index);
+   case BI_OPCODE_LD_BUFFER_I8:
+      return bi_ld_buffer_i8_to(b, dst, I->src[0], I->src[1]);
+   case BI_OPCODE_LD_BUFFER_I16:
+      return bi_ld_buffer_i16_to(b, dst, I->src[0], I->src[1]);
+   case BI_OPCODE_LD_BUFFER_I24:
+      return bi_ld_buffer_i24_to(b, dst, I->src[0], I->src[1]);
+   case BI_OPCODE_LD_BUFFER_I32:
+      return bi_ld_buffer_i32_to(b, dst, I->src[0], I->src[1]);
    case BI_OPCODE_MOV_I32:
-      assert(I->src[0].type == BI_INDEX_CONSTANT /*|| I->src[0].type == BI_INDEX_REGISTER*/);
-      assert(dst.type == BI_INDEX_NORMAL);
+      assert(I->src[0].type == BI_INDEX_CONSTANT ||
+             I->src[0].type == BI_INDEX_FAU);
       return bi_mov_i32_to(b, dst, I->src[0]);
    default:
       UNREACHABLE("invalid remat");
@@ -425,7 +463,8 @@ cmp_dist(const void *left_, const void *right_, void *ctx_)
    struct spill_ctx *ctx = ctx_;
    const struct candidate *left = left_;
    const struct candidate *right = right_;
-
+   unsigned ldist = left->dist;
+   unsigned rdist = right->dist;
    /* We assume that rematerializing - even before every instruction - is
     * cheaper than spilling. As long as one of the nodes is rematerializable
     * (with distance > 0), we choose it over spilling. Within a class of nodes
@@ -433,13 +472,13 @@ cmp_dist(const void *left_, const void *right_, void *ctx_)
     */
    assert(left->node < ctx->n_alloc);
    assert(right->node < ctx->n_alloc);
-   bool remat_left = ctx->remat[left->node] != NULL && left->dist > 0;
-   bool remat_right = ctx->remat[right->node] != NULL && right->dist > 0;
+   bool remat_left = ctx->remat[left->node] != NULL && ldist > 0;
+   bool remat_right = ctx->remat[right->node] != NULL && rdist > 0;
 
    if (remat_left != remat_right)
       return remat_left ? 1 : -1;
    else
-      return (left->dist > right->dist) - (left->dist < right->dist);
+      return (ldist > rdist) - (ldist < rdist);
 }
 
 /*
@@ -646,13 +685,13 @@ calculate_local_next_use(struct spill_ctx *ctx, struct util_dynarray *out)
          bi_foreach_ssa_dest_rev(I, d) {
             unsigned v = I->dest[d].value;
             dist_t next_dist = search_next_uses(&nu, v);
-            util_dynarray_append(out, dist_t, next_dist);
+            util_dynarray_append(out, next_dist);
          }
 
          bi_foreach_ssa_src(I, s) {
             unsigned v = I->src[s].value;
             dist_t next_dist = search_next_uses(&nu, v);
-            util_dynarray_append(out, dist_t, next_dist);
+            util_dynarray_append(out, next_dist);
             assert((next_dist == DIST_INFINITY) == I->src[s].kill_ssa);
             set_next_use(&nu, v, ip);
          }
@@ -1257,13 +1296,40 @@ bi_spill_ssa(bi_context *ctx, unsigned k, unsigned spill_base)
 
    dist_t *next_uses = rzalloc_array(memctx, dist_t, ctx->ssa_alloc + max_temps);
    bi_instr **remat = rzalloc_array(memctx, bi_instr *, ctx->ssa_alloc + max_temps);
+   uint32_t *sizes = rzalloc_array(memctx, uint32_t, ctx->ssa_alloc + max_temps);
 
    /* now record instructions that can be easily re-materialized */
+   /* while we're at it, calculate sizes too */
    bi_foreach_instr_global(ctx, I) {
+      if (I->nr_dests == 0 || I->dest[0].type != BI_INDEX_NORMAL)
+         continue;
+      unsigned idx = I->dest[0].value;
       if (can_remat(I))
-         remat[I->dest[0].value] = I;
+         remat[idx] = I;
+      bi_foreach_ssa_dest(I, d) {
+         idx = I->dest[d].value;
+         assert(sizes[idx] == 0 && "SSA broken");
+         switch (I->op) {
+         case BI_OPCODE_PHI:
+            break;
+         default:
+            sizes[idx] = bi_count_write_registers(I, d);
+            break;
+         }
+      }
    }
-
+   /* now that we know the rest of the sizes, find the sizes for PHI nodes */
+   bi_foreach_block(ctx, block) {
+      bi_foreach_phi_in_block(block, I) {
+         if (I->dest[0].type != BI_INDEX_NORMAL)
+            continue;
+         unsigned idx = I->dest[0].value;
+         sizes[idx] = 1;
+         bi_foreach_ssa_src(I, s) {
+            sizes[idx] = MAX2(sizes[idx], sizes[I->src[s].value]);
+         }
+      }
+   }
    struct spill_block *blocks =
       rzalloc_array(memctx, struct spill_block, ctx->num_blocks);
 
@@ -1297,6 +1363,7 @@ bi_spill_ssa(bi_context *ctx, unsigned k, unsigned spill_base)
          .k = k,
          .W = W,
          .S = S,
+         .size = sizes,
          .spill_max = n,
          .spill_base = spill_base,
          .spill_map = spill_map,
@@ -1323,6 +1390,7 @@ bi_spill_ssa(bi_context *ctx, unsigned k, unsigned spill_base)
          .k = k,
          .W = W,
          .S = S,
+         .size = sizes,
          .spill_max = n,
          .spill_base = spill_base,
          .spill_map = spill_map,

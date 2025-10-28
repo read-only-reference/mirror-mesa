@@ -1441,7 +1441,7 @@ static void amdgpu_buffer_get_metadata(struct radeon_winsys *rws,
 static void amdgpu_buffer_set_metadata(struct radeon_winsys *rws,
                                        struct pb_buffer_lean *_buf,
                                        struct radeon_bo_metadata *md,
-                                       struct radeon_surf *surf)
+                                       const struct radeon_surf *surf)
 {
    struct amdgpu_winsys *aws = amdgpu_winsys(rws);
    struct amdgpu_winsys_bo *bo = amdgpu_winsys_bo(_buf);
@@ -1726,8 +1726,7 @@ static struct pb_buffer_lean *amdgpu_bo_from_handle(struct radeon_winsys *rws,
 
 error:
    simple_mtx_unlock(&aws->bo_export_table_lock);
-   if (bo)
-      FREE(bo);
+   FREE(bo);
    if (va_handle)
       ac_drm_va_range_free(va_handle);
    ac_drm_bo_free(aws->dev, result.bo);

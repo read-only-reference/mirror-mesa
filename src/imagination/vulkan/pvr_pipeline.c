@@ -24,6 +24,8 @@
  * SOFTWARE.
  */
 
+#include "pvr_pipeline.h"
+
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -39,8 +41,12 @@
 #include "pvr_bo.h"
 #include "pvr_csb.h"
 #include "pvr_csb_enum_helpers.h"
+#include "pvr_descriptor_set.h"
+#include "pvr_device.h"
+#include "pvr_entrypoints.h"
+#include "pvr_hw_pass.h"
+#include "pvr_pass.h"
 #include "pvr_pds.h"
-#include "pvr_private.h"
 #include "pvr_robustness.h"
 #include "pvr_types.h"
 #include "pvr_usc.h"
@@ -1198,9 +1204,9 @@ pvr_CreateComputePipelines(VkDevice _device,
 
 static void pvr_pipeline_destroy_shader_data(pco_data *data)
 {
-   for (unsigned u = 0; u < ARRAY_SIZE(data->common.desc_sets); ++u)
-      if (data->common.desc_sets[u].bindings)
-         ralloc_free(data->common.desc_sets[u].bindings);
+   for (unsigned u = 0; u < ARRAY_SIZE(data->common.desc_sets); ++u) {
+      ralloc_free(data->common.desc_sets[u].bindings);
+   }
 }
 
 static void

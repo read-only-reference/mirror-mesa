@@ -232,61 +232,57 @@ static void get_param(struct rvce_encoder *enc, struct pipe_h264_enc_picture_des
    enc->enc_pic.eo.num_ref_idx_l0_active_minus1 = pic->slice.num_ref_idx_l0_active_minus1;
    enc->enc_pic.eo.num_ref_idx_l1_active_minus1 = pic->slice.num_ref_idx_l1_active_minus1;
 
-   i = 0;
-   if (pic->slice.ref_pic_list_modification_flag_l0) {
-      for (; i < MIN2(4, pic->slice.num_ref_list0_mod_operations); i++) {
-         struct pipe_h264_ref_list_mod_entry *entry = &pic->slice.ref_list0_mod_operations[i];
-         switch (entry->modification_of_pic_nums_idc) {
-         case 0:
-            enc->enc_pic.eo.enc_ref_list_modification_op[i] = REF_LIST_MODIFICATION_OP_SHORT_TERM_SUBTRACT;
-            enc->enc_pic.eo.enc_ref_list_modification_num[i] = entry->abs_diff_pic_num_minus1;
-            break;
-         case 2:
-            enc->enc_pic.eo.enc_ref_list_modification_op[i] = REF_LIST_MODIFICATION_OP_LONG_TERM;
-            enc->enc_pic.eo.enc_ref_list_modification_num[i] = entry->long_term_pic_num;
-            break;
-         case 5:
-            enc->enc_pic.eo.enc_ref_list_modification_op[i] = REF_LIST_MODIFICATION_OP_VIEW_ADD;
-            enc->enc_pic.eo.enc_ref_list_modification_num[i] = entry->abs_diff_pic_num_minus1;
-            break;
-         default:
-         case 3:
-            enc->enc_pic.eo.enc_ref_list_modification_op[i] = REF_LIST_MODIFICATION_OP_END;
-            break;
-         }
+   for (i = 0; i < MIN2(4, pic->slice.num_ref_list0_mod_operations); i++) {
+      struct pipe_h264_ref_list_mod_entry *entry = &pic->slice.ref_list0_mod_operations[i];
+      switch (entry->modification_of_pic_nums_idc) {
+      case 0:
+         enc->enc_pic.eo.enc_ref_list_modification_op[i] = REF_LIST_MODIFICATION_OP_SHORT_TERM_SUBTRACT;
+         enc->enc_pic.eo.enc_ref_list_modification_num[i] = entry->abs_diff_pic_num_minus1;
+         break;
+      case 2:
+         enc->enc_pic.eo.enc_ref_list_modification_op[i] = REF_LIST_MODIFICATION_OP_LONG_TERM;
+         enc->enc_pic.eo.enc_ref_list_modification_num[i] = entry->long_term_pic_num;
+         break;
+      case 5:
+         enc->enc_pic.eo.enc_ref_list_modification_op[i] = REF_LIST_MODIFICATION_OP_VIEW_ADD;
+         enc->enc_pic.eo.enc_ref_list_modification_num[i] = entry->abs_diff_pic_num_minus1;
+         break;
+      default:
+      case 3:
+         enc->enc_pic.eo.enc_ref_list_modification_op[i] = REF_LIST_MODIFICATION_OP_END;
+         break;
       }
    }
    if (i < 4)
       enc->enc_pic.eo.enc_ref_list_modification_op[i] = REF_LIST_MODIFICATION_OP_END;
 
-   i = 0;
-   if (pic->pic_ctrl.nal_unit_type == PIPE_H264_NAL_IDR_SLICE) {
-      enc->enc_pic.eo.enc_decoded_picture_marking_op[i++] = pic->slice.long_term_reference_flag ? 6 : 0;
-   } else if (pic->slice.adaptive_ref_pic_marking_mode_flag) {
-      for (; i < MIN2(4, pic->slice.num_ref_pic_marking_operations); i++) {
-         struct pipe_h264_ref_pic_marking_entry *entry = &pic->slice.ref_pic_marking_operations[i];
-         enc->enc_pic.eo.enc_decoded_picture_marking_op[i] = entry->memory_management_control_operation;
-         switch (entry->memory_management_control_operation) {
-         case 1:
-            enc->enc_pic.eo.enc_decoded_picture_marking_num[i] = entry->difference_of_pic_nums_minus1;
-            break;
-         case 2:
-            enc->enc_pic.eo.enc_decoded_picture_marking_num[i] = entry->long_term_pic_num;
-            break;
-         case 3:
-            enc->enc_pic.eo.enc_decoded_picture_marking_num[i] = entry->difference_of_pic_nums_minus1;
-            enc->enc_pic.eo.enc_decoded_picture_marking_idx[i] = entry->long_term_frame_idx;
-            break;
-         case 4:
-            enc->enc_pic.eo.enc_decoded_picture_marking_idx[i] = entry->max_long_term_frame_idx_plus1;
-            break;
-         case 6:
-            enc->enc_pic.eo.enc_decoded_picture_marking_idx[i] = entry->long_term_frame_idx;
-            break;
-         default:
-            break;
-         }
+   for (i = 0; i < MIN2(4, pic->slice.num_ref_pic_marking_operations); i++) {
+      struct pipe_h264_ref_pic_marking_entry *entry = &pic->slice.ref_pic_marking_operations[i];
+      enc->enc_pic.eo.enc_decoded_picture_marking_op[i] = entry->memory_management_control_operation;
+      switch (entry->memory_management_control_operation) {
+      case 1:
+         enc->enc_pic.eo.enc_decoded_picture_marking_num[i] = entry->difference_of_pic_nums_minus1;
+         break;
+      case 2:
+         enc->enc_pic.eo.enc_decoded_picture_marking_num[i] = entry->long_term_pic_num;
+         break;
+      case 3:
+         enc->enc_pic.eo.enc_decoded_picture_marking_num[i] = entry->difference_of_pic_nums_minus1;
+         enc->enc_pic.eo.enc_decoded_picture_marking_idx[i] = entry->long_term_frame_idx;
+         break;
+      case 4:
+         enc->enc_pic.eo.enc_decoded_picture_marking_idx[i] = entry->max_long_term_frame_idx_plus1;
+         break;
+      case 6:
+         enc->enc_pic.eo.enc_decoded_picture_marking_idx[i] = entry->long_term_frame_idx;
+         break;
+      default:
+         break;
       }
+   }
+   if (pic->pic_ctrl.nal_unit_type == PIPE_H264_NAL_IDR_SLICE) {
+      assert(pic->slice.num_ref_pic_marking_operations == 0);
+      enc->enc_pic.eo.enc_decoded_picture_marking_op[i++] = pic->slice.long_term_reference_flag ? 6 : 0;
    }
    if (i < 4)
       enc->enc_pic.eo.enc_decoded_picture_marking_op[i] = 0;
@@ -368,7 +364,7 @@ static void encode(struct rvce_encoder *enc)
    task_info(enc, 0x00000003, 0);
 
    RVCE_BEGIN(0x05000001);                                      // context buffer
-   RVCE_READWRITE(enc->dpb.res->buf, enc->dpb.res->domains, 0); // encodeContextAddressHi/Lo
+   RVCE_READWRITE(enc->dpb->buf, enc->dpb->domains, 0); // encodeContextAddressHi/Lo
    RVCE_END();
 
    RVCE_BEGIN(0x05000004);                                   // video bitstream buffer
@@ -836,15 +832,16 @@ static void rvce_destroy(struct pipe_video_codec *encoder)
 {
    struct rvce_encoder *enc = (struct rvce_encoder *)encoder;
    if (enc->stream_handle) {
-      struct rvid_buffer fb;
-      si_vid_create_buffer(enc->screen, &fb, 512, PIPE_USAGE_STAGING);
+      struct rvce_fb_buffer fb = {
+         .res = si_resource(pipe_buffer_create(enc->screen, 0, PIPE_USAGE_STAGING, 512)),
+      };
       enc->fb = &fb;
       session(enc);
       destroy(enc);
       flush(enc, PIPE_FLUSH_ASYNC, NULL);
-      si_vid_destroy_buffer(&fb);
+      si_resource_reference(&fb.res, NULL);
    }
-   si_vid_destroy_buffer(&enc->dpb);
+   si_resource_reference(&enc->dpb, NULL);
    enc->ws->cs_destroy(&enc->cs);
    FREE(enc);
 }
@@ -900,8 +897,9 @@ static void rvce_begin_frame(struct pipe_video_codec *encoder, struct pipe_video
       unsigned dpb_size;
 
       dpb_size = get_dpb_size(enc, dpb_slots);
-      if (!enc->dpb.res) {
-         if (!si_vid_create_buffer(enc->screen, &enc->dpb, dpb_size, PIPE_USAGE_DEFAULT)) {
+      if (!enc->dpb) {
+         enc->dpb = si_resource(pipe_buffer_create(enc->screen, PIPE_BIND_CUSTOM, PIPE_USAGE_DEFAULT, dpb_size));
+         if (!enc->dpb) {
             RVID_ERR("Can't create DPB buffer.\n");
             return;
          }
@@ -912,16 +910,17 @@ static void rvce_begin_frame(struct pipe_video_codec *encoder, struct pipe_video
    }
 
    if (!enc->stream_handle) {
-      struct rvid_buffer fb;
       enc->stream_handle = si_vid_alloc_stream_handle();
-      si_vid_create_buffer(enc->screen, &fb, 512, PIPE_USAGE_STAGING);
+      struct rvce_fb_buffer fb = {
+         .res = si_resource(pipe_buffer_create(enc->screen, 0, PIPE_USAGE_STAGING, 512)),
+      };
       enc->fb = &fb;
       session(enc);
       create(enc);
       config(enc);
       feedback(enc);
       flush(enc, PIPE_FLUSH_ASYNC, NULL);
-      si_vid_destroy_buffer(&fb);
+      si_resource_reference(&fb.res, NULL);
       need_rate_control = false;
    }
 
@@ -1015,13 +1014,14 @@ static void rvce_encode_bitstream(struct pipe_video_codec *encoder,
    enc->bs_size = destination->width0;
    enc->bs_offset = 0;
 
-   *fb = enc->fb = CALLOC_STRUCT(rvid_buffer);
-   if (!si_vid_create_buffer(enc->screen, enc->fb, 512, PIPE_USAGE_STAGING)) {
+   *fb = enc->fb = CALLOC_STRUCT(rvce_fb_buffer);
+   enc->fb->res = si_resource(pipe_buffer_create(enc->screen, 0, PIPE_USAGE_STAGING, 512));
+   if (!enc->fb->res) {
       RVID_ERR("Can't create feedback buffer.\n");
       return;
    }
 
-   enc->fb->user_data = si_vce_encode_headers(enc);
+   enc->fb->data = si_vce_encode_headers(enc);
 
    session(enc);
    encode(enc);
@@ -1042,7 +1042,7 @@ static void rvce_get_feedback(struct pipe_video_codec *encoder, void *feedback, 
                               struct pipe_enc_feedback_metadata* metadata)
 {
    struct rvce_encoder *enc = (struct rvce_encoder *)encoder;
-   struct rvid_buffer *fb = feedback;
+   struct rvce_fb_buffer *fb = feedback;
 
    uint32_t *ptr = enc->ws->buffer_map(enc->ws, fb->res->buf, NULL,
                                        PIPE_MAP_READ_WRITE | RADEON_MAP_TEMPORARY);
@@ -1057,8 +1057,8 @@ static void rvce_get_feedback(struct pipe_video_codec *encoder, void *feedback, 
 
    metadata->present_metadata = PIPE_VIDEO_FEEDBACK_METADATA_TYPE_CODEC_UNIT_LOCATION;
 
-   if (fb->user_data) {
-      struct rvce_feedback_data *data = fb->user_data;
+   if (fb->data) {
+      struct rvce_feedback_data *data = fb->data;
       metadata->codec_unit_metadata_count = data->num_segments;
       for (unsigned i = 0; i < data->num_segments; i++) {
          metadata->codec_unit_metadata[i].offset = data->segments[i].offset;
@@ -1070,8 +1070,8 @@ static void rvce_get_feedback(struct pipe_video_codec *encoder, void *feedback, 
             metadata->codec_unit_metadata[i].flags = PIPE_VIDEO_CODEC_UNIT_LOCATION_FLAG_SINGLE_NALU;
          }
       }
-      FREE(fb->user_data);
-      fb->user_data = NULL;
+      FREE(fb->data);
+      fb->data = NULL;
    } else {
       metadata->codec_unit_metadata_count = 1;
       metadata->codec_unit_metadata[0].offset = 0;
@@ -1079,7 +1079,7 @@ static void rvce_get_feedback(struct pipe_video_codec *encoder, void *feedback, 
       metadata->codec_unit_metadata[0].flags = 0;
    }
 
-   si_vid_destroy_buffer(fb);
+   si_resource_reference(&fb->res, NULL);
    FREE(fb);
 }
 

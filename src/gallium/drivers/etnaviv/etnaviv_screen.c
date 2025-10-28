@@ -257,7 +257,7 @@ etna_init_screen_caps(struct etna_screen *screen)
    caps->texrect = false;
 
    /* Stream output. */
-   caps->max_stream_output_buffers = VIV_FEATURE(screen, ETNA_FEATURE_HWTFB) ? 4 : 0;
+   caps->max_stream_output_buffers = VIV_FEATURE(screen, ETNA_FEATURE_HWTFB) || DBG_ENABLED(ETNA_DBG_DEQP) ? 4 : 0;
    caps->max_stream_output_separate_components = 64;
    caps->max_stream_output_interleaved_components = 64;
 
@@ -388,7 +388,8 @@ gpu_supports_texture_format(struct etna_screen *screen, uint32_t fmt,
    bool supported = true;
 
    /* Requires split sampler support, which the driver doesn't support, yet. */
-   if (!util_format_is_compressed(format) &&
+   if (!DBG_ENABLED(ETNA_DBG_DEQP) &&
+       !util_format_is_compressed(format) &&
        util_format_get_blocksizebits(format) > 64)
       return false;
 
@@ -441,7 +442,8 @@ gpu_supports_render_format(struct etna_screen *screen, enum pipe_format format,
       return false;
 
    /* Requires split target support, which the driver doesn't support, yet. */
-   if (util_format_get_blocksizebits(format) > 64)
+   if (!DBG_ENABLED(ETNA_DBG_DEQP) &&
+       util_format_get_blocksizebits(format) > 64)
       return false;
 
    if (sample_count > 1) {

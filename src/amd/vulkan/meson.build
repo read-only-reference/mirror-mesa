@@ -21,6 +21,7 @@ radv_entrypoints_gen_command += [
   '--device-prefix', 'metro_exodus',
   '--device-prefix', 'rage2',
   '--device-prefix', 'quantic_dream',
+  '--device-prefix', 'no_mans_sky',
 
   # Command buffer annotation layer entrypoints
   '--device-prefix', 'annotate',
@@ -40,6 +41,7 @@ libradv_files = files(
   'layers/radv_metro_exodus.c',
   'layers/radv_rage2.c',
   'layers/radv_quantic_dream.c',
+  'layers/radv_no_mans_sky.c',
   'layers/radv_rmv_layer.c',
   'layers/radv_rra_layer.c',
   'layers/radv_sqtt_layer.c',
@@ -73,6 +75,7 @@ libradv_files = files(
   'nir/radv_nir_lower_fs_barycentric.c',
   'nir/radv_nir_lower_fs_intrinsics.c',
   'nir/radv_nir_lower_hit_attrib_derefs.c',
+  'nir/radv_nir_lower_immediate_samplers.c',
   'nir/radv_nir_lower_intrinsics_early.c',
   'nir/radv_nir_lower_io.c',
   'nir/radv_nir_lower_primitive_shading_rate.c',
@@ -81,7 +84,6 @@ libradv_files = files(
   'nir/radv_nir_lower_view_index.c',
   'nir/radv_nir_lower_viewport_to_zero.c',
   'nir/radv_nir_lower_vs_inputs.c',
-  'nir/radv_nir_opt_access_speculate.c',
   'nir/radv_nir_opt_fs_builtins.c',
   'nir/radv_nir_opt_tid_function.c',
   'nir/radv_nir_remap_color_attachment.c',

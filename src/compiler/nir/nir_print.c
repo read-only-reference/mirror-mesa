@@ -851,6 +851,8 @@ print_access(enum gl_access_qualifier access, print_state *state, const char *se
       { ACCESS_KEEP_SCALAR, "keep-scalar" },
       { ACCESS_SMEM_AMD, "smem-amd" },
       { ACCESS_SKIP_HELPERS, "skip-helpers" },
+      { ACCESS_ATOMIC, "atomic" },
+      { ACCESS_FUSED_EU_DISABLE_INTEL, "fused-eu-disable-intel" },
    };
 
    bool first = true;
@@ -1131,6 +1133,12 @@ print_deref_instr(nir_deref_instr *instr, print_state *state)
               instr->cast.align_mul, instr->cast.align_offset);
    }
 
+   if (instr->deref_type == nir_deref_type_array ||
+       instr->deref_type == nir_deref_type_ptr_as_array) {
+      if (instr->arr.in_bounds)
+         fprintf(fp, "  (in bounds)");
+   }
+
    if (instr->deref_type != nir_deref_type_var &&
        instr->deref_type != nir_deref_type_cast) {
       /* Print the entire chain as a comment */
@@ -1267,6 +1275,9 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
          switch (atomic_op) {
          case nir_atomic_op_iadd:
             fprintf(fp, "iadd");
+            break;
+         case nir_atomic_op_isub:
+            fprintf(fp, "isub");
             break;
          case nir_atomic_op_imin:
             fprintf(fp, "imin");
@@ -1914,6 +1925,9 @@ print_tex_instr(nir_tex_instr *instr, print_state *state)
       case nir_tex_src_min_lod:
          fprintf(fp, "(min_lod)");
          break;
+      case nir_tex_src_max_lod_kk:
+         fprintf(fp, "(max_lod_kk)");
+         break;
       case nir_tex_src_ms_index:
          fprintf(fp, "(ms_index)");
          break;
@@ -2429,8 +2443,8 @@ print_function_impl(nir_function_impl *impl, print_state *state, bool print_name
        * nir_print don't modify the shader.  If needed, a limit for ssa_alloc
        * can be added.
        */
-      state->float_types = calloc(BITSET_WORDS(impl->ssa_alloc), sizeof(BITSET_WORD));
-      state->int_types = calloc(BITSET_WORDS(impl->ssa_alloc), sizeof(BITSET_WORD));
+      state->float_types = BITSET_CALLOC(impl->ssa_alloc);
+      state->int_types = BITSET_CALLOC(impl->ssa_alloc);
       nir_gather_types(impl, state->float_types, state->int_types);
    }
 

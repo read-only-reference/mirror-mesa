@@ -237,7 +237,7 @@ struct fd_dev_info {
          uint32_t RB_DBG_ECO_CNTL;
          uint32_t RB_DBG_ECO_CNTL_blit;
          uint32_t HLSQ_DBG_ECO_CNTL;
-         uint32_t RB_UNKNOWN_8E01;
+         uint32_t RB_RBP_CNTL;
          uint32_t VPC_DBG_ECO_CNTL;
          uint32_t UCHE_UNKNOWN_0E12;
 
@@ -264,6 +264,17 @@ struct fd_dev_info {
        * with sysmem.
        */
       bool blit_wfi_quirk;
+
+      /* True if sel.b supports (neg) that behaves as fneg. */
+      bool has_sel_b_fneg;
+
+      /* Whether CP_REG_TEST::PRED_BIT exists so that there are 32 predicates
+       * that can be written by CP_REG_TEST instead of just 1.
+       */
+      bool has_pred_bit;
+
+      /* True if PC_DGEN_SO_CNTL is present. */
+      bool has_pc_dgen_so_cntl;
    } a6xx;
 
    struct {

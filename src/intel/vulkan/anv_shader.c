@@ -7,7 +7,8 @@
 
 #include "nir/nir_serialize.h"
 
-#include "compiler/brw_disasm.h"
+#include "compiler/brw/brw_disasm.h"
+#include "util/shader_stats.h"
 
 static void
 anv_shader_destroy(struct vk_device *vk_device,
@@ -174,7 +175,7 @@ anv_shader_get_executable_properties(struct vk_device *device,
       container_of(vk_shader, struct anv_shader, vk);
 
    for (uint32_t i = 0; i < shader->num_stats; i++) {
-      const struct brw_compile_stats *stats = &shader->stats[i];
+      const struct genisa_stats *stats = &shader->stats[i];
 
       vk_outarray_append_typed(VkPipelineExecutablePropertiesKHR, &out, props) {
          mesa_shader_stage stage = vk_shader->stage;
@@ -219,145 +220,11 @@ anv_shader_get_executable_statistics(struct vk_device *vk_device,
 {
    VK_OUTARRAY_MAKE_TYPED(VkPipelineExecutableStatisticKHR, out,
                           statistics, statistic_count);
-   struct anv_device *device =
-      container_of(vk_device, struct anv_device, vk);
    struct anv_shader *shader =
       container_of(vk_shader, struct anv_shader, vk);
 
    assert(executable_index < shader->num_stats);
-
-   const struct brw_compile_stats *stats = &shader->stats[executable_index];
-   const struct brw_stage_prog_data *prog_data = shader->prog_data;
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      VK_COPY_STR(stat->name, "Instruction Count");
-      VK_COPY_STR(stat->description,
-                  "Number of GEN instructions in the final generated "
-                  "shader executable.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = stats->instructions;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      VK_COPY_STR(stat->name, "SEND Count");
-      VK_COPY_STR(stat->description,
-                  "Number of instructions in the final generated shader "
-                  "executable which access external units such as the "
-                  "constant cache or the sampler.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = stats->sends;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      VK_COPY_STR(stat->name, "Loop Count");
-      VK_COPY_STR(stat->description,
-                  "Number of loops (not unrolled) in the final generated "
-                  "shader executable.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = stats->loops;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      VK_COPY_STR(stat->name, "Cycle Count");
-      VK_COPY_STR(stat->description,
-                  "Estimate of the number of EU cycles required to execute "
-                  "the final generated executable.  This is an estimate only "
-                  "and may vary greatly from actual run-time performance.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = stats->cycles;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      VK_COPY_STR(stat->name, "Spill Count");
-      VK_COPY_STR(stat->description,
-                  "Number of scratch spill operations.  This gives a rough "
-                  "estimate of the cost incurred due to spilling temporary "
-                  "values to memory.  If this is non-zero, you may want to "
-                  "adjust your shader to reduce register pressure.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = stats->spills;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      VK_COPY_STR(stat->name, "Fill Count");
-      VK_COPY_STR(stat->description,
-                  "Number of scratch fill operations.  This gives a rough "
-                  "estimate of the cost incurred due to spilling temporary "
-                  "values to memory.  If this is non-zero, you may want to "
-                  "adjust your shader to reduce register pressure.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = stats->fills;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      VK_COPY_STR(stat->name, "Scratch Memory Size");
-      VK_COPY_STR(stat->description,
-                  "Number of bytes of scratch memory required by the "
-                  "generated shader executable.  If this is non-zero, you "
-                  "may want to adjust your shader to reduce register "
-                  "pressure.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = prog_data->total_scratch;
-   }
-
-   if (device->info->ver >= 30) {
-      vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-         VK_COPY_STR(stat->name, "GRF registers");
-         VK_COPY_STR(stat->description,
-                     "Number of GRF registers required by the shader.");
-         stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-         stat->value.u64 = prog_data->grf_used;
-      }
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      VK_COPY_STR(stat->name, "Max dispatch width");
-      VK_COPY_STR(stat->description,
-                  "Largest SIMD dispatch width.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      /* Report the max dispatch width only on the smallest SIMD variant */
-      if (vk_shader->stage != MESA_SHADER_FRAGMENT || stats->dispatch_width == 8)
-         stat->value.u64 = stats->max_dispatch_width;
-      else
-         stat->value.u64 = 0;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      VK_COPY_STR(stat->name, "Max live registers");
-      VK_COPY_STR(stat->description,
-                  "Maximum number of registers used across the entire shader.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = stats->max_live_registers;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      VK_COPY_STR(stat->name, "Workgroup Memory Size");
-      VK_COPY_STR(stat->description,
-                  "Number of bytes of workgroup shared memory used by this "
-                  "shader including any padding.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      if (mesa_shader_stage_uses_workgroup(vk_shader->stage))
-         stat->value.u64 = prog_data->total_shared;
-      else
-         stat->value.u64 = 0;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      VK_COPY_STR(stat->name, "Source hash");
-      VK_PRINT_STR(stat->description,
-                   "hash = 0x%08x. Hash generated from shader source.",
-                   prog_data->source_hash);
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = prog_data->source_hash;
-   }
-
-   vk_outarray_append_typed(VkPipelineExecutableStatisticKHR, &out, stat) {
-      VK_COPY_STR(stat->name, "Non SSA regs after NIR");
-      VK_COPY_STR(stat->description, "Non SSA regs after NIR translation to BRW.");
-      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-      stat->value.u64 = stats->non_ssa_registers_after_nir;
-   }
-
+   vk_add_genisa_stats(out, &shader->stats[executable_index]);
    return VK_SUCCESS;
 }
 
@@ -432,58 +299,48 @@ static struct vk_shader_ops anv_shader_ops = {
       anv_shader_get_executable_internal_representations,
 };
 
-static VkResult
-anv_shader_reloc(struct anv_device *device,
-                 void *code,
-                 struct anv_shader *shader,
-                 const VkAllocationCallbacks *pAllocator)
+static int
+anv_shader_set_relocs(struct anv_device *device,
+                      struct intel_shader_reloc_value *reloc_values,
+                      struct anv_shader *shader)
 {
-   uint64_t shader_data_addr =
+   int rv_count = 0;
+   const uint64_t shader_data_addr =
       device->physical->va.instruction_state_pool.addr +
       shader->kernel.offset +
       shader->prog_data->const_data_offset;
 
-   const uint32_t max_relocs =
-      BRW_SHADER_RELOC_EMBEDDED_SAMPLER_HANDLE +
-      shader->bind_map.embedded_sampler_count;
-   uint32_t rv_count = 0;
-   struct brw_shader_reloc_value *reloc_values =
-      vk_zalloc2(&device->vk.alloc, pAllocator,
-                 sizeof(struct brw_shader_reloc_value) * max_relocs, 8,
-                 VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
-   if (reloc_values == NULL)
-      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
-
-   assert((device->physical->va.dynamic_visible_pool.addr & 0xffffffff) == 0);
-   reloc_values[rv_count++] = (struct brw_shader_reloc_value) {
+   assert((device->physical->va.instruction_state_pool.addr & 0xffffffff) == 0);
+   reloc_values[rv_count++] = (struct intel_shader_reloc_value) {
       .id = BRW_SHADER_RELOC_INSTRUCTION_BASE_ADDR_HIGH,
       .value = device->physical->va.instruction_state_pool.addr >> 32,
    };
-   reloc_values[rv_count++] = (struct brw_shader_reloc_value) {
+   assert((device->physical->va.dynamic_visible_pool.addr & 0xffffffff) == 0);
+   reloc_values[rv_count++] = (struct intel_shader_reloc_value) {
       .id = BRW_SHADER_RELOC_DESCRIPTORS_BUFFER_ADDR_HIGH,
       .value = device->physical->va.dynamic_visible_pool.addr >> 32,
    };
    assert((device->physical->va.indirect_descriptor_pool.addr & 0xffffffff) == 0);
    assert((device->physical->va.internal_surface_state_pool.addr & 0xffffffff) == 0);
-   reloc_values[rv_count++] = (struct brw_shader_reloc_value) {
+   reloc_values[rv_count++] = (struct intel_shader_reloc_value) {
       .id = BRW_SHADER_RELOC_DESCRIPTORS_ADDR_HIGH,
       .value = device->physical->indirect_descriptors ?
                (device->physical->va.indirect_descriptor_pool.addr >> 32) :
                (device->physical->va.internal_surface_state_pool.addr >> 32),
    };
    assert((device->physical->va.instruction_state_pool.addr & 0xffffffff) == 0);
-   reloc_values[rv_count++] = (struct brw_shader_reloc_value) {
-      .id = BRW_SHADER_RELOC_CONST_DATA_ADDR_LOW,
+   reloc_values[rv_count++] = (struct intel_shader_reloc_value) {
+      .id = INTEL_SHADER_RELOC_CONST_DATA_ADDR_LOW,
       .value = shader_data_addr,
    };
    assert((device->physical->va.instruction_state_pool.addr & 0xffffffff) == 0);
    assert(shader_data_addr >> 32 == device->physical->va.instruction_state_pool.addr >> 32);
-   reloc_values[rv_count++] = (struct brw_shader_reloc_value) {
-      .id = BRW_SHADER_RELOC_CONST_DATA_ADDR_HIGH,
+   reloc_values[rv_count++] = (struct intel_shader_reloc_value) {
+      .id = INTEL_SHADER_RELOC_CONST_DATA_ADDR_HIGH,
       .value = device->physical->va.instruction_state_pool.addr >> 32,
    };
-   reloc_values[rv_count++] = (struct brw_shader_reloc_value) {
-      .id = BRW_SHADER_RELOC_SHADER_START_OFFSET,
+   reloc_values[rv_count++] = (struct intel_shader_reloc_value) {
+      .id = INTEL_SHADER_RELOC_SHADER_START_OFFSET,
       .value = shader->kernel.offset,
    };
    if (brw_shader_stage_is_bindless(shader->vk.stage)) {
@@ -493,11 +350,11 @@ anv_shader_reloc(struct anv_device *device,
          device->physical->va.instruction_state_pool.addr +
          shader->kernel.offset +
          bs_prog_data->resume_sbt_offset;
-      reloc_values[rv_count++] = (struct brw_shader_reloc_value) {
+      reloc_values[rv_count++] = (struct intel_shader_reloc_value) {
          .id = BRW_SHADER_RELOC_RESUME_SBT_ADDR_LOW,
          .value = resume_sbt_addr,
       };
-      reloc_values[rv_count++] = (struct brw_shader_reloc_value) {
+      reloc_values[rv_count++] = (struct intel_shader_reloc_value) {
          .id = BRW_SHADER_RELOC_RESUME_SBT_ADDR_HIGH,
          .value = resume_sbt_addr >> 32,
       };
@@ -507,27 +364,48 @@ anv_shader_reloc(struct anv_device *device,
       struct anv_bo *bo = device->printf.bo;
       assert(bo != NULL);
 
-      reloc_values[rv_count++] = (struct brw_shader_reloc_value) {
+      reloc_values[rv_count++] = (struct intel_shader_reloc_value) {
          .id = BRW_SHADER_RELOC_PRINTF_BUFFER_ADDR_LOW,
          .value = bo->offset & 0xffffffff,
       };
-      reloc_values[rv_count++] = (struct brw_shader_reloc_value) {
+      reloc_values[rv_count++] = (struct intel_shader_reloc_value) {
          .id = BRW_SHADER_RELOC_PRINTF_BUFFER_ADDR_HIGH,
          .value = bo->offset >> 32,
       };
-      reloc_values[rv_count++] = (struct brw_shader_reloc_value) {
+      reloc_values[rv_count++] = (struct intel_shader_reloc_value) {
          .id = BRW_SHADER_RELOC_PRINTF_BUFFER_SIZE,
          .value = anv_printf_buffer_size(),
       };
    }
 
    for (uint32_t i = 0; i < shader->bind_map.embedded_sampler_count; i++) {
-      reloc_values[rv_count++] = (struct brw_shader_reloc_value) {
+      reloc_values[rv_count++] = (struct intel_shader_reloc_value) {
          .id = BRW_SHADER_RELOC_EMBEDDED_SAMPLER_HANDLE + i,
          .value = shader->embedded_samplers[i]->sampler_state.offset,
       };
    }
 
+   return rv_count;
+}
+
+static VkResult
+anv_shader_reloc(struct anv_device *device,
+                 void *code,
+                 struct anv_shader *shader,
+                 const VkAllocationCallbacks *pAllocator)
+{
+   const uint32_t max_relocs =
+      BRW_SHADER_RELOC_EMBEDDED_SAMPLER_HANDLE +
+      shader->bind_map.embedded_sampler_count;
+   uint32_t rv_count;
+   struct intel_shader_reloc_value *reloc_values =
+      vk_zalloc2(&device->vk.alloc, pAllocator,
+                 sizeof(struct intel_shader_reloc_value) * max_relocs, 8,
+                 VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+   if (reloc_values == NULL)
+      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   rv_count = anv_shader_set_relocs(device, reloc_values, shader);
    assert(rv_count <= max_relocs);
 
    brw_write_shader_relocs(&device->physical->compiler->isa,
@@ -683,7 +561,7 @@ anv_shader_create(struct anv_device *device,
    VK_MULTIALLOC_DECL_SIZE(&ma, void, obj_key_data, brw_prog_key_size(stage));
    VK_MULTIALLOC_DECL_SIZE(&ma, struct brw_stage_prog_data, prog_data,
                            brw_prog_data_size(stage));
-   VK_MULTIALLOC_DECL(&ma, struct brw_shader_reloc, prog_data_relocs,
+   VK_MULTIALLOC_DECL(&ma, struct intel_shader_reloc, prog_data_relocs,
                       shader_data->prog_data.base.num_relocs);
 
    VK_MULTIALLOC_DECL_SIZE(&ma, nir_xfb_info, xfb_info,

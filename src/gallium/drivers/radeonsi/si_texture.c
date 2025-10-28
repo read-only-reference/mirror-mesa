@@ -254,7 +254,16 @@ static int si_init_surface(struct si_screen *sscreen, struct radeon_surf *surfac
              (ptex->bind & PIPE_BIND_SHARED) || is_imported) {
             flags |= RADEON_SURF_NO_HTILE;
          } else if (tc_compatible_htile &&
-                    (sscreen->info.gfx_level >= GFX9 || array_mode == RADEON_SURF_MODE_2D)) {
+                    (sscreen->info.gfx_level >= GFX9 || array_mode == RADEON_SURF_MODE_2D) &&
+                    !(sscreen->info.has_htile_stencil_mipmap_bug &&
+                      sscreen->info.has_htile_tc_z_clear_bug_without_stencil &&
+                      ptex->last_level > 0)) {
+            /* On GFX1013, TILE_STENCIL_DISABLE = 0 is needed to work around the hardware bug that
+             * may cause the Z clear value used by TC to be inverted, but stencil texturing with
+             * HTILE doesn't work with mipmapping on GFX10, so not enabling TC-compatible HTILE on
+             * GFX1013 if both bugs checked above can't be worked around at once (with mipmaps).
+             */
+
             /* TC-compatible HTILE only supports Z32_FLOAT.
              * GFX9 also supports Z16_UNORM.
              * On GFX8, promote Z16 to Z32. DB->CB copies will convert
@@ -1195,23 +1204,31 @@ static struct si_texture *si_texture_create_object(struct pipe_screen *screen,
       if (sscreen->info.gfx_level >= GFX9) {
          tex->can_sample_z = true;
          tex->can_sample_s = true;
-
-         /* Stencil texturing with HTILE doesn't work
-          * with mipmapping on Navi10-14. */
-         if (sscreen->info.gfx_level == GFX10 && base->last_level > 0)
-            tex->htile_stencil_disabled = true;
       } else {
          tex->can_sample_z = !tex->surface.u.legacy.depth_adjusted;
          tex->can_sample_s = !tex->surface.u.legacy.stencil_adjusted;
+      }
 
-         /* GFX8 must keep stencil enabled because it can't use Z-only TC-compatible
-          * HTILE because of a hw bug. This has only a small effect on performance
-          * because we lose a little bit of Z precision in order to make space for
-          * stencil in HTILE.
+      const bool need_htile_stencil_mipmap_bug_workaround =
+         sscreen->info.has_htile_stencil_mipmap_bug && base->last_level > 0;
+      if (need_htile_stencil_mipmap_bug_workaround)
+         tex->htile_stencil_disabled = true;
+
+      if (sscreen->info.has_htile_tc_z_clear_bug_without_stencil &&
+          (tex->surface.flags & RADEON_SURF_TC_COMPATIBLE_HTILE)) {
+         /* Must keep stencil enabled because the base and delta Z encoding is
+          * needed to work around the TC Z clear value bug by using
+          * ZRANGE_PRECISION.
+          *
+          * This has only a small effect on performance because we lose a little
+          * bit of Z precision in order to make space for stencil in HTILE.
+          *
+          * If this workaround can't be applied to this texture,
+          * RADEON_SURF_TC_COMPATIBLE_HTILE must not be set for it, hence the
+          * assertion.
           */
-         if (sscreen->info.gfx_level == GFX8 &&
-             tex->surface.flags & RADEON_SURF_TC_COMPATIBLE_HTILE)
-            tex->htile_stencil_disabled = false;
+         assert(!need_htile_stencil_mipmap_bug_workaround);
+         tex->htile_stencil_disabled = false;
       }
 
       tex->db_compatible = surface->flags & RADEON_SURF_ZBUFFER;
@@ -1523,7 +1540,7 @@ bool si_texture_commit(struct si_context *ctx, struct si_resource *res, unsigned
                        struct pipe_box *box, bool commit)
 {
    struct si_texture *tex = (struct si_texture *)res;
-   struct radeon_surf *surface = &tex->surface;
+   const struct radeon_surf *surface = &tex->surface;
    enum pipe_format format = res->b.b.format;
    unsigned blks = util_format_get_blocksize(format);
    unsigned samples = MAX2(1, res->b.b.nr_samples);
@@ -2545,7 +2562,6 @@ void si_init_screen_texture_functions(struct si_screen *sscreen)
    sscreen->b.resource_from_handle = si_texture_from_handle;
    sscreen->b.resource_get_handle = si_texture_get_handle;
    sscreen->b.resource_get_param = si_resource_get_param;
-   sscreen->b.resource_get_info = si_texture_get_info;
    sscreen->b.resource_from_memobj = si_resource_from_memobj;
    sscreen->b.memobj_create_from_handle = si_memobj_from_handle;
    sscreen->b.memobj_destroy = si_memobj_destroy;

@@ -494,13 +494,14 @@ tu6_setup_streamout(struct tu_cs *cs,
 #define A6XX_SO_PROG_DWORDS 64
    uint32_t prog[A6XX_SO_PROG_DWORDS * IR3_MAX_SO_STREAMS] = {};
    BITSET_DECLARE(valid_dwords, A6XX_SO_PROG_DWORDS * IR3_MAX_SO_STREAMS) = {0};
+   bool has_pc_dgen_so_cntl = cs->device->physical_device->info->a6xx.has_pc_dgen_so_cntl;
 
    /* TODO: streamout state should be in a non-GMEM draw state */
 
    /* no streamout: */
    if (info->num_outputs == 0) {
       unsigned sizedw = 4;
-      if (cs->device->physical_device->info->a6xx.tess_use_shared)
+      if (has_pc_dgen_so_cntl)
          sizedw += 2;
 
       tu_cs_emit_pkt7(cs, CP_CONTEXT_REG_BUNCH, sizedw);
@@ -509,7 +510,7 @@ tu6_setup_streamout(struct tu_cs *cs,
       tu_cs_emit(cs, REG_A6XX_VPC_SO_CNTL);
       tu_cs_emit(cs, 0);
 
-      if (cs->device->physical_device->info->a6xx.tess_use_shared) {
+      if (has_pc_dgen_so_cntl) {
          tu_cs_emit(cs, REG_A6XX_PC_DGEN_SO_CNTL);
          tu_cs_emit(cs, 0);
       }
@@ -562,11 +563,7 @@ tu6_setup_streamout(struct tu_cs *cs,
       prog_count += end - start + 1;
    }
 
-   const bool emit_pc_so_stream_cntl =
-      cs->device->physical_device->info->a6xx.tess_use_shared &&
-      v->type == MESA_SHADER_TESS_EVAL;
-
-   if (emit_pc_so_stream_cntl)
+   if (has_pc_dgen_so_cntl)
       prog_count += 1;
 
    tu_cs_emit_pkt7(cs, CP_CONTEXT_REG_BUNCH, 10 + 2 * prog_count);
@@ -597,9 +594,9 @@ tu6_setup_streamout(struct tu_cs *cs,
       first = false;
    }
 
-   if (emit_pc_so_stream_cntl) {
-      /* Possibly not tess_use_shared related, but the combination of
-       * tess + xfb fails some tests if we don't emit this.
+   if (has_pc_dgen_so_cntl) {
+      /* When present, setting this register makes sure that degenerate primitives
+       * are included in the stream output and not discarded.
        */
       tu_cs_emit(cs, REG_A6XX_PC_DGEN_SO_CNTL);
       tu_cs_emit(cs, A6XX_PC_DGEN_SO_CNTL_STREAM_ENABLE(info->streams_written));
@@ -1451,7 +1448,7 @@ tu_append_executable(struct tu_pipeline *pipeline,
       .disasm = ralloc_strdup(pipeline->executables_mem_ctx, variant->disasm_info.disasm),
    };
 
-   util_dynarray_append(&pipeline->executables, struct tu_pipeline_executable, exe);
+   util_dynarray_append(&pipeline->executables, exe);
 }
 
 static void
@@ -2113,7 +2110,8 @@ tu_pipeline_builder_parse_libraries(struct tu_pipeline_builder *builder,
       if (library->state &
           VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT) {
          pipeline->output = library->base.output;
-         pipeline->lrz_blend.reads_dest |= library->base.lrz_blend.reads_dest;
+         pipeline->lrz_blend.lrz_blend_status =
+            library->base.lrz_blend.lrz_blend_status;
          pipeline->lrz_blend.valid |= library->base.lrz_blend.valid;
       }
 
@@ -3028,28 +3026,34 @@ tu_emit_disable_fs(struct tu_disable_fs *disable_fs,
 }
 
 /* Return true if the blend state reads the color attachments. */
-static bool
+static tu_lrz_blend_status
 tu6_calc_blend_lrz(const struct vk_color_blend_state *cb,
                    const struct vk_render_pass_state *rp)
 {
    if (cb->logic_op_enable && tu_logic_op_reads_dst((VkLogicOp)cb->logic_op))
-      return true;
+      return TU_LRZ_BLEND_READS_DEST_OR_PARTIAL_WRITE;
 
-   bool has_enabled_attachments = false;
+   uint32_t written_color_attachments = 0;
+   uint32_t total_color_attachments = 0;
    for (unsigned i = 0; i < cb->attachment_count; i++) {
       if (rp->color_attachment_formats[i] == VK_FORMAT_UNDEFINED)
          continue;
 
+      total_color_attachments++;
       const struct vk_color_blend_attachment_state *att = &cb->attachments[i];
       if ((cb->color_write_enables & (1u << i)) && att->write_mask != 0) {
-         has_enabled_attachments = true;
-         break;
+         written_color_attachments++;
       }
    }
 
-   /* There is no partial write if there is no writes at all. */
-   if (!has_enabled_attachments)
-      return false;
+   if (total_color_attachments == 0)
+      return TU_LRZ_BLEND_SAFE_FOR_LRZ;
+
+   if (written_color_attachments == 0)
+      return TU_LRZ_BLEND_ALL_COLOR_WRITES_SKIPPED;
+
+   if (written_color_attachments < cb->attachment_count)
+      return TU_LRZ_BLEND_READS_DEST_OR_PARTIAL_WRITE;
 
    for (unsigned i = 0; i < cb->attachment_count; i++) {
       if (rp->color_attachment_formats[i] == VK_FORMAT_UNDEFINED)
@@ -3057,16 +3061,16 @@ tu6_calc_blend_lrz(const struct vk_color_blend_state *cb,
 
       const struct vk_color_blend_attachment_state *att = &cb->attachments[i];
       if (att->blend_enable)
-         return true;
+         return TU_LRZ_BLEND_READS_DEST_OR_PARTIAL_WRITE;
       if (!(cb->color_write_enables & (1u << i)))
-         return true;
+         return TU_LRZ_BLEND_READS_DEST_OR_PARTIAL_WRITE;
       unsigned mask =
          MASK(vk_format_get_nr_components(rp->color_attachment_formats[i]));
       if ((att->write_mask & mask) != mask)
-         return true;
+         return TU_LRZ_BLEND_READS_DEST_OR_PARTIAL_WRITE;
    }
 
-   return false;
+   return TU_LRZ_BLEND_SAFE_FOR_LRZ;
 }
 
 static const enum mesa_vk_dynamic_graphics_state tu_blend_lrz_state[] = {
@@ -3083,7 +3087,7 @@ tu_emit_blend_lrz(struct tu_lrz_blend *lrz,
                   const struct vk_color_blend_state *cb,
                   const struct vk_render_pass_state *rp)
 {
-   lrz->reads_dest = tu6_calc_blend_lrz(cb, rp);
+   lrz->lrz_blend_status = tu6_calc_blend_lrz(cb, rp);
    lrz->valid = true;
 }
 
@@ -3157,8 +3161,6 @@ tu6_emit_blend(struct tu_cs *cs,
 
    bool dual_src_blend = tu_blend_state_is_dual_src(cb);
 
-   tu_cs_emit_regs(cs, A6XX_SP_PS_MRT_CNTL(.mrt = num_rts));
-   tu_cs_emit_regs(cs, A6XX_RB_PS_MRT_CNTL(.mrt = num_rts));
    tu_cs_emit_regs(cs, A6XX_SP_BLEND_CNTL(.enable_blend = blend_enable_mask,
                                           .unk8 = true,
                                           .dual_color_in_enable =
@@ -3180,10 +3182,12 @@ tu6_emit_blend(struct tu_cs *cs,
                                           .alpha_to_one = alpha_to_one_enable,
                                           .sample_mask = sample_mask));
 
+   unsigned num_remapped_rts = 0;
    for (unsigned i = 0; i < num_rts; i++) {
       if (cal->color_map[i] == MESA_VK_ATTACHMENT_UNUSED)
          continue;
       unsigned remapped_idx = cal->color_map[i];
+      num_remapped_rts = MAX2(num_remapped_rts, remapped_idx + 1);
       const struct vk_color_blend_attachment_state *att = &cb->attachments[i];
       if ((cb->color_write_enables & (1u << i)) && i < cb->attachment_count) {
          const enum a3xx_rb_blend_opcode color_op = tu6_blend_op(att->color_blend_op);
@@ -3227,6 +3231,8 @@ tu6_emit_blend(struct tu_cs *cs,
                             A6XX_RB_MRT_BLEND_CONTROL(remapped_idx,));
       }
    }
+   tu_cs_emit_regs(cs, A6XX_SP_PS_MRT_CNTL(.mrt = num_remapped_rts));
+   tu_cs_emit_regs(cs, A6XX_RB_PS_MRT_CNTL(.mrt = num_remapped_rts));
 }
 
 static const enum mesa_vk_dynamic_graphics_state tu_blend_constants_state[] = {
@@ -4019,10 +4025,10 @@ tu_emit_draw_state(struct tu_cmd_buffer *cmd)
                    cmd->vk.dynamic_graphics_state.ms.sample_mask);
    if (!cmd->state.pipeline_blend_lrz &&
        (EMIT_STATE(blend_lrz) || (cmd->state.dirty & TU_CMD_DIRTY_SUBPASS))) {
-      bool blend_reads_dest = tu6_calc_blend_lrz(&cmd->vk.dynamic_graphics_state.cb,
-                                                 &cmd->state.vk_rp);
-      if (blend_reads_dest != cmd->state.blend_reads_dest) {
-         cmd->state.blend_reads_dest = blend_reads_dest;
+      tu_lrz_blend_status blend_status = tu6_calc_blend_lrz(
+         &cmd->vk.dynamic_graphics_state.cb, &cmd->state.vk_rp);
+      if (blend_status != cmd->state.lrz_blend_status) {
+         cmd->state.lrz_blend_status = blend_status;
          cmd->state.dirty |= TU_CMD_DIRTY_LRZ;
       }
    }

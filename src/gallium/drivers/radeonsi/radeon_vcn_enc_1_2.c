@@ -21,7 +21,7 @@ static void radeon_enc_session_info(struct radeon_encoder *enc)
 {
    RADEON_ENC_BEGIN(enc->cmd.session_info);
    RADEON_ENC_CS(enc->enc_pic.session_info.interface_version);
-   RADEON_ENC_READWRITE(enc->si->res->buf, enc->si->res->domains, 0x0);
+   RADEON_ENC_READWRITE(enc->si->buf, enc->si->domains, 0x0);
    RADEON_ENC_CS(RENCODE_ENGINE_TYPE_ENCODE);
    RADEON_ENC_END();
 }
@@ -208,8 +208,16 @@ unsigned int radeon_enc_write_sps(struct radeon_encoder *enc, uint8_t nal_byte, 
    radeon_bs_code_ue(&bs, sps->log2_max_frame_num_minus4);
    radeon_bs_code_ue(&bs, sps->pic_order_cnt_type);
 
-   if (sps->pic_order_cnt_type == 0)
+   if (sps->pic_order_cnt_type == 0) {
       radeon_bs_code_ue(&bs, sps->log2_max_pic_order_cnt_lsb_minus4);
+   } else if (sps->pic_order_cnt_type == 1) {
+      radeon_bs_code_fixed_bits(&bs, sps->delta_pic_order_always_zero_flag, 1);
+      radeon_bs_code_se(&bs, sps->offset_for_non_ref_pic);
+      radeon_bs_code_se(&bs, sps->offset_for_top_to_bottom_field);
+      radeon_bs_code_ue(&bs, sps->num_ref_frames_in_pic_order_cnt_cycle);
+      for (unsigned i = 0; i < sps->num_ref_frames_in_pic_order_cnt_cycle; i++)
+         radeon_bs_code_se(&bs, sps->offset_for_ref_frame[i]);
+   }
 
    radeon_bs_code_ue(&bs, sps->max_num_ref_frames);
    radeon_bs_code_fixed_bits(&bs, sps->gaps_in_frame_num_value_allowed_flag, 1);
@@ -626,6 +634,9 @@ static void radeon_enc_slice_header(struct radeon_encoder *enc)
    if (sps->pic_order_cnt_type == 0)
       radeon_bs_code_fixed_bits(&bs, slice->pic_order_cnt_lsb, sps->log2_max_pic_order_cnt_lsb_minus4 + 4);
 
+   if (sps->pic_order_cnt_type == 1 && !sps->delta_pic_order_always_zero_flag)
+      radeon_bs_code_se(&bs, slice->delta_pic_order_cnt0);
+
    if (pps->redundant_pic_cnt_present_flag)
       radeon_bs_code_ue(&bs, slice->redundant_pic_cnt);
 
@@ -942,7 +953,7 @@ static void radeon_enc_ctx(struct radeon_encoder *enc)
    enc->enc_pic.ctx_buf.two_pass_search_center_map_offset = 0;
 
    RADEON_ENC_BEGIN(enc->cmd.ctx);
-   RADEON_ENC_READWRITE(enc->dpb->res->buf, enc->dpb->res->domains, 0);
+   RADEON_ENC_READWRITE(enc->dpb->buf, enc->dpb->domains, 0);
    RADEON_ENC_CS(enc->enc_pic.ctx_buf.swizzle_mode);
    RADEON_ENC_CS(enc->enc_pic.ctx_buf.rec_luma_pitch);
    RADEON_ENC_CS(enc->enc_pic.ctx_buf.rec_chroma_pitch);
@@ -1102,7 +1113,7 @@ static void radeon_enc_qp_map(struct radeon_encoder *enc)
    RADEON_ENC_BEGIN(enc->cmd.enc_qp_map);
    RADEON_ENC_CS(enc->enc_pic.enc_qp_map.qp_map_type);
    if (enc->enc_pic.enc_qp_map.qp_map_type != RENCODE_QP_MAP_TYPE_NONE)
-      RADEON_ENC_READWRITE(enc->roi->res->buf, enc->roi->res->domains, 0);
+      RADEON_ENC_READWRITE(enc->roi->buf, enc->roi->domains, 0);
    else {
       RADEON_ENC_CS(0); /* use null for roi buffer */
       RADEON_ENC_CS(0); /* use null for roi buffer */

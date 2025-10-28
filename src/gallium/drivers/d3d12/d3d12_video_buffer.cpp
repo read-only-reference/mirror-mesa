@@ -65,7 +65,7 @@ d3d12_video_buffer_create_impl(struct pipe_context *pipe,
    pD3D12VideoBuffer->base.height        = tmpl->height;
    pD3D12VideoBuffer->base.interlaced    = tmpl->interlaced;
    pD3D12VideoBuffer->base.contiguous_planes = true;
-   pD3D12VideoBuffer->base.associated_data = nullptr;
+   pD3D12VideoBuffer->base.associated_data = &pD3D12VideoBuffer->d3d12_video_buffer_associated_data;
    pD3D12VideoBuffer->idx_texarray_slots = 0;
    pD3D12VideoBuffer->m_spVideoTexArrayDPBPoolInUse.reset();
 
@@ -140,7 +140,7 @@ d3d12_video_buffer_create_impl(struct pipe_context *pipe,
       goto failed;
    }
 
-   d3d12_promote_to_permanent_residency((struct d3d12_screen*) pipe->screen, pD3D12VideoBuffer->texture);
+   d3d12_promote_to_permanent_residency((struct d3d12_screen*) pipe->screen, &pD3D12VideoBuffer->texture, 1);
 
    pD3D12VideoBuffer->num_planes = util_format_get_num_planes(pD3D12VideoBuffer->texture->overall_format);
    return &pD3D12VideoBuffer->base;
@@ -160,6 +160,12 @@ d3d12_video_buffer_from_handle(struct pipe_context *pipe,
                                struct winsys_handle *handle,
                                unsigned usage)
 {
+   if (handle && handle->type == WINSYS_HANDLE_TYPE_D3D12_RES && handle->modifier == 2) // modifier==2 means "place on resource"
+   {
+      struct pipe_resource* resource = (struct pipe_resource*) handle->com_obj;
+      return d3d12_video_buffer_create_impl(pipe, tmpl, resource, d3d12_video_buffer_creation_mode::place_on_resource, NULL, 0);
+   }
+
    struct pipe_video_buffer updated_template = {};
    if ((handle->format == PIPE_FORMAT_NONE) || (tmpl == nullptr) || (tmpl->buffer_format == PIPE_FORMAT_NONE) ||
        (tmpl->width == 0) || (tmpl->height == 0)) {
@@ -529,6 +535,7 @@ d3d12_video_create_dpb_buffer_texarray(struct pipe_video_codec *codec,
       if (((*pD3D12Enc->m_spVideoTexArrayDPBPoolInUse) & (1 << i)) == 0)
       {
          buf->idx_texarray_slots = i;
+         buf->d3d12_video_buffer_associated_data.subresource_index = i;
          (*pD3D12Enc->m_spVideoTexArrayDPBPoolInUse) |= (1 << buf->idx_texarray_slots); // Mark i-th bit as used
          bFoundEmptySlot = true;
          break;

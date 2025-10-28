@@ -528,6 +528,26 @@ struct pipe_enc_roi
    struct pipe_enc_region_in_roi region[PIPE_ENC_ROI_REGION_NUM_MAX];
 };
 
+enum pipe_enc_qpmap_input_mode
+{
+   PIPE_ENC_QPMAP_INPUT_MODE_DISABLED = 0,
+   PIPE_ENC_QPMAP_INPUT_MODE_CPU_BUFFER_8BIT = 1,
+   PIPE_ENC_QPMAP_INPUT_MODE_CPU_BUFFER_16BIT = 2,
+   PIPE_ENC_QPMAP_INPUT_MODE_GPU_RESOURCE = 3,
+};
+
+struct pipe_enc_qpmap_input_info
+{
+   /* Selects the input mode and app sets different params below */
+   enum pipe_enc_qpmap_input_mode input_qp_mode;
+   /* Count of the number entries contained by input_qpmap_cpu */
+   uint32_t qp_map_values_count;
+    /* Used with CPU modes */
+   void *input_qpmap_cpu;
+   /* Used with PIPE_ENC_QPMAP_INPUT_GPU_MODE */
+   struct pipe_resource *input_gpu_qpmap;
+};
+
 enum pipe_enc_dirty_info_type
 {
    PIPE_ENC_DIRTY_INFO_TYPE_DIRTY = 0,
@@ -700,6 +720,10 @@ struct pipe_h264_enc_rate_control
 
    /* Used with PIPE_H2645_ENC_RATE_CONTROL_METHOD_QUALITY_VARIABLE */
    unsigned vbr_quality_factor;
+
+   /* See PIPE_VIDEO_CAP_ENC_SPATIAL_ADAPTIVE_QUANTIZATION */
+   /* value 0 indicates SAQ is disabled */
+   unsigned spatial_adaptive_quantization_strength;
 };
 
 struct pipe_h264_enc_motion_estimation
@@ -801,6 +825,7 @@ struct pipe_h264_enc_seq_param
       uint32_t video_full_range_flag : 1;
       uint32_t direct_8x8_inference_flag : 1;
       uint32_t gaps_in_frame_num_value_allowed_flag : 1;
+      uint32_t delta_pic_order_always_zero_flag : 1;
    };
    unsigned profile_idc;
    unsigned enc_constraint_set_flags;
@@ -853,6 +878,10 @@ struct pipe_h264_enc_seq_param
    uint32_t max_num_ref_frames;
    uint32_t pic_width_in_mbs_minus1;
    uint32_t pic_height_in_map_units_minus1;
+   int32_t offset_for_non_ref_pic;
+   int32_t offset_for_top_to_bottom_field;
+   uint32_t num_ref_frames_in_pic_order_cnt_cycle;
+   int32_t offset_for_ref_frame[256];
 };
 
 struct pipe_h264_ref_list_mod_entry
@@ -901,6 +930,7 @@ struct pipe_h264_enc_slice_param
    uint8_t disable_deblocking_filter_idc;
    int32_t slice_alpha_c0_offset_div2;
    int32_t slice_beta_offset_div2;
+   int32_t delta_pic_order_cnt0;
 };
 
 struct pipe_h264_enc_dpb_entry
@@ -966,8 +996,7 @@ struct pipe_h264_enc_picture_desc
    /* See PIPE_VIDEO_CAP_ENC_GPU_STATS_PSNR */
    struct pipe_resource *gpu_stats_psnr;
 
-   /* See PIPE_VIDEO_CAP_ENC_QP_MAPS */
-   struct pipe_resource *input_gpu_qpmap;
+   struct pipe_enc_qpmap_input_info input_qpmap_info;
 
    bool not_referenced;
    bool is_ltr;
@@ -1322,6 +1351,10 @@ struct pipe_h265_enc_rate_control
 
    /* Used with PIPE_H2645_ENC_RATE_CONTROL_METHOD_QUALITY_VARIABLE */
    unsigned vbr_quality_factor;
+
+   /* See PIPE_VIDEO_CAP_ENC_SPATIAL_ADAPTIVE_QUANTIZATION */
+   /* value 0 indicates SAQ is disabled */
+   unsigned spatial_adaptive_quantization_strength;
 };
 
 struct pipe_h265_enc_dpb_entry
@@ -1366,8 +1399,7 @@ struct pipe_h265_enc_picture_desc
    /* See PIPE_VIDEO_CAP_ENC_GPU_STATS_PSNR */
    struct pipe_resource *gpu_stats_psnr;
 
-   /* See PIPE_VIDEO_CAP_ENC_QP_MAPS */
-   struct pipe_resource *input_gpu_qpmap;
+   struct pipe_enc_qpmap_input_info input_qpmap_info;
 
    unsigned num_ref_idx_l0_active_minus1;
    unsigned num_ref_idx_l1_active_minus1;
@@ -1550,8 +1582,7 @@ struct pipe_av1_enc_picture_desc
    struct pipe_enc_quality_modes quality_modes;
    struct pipe_enc_intra_refresh intra_refresh;
    struct pipe_enc_roi roi;
-   /* See PIPE_VIDEO_CAP_ENC_QP_MAPS */
-   struct pipe_resource *input_gpu_qpmap;
+   struct pipe_enc_qpmap_input_info input_qpmap_info;
    uint32_t tile_rows;
    uint32_t tile_cols;
    unsigned num_tile_groups;
@@ -1906,6 +1937,7 @@ struct pipe_vp9_picture_desc
          uint32_t  segmentation_enabled:1;
          uint32_t  segmentation_temporal_update:1;
          uint32_t  segmentation_update_map:1;
+         uint32_t  segmentation_update_data:1;
          uint32_t  last_ref_frame:3;
          uint32_t  last_ref_frame_sign_bias:1;
          uint32_t  golden_ref_frame:3;
@@ -1913,6 +1945,7 @@ struct pipe_vp9_picture_desc
          uint32_t  alt_ref_frame:3;
          uint32_t  alt_ref_frame_sign_bias:1;
          uint32_t  lossless_flag:1;
+         uint32_t  use_prev_frame_mvs:1;
       } pic_fields;
 
       uint8_t filter_level;
@@ -1940,8 +1973,8 @@ struct pipe_vp9_picture_desc
       int8_t uv_ac_delta_q;
       int8_t uv_dc_delta_q;
       uint8_t abs_delta;
-      uint8_t ref_deltas[4];
-      uint8_t mode_deltas[2];
+      int8_t ref_deltas[4];
+      int8_t mode_deltas[2];
    } picture_parameter;
 
    struct {
@@ -2160,10 +2193,8 @@ struct pipe_vpp_desc
    struct pipe_video_buffer *dst;
 
    uint32_t background_color;
-   enum pipe_video_vpp_color_standard_type in_colors_standard;
    enum pipe_video_vpp_color_range in_color_range;
    enum pipe_video_vpp_chroma_siting in_chroma_siting;
-   enum pipe_video_vpp_color_standard_type out_colors_standard;
    enum pipe_video_vpp_color_range out_color_range;
    enum pipe_video_vpp_chroma_siting out_chroma_siting;
 
@@ -2955,6 +2986,15 @@ union pipe_enc_cap_motion_vector_map {
        * passed to the driver
        */
       uint32_t pipe_pixel_vectors_metadata_map_format: 9; /* 9 bits for pipe_format < PIPE_FORMAT_COUNT */
+   } bits;
+  uint32_t value;
+};
+
+/* Used with PIPE_VIDEO_CAP_ENC_SPATIAL_ADAPTIVE_QUANTIZATION */
+union pipe_enc_cap_spatial_adaptive_quantization {
+   struct {
+      /* value 0 indicates no support for SAQ */
+      uint32_t max_spatial_adaptive_quantization_strength: 8;
    } bits;
   uint32_t value;
 };

@@ -13,7 +13,6 @@ and show the job(s) logs.
 """
 
 import argparse
-import os
 import re
 import sys
 import time
@@ -88,9 +87,9 @@ def print_job_status(
     print(
         f"{STATUS_COLORS[job.status]}"
         f"{jtype:{type_field_pad}} "  # U+1F78B Round target
-        f"{link2print(job.web_url, job.name, name_field_pad)} "
-        f"{f"has new status: {job.status} " if new_status else f"{job.status}"} "
-        f"{f"({pretty_duration(duration)})" if job.started_at else ""}"
+        f"{link2print(job.web_url, job.name, name_field_pad)} " +
+        (f" has new status: {job.status}" if new_status else f" {job.status}") +
+        (f" ({pretty_duration(duration)})" if job.started_at else "")
     )
 
 
@@ -234,7 +233,6 @@ def monitor_pipeline(
                     f"* {job_name:{name_field_pad}} succ: {n_succeed}; "
                     f"fail: {n_failed}; "
                     f"total: {n_total_seen} of {stress}",
-                    flush=False,
                 )
                 if stress < 0 or n_total_completed < stress:
                     enough = False

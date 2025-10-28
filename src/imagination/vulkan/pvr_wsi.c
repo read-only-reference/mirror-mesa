@@ -24,12 +24,17 @@
  * SOFTWARE.
  */
 
+#include "pvr_wsi.h"
+
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
 #include <vulkan/vulkan.h>
 
-#include "pvr_private.h"
+#include "pvr_device.h"
+#include "pvr_entrypoints.h"
+#include "pvr_queue.h"
+
 #include "util/u_atomic.h"
 #include "vk_object.h"
 #include "wsi_common.h"

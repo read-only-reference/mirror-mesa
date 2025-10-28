@@ -26,12 +26,14 @@
 #include <stdint.h>
 #include <vulkan/vulkan.h>
 
+#include "pvr_cmd_buffer.h"
 #include "pvr_csb.h"
 #include "pvr_debug.h"
+#include "pvr_device.h"
 #include "pvr_job_common.h"
 #include "pvr_job_context.h"
 #include "pvr_job_compute.h"
-#include "pvr_private.h"
+#include "pvr_macros.h"
 #include "pvr_types.h"
 #include "pvr_winsys.h"
 #include "util/macros.h"

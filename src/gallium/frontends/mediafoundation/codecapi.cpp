@@ -266,6 +266,10 @@ StringFromCodecAPI( const GUID *Api )
    {
       return "CODECAPI_AVEncVideoSatdMapBlockSize";
    }
+   else if( *Api == CODECAPI_AVEncVideoReconstructedPictureOutputMode )
+   {
+      return "CODECAPI_AVEncVideoReconstructedPictureOutputMode";
+   }
    else if( *Api == CODECAPI_AVEncVideoRateControlFramePreAnalysis )
    {
       return "CODECAPI_AVEncVideoRateControlFramePreAnalysis";
@@ -273,6 +277,10 @@ StringFromCodecAPI( const GUID *Api )
    else if( *Api == CODECAPI_AVEncVideoRateControlFramePreAnalysisExternalReconDownscale )
    {
       return "CODECAPI_AVEncVideoRateControlFramePreAnalysisExternalReconDownscale";
+   }
+   else if( *Api == CODECAPI_AVEncSliceGenerationMode )
+   {
+      return "CODECAPI_AVEncSliceGenerationMode";
    }
    else if( *Api == CODECAPI_AVEncVideoInputDeltaQPBlockSettings )
    {
@@ -342,15 +350,15 @@ CDX12EncHMFT::IsSupported( const GUID *Api )
        *Api == CODECAPI_AVEncVideoSelectLayer || *Api == CODECAPI_AVEncVideoEncodeFrameTypeQP ||
        *Api == CODECAPI_AVEncSliceControlMode || *Api == CODECAPI_AVEncSliceControlSize ||
        *Api == CODECAPI_AVEncVideoMaxNumRefFrame || *Api == CODECAPI_AVEncVideoMeanAbsoluteDifference ||
-       *Api == CODECAPI_AVEncVideoMaxQP || *Api == CODECAPI_AVScenarioInfo ||
-       *Api == CODECAPI_AVEncVideoROIEnabled || *Api == CODECAPI_AVEncVideoLTRBufferControl ||
-       *Api == CODECAPI_AVEncVideoMarkLTRFrame || *Api == CODECAPI_AVEncVideoUseLTRFrame )
+       *Api == CODECAPI_AVEncVideoMaxQP || *Api == CODECAPI_AVScenarioInfo || *Api == CODECAPI_AVEncVideoROIEnabled ||
+       *Api == CODECAPI_AVEncVideoLTRBufferControl || *Api == CODECAPI_AVEncVideoMarkLTRFrame ||
+       *Api == CODECAPI_AVEncVideoUseLTRFrame || *Api == CODECAPI_AVEncSliceGenerationMode )
    {
       hr = S_OK;
       return hr;
    }
 
-   if( m_EncoderCapabilities.m_HWSupportsIntraRefreshModes != PIPE_VIDEO_ENC_INTRA_REFRESH_NONE)
+   if( m_EncoderCapabilities.m_HWSupportsIntraRefreshModes != PIPE_VIDEO_ENC_INTRA_REFRESH_NONE )
    {
       if( *Api == CODECAPI_AVEncVideoGradualIntraRefresh )
       {
@@ -422,16 +430,14 @@ CDX12EncHMFT::IsSupported( const GUID *Api )
       }
    }
 
-#if ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
-      if( (*Api == CODECAPI_AVEncWorkGlobalPriority) || (*Api == CODECAPI_AVEncWorkProcessPriority) )
+   if( ( *Api == CODECAPI_AVEncWorkGlobalPriority ) || ( *Api == CODECAPI_AVEncWorkProcessPriority ) )
+   {
+      if( m_EncoderCapabilities.m_bHWSupportsQueuePriorityManagement )
       {
-         if(m_EncoderCapabilities.m_bHWSupportsQueuePriorityManagement)
-         {
-            hr = S_OK;
-            return hr;
-         }
+         hr = S_OK;
+         return hr;
       }
-#endif // ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
+   }
 
    if( m_EncoderCapabilities.m_TwoPassSupport.bits.supports_1pass_recon_writing_skip )
    {
@@ -442,9 +448,27 @@ CDX12EncHMFT::IsSupported( const GUID *Api )
       }
    }
 
+   if( m_EncoderCapabilities.m_bHWSupportReadableReconstructedPicture )
+   {
+      if( *Api == CODECAPI_AVEncVideoReconstructedPictureOutputMode )
+      {
+         hr = S_OK;
+         return hr;
+      }
+   }
+
    if( m_EncoderCapabilities.m_HWSupportsVideoEncodeROI.bits.roi_rc_qp_delta_support )
    {
       if( *Api == CODECAPI_AVEncVideoInputDeltaQPBlockSettings )
+      {
+         hr = S_OK;
+         return hr;
+      }
+   }
+
+   if( m_EncoderCapabilities.m_HWSupportSpatialAdaptiveQuantization.bits.max_spatial_adaptive_quantization_strength > 0 )
+   {
+      if( *Api == CODECAPI_AVEncVideoEnableSpatialAdaptiveQuantization )
       {
          hr = S_OK;
          return hr;
@@ -660,9 +684,9 @@ CDX12EncHMFT::GetParameterValues( const GUID *Api, VARIANT **Values, ULONG *Valu
       else if( *Api == CODECAPI_AVEncVideoGradualIntraRefresh )
       {
 
-         *ValuesCount = 0; // Assume no support unless reported by driver's capabilities
+         *ValuesCount = 0;   // Assume no support unless reported by driver's capabilities
 
-         if( m_EncoderCapabilities.m_HWSupportsIntraRefreshModes != PIPE_VIDEO_ENC_INTRA_REFRESH_NONE)
+         if( m_EncoderCapabilities.m_HWSupportsIntraRefreshModes != PIPE_VIDEO_ENC_INTRA_REFRESH_NONE )
          {
             // Our HMFT doesn't support HMFT_INTRA_REFRESH_MODE_PERIODIC
             *ValuesCount = 2;
@@ -676,7 +700,8 @@ CDX12EncHMFT::GetParameterValues( const GUID *Api, VARIANT **Values, ULONG *Valu
       else if( *Api == CODECAPI_AVEncVideoLTRBufferControl )
       {
          // reserve one dpb spot for short term reference frame.
-         // when m_EncoderCapabilities.m_uiMaxHWSupportedLongTermReferences = m_EncoderCapabilities.m_uiMaxHWSupportedDPBCapacity, we subtract one.
+         // when m_EncoderCapabilities.m_uiMaxHWSupportedLongTermReferences = m_EncoderCapabilities.m_uiMaxHWSupportedDPBCapacity,
+         // we subtract one.
          ULONG numSupportedLTR = m_EncoderCapabilities.m_uiMaxHWSupportedLongTermReferences;
          if( numSupportedLTR > 0 && numSupportedLTR == m_EncoderCapabilities.m_uiMaxHWSupportedDPBCapacity )
          {
@@ -894,6 +919,11 @@ CDX12EncHMFT::GetValue( const GUID *Api, VARIANT *Value )
       Value->vt = VT_UI4;
       Value->ulVal = m_bVideoEnableFramePsnrYuv;
    }
+   else if( *Api == CODECAPI_AVEncVideoReconstructedPictureOutputMode )
+   {
+      Value->vt = VT_UI4;
+      Value->ulVal = (UINT32) m_VideoReconstructedPictureMode;
+   }
    else if( *Api == CODECAPI_AVEncVideoEnableSpatialAdaptiveQuantization )
    {
       Value->vt = VT_UI4;
@@ -931,7 +961,11 @@ CDX12EncHMFT::GetValue( const GUID *Api, VARIANT *Value )
       Value->vt = VT_BOOL;
       Value->boolVal = m_bRateControlFramePreAnalysisExternalReconDownscale ? VARIANT_TRUE : VARIANT_FALSE;
    }
-#if ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
+   else if( *Api == CODECAPI_AVEncSliceGenerationMode )
+   {
+      Value->vt = VT_UI4;
+      Value->ulVal = m_uiSliceGenerationMode;
+   }
    else if( *Api == CODECAPI_AVEncWorkGlobalPriority )
    {
       Value->vt = VT_UI4;
@@ -942,7 +976,6 @@ CDX12EncHMFT::GetValue( const GUID *Api, VARIANT *Value )
       Value->vt = VT_UI4;
       Value->ulVal = (UINT32) m_WorkProcessPriority;
    }
-#endif // ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
    else if( *Api == CODECAPI_AVEncVideoInputDeltaQPBlockSettings )
    {
       InputQPSettings hevcDeltaQPSettings;
@@ -1164,6 +1197,15 @@ CDX12EncHMFT::SetValue( const GUID *Api, VARIANT *Value )
              ( m_eScenarioInfo == eAVScenarioInfo_LiveStreaming ) )
          {
             m_bLowLatency = TRUE;
+         }
+
+         // Enforce disabling read only shared resource output mode when low latency is disabled
+         if( ( m_bLowLatency == FALSE ) && ( m_VideoReconstructedPictureMode == RECON_PIC_OUTPUT_MODE_READ_ONLY_SHARED_RESOURCE ) )
+         {
+            m_VideoReconstructedPictureMode = RECON_PIC_OUTPUT_MODE_DISABLED;
+            debug_printf( "[dx12 hmft 0x%p] Disabling RECON_PIC_OUTPUT_MODE_READ_ONLY_SHARED_RESOURCE as low latency is disabled. "
+                          "Please use to RECON_PIC_OUTPUT_MODE_BLIT_COPY for LowLatency Mode disabled scenarios.\n",
+                          this );
          }
       }
    }
@@ -1551,32 +1593,40 @@ CDX12EncHMFT::SetValue( const GUID *Api, VARIANT *Value )
       UINT uiIntraRefreshMode = Value->ulVal & 0xFFFF;
       UINT uiIntraRefreshSize = Value->ulVal >> 16 & 0xFFFF;
 
-      if ((uiIntraRefreshMode != 0) && (m_EncoderCapabilities.m_HWSupportsIntraRefreshModes == PIPE_VIDEO_ENC_INTRA_REFRESH_NONE))
+      if( ( uiIntraRefreshMode != 0 ) &&
+          ( m_EncoderCapabilities.m_HWSupportsIntraRefreshModes == PIPE_VIDEO_ENC_INTRA_REFRESH_NONE ) )
       {
          debug_printf( "[dx12 hmft 0x%p] User tried to set CODECAPI_AVEncVideoGradualIntraRefresh with mode %u, but this "
-                    "encoder does NOT support intra refresh.",
-                    this, uiIntraRefreshMode );
+                       "encoder does NOT support intra refresh.",
+                       this,
+                       uiIntraRefreshMode );
          CHECKHR_GOTO( E_INVALIDARG, done );
       }
 
-      if (uiIntraRefreshSize > m_EncoderCapabilities.m_uiMaxHWSupportedIntraRefreshSize)
+      if( uiIntraRefreshSize > m_EncoderCapabilities.m_uiMaxHWSupportedIntraRefreshSize )
       {
          debug_printf( "[dx12 hmft 0x%p] User tried to set CODECAPI_AVEncVideoGradualIntraRefresh with size %u, but this "
-                    "exceeds the maximum supported by hardware %u.",
-                    this, uiIntraRefreshSize, m_EncoderCapabilities.m_uiMaxHWSupportedIntraRefreshSize );
+                       "exceeds the maximum supported by hardware %u.",
+                       this,
+                       uiIntraRefreshSize,
+                       m_EncoderCapabilities.m_uiMaxHWSupportedIntraRefreshSize );
          CHECKHR_GOTO( E_INVALIDARG, done );
       }
 
       debug_printf( "[dx12 hmft 0x%p] SET CODECAPI_AVEncVideoGradualIntraRefresh - %u\n", this, Value->ulVal );
       if( Value->vt != VT_UI4 )
       {
-         debug_printf( "[dx12 hmft 0x%p] User tried to set CODECAPI_AVEncVideoGradualIntraRefresh with invalid vt %u\n", this, Value->vt );
+         debug_printf( "[dx12 hmft 0x%p] User tried to set CODECAPI_AVEncVideoGradualIntraRefresh with invalid vt %u\n",
+                       this,
+                       Value->vt );
          CHECKHR_GOTO( E_INVALIDARG, done );
       }
 
       if( uiIntraRefreshMode >= HMFT_INTRA_REFRESH_MODE_MAX )
       {
-         debug_printf( "[dx12 hmft 0x%p] User tried to set CODECAPI_AVEncVideoGradualIntraRefresh with invalid mode %u\n", this, uiIntraRefreshMode );
+         debug_printf( "[dx12 hmft 0x%p] User tried to set CODECAPI_AVEncVideoGradualIntraRefresh with invalid mode %u\n",
+                       this,
+                       uiIntraRefreshMode );
          CHECKHR_GOTO( E_INVALIDARG, done );
       }
 
@@ -1638,6 +1688,39 @@ CDX12EncHMFT::SetValue( const GUID *Api, VARIANT *Value )
       }
       m_bVideoEnableFramePsnrYuv = Value->ulVal ? TRUE : FALSE;
    }
+   else if( *Api == CODECAPI_AVEncVideoReconstructedPictureOutputMode )
+   {
+      debug_printf( "[dx12 hmft 0x%p] SET CODECAPI_AVEncVideoReconstructedPictureOutputMode - %u\n", this, Value->ulVal );
+      if( Value->vt != VT_UI4 )
+      {
+         CHECKHR_GOTO( E_INVALIDARG, done );
+      }
+
+      if( Value->ulVal > RECON_PIC_OUTPUT_MODE_READ_ONLY_SHARED_RESOURCE )
+      {
+         MFE_ERROR(
+            "[dx12 hmft 0x%p] Invalid value %u for CODECAPI_AVEncVideoReconstructedPictureOutputMode. Valid values are 0-2.",
+            this,
+            Value->ulVal );
+         CHECKHR_GOTO( E_INVALIDARG, done );
+      }
+
+      if( !m_EncoderCapabilities.m_bHWSupportReadableReconstructedPicture && Value->ulVal != RECON_PIC_OUTPUT_MODE_DISABLED )
+      {
+         MFE_ERROR( "[dx12 hmft 0x%p] User tried to enable CODECAPI_AVEncVideoReconstructedPictureOutputMode, but this encoder "
+                    "does NOT support this feature.",
+                    this );
+         CHECKHR_GOTO( E_INVALIDARG, done );
+      }
+
+      if( Value->ulVal == RECON_PIC_OUTPUT_MODE_READ_ONLY_SHARED_RESOURCE && !m_bLowLatency )
+      {
+         MFE_ERROR( "[dx12 hmft 0x%p] RECON_PIC_OUTPUT_MODE_READ_ONLY_SHARED_RESOURCE requires low latency mode to be enabled.",
+                    this );
+         CHECKHR_GOTO( E_INVALIDARG, done );
+      }
+      m_VideoReconstructedPictureMode = (RECON_PIC_OUTPUT_MODE) Value->ulVal;
+   }
    else if( *Api == CODECAPI_AVEncVideoEnableSpatialAdaptiveQuantization )
    {
       debug_printf( "[dx12 hmft 0x%p] SET CODECAPI_AVEncVideoEnableSpatialAdaptiveQuantization - %u\n", this, Value->ulVal );
@@ -1655,14 +1738,12 @@ CDX12EncHMFT::SetValue( const GUID *Api, VARIANT *Value )
          CHECKHR_GOTO( E_INVALIDARG, done );
       }
 
-      if(!m_EncoderCapabilities.m_bHWSupportsQueuePriorityManagement)
+      if( !m_EncoderCapabilities.m_bHWSupportsQueuePriorityManagement )
       {
          CHECKHR_GOTO( E_INVALIDARG, done );
       }
-#if ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
-      m_WorkProcessPriority = (D3D12_COMMAND_QUEUE_PROCESS_PRIORITY) (Value->ulVal);;
+      m_WorkProcessPriority = (D3D12_COMMAND_QUEUE_PROCESS_PRIORITY) ( Value->ulVal );
       m_bWorkProcessPrioritySet = TRUE;
-#endif // ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
    }
    else if( *Api == CODECAPI_AVEncWorkGlobalPriority )
    {
@@ -1672,14 +1753,12 @@ CDX12EncHMFT::SetValue( const GUID *Api, VARIANT *Value )
          CHECKHR_GOTO( E_INVALIDARG, done );
       }
 
-      if(!m_EncoderCapabilities.m_bHWSupportsQueuePriorityManagement)
+      if( !m_EncoderCapabilities.m_bHWSupportsQueuePriorityManagement )
       {
          CHECKHR_GOTO( E_INVALIDARG, done );
       }
-#if ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
       m_WorkGlobalPriority = (D3D12_COMMAND_QUEUE_GLOBAL_PRIORITY) Value->ulVal;
       m_bWorkGlobalPrioritySet = TRUE;
-#endif // ( USE_D3D12_PREVIEW_HEADERS && ( D3D12_PREVIEW_SDK_VERSION >= 717 ) )
    }
    else if( *Api == CODECAPI_AVEncVideoOutputQPMapBlockSize )
    {
@@ -1798,6 +1877,26 @@ CDX12EncHMFT::SetValue( const GUID *Api, VARIANT *Value )
          CHECKHR_GOTO( E_INVALIDARG, done );
       }
       m_bRateControlFramePreAnalysisExternalReconDownscale = Value->boolVal == VARIANT_TRUE ? TRUE : FALSE;
+   }
+   else if( *Api == CODECAPI_AVEncSliceGenerationMode )
+   {
+      if( Value->vt != VT_UI4 )
+      {
+         CHECKHR_GOTO( E_INVALIDARG, done );
+      }
+
+      if( ( Value->ulVal > 0 ) && ( !m_EncoderCapabilities.m_HWSupportSlicedFences.bits.supported ) )
+      {
+         MFE_ERROR( "[dx12 hmft 0x%p] User tried to set CODECAPI_AVEncSliceGenerationMode: %d, but this encoder does NOT support "
+                    "sliced fence generation.",
+                    this,
+                    Value->ulVal );
+         CHECKHR_GOTO( E_INVALIDARG, done );
+      }
+
+      debug_printf( "[dx12 hmft 0x%p] SET CODECAPI_AVEncSliceGenerationMode - %u\n", this, Value->ulVal );
+      m_uiSliceGenerationMode = Value->ulVal;
+      m_bSliceGenerationModeSet = TRUE;
    }
    else
    {

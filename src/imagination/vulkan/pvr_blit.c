@@ -28,11 +28,17 @@
 #include <vulkan/vulkan.h>
 
 #include "pvr_blit.h"
+#include "pvr_buffer.h"
 #include "pvr_clear.h"
+#include "pvr_cmd_buffer.h"
 #include "pvr_csb.h"
+#include "pvr_device.h"
+#include "pvr_entrypoints.h"
 #include "pvr_formats.h"
+#include "pvr_hw_pass.h"
+#include "pvr_image.h"
 #include "pvr_job_transfer.h"
-#include "pvr_private.h"
+#include "pvr_pass.h"
 #include "pvr_types.h"
 #include "pvr_usc.h"
 #include "util/bitscan.h"

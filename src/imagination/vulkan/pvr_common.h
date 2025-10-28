@@ -234,87 +234,6 @@ struct pvr_sampler {
    uint32_t border_color_table_index;
 };
 
-struct pvr_descriptor_set_layout_binding {
-   VkDescriptorType type;
-   VkDescriptorBindingFlags flags;
-
-   uint32_t stage_flags; /** Which stages can use this binding. */
-
-   uint32_t descriptor_count;
-   uint32_t immutable_sampler_count;
-   struct pvr_sampler **immutable_samplers;
-
-   unsigned offset; /** Offset within the descriptor set. */
-   unsigned dynamic_buffer_idx;
-   unsigned stride; /** Stride of each descriptor in this binding. */
-};
-
-struct pvr_descriptor_set_layout {
-   struct vk_descriptor_set_layout vk;
-   VkDescriptorSetLayoutCreateFlagBits flags;
-
-   uint32_t descriptor_count;
-   uint32_t dynamic_buffer_count;
-
-   uint32_t binding_count;
-   struct pvr_descriptor_set_layout_binding *bindings;
-
-   uint32_t immutable_sampler_count;
-   struct pvr_sampler **immutable_samplers;
-
-   uint32_t stage_flags; /** Which stages can use this binding. */
-
-   unsigned size; /** Size in bytes. */
-};
-
-struct pvr_descriptor_pool {
-   struct vk_object_base base;
-
-   VkDescriptorType type;
-   VkAllocationCallbacks alloc;
-   VkDescriptorPoolCreateFlags flags;
-
-   /** List of the descriptor sets created using this pool. */
-   struct list_head desc_sets;
-
-   struct pvr_suballoc_bo *pvr_bo; /** Pool buffer object. */
-   void *mapping; /** Pool buffer CPU mapping. */
-   struct util_vma_heap heap; /** Pool (sub)allocation heap. */
-};
-
-struct pvr_descriptor {
-   VkDescriptorType type;
-
-   union {
-      struct {
-         struct pvr_buffer_view *bview;
-         pvr_dev_addr_t buffer_dev_addr;
-         VkDeviceSize buffer_desc_range;
-         VkDeviceSize buffer_whole_range;
-      };
-
-      struct {
-         VkImageLayout layout;
-         const struct pvr_image_view *iview;
-         const struct pvr_sampler *sampler;
-      };
-   };
-};
-
-struct pvr_descriptor_set {
-   struct vk_object_base base;
-   struct list_head link; /** Link in pvr_descriptor_pool::desc_sets. */
-
-   struct pvr_descriptor_set_layout *layout;
-   struct pvr_descriptor_pool *pool;
-
-   unsigned size; /** Descriptor set size. */
-   pvr_dev_addr_t dev_addr; /** Descriptor set device address. */
-   void *mapping; /** Descriptor set CPU mapping. */
-
-   struct pvr_buffer_descriptor dynamic_buffers[];
-};
-
 struct pvr_event {
    struct vk_object_base base;
 
@@ -332,6 +251,18 @@ struct pvr_descriptor_state {
 };
 
 #undef PVR_MAX_DYNAMIC_BUFFERS
+
+struct pvr_pds_upload {
+   struct pvr_suballoc_bo *pvr_bo;
+   /* Offset from the pds heap base address. */
+   uint32_t data_offset;
+   /* Offset from the pds heap base address. */
+   uint32_t code_offset;
+
+   /* data_size + code_size = program_size. */
+   uint32_t data_size;
+   uint32_t code_size;
+};
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(pvr_event, base, VkEvent, VK_OBJECT_TYPE_EVENT)
 VK_DEFINE_NONDISP_HANDLE_CASTS(pvr_sampler,

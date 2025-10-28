@@ -237,7 +237,7 @@ midgard_nir_lower_global_load_instr(nir_builder *b, nir_intrinsic_instr *intr,
 
       nir_def *load;
       if (intr->intrinsic == nir_intrinsic_load_global) {
-         load = nir_load_global(b, addr, compsz / 8, loadncomps, compsz);
+         load = nir_load_global(b, loadncomps, compsz, addr);
       } else {
          assert(intr->intrinsic == nir_intrinsic_load_shared);
          nir_intrinsic_instr *shared_load =
@@ -2997,7 +2997,7 @@ midgard_compile_shader_nir(nir_shader *nir,
    skip_internal &= !(midgard_debug & MIDGARD_DBG_INTERNAL);
 
    if (midgard_debug & MIDGARD_DBG_SHADERS && !skip_internal)
-      nir_print_shader(nir, stdout);
+      nir_log_shaderi(nir);
 
    info->tls_size = nir->scratch_size;
 

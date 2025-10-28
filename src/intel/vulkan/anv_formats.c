@@ -410,8 +410,10 @@ static const struct anv_format ycbcr_formats[] = {
              ycbcr_plane(1, ISL_FORMAT_R8_UNORM, RGBA),
              ycbcr_plane(2, ISL_FORMAT_R8_UNORM, RGBA)),
 
-   fmt_unsupported(VK_FORMAT_R10X6_UNORM_PACK16),
-   fmt_unsupported(VK_FORMAT_R10X6G10X6_UNORM_2PACK16),
+   ycbcr_fmt(VK_FORMAT_R10X6_UNORM_PACK16, 1, false, true,
+             ycbcr_plane(0, ISL_FORMAT_R16_UNORM, RGBA)),
+   ycbcr_fmt(VK_FORMAT_R10X6G10X6_UNORM_2PACK16, 1, false, true,
+             ycbcr_plane(0, ISL_FORMAT_R16G16_UNORM, RGBA)),
    fmt_unsupported(VK_FORMAT_R10X6G10X6B10X6A10X6_UNORM_4PACK16),
    fmt_unsupported(VK_FORMAT_G10X6B10X6G10X6R10X6_422_UNORM_4PACK16),
    fmt_unsupported(VK_FORMAT_B10X6G10X6R10X6G10X6_422_UNORM_4PACK16),
@@ -679,9 +681,21 @@ anv_get_image_format_features2(const struct anv_physical_device *physical_device
    const VkImageAspectFlags aspects = vk_format_aspects(vk_format);
 
    if (aspects & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
-      if (vk_tiling == VK_IMAGE_TILING_LINEAR ||
-          vk_tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT)
+      if (vk_tiling == VK_IMAGE_TILING_LINEAR)
          return 0;
+
+      if (vk_tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT) {
+         if (aspects != VK_IMAGE_ASPECT_DEPTH_BIT)
+            return 0;
+
+         if (isl_mod_info->tiling != ISL_TILING_Y0 &&
+             isl_mod_info->tiling != ISL_TILING_4)
+            return 0;
+
+         if (devinfo->ver <= 12 &&
+             isl_drm_modifier_has_aux(isl_mod_info->modifier))
+            return 0;
+      }
 
       flags |= VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT |
                VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT |
@@ -696,6 +710,20 @@ anv_get_image_format_features2(const struct anv_physical_device *physical_device
                   VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_MINMAX_BIT |
                   VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_DEPTH_COMPARISON_BIT;
       }
+
+      /* Notes on VK_KHR_maintenance10:
+       *
+       * Intel HW can only write depth HiZ surfaces from the 3D pipeline depth
+       * output. So Depth on compute or transfer queues is not possible. Here
+       * we choose to not support stencil either, although it could be
+       * possible on Gfx20+ but would probably be confusing to application. So
+       * no support for:
+       *    - VK_FORMAT_FEATURE_2_DEPTH_COPY_ON_COMPUTE_QUEUE_BIT_KHR
+       *    - VK_FORMAT_FEATURE_2_DEPTH_COPY_ON_TRANSFER_QUEUE_BIT_KHR
+       *    - VK_FORMAT_FEATURE_2_STENCIL_COPY_ON_COMPUTE_QUEUE_BIT_KHR
+       *    - VK_FORMAT_FEATURE_2_STENCIL_COPY_ON_TRANSFER_QUEUE_BIT_KHR
+       */
+
 
       return flags;
    }
@@ -792,7 +820,7 @@ anv_get_image_format_features2(const struct anv_physical_device *physical_device
     * it for the list of shader storage extended formats [1]. Before that,
     * this applies to all VkFormats.
     *
-    * [1] : https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#features-shaderStorageImageExtendedFormats
+    * [1] : https://docs.vulkan.org/spec/latest/chapters/features.html#features-shaderStorageImageExtendedFormats
     */
    if ((flags & VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT) ||
        (anv_format->flags & ANV_FORMAT_FLAG_STORAGE_FORMAT_EMULATED))

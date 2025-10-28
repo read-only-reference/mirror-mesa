@@ -30,9 +30,10 @@
 
 #include "hwdef/rogue_hw_defs.h"
 #include "hwdef/rogue_hw_utils.h"
+#include "pvr_device.h"
 #include "pvr_hw_pass.h"
 #include "pvr_formats.h"
-#include "pvr_private.h"
+#include "pvr_pass.h"
 #include "util/bitset.h"
 #include "util/list.h"
 #include "util/macros.h"

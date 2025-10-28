@@ -270,8 +270,7 @@ update_gfx_pipeline(struct zink_context *ctx, struct zink_batch_state *bs, enum 
          pipeline = zink_get_gfx_pipeline<DYNAMIC_STATE, true, false>(ctx, ctx->curr_program, &ctx->gfx_pipeline_state, mode);
       else
          pipeline = zink_get_gfx_pipeline<DYNAMIC_STATE, false, false>(ctx, ctx->curr_program, &ctx->gfx_pipeline_state, mode);
-   }
-   if (pipeline) {
+      assert(pipeline);
       pipeline_changed = prev_pipeline != pipeline || ctx->shobj_draw;
       if (BATCH_CHANGED || pipeline_changed)
          VKCTX(CmdBindPipeline)(bs->cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
@@ -298,7 +297,7 @@ update_gfx_pipeline(struct zink_context *ctx, struct zink_batch_state *bs, enum 
          }
          VKCTX(CmdSetDepthBiasEnable)(bs->cmdbuf, VK_TRUE);
          VKCTX(CmdSetTessellationDomainOriginEXT)(bs->cmdbuf, VK_TESSELLATION_DOMAIN_ORIGIN_LOWER_LEFT);
-         VKCTX(CmdSetSampleLocationsEnableEXT)(bs->cmdbuf, ctx->gfx_pipeline_state.sample_locations_enabled);
+         VKCTX(CmdSetSampleLocationsEnableEXT)(bs->cmdbuf, ctx->gfx_pipeline_state.custom_sample_locations);
          VKCTX(CmdSetRasterizationStreamEXT)(bs->cmdbuf, 0);
          pipeline_changed = true;
       }
@@ -450,8 +449,8 @@ emit_dynamic_state(struct zink_context *ctx, bool pipeline_changed, unsigned num
       ctx->dsa_state_changed = false;
    }
 
-   if (DYNAMIC_STATE != ZINK_NO_DYNAMIC_STATE) {
-      if (ctx->sample_locations_changed) {
+   if (ctx->sample_locations_changed) {
+      if (ctx->gfx_pipeline_state.custom_sample_locations) {
          VkSampleLocationsInfoEXT loc;
          zink_init_vk_sample_locations(ctx, &loc);
          VKCTX(CmdSetSampleLocationsEXT)(bs->cmdbuf, &loc);
@@ -986,8 +985,7 @@ update_mesh_pipeline(struct zink_context *ctx, struct zink_batch_state *bs)
          pipeline = zink_get_gfx_pipeline<ZINK_DYNAMIC_STATE3, true, true>(ctx, ctx->mesh_program, &ctx->gfx_pipeline_state, MESA_PRIM_COUNT);
       else
          pipeline = zink_get_gfx_pipeline<ZINK_DYNAMIC_STATE3, false, true>(ctx, ctx->mesh_program, &ctx->gfx_pipeline_state, MESA_PRIM_COUNT);
-   }
-   if (pipeline) {
+      assert(pipeline);
       pipeline_changed = prev_pipeline != pipeline || ctx->shobj_draw;
       if (BATCH_CHANGED || pipeline_changed)
          VKCTX(CmdBindPipeline)(bs->cmdbuf, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
@@ -1007,7 +1005,7 @@ update_mesh_pipeline(struct zink_context *ctx, struct zink_batch_state *bs)
          /* always rebind all stages */
          VKCTX(CmdBindShadersEXT)(bs->cmdbuf, ZINK_GFX_SHADER_COUNT, stages, ctx->mesh_program->objects);
          VKCTX(CmdBindShadersEXT)(bs->cmdbuf, 2, &stages[MESA_SHADER_TASK], &ctx->mesh_program->objects[MESA_SHADER_TASK]);
-         VKCTX(CmdSetSampleLocationsEnableEXT)(bs->cmdbuf, ctx->gfx_pipeline_state.sample_locations_enabled);
+         VKCTX(CmdSetSampleLocationsEnableEXT)(bs->cmdbuf, ctx->gfx_pipeline_state.custom_sample_locations);
          VKCTX(CmdSetDepthBiasEnable)(bs->cmdbuf, VK_TRUE);
          pipeline_changed = true;
       }

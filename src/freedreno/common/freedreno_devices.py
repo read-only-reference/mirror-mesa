@@ -407,6 +407,8 @@ a6xx_gen3 = A6XXProps(
         has_scalar_alu = True,
         has_early_preamble = True,
         prede_nop_quirk = True,
+        has_pred_bit = True,
+        has_pc_dgen_so_cntl = True,
     )
 
 a6xx_gen4 = A6XXProps(
@@ -442,6 +444,9 @@ a6xx_gen4 = A6XXProps(
         prede_nop_quirk = True,
         predtf_nop_quirk = True,
         has_sad = True,
+        has_sel_b_fneg = True,
+        has_pred_bit = True,
+        has_pc_dgen_so_cntl = True,
     )
 
 add_gpus([
@@ -473,7 +478,7 @@ add_gpus([
             RB_DBG_ECO_CNTL = 0x04100000,
             RB_DBG_ECO_CNTL_blit = 0x04100000,
             HLSQ_DBG_ECO_CNTL = 0,
-            RB_UNKNOWN_8E01 = 0x00000001,
+            RB_RBP_CNTL = 0x00000001,
             VPC_DBG_ECO_CNTL = 0x0,
             UCHE_UNKNOWN_0E12 = 0x10000000,
         ),
@@ -507,7 +512,7 @@ add_gpus([
             RB_DBG_ECO_CNTL = 0x04100000,
             RB_DBG_ECO_CNTL_blit = 0x04100000,
             HLSQ_DBG_ECO_CNTL = 0x00080000,
-            RB_UNKNOWN_8E01 = 0x00000001,
+            RB_RBP_CNTL = 0x00000001,
             VPC_DBG_ECO_CNTL = 0x0,
             UCHE_UNKNOWN_0E12 = 0x00000001
         )
@@ -536,7 +541,7 @@ add_gpus([
             RB_DBG_ECO_CNTL = 0x04100000,
             RB_DBG_ECO_CNTL_blit = 0x04100000,
             HLSQ_DBG_ECO_CNTL = 0x0,
-            RB_UNKNOWN_8E01 = 0x0,
+            RB_RBP_CNTL = 0x0,
             VPC_DBG_ECO_CNTL = 0x02000000,
             UCHE_UNKNOWN_0E12 = 0x00000001
         )
@@ -567,7 +572,7 @@ add_gpus([
             RB_DBG_ECO_CNTL = 0x04100000,
             RB_DBG_ECO_CNTL_blit = 0x04100000,
             HLSQ_DBG_ECO_CNTL = 0x0,
-            RB_UNKNOWN_8E01 = 0x0,
+            RB_RBP_CNTL = 0x0,
             VPC_DBG_ECO_CNTL = 0x02000000,
             UCHE_UNKNOWN_0E12 = 0x00000001
         )
@@ -598,7 +603,7 @@ add_gpus([
             RB_DBG_ECO_CNTL = 0x04100000,
             RB_DBG_ECO_CNTL_blit = 0x05100000,
             HLSQ_DBG_ECO_CNTL = 0x00080000,
-            RB_UNKNOWN_8E01 = 0x00000001,
+            RB_RBP_CNTL = 0x00000001,
             VPC_DBG_ECO_CNTL = 0x0,
             UCHE_UNKNOWN_0E12 = 0x10000001
         )
@@ -629,7 +634,7 @@ add_gpus([
             RB_DBG_ECO_CNTL = 0x04100000,
             RB_DBG_ECO_CNTL_blit = 0x04100000,
             HLSQ_DBG_ECO_CNTL = 0x0,
-            RB_UNKNOWN_8E01 = 0x00000001,
+            RB_RBP_CNTL = 0x00000001,
             VPC_DBG_ECO_CNTL = 0x02000000,
             UCHE_UNKNOWN_0E12 = 0x00000001
         )
@@ -660,7 +665,7 @@ add_gpus([
             RB_DBG_ECO_CNTL = 0x04100000,
             RB_DBG_ECO_CNTL_blit = 0x04100000,
             HLSQ_DBG_ECO_CNTL = 0x0,
-            RB_UNKNOWN_8E01 = 0x00000001,
+            RB_RBP_CNTL = 0x00000001,
             VPC_DBG_ECO_CNTL = 0x02000000,
             UCHE_UNKNOWN_0E12 = 0x00000001
         )
@@ -691,7 +696,7 @@ add_gpus([
             RB_DBG_ECO_CNTL = 0x04100000,
             RB_DBG_ECO_CNTL_blit = 0x04100000,
             HLSQ_DBG_ECO_CNTL = 0x0,
-            RB_UNKNOWN_8E01 = 0x0,
+            RB_RBP_CNTL = 0x0,
             VPC_DBG_ECO_CNTL = 0x02000000,
             UCHE_UNKNOWN_0E12 = 0x00000001
         )
@@ -727,7 +732,7 @@ add_gpus([
             RB_DBG_ECO_CNTL = 0x04100000,
             RB_DBG_ECO_CNTL_blit = 0x04100000,
             HLSQ_DBG_ECO_CNTL = 0x0,
-            RB_UNKNOWN_8E01 = 0x0,
+            RB_RBP_CNTL = 0x0,
             VPC_DBG_ECO_CNTL = 0x02000000,
             UCHE_UNKNOWN_0E12 = 0x00000001
         )
@@ -757,7 +762,7 @@ add_gpus([
             RB_DBG_ECO_CNTL = 0x04100000,
             RB_DBG_ECO_CNTL_blit = 0x04100000,
             HLSQ_DBG_ECO_CNTL = 0x0,
-            RB_UNKNOWN_8E01 = 0x0,
+            RB_RBP_CNTL = 0x0,
             VPC_DBG_ECO_CNTL = 0x02000000,
             UCHE_UNKNOWN_0E12 = 0x00000001
         )
@@ -787,7 +792,7 @@ add_gpus([
             RB_DBG_ECO_CNTL = 0x04100000,
             RB_DBG_ECO_CNTL_blit = 0x04100000,
             HLSQ_DBG_ECO_CNTL = 0x0,
-            RB_UNKNOWN_8E01 = 0x0,
+            RB_RBP_CNTL = 0x0,
             VPC_DBG_ECO_CNTL = 0x02000000,
             UCHE_UNKNOWN_0E12 = 0x00000001
         )
@@ -818,7 +823,7 @@ add_gpus([
             RB_DBG_ECO_CNTL = 0x100000,
             RB_DBG_ECO_CNTL_blit = 0x00100000,  # ???
             HLSQ_DBG_ECO_CNTL = 0x0,
-            RB_UNKNOWN_8E01 = 0x0,
+            RB_RBP_CNTL = 0x0,
             VPC_DBG_ECO_CNTL = 0x2000400,
             UCHE_UNKNOWN_0E12 = 0x00000001
         ),
@@ -866,7 +871,7 @@ add_gpus([
             RB_DBG_ECO_CNTL = 0x100000,
             RB_DBG_ECO_CNTL_blit = 0x100000,
             HLSQ_DBG_ECO_CNTL = 0x02000000,
-            RB_UNKNOWN_8E01 = 0x1,
+            RB_RBP_CNTL = 0x1,
             VPC_DBG_ECO_CNTL = 0x0,
             UCHE_UNKNOWN_0E12 = 0x1,
         ),
@@ -922,6 +927,9 @@ a7xx_base = A6XXProps(
         predtf_nop_quirk = True,
         has_sad = True,
         has_bin_mask = True,
+        has_sel_b_fneg = True,
+        has_pred_bit = True,
+        has_pc_dgen_so_cntl = True,
     )
 
 a7xx_gen1 = A7XXProps(
@@ -984,7 +992,7 @@ a730_magic_regs = dict(
         SP_DBG_ECO_CNTL = 0x10000000,
         RB_DBG_ECO_CNTL = 0x00000000,
         RB_DBG_ECO_CNTL_blit = 0x00000000,  # is it even needed?
-        RB_UNKNOWN_8E01 = 0x0,
+        RB_RBP_CNTL = 0x0,
         VPC_DBG_ECO_CNTL = 0x02000000,
         UCHE_UNKNOWN_0E12 = 0x3200000,
 
@@ -1004,10 +1012,10 @@ a730_raw_magic_regs = [
         [A6XXRegs.REG_A6XX_PC_DBG_ECO_CNTL, 0x20080000],
         [A6XXRegs.REG_A7XX_PC_UNKNOWN_9E24, 0x21fc7f00],
         [A6XXRegs.REG_A7XX_VFD_DBG_ECO_CNTL, 0x00000000],
-        [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE06, 0x00000000],
+        [A6XXRegs.REG_A7XX_SP_ISDB_CNTL, 0x00000000],
         [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE6A, 0x00000000],
-        [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE6B, 0x00000080],
-        [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE73, 0x00000000],
+        [A6XXRegs.REG_A7XX_SP_HLSQ_TIMEOUT_THRESHOLD_DP, 0x00000080],
+        [A6XXRegs.REG_A7XX_SP_HLSQ_DBG_ECO_CNTL_1, 0x00000000],
         [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB02, 0x00000000],
         [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB01, 0x00000000],
         [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB22, 0x00000000],
@@ -1039,7 +1047,7 @@ a740_magic_regs = dict(
         RB_DBG_ECO_CNTL = 0x00000000,
         RB_DBG_ECO_CNTL_blit = 0x00000000,  # is it even needed?
         # HLSQ_DBG_ECO_CNTL = 0x0,
-        RB_UNKNOWN_8E01 = 0x0,
+        RB_RBP_CNTL = 0x0,
         VPC_DBG_ECO_CNTL = 0x02000000,
         UCHE_UNKNOWN_0E12 = 0x00000000,
 
@@ -1059,10 +1067,10 @@ a740_raw_magic_regs = [
         [A6XXRegs.REG_A6XX_PC_DBG_ECO_CNTL, 0x00100000],
         [A6XXRegs.REG_A7XX_PC_UNKNOWN_9E24, 0x21585600],
         [A6XXRegs.REG_A7XX_VFD_DBG_ECO_CNTL, 0x00008000],
-        [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE06, 0x00000000],
+        [A6XXRegs.REG_A7XX_SP_ISDB_CNTL, 0x00000000],
         [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE6A, 0x00000000],
-        [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE6B, 0x00000080],
-        [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE73, 0x00000000],
+        [A6XXRegs.REG_A7XX_SP_HLSQ_TIMEOUT_THRESHOLD_DP, 0x00000080],
+        [A6XXRegs.REG_A7XX_SP_HLSQ_DBG_ECO_CNTL_1, 0x00000000],
         [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB02, 0x00000000],
         [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB01, 0x00000000],
         [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB22, 0x00000000],
@@ -1141,7 +1149,7 @@ add_gpus([
             SP_DBG_ECO_CNTL = 0x10000000,
             RB_DBG_ECO_CNTL = 0x00000001,
             RB_DBG_ECO_CNTL_blit = 0x00000001,  # is it even needed?
-            RB_UNKNOWN_8E01 = 0x0,
+            RB_RBP_CNTL = 0x0,
             VPC_DBG_ECO_CNTL = 0x02000000,
             UCHE_UNKNOWN_0E12 = 0x00000000,
 
@@ -1160,10 +1168,10 @@ add_gpus([
             [A6XXRegs.REG_A6XX_PC_DBG_ECO_CNTL, 0x00100000],
             [A6XXRegs.REG_A7XX_PC_UNKNOWN_9E24, 0x01585600],
             [A6XXRegs.REG_A7XX_VFD_DBG_ECO_CNTL, 0x00008000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE06, 0x00000000],
+            [A6XXRegs.REG_A7XX_SP_ISDB_CNTL, 0x00000000],
             [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE6A, 0x00000000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE6B, 0x00000080],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE73, 0x00000000],
+            [A6XXRegs.REG_A7XX_SP_HLSQ_TIMEOUT_THRESHOLD_DP, 0x00000080],
+            [A6XXRegs.REG_A7XX_SP_HLSQ_DBG_ECO_CNTL_1, 0x00000000],
             [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB02, 0x00000000],
             [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB01, 0x00000000],
             [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB22, 0x00000000],
@@ -1232,10 +1240,10 @@ add_gpus([
             [A6XXRegs.REG_A6XX_PC_DBG_ECO_CNTL, 0x00100000],
             [A6XXRegs.REG_A7XX_PC_UNKNOWN_9E24, 0x21585600],
             [A6XXRegs.REG_A7XX_VFD_DBG_ECO_CNTL, 0x00008000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE06, 0x00000000],
+            [A6XXRegs.REG_A7XX_SP_ISDB_CNTL, 0x00000000],
             [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE6A, 0x00000000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE6B, 0x00000080],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE73, 0x00000000],
+            [A6XXRegs.REG_A7XX_SP_HLSQ_TIMEOUT_THRESHOLD_DP, 0x00000080],
+            [A6XXRegs.REG_A7XX_SP_HLSQ_DBG_ECO_CNTL_1, 0x00000000],
             [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB02, 0x00000000],
             [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB01, 0x00000000],
             [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB22, 0x00000000],
@@ -1281,7 +1289,7 @@ add_gpus([
             RB_DBG_ECO_CNTL = 0x00000001,
             RB_DBG_ECO_CNTL_blit = 0x00000000,  # is it even needed?
             # HLSQ_DBG_ECO_CNTL = 0x0,
-            RB_UNKNOWN_8E01 = 0x0,
+            RB_RBP_CNTL = 0x0,
             VPC_DBG_ECO_CNTL = 0x02000000,
             UCHE_UNKNOWN_0E12 = 0x00000000,
 
@@ -1312,7 +1320,7 @@ add_gpus([
             SP_DBG_ECO_CNTL = 0x10000000,
             RB_DBG_ECO_CNTL = 0x00000001,
             RB_DBG_ECO_CNTL_blit = 0x00000001,
-            RB_UNKNOWN_8E01 = 0x0,
+            RB_RBP_CNTL = 0x0,
             VPC_DBG_ECO_CNTL = 0x02000000,
             UCHE_UNKNOWN_0E12 = 0x40000000,
 
@@ -1329,10 +1337,10 @@ add_gpus([
             [A6XXRegs.REG_A6XX_PC_DBG_ECO_CNTL, 0x00100000],
             [A6XXRegs.REG_A7XX_PC_UNKNOWN_9E24, 0x01585600],
             [A6XXRegs.REG_A7XX_VFD_DBG_ECO_CNTL, 0x00008000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE06, 0x00000000],
+            [A6XXRegs.REG_A7XX_SP_ISDB_CNTL, 0x00000000],
             [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE6A, 0x00000000],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE6B, 0x00000080],
-            [A6XXRegs.REG_A7XX_SP_UNKNOWN_AE73, 0x00000000],
+            [A6XXRegs.REG_A7XX_SP_HLSQ_TIMEOUT_THRESHOLD_DP, 0x00000080],
+            [A6XXRegs.REG_A7XX_SP_HLSQ_DBG_ECO_CNTL_1, 0x00000000],
             [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB02, 0x00000000],
             [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB01, 0x00000000],
             [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB22, 0x00000000],

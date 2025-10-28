@@ -555,10 +555,7 @@ emit_mubuf_instruction(asm_context& ctx, std::vector<uint32_t>& out, const Instr
    bool dlc = mubuf.cache.value & ac_dlc;
 
    uint32_t encoding = (0b111000 << 26);
-   if (ctx.gfx_level >= GFX11 && mubuf.lds) /* GFX11 has separate opcodes for LDS loads */
-      opcode = opcode == 0 ? 0x32 : (opcode + 0x1d);
-   else
-      encoding |= (mubuf.lds ? 1 : 0) << 16;
+   encoding |= (mubuf.lds ? 1 : 0) << 16;
    encoding |= opcode << 18;
    encoding |= (glc ? 1 : 0) << 14;
    if (ctx.gfx_level <= GFX10_3)
@@ -1253,7 +1250,7 @@ emit_instruction(asm_context& ctx, std::vector<uint32_t>& out, Instruction* inst
    } else if (instr->opcode == aco_opcode::p_debug_info) {
       assert(instr->operands[0].isConstant());
       uint32_t index = instr->operands[0].constantValue();
-      ctx.program->debug_info[index].offset = (out.size() - 1) * 4;
+      ctx.program->debug_info[index].offset = out.size() * 4;
       return;
    }
 
@@ -1833,6 +1830,7 @@ emit_program(Program* program, std::vector<uint32_t>& code, std::vector<struct a
 
    program->config->scratch_bytes_per_wave =
       align(program->config->scratch_bytes_per_wave, program->dev.scratch_alloc_granule);
+   program->config->wgp_mode = program->wgp_mode;
 
    return exec_size;
 }

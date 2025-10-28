@@ -1104,8 +1104,11 @@ fd_resource_get_handle(struct pipe_screen *pscreen, struct pipe_context *pctx,
 
       pctx = threaded_context_unwrap_sync(pctx);
 
-      struct fd_context *ctx = pctx ?
-            fd_context(pctx) : fd_screen_aux_context_get(pscreen);
+      /* Always use aux ctx, even if we are provided a valid pctx, since in
+       * the TC case this could be called from something other than the
+       * driver thread
+       */
+      struct fd_context *ctx = fd_screen_aux_context_get(pscreen);
 
       /* Since gl is horrible, we can end up getting asked to export a handle
        * for a rsc which was not originally allocated in a way that can be
@@ -1119,8 +1122,7 @@ fd_resource_get_handle(struct pipe_screen *pscreen, struct pipe_context *pctx,
 
       ret = fd_try_shadow_resource(ctx, rsc, 0, NULL, handle->modifier);
 
-      if (!pctx)
-         fd_screen_aux_context_put(pscreen);
+      fd_screen_aux_context_put(pscreen);
 
       if (!ret)
          return false;
@@ -1506,18 +1508,30 @@ fd_resource_from_handle(struct pipe_screen *pscreen,
    rsc->b.is_shared = true;
 
    struct fd_bo *bo = fd_screen_bo_from_handle(pscreen, handle);
-   if (!bo)
+   if (!bo) {
+      if (FD_DBG(LAYOUT))
+         mesa_loge("handle import failed for: %" PRSC_FMT, PRSC_ARGS(tmpl));
       goto fail;
+   }
 
    fd_resource_set_bo(rsc, bo);
 
    rsc->internal_format = tmpl->format;
 
-   if (!screen->layout_resource_for_handle(rsc, handle))
+   if (tmpl->target == PIPE_BUFFER) {
+      fdl_layout_buffer(&rsc->layout, tmpl->width0);
+   } else if (!screen->layout_resource_for_handle(rsc, handle)) {
+      if (FD_DBG(LAYOUT))
+         mesa_loge("layout failed for: %" PRSC_FMT, PRSC_ARGS(tmpl));
       goto fail;
+   }
 
-   if (rsc->layout.pitch0 != handle->stride)
+   if (rsc->layout.pitch0 != handle->stride) {
+      if (FD_DBG(LAYOUT))
+         mesa_loge("invalid pitch (%u vs %u) for: %" PRSC_FMT, rsc->layout.pitch0,
+                   handle->stride, PRSC_ARGS(tmpl));
       goto fail;
+   }
 
    if (screen->ro) {
       rsc->scanout =

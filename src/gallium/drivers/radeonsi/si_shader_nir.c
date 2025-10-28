@@ -99,13 +99,7 @@ void si_nir_opts(struct si_screen *sscreen, struct nir_shader *nir, bool has_arr
                                (nir->options->lower_flrp32 ? 32 : 0) |
                                (nir->options->lower_flrp64 ? 64 : 0);
          assert(lower_flrp);
-         bool lower_flrp_progress = false;
-
-         NIR_PASS(lower_flrp_progress, nir, nir_lower_flrp, lower_flrp, false /* always_precise */);
-         if (lower_flrp_progress) {
-            NIR_PASS(progress, nir, nir_opt_constant_folding);
-            progress = true;
-         }
+         NIR_PASS(progress, nir, nir_lower_flrp, lower_flrp, false /* always_precise */);
 
          /* Nothing should rematerialize any flrps, so we only
           * need to do this lowering once.
@@ -300,6 +294,7 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
       .lower_tg4_offsets = true,
       .lower_to_fragment_fetch_amd = sscreen->info.gfx_level < GFX11,
       .lower_1d = sscreen->info.gfx_level == GFX9,
+      .optimize_txd = true,
    };
    NIR_PASS(_, nir, nir_lower_tex, &lower_tex_options);
 
@@ -323,7 +318,8 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
    /* si_nir_kill_outputs and ac_nir_optimize_outputs require outputs to be scalar. */
    if (nir->info.stage == MESA_SHADER_VERTEX ||
        nir->info.stage == MESA_SHADER_TESS_EVAL ||
-       nir->info.stage == MESA_SHADER_GEOMETRY)
+       nir->info.stage == MESA_SHADER_GEOMETRY ||
+       nir->info.stage == MESA_SHADER_MESH)
       NIR_PASS(_, nir, nir_lower_io_to_scalar, nir_var_shader_out, NULL, NULL);
 
    if (nir->info.stage == MESA_SHADER_GEOMETRY) {
@@ -335,6 +331,14 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
       }
 
       NIR_PASS(_, nir, nir_lower_gs_intrinsics, flags);
+   } else if (nir->info.stage == MESA_SHADER_TASK) {
+      NIR_PASS(_, nir, ac_nir_lower_task_outputs_to_mem,
+               sscreen->task_info.payload_entry_size,
+               sscreen->task_info.num_entries, false);
+   } else if (nir->info.stage == MESA_SHADER_MESH) {
+      NIR_PASS(_, nir, ac_nir_lower_mesh_inputs_to_mem,
+               sscreen->task_info.payload_entry_size,
+               sscreen->task_info.num_entries);
    }
 
    if (mesa_shader_stage_is_compute(nir->info.stage)) {

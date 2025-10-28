@@ -51,6 +51,16 @@ struct wsi_memory_allocate_info {
      * point DMA_BUF_IOCTL_IMPORT_SYNC_FILE was added.
      */
     bool implicit_sync;
+
+    /**
+     * If set, then the WSI will attach implicit synchronization's fences to
+     * (and reference implicit sync fences from) the dma-buf for this memory, to
+     * meet the requirement for implicit synchronization with the window system.
+     * This does mean that the kernel BO must be able to participate in implicit
+     * sync still when used as part of a non-explicit-synced submit (e.g. by a
+     * GL driver in the X server).
+     */
+    bool dma_buf_sync_file;
 };
 
 /* To be chained into VkSurfaceCapabilities2KHR */
@@ -78,13 +88,6 @@ struct wsi_surface_supported_counters {
    struct wsi_memory_allocate_info
 #define VK_STRUCTURE_TYPE_WSI_SURFACE_SUPPORTED_COUNTERS_MESA_cast \
    struct wsi_surface_supported_counters
-
-
-/* Mesa-specific dynamic rendering flag to indicate that legacy RPs don't use
- * input attachments with concurrent writes (aka. feedback loops).
- */
-#define VK_RENDERING_INPUT_ATTACHMENT_NO_CONCURRENT_WRITES_BIT_MESA 0x80000000
-
 
 /**
  * Pseudo-extension struct that may be chained into VkRenderingAttachmentInfo

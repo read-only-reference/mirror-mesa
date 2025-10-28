@@ -1625,9 +1625,12 @@ BEGIN_TEST(optimize.vop3p_constants)
          //;                     0x42420000, 0x42424242, 0x4242c242, 0x4242ffff, 0x7ffefffe,
          //;                     0x80300030, 0xbeefdead, 0xc2424242, 0xdeadbeef, 0xfffe0000,
          //;                     0xfffe7ffe, 0xffff0030, 0xffff3c00, 0xffff4242, 0xc242c242,
-         //;                     0x80308030, 0xdeaddead, 0xbeefbeef, 0x7ffe7ffe]
+         //;                     0x80308030, 0xdeaddead, 0xbeefbeef, 0x7ffe7ffe, 0x0000c242,
+         //;                     0x0000beef, 0x0000dead, ]
          //; if opcode == 'v_pk_add_u16':
-         //;    allowed_literals.extend([0x00003c00, 0x3c000000, 0x3c003c00, 0x3c00bc00, 0xbc003c00, 0xbc00bc00])
+         //;    allowed_literals.extend([0x00003c00, 0x3c000000, 0x3c003c00, 0x3c00bc00,
+         //;                             0xbc003c00, 0xbc00bc00, 0x0000bc00, 0x00008030,
+         //;                             0x00007ffe])
          //; else:
          //;    allowed_literals.extend([0x00003f80, 0x3f800000, 0x3f803f80])
          //;
@@ -1698,14 +1701,14 @@ BEGIN_TEST(optimize.fmamix_two_literals)
 
       /* v_fma_mix_f32 is a fused mul/add, so it can't be used for precise separate mul/add. */
       //~gfx10! v1: (precise)%res3 = v_madak_f32 %a, %c15, 0x40400000
-      //~gfx10_3! v1: (precise)%res3_tmp = v_mul_f32 %a, 0x3fc00000
-      //~gfx10_3! v1: %res3 = v_add_f32 %res3_tmp, 0x40400000
+      //~gfx10_3! v1: (precise)%res3_tmp = v_mul_f32 0x3fc00000, %a
+      //~gfx10_3! v1: %res3 = v_add_f32 0x40400000, %res3_tmp
       //! p_unit_test 3, %res3
       writeout(3, fadd(bld.precise().vop2(aco_opcode::v_mul_f32, bld.def(v1), a, c15), c30));
 
       //~gfx10! v1: (precise)%res4 = v_madak_f32 %1, %c16, 0x40400000
-      //~gfx10_3! v1: %res4_tmp = v_mul_f32 %a, 0x3fc00000
-      //~gfx10_3! v1: (precise)%res4 = v_add_f32 %res4_tmp, 0x40400000
+      //~gfx10_3! v1: %res4_tmp = v_mul_f32 0x3fc00000, %a
+      //~gfx10_3! v1: (precise)%res4 = v_add_f32 0x40400000, %res4_tmp
       //! p_unit_test 4, %res4
       writeout(4, bld.precise().vop2(aco_opcode::v_add_f32, bld.def(v1), fmul(a, c15), c30));
 
@@ -1740,9 +1743,9 @@ BEGIN_TEST(optimize.fmamix_two_literals)
       writeout(7, fma(c15, c30, c45));
 
       /* Modifiers must be preserved. */
-      //! v1: %res8 = v_fma_mix_f32 -%a, lo(0x44804200), hi(0x44804200)
+      //! v1: %res8 = v_fma_mix_f32 |%a|, lo(0x44804200), hi(0x44804200)
       //! p_unit_test 8, %res8
-      writeout(8, fma(fneg(a), c30, c45));
+      writeout(8, fma(fabs(a), c30, c45));
 
       //! v1: %res9 = v_fma_mix_f32 lo(0x44804200), |%a|, hi(0x44804200)
       //! p_unit_test 9, %res9
@@ -2023,7 +2026,7 @@ BEGIN_TEST(optimizer.trans_inline_constant)
    //! p_unit_test 5, %res5
    writeout(5, bld.vop1(aco_opcode::v_rcp_f32, bld.def(v1), bld.copy(bld.def(s1), Operand::c32(0x3c00))));
 
-   //! v2b: %res6 = v_rcp_f16 0x3f800000
+   //! v2b: %res6 = v_rcp_f16 0
    //! p_unit_test 6, %res6
    writeout(6, bld.vop1(aco_opcode::v_rcp_f16, bld.def(v2b), bld.copy(bld.def(s1), Operand::c32(0x3f800000))));
 
@@ -2075,6 +2078,104 @@ BEGIN_TEST(optimizer.pk_clamp_fma_mix)
    clamp1->valu().clamp = true;
 
    writeout(1, clamp1);
+
+   finish_opt_test();
+END_TEST
+
+BEGIN_TEST(optimizer.fp64_input_modifiers)
+   //>> v2: %a:v[0-1],  v2: %b:v[2-3],  s2: %c:s[0-1] = p_startpgm
+   if (!setup_cs("v2 v2 s2", GFX12))
+      return;
+
+   //! v2: %add = v_fma_f64 -%a, |%b|, -|%c|
+   //! p_unit_test 0, %add
+   Temp neg_a =
+      bld.vop3(aco_opcode::v_mul_f64_e64, bld.def(v2), Operand::c64(dui(-1.0)), inputs[0]);
+   Builder::Result abs_b =
+      bld.vop3(aco_opcode::v_mul_f64_e64, bld.def(v2), Operand::c64(dui(1.0)), inputs[1]);
+   abs_b->valu().abs[1] = true;
+   Builder::Result abs_c = bld.vop3(aco_opcode::v_mul_f64_e64, bld.def(v2), Operand::c64(dui(1.0)),
+                                    bld.copy(bld.def(v2), inputs[2]));
+   abs_c->valu().abs[1] = true;
+   Temp neg_abs_c =
+      bld.vop3(aco_opcode::v_mul_f64_e64, bld.def(v2), Operand::c64(dui(-1.0)), abs_c);
+   Temp mul = bld.vop3(aco_opcode::v_mul_f64_e64, bld.def(v2), neg_a, abs_b);
+   Temp add = bld.vop3(aco_opcode::v_add_f64_e64, bld.def(v2), mul, neg_abs_c);
+   writeout(0, add);
+
+   finish_opt_test();
+END_TEST
+
+BEGIN_TEST(optimizer.fp64_input_modifiers_not_applied)
+   //>> v2: %a:v[0-1],  v2: %b:v[2-3],  s2: %c:s[0-1] = p_startpgm
+   if (!setup_cs("v2 v2 s2", GFX12))
+      return;
+
+   //! v1: %lo_a,  v1: %hi_a = p_split_vector %a
+   //! v1: %neg_hi_a = v_xor_b32 0x80000000, %hi_a
+   //! v2: %neg_a = p_create_vector %lo_a, %neg_hi_a
+   //! p_unit_test 0, %neg_a
+   Temp neg_a =
+      bld.vop3(aco_opcode::v_mul_f64_e64, bld.def(v2), Operand::c64(dui(-1.0)), inputs[0]);
+   writeout(0, neg_a);
+
+   //! v1: %lo_b,  v1: %hi_b = p_split_vector %b
+   //! v1: %abs_hi_b = v_and_b32 0x7fffffff, %hi_b
+   //! v2: %abs_b = p_create_vector %lo_b, %abs_hi_b
+   //! p_unit_test 1, %abs_b
+   Builder::Result abs_b =
+      bld.vop3(aco_opcode::v_mul_f64_e64, bld.def(v2), Operand::c64(dui(1.0)), inputs[1]);
+   abs_b->valu().abs[1] = true;
+   writeout(1, abs_b);
+
+   //! s1: %lo_c,  s1: %hi_c = p_split_vector %c
+   //! s1: %neg_abs_hi_c,  s1: %_:scc = s_or_b32 0x80000000, %hi_c
+   //! v2: %neg_abs_c = p_create_vector %lo_c, %neg_abs_hi_c
+   //! p_unit_test 2, %neg_abs_c
+   Builder::Result abs_c = bld.vop3(aco_opcode::v_mul_f64_e64, bld.def(v2), Operand::c64(dui(1.0)),
+                                    bld.copy(bld.def(v2), inputs[2]));
+   abs_c->valu().abs[1] = true;
+   Temp neg_abs_c =
+      bld.vop3(aco_opcode::v_mul_f64_e64, bld.def(v2), Operand::c64(dui(-1.0)), abs_c);
+   writeout(2, neg_abs_c);
+
+   finish_opt_test();
+END_TEST
+
+BEGIN_TEST(optimizer.fp64_omod)
+   //>> v2: %a:v[0-1] = p_startpgm
+   if (!setup_cs("v2", GFX12))
+      return;
+
+   program->blocks[0].fp_mode.denorm16_64 = fp_denorm_flush;
+
+   //! v2: %res0 = v_rcp_f64 %a *2
+   //! p_unit_test 0, %res0
+   Temp res0 = bld.vop1(aco_opcode::v_rcp_f64, bld.def(v2), inputs[0]);
+   res0 = bld.vop3(aco_opcode::v_mul_f64_e64, bld.def(v2), Operand::c64(dui(2.0)), res0);
+   writeout(0, res0);
+
+   //! v2: %res1 = v_sqrt_f64 %a *0.5
+   //! p_unit_test 1, %res1
+   Temp res1 = bld.vop1(aco_opcode::v_sqrt_f64, bld.def(v2), inputs[0]);
+   res1 = bld.vop3(aco_opcode::v_mul_f64_e64, bld.def(v2), Operand::c64(dui(0.5)), res1);
+   writeout(1, res1);
+
+   finish_opt_test();
+END_TEST
+
+BEGIN_TEST(optimizer.fp64_clamp)
+   //>> v2: %a:v[0-1] = p_startpgm
+   if (!setup_cs("v2", GFX12))
+      return;
+
+   //! v2: %clamp = v_rcp_f64 %a clamp
+   //! p_unit_test 0, %clamp
+   Temp tmp = bld.vop1(aco_opcode::v_rcp_f64, bld.def(v2), inputs[0]);
+   Instruction* clamp =
+      bld.vop3(aco_opcode::v_mul_f64_e64, bld.def(v2), Operand::c64(dui(1.0)), tmp);
+   clamp->valu().clamp = true;
+   writeout(0, clamp->definitions[0].getTemp());
 
    finish_opt_test();
 END_TEST

@@ -756,11 +756,7 @@ elk_nir_optimize(nir_shader *nir, bool is_scalar,
       OPT(nir_opt_constant_folding);
 
       if (lower_flrp != 0) {
-         if (OPT(nir_lower_flrp,
-                 lower_flrp,
-                 false /* always_precise */)) {
-            OPT(nir_opt_constant_folding);
-         }
+         OPT(nir_lower_flrp, lower_flrp, false /* always_precise */);
 
          /* Nothing should rematerialize any flrps, so we only need to do this
           * lowering once.
@@ -950,6 +946,43 @@ lower_xehp_tg4_offset_filter(const nir_instr *instr, UNUSED const void *data)
    return offset_x < -8 || offset_x > 7 || offset_y < -8 || offset_y > 7;
 }
 
+static bool
+lower_txd_cb(const nir_tex_instr *tex, const void *data)
+{
+   const struct intel_device_info *devinfo = data;
+
+   /* Prior to Haswell, we have to lower gradients on shadow samplers */
+   if (devinfo->verx10 <= 70 && tex->is_shadow)
+      return true;
+
+   /* sample_d_c messages don't have a LOD/MLOD parameter */
+   int min_lod_index = nir_tex_instr_src_index(tex, nir_tex_src_min_lod);
+   if (tex->is_shadow && min_lod_index >= 0)
+      return true;
+
+   int offset_index = nir_tex_instr_src_index(tex, nir_tex_src_offset);
+   if (offset_index >= 0 && min_lod_index >= 0)
+      return true;
+
+   /* Cases that require a sampler header and the payload is already too large
+    * for the HW to handle.
+    */
+   const int sampler_offset_idx =
+      nir_tex_instr_src_index(tex, nir_tex_src_sampler_offset);
+   if (min_lod_index >= 0 && sampler_offset_idx >= 0) {
+      if (!nir_src_is_const(tex->src[sampler_offset_idx].src) ||
+          (nir_src_is_const(tex->src[sampler_offset_idx].src) &&
+           (tex->sampler_index +
+            nir_src_as_uint(tex->src[sampler_offset_idx].src)) >= 16))
+         return true;
+   }
+
+   if (tex->sampler_dim == GLSL_SAMPLER_DIM_CUBE)
+      return true;
+
+   return false;
+}
+
 /* Does some simple lowering and runs the standard suite of optimizations
  *
  * This is intended to be called more-or-less directly after you get the
@@ -993,13 +1026,12 @@ elk_preprocess_nir(const struct elk_compiler *compiler, nir_shader *nir,
       .lower_txp = ~0,
       .lower_txf_offset = true,
       .lower_rect_offset = true,
-      .lower_txd_cube_map = true,
       .lower_txb_shadow_clamp = true,
-      .lower_txd_shadow_clamp = true,
-      .lower_txd_offset_clamp = true,
       .lower_tg4_offsets = true,
       .lower_txs_lod = true, /* Wa_14012320009 */
       .lower_invalid_implicit_lod = true,
+      .lower_txd_cb = lower_txd_cb,
+      .lower_txd_data = devinfo,
    };
 
    OPT(nir_lower_tex, &tex_options);
@@ -1646,8 +1678,6 @@ elk_nir_apply_sampler_key(nir_shader *nir,
 {
    const struct intel_device_info *devinfo = compiler->devinfo;
    nir_lower_tex_options tex_options = {
-      .lower_txd_clamp_bindless_sampler = true,
-      .lower_txd_clamp_if_sampler_index_not_lt_16 = true,
       .lower_invalid_implicit_lod = true,
       .lower_index_to_offset = true,
    };
@@ -1662,9 +1692,6 @@ elk_nir_apply_sampler_key(nir_shader *nir,
       tex_options.saturate_t = key_tex->gl_clamp_mask[1];
       tex_options.saturate_r = key_tex->gl_clamp_mask[2];
    }
-
-   /* Prior to Haswell, we have to lower gradients on shadow samplers */
-   tex_options.lower_txd_shadow = devinfo->verx10 <= 70;
 
    return nir_lower_tex(nir, &tex_options);
 }
@@ -1917,7 +1944,6 @@ elk_nir_load_global_const(nir_builder *b, nir_intrinsic_instr *load_uniform,
 
    unsigned bit_size = load_uniform->def.bit_size;
    assert(bit_size >= 8 && bit_size % 8 == 0);
-   unsigned byte_size = bit_size / 8;
    nir_def *sysval;
 
    if (nir_src_is_const(load_uniform->src[0])) {
@@ -1926,7 +1952,7 @@ elk_nir_load_global_const(nir_builder *b, nir_intrinsic_instr *load_uniform,
                         nir_src_as_uint(load_uniform->src[0]);
 
       /* Things should be component-aligned. */
-      assert(offset % byte_size == 0);
+      assert(offset % (bit_size / 8) == 0);
 
       unsigned suboffset = offset % 64;
       uint64_t aligned_offset = offset - suboffset;
@@ -1945,8 +1971,7 @@ elk_nir_load_global_const(nir_builder *b, nir_intrinsic_instr *load_uniform,
          nir_iadd_imm(b, load_uniform->src[0].ssa,
                          off + nir_intrinsic_base(load_uniform));
       nir_def *addr = nir_iadd(b, base_addr, nir_u2u64(b, offset32));
-      sysval = nir_load_global_constant(b, addr, byte_size,
-                                        load_uniform->num_components, bit_size);
+      sysval = nir_load_global_constant(b, load_uniform->num_components, bit_size, addr);
    }
 
    return sysval;
