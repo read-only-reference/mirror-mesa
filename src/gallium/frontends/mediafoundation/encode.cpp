@@ -44,6 +44,8 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
    UINT textureHeight = 0u;
    bool bReceivedDirtyRectBlob = false;
    uint32_t dirtyRectFrameNum = UINT32_MAX;
+   LONGLONG inputSampleTime = 0;
+   LONGLONG inputSampleDuration = 0;
 
    ComPtr<IMFDXGIBuffer> spDXGIBuffer;
    HANDLE hTexture = NULL;
@@ -66,7 +68,10 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
    CHECKNULL_GOTO( pDX12EncodeContext->pAsyncDPBToken = new reference_frames_tracker_dpb_async_token(), E_OUTOFMEMORY, done );
 
    CHECKHR_GOTO( pSample->GetBufferByIndex( 0, &pDX12EncodeContext->spMediaBuffer ), done );
-
+   CHECKHR_GOTO( pSample->GetSampleTime( &inputSampleTime ), done );
+   CHECKHR_GOTO( pSample->GetSampleDuration( &inputSampleDuration ), done );
+   pDX12EncodeContext->inputSampleTime = inputSampleTime;
+   pDX12EncodeContext->inputSampleDuration = inputSampleDuration;
    // If we can't get a DXGIBuffer out of this incoming buffer, then its a software-based buffer
    if( FAILED( pDX12EncodeContext->spMediaBuffer.As( &spDXGIBuffer ) ) )
    {
@@ -591,7 +596,7 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
          std::max( 1u, pDX12EncodeContext->encoderPicInfo.av1enc.tile_rows * pDX12EncodeContext->encoderPicInfo.av1enc.tile_cols );
 #endif
 
-      if (m_bSliceGenerationModeSet && pDX12EncodeContext->IsSliceAutoModeEnabled())
+      if( m_bSliceGenerationModeSet && pDX12EncodeContext->IsSliceAutoModeEnabled() )
       {
          num_output_buffers = m_EncoderCapabilities.m_uiMaxHWSupportedMaxSlices;
       }
@@ -600,7 +605,7 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
       // This is especially important in PIPE_SLICE_MODE_AUTO where num_output_buffers
       // can be set to the maximum possible slices, leading to very small per-slice
       // buffer sizes that may be insufficient for actual bitstream data.
-      const uint32_t min_slice_buffer_size = 256 * 1024; // 256KB
+      const uint32_t min_slice_buffer_size = 256 * 1024;   // 256KB
 
       pDX12EncodeContext->sliceNotificationMode = D3D12_VIDEO_ENCODER_COMPRESSED_BITSTREAM_NOTIFICATION_MODE_FULL_FRAME;
       if( m_bSliceGenerationModeSet && ( m_uiSliceGenerationMode > 0 ) &&

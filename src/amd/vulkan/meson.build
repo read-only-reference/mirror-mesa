@@ -89,12 +89,6 @@ libradv_files = files(
   'nir/radv_nir_remap_color_attachment.c',
   'nir/radv_nir_rt_common.c',
   'nir/radv_nir_rt_shader.c',
-  'winsys/null/radv_null_bo.c',
-  'winsys/null/radv_null_bo.h',
-  'winsys/null/radv_null_cs.c',
-  'winsys/null/radv_null_cs.h',
-  'winsys/null/radv_null_winsys.c',
-  'winsys/null/radv_null_winsys_public.h',
   'radv_acceleration_structure.c',
   'radv_android.c',
   'radv_android.h',
@@ -289,7 +283,8 @@ icd_command = [
   prog_python, '@INPUT0@',
   '--api-version', '1.4', '--xml', '@INPUT1@',
   '--sizeof-pointer', sizeof_pointer,
-  '--lib-path', vulkan_icd_lib_path / icd_file_name,
+  '--icd-lib-path', vulkan_icd_lib_path,
+  '--icd-filename', icd_file_name,
   '--out', '@OUTPUT@',
 ]
 if with_platform_windows
@@ -299,7 +294,7 @@ endif
 radeon_icd = custom_target(
   'radeon_icd',
   input : [vk_icd_gen, vk_api_xml],
-  output : 'radeon_icd.@0@.json'.format(host_machine.cpu()),
+  output : 'radeon_icd.' + vulkan_manifest_suffix,
   command : icd_command,
   build_by_default : true,
   install_dir : with_vulkan_icd_dir,
@@ -316,7 +311,8 @@ _dev_icd = custom_target(
     prog_python, '@INPUT0@',
     '--api-version', '1.4', '--xml', '@INPUT1@',
     '--sizeof-pointer', sizeof_pointer,
-    '--lib-path', meson.current_build_dir() / icd_file_name,
+    '--icd-lib-path', meson.current_build_dir(),
+    '--icd-filename', icd_file_name,
     '--out', '@OUTPUT@',
   ],
   build_by_default : true,
@@ -355,5 +351,9 @@ if with_radv_tests
     ),
     suite : ['compiler', 'nir'],
     protocol : 'gtest',
+    env : [
+      'LD_PRELOAD=@0@'.format(libamdgpu_noop_drm_shim.full_path()),
+      'AMDGPU_GPU_ID=navi21',
+    ],
   )
 endif

@@ -167,6 +167,8 @@ anv_shader_get_spirv_options(struct vk_physical_device *device,
       .phys_ssbo_addr_format = nir_address_format_64bit_global,
       .push_const_addr_format = nir_address_format_logical,
 
+      .printf = INTEL_DEBUG(DEBUG_SHADER_PRINT),
+
       /* TODO: Consider changing this to an address format that has the NULL
        * pointer equals to 0.  That might be a better format to play nice
        * with certain code / code generators.
@@ -192,7 +194,7 @@ anv_shader_preprocess_nir(struct vk_physical_device *device,
    const struct brw_compiler *compiler = pdevice->compiler;
 
    NIR_PASS(_, nir, nir_lower_io_vars_to_temporaries,
-            nir_shader_get_entrypoint(nir), true, false);
+            nir_shader_get_entrypoint(nir), nir_var_shader_out);
 
    const struct nir_lower_sysvals_to_varyings_options sysvals_to_varyings = {
       .point_coord = true,
@@ -214,6 +216,14 @@ anv_shader_preprocess_nir(struct vk_physical_device *device,
 
    NIR_PASS(_, nir, nir_opt_barrier_modes);
    NIR_PASS(_, nir, nir_opt_acquire_release_barriers, SCOPE_QUEUE_FAMILY);
+
+   if (INTEL_DEBUG(DEBUG_SHADER_PRINT)) {
+      const nir_lower_printf_options printf_opts = {
+         .ptr_bit_size = 64,
+         .hash_format_strings = true,
+      };
+      NIR_PASS(_, nir, nir_lower_printf, &printf_opts);
+   }
 
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 }
@@ -974,8 +984,6 @@ anv_shader_compile_fs(struct anv_device *device,
                        nir->info.separate_shader,
                        pos_slots);
 
-   shader_data->key.wm.input_slots_valid = prev_vue_map.slots_valid;
-
    struct brw_compile_fs_params params = {
       .base = {
          .nir = nir,
@@ -1226,13 +1234,13 @@ fixup_large_workgroup_image_coherency(nir_shader *nir)
             if (array_deref->deref_type != nir_deref_type_array)
                continue;
 
-            nir_alu_instr *alu = nir_src_as_alu_instr(intr->src[1]);
+            nir_alu_instr *alu = nir_src_as_alu(intr->src[1]);
             if (!alu || !nir_op_is_vec(alu->op))
                return;
 
             /* Check if any src is from @load_local_invocation_id. */
             for (unsigned i = 0; i < nir_op_infos[alu->op].num_inputs; i++) {
-               nir_instr *parent = alu->src[i].src.ssa->parent_instr;
+               nir_instr *parent = nir_def_instr(alu->src[i].src.ssa);
                if (parent->type != nir_instr_type_intrinsic)
                   continue;
 
@@ -1292,10 +1300,7 @@ anv_shader_lower_nir(struct anv_device *device,
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       NIR_PASS(_, nir, nir_lower_wpos_center);
       NIR_PASS(_, nir, nir_lower_input_attachments,
-               &(nir_input_attachment_options) {
-                  .use_fragcoord_sysval = true,
-                  .use_layer_id_sysval = true,
-               });
+               &(nir_input_attachment_options) { });
    }
 
    if (nir->info.stage == MESA_SHADER_COMPUTE &&
@@ -1334,17 +1339,23 @@ anv_shader_lower_nir(struct anv_device *device,
        nir->info.cs.has_cooperative_matrix) {
       anv_fixup_subgroup_size(device, &nir->info);
       NIR_PASS(_, nir, brw_nir_lower_cmat, nir->info.api_subgroup_size);
-      NIR_PASS(_, nir, nir_lower_indirect_derefs, nir_var_function_temp, 16);
+      NIR_PASS(_, nir, nir_lower_indirect_derefs_to_if_else_trees,
+               nir_var_function_temp, 16);
    }
 
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
-   /* Ensure robustness, do this before brw_nir_lower_storage_image so that
-    * added image size intrinsics for bounds checkings are properly lowered
-    * for cube images.
-    */
-   NIR_PASS(_, nir, nir_lower_robust_access,
-            accept_64bit_atomic_cb, NULL);
+   /* Apply lowering for 64bit atomics pre-Xe2 */
+   const bool lower_64bit_atomics = compiler->devinfo->ver < 20;
+
+   if (lower_64bit_atomics) {
+      /* Ensure robustness, do this before brw_nir_lower_storage_image so that
+       * added image size intrinsics for bounds checkings are properly lowered
+       * for cube images.
+       */
+      NIR_PASS(_, nir, nir_lower_robust_access,
+               accept_64bit_atomic_cb, NULL);
+   }
 
    NIR_PASS(_, nir, brw_nir_lower_storage_image, compiler,
             &(struct brw_nir_lower_storage_image_opts) {
@@ -1358,13 +1369,15 @@ anv_shader_lower_nir(struct anv_device *device,
                   pdevice->instance->emulate_read_without_format,
             });
 
-   /* Switch from image to global */
-   NIR_PASS(_, nir, nir_lower_image_atomics_to_global,
-            accept_64bit_atomic_cb, NULL);
+   if (lower_64bit_atomics) {
+      /* Switch from image to global */
+      NIR_PASS(_, nir, nir_lower_image_atomics_to_global,
+               accept_64bit_atomic_cb, NULL);
 
-   /* Detile for global */
-   NIR_PASS(_, nir, brw_nir_lower_texel_address, compiler->devinfo,
-            pdevice->isl_dev.shader_tiling);
+      /* Detile for global */
+      NIR_PASS(_, nir, brw_nir_lower_texel_address, compiler->devinfo,
+               pdevice->isl_dev.shader_tiling);
+   }
 
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_global,
             nir_address_format_64bit_global);
@@ -1387,6 +1400,8 @@ anv_shader_lower_nir(struct anv_device *device,
                set_layouts, set_layout_count, NULL, /* TODO? */
                &shader_data->bind_map, &shader_data->push_map, mem_ctx);
 
+   NIR_PASS(_, nir, anv_nir_lower_driver_values, pdevice);
+
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_ubo,
             anv_nir_ubo_addr_format(pdevice, shader_data->key.base.robust_flags));
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_ssbo,
@@ -1400,7 +1415,7 @@ anv_shader_lower_nir(struct anv_device *device,
    do {
       progress = false;
       NIR_PASS(progress, nir, nir_opt_algebraic);
-      NIR_PASS(progress, nir, nir_copy_prop);
+      NIR_PASS(progress, nir, nir_opt_copy_prop);
       NIR_PASS(progress, nir, nir_opt_constant_folding);
       NIR_PASS(progress, nir, nir_opt_dce);
    } while (progress);
@@ -1493,7 +1508,7 @@ anv_shader_lower_nir(struct anv_device *device,
           * used by the shader to chunk_size -- which does simplify the logic.
           */
          const unsigned chunk_size = 16;
-         const unsigned shared_size = ALIGN(nir->info.shared_size, chunk_size);
+         const unsigned shared_size = align(nir->info.shared_size, chunk_size);
          assert(shared_size <=
                 intel_compute_slm_calculate_size(compiler->devinfo->ver,
                                                  nir->info.shared_size));

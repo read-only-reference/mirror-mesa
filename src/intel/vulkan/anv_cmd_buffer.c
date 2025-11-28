@@ -459,7 +459,7 @@ anv_cmd_buffer_set_rt_query_buffer(struct anv_cmd_buffer *cmd_buffer,
       if (bo == NULL) {
          struct anv_bo *new_bo;
          VkResult result = anv_device_alloc_bo(device, "RT queries shadow",
-                                               ray_shadow_size,
+                                               1 << shadow_size_log2,
                                                ANV_BO_ALLOC_INTERNAL, /* alloc_flags */
                                                0, /* explicit_address */
                                                &new_bo);
@@ -1070,7 +1070,7 @@ anv_cmd_buffer_cs_push_constants(struct anv_cmd_buffer *cmd_buffer)
 
    const unsigned push_constant_alignment = 64;
    const unsigned aligned_total_push_constants_size =
-      ALIGN(total_push_constants_size, push_constant_alignment);
+      align(total_push_constants_size, push_constant_alignment);
    struct anv_state state;
    if (devinfo->verx10 >= 125) {
       state = anv_cmd_buffer_alloc_general_state(cmd_buffer,

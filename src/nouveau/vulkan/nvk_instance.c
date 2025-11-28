@@ -29,6 +29,7 @@ static const struct vk_instance_extension_table instance_extensions = {
 #ifdef NVK_USE_WSI_PLATFORM
    .KHR_get_surface_capabilities2 = true,
    .KHR_surface = true,
+   .KHR_surface_maintenance1 = true,
    .KHR_surface_protected_capabilities = true,
    .EXT_surface_maintenance1 = true,
    .EXT_swapchain_colorspace = true,
@@ -93,7 +94,7 @@ nvk_init_debug_flags(struct nvk_instance *instance)
       { NULL, 0 },
    };
 
-   instance->debug_flags = parse_debug_string(getenv("NVK_DEBUG"), flags);
+   instance->debug_flags = parse_debug_string(os_get_option("NVK_DEBUG"), flags);
 }
 
 static const driOptionDescription nvk_dri_options[] = {

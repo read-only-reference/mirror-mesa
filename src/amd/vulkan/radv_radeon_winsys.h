@@ -217,7 +217,9 @@ struct radv_winsys_gpuvm_fault_info {
 };
 
 enum radv_cs_dump_type {
-   RADV_CS_DUMP_TYPE_IBS,
+   RADV_CS_DUMP_TYPE_PREAMBLE_IBS,
+   RADV_CS_DUMP_TYPE_MAIN_IBS,
+   RADV_CS_DUMP_TYPE_POSTAMBLE_IBS,
    RADV_CS_DUMP_TYPE_CTX_ROLLS,
 };
 
@@ -229,8 +231,6 @@ struct radeon_winsys {
    uint64_t (*query_value)(struct radeon_winsys *ws, enum radeon_value_id value);
 
    bool (*read_registers)(struct radeon_winsys *ws, unsigned reg_offset, unsigned num_registers, uint32_t *out);
-
-   const char *(*get_chip_name)(struct radeon_winsys *ws);
 
    bool (*query_gpuvm_fault)(struct radeon_winsys *ws, struct radv_winsys_gpuvm_fault_info *fault_info);
 

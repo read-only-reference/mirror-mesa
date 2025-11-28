@@ -1064,65 +1064,6 @@ done:
    return hr;
 }
 
-// Utility function to configure the sample allocator to allocate map samples
-HRESULT
-CDX12EncHMFT::ConfigureMapSampleAllocator(
-   IMFVideoSampleAllocatorEx *spAllocator, UINT32 width, UINT32 height, GUID subtype, UINT32 poolSize )
-{
-   if( !spAllocator )
-      return E_POINTER;
-
-   spAllocator->UninitializeSampleAllocator();
-   HRESULT hr = spAllocator->SetDirectXManager( m_spDeviceManager.Get() );
-   if( FAILED( hr ) )
-      return hr;
-
-   ComPtr<IMFAttributes> spAttrs;
-   ComPtr<IMFMediaType> spMapType;
-
-   // Attributes for allocator
-   CHECKHR_GOTO( MFCreateAttributes( &spAttrs, 2 ), done );
-   CHECKHR_GOTO( spAttrs->SetUINT32( MF_SA_BUFFERS_PER_SAMPLE, 1 ), done );
-   CHECKHR_GOTO( spAttrs->SetUINT32( MF_MT_D3D_RESOURCE_VERSION, MF_D3D12_RESOURCE ), done );
-
-   // Media type for the map
-   CHECKHR_GOTO( MFCreateMediaType( &spMapType ), done );
-   CHECKHR_GOTO( spMapType->SetGUID( MF_MT_MAJOR_TYPE, MFMediaType_Video ), done );
-   CHECKHR_GOTO( spMapType->SetGUID( MF_MT_SUBTYPE, subtype ), done );
-   MFSetAttributeSize( spMapType.Get(), MF_MT_FRAME_SIZE, width, height );
-   CHECKHR_GOTO( spMapType->SetUINT32( MF_MT_D3D_RESOURCE_VERSION, MF_D3D12_RESOURCE ), done );
-
-   // Initialize the allocator
-   CHECKHR_GOTO( spAllocator->InitializeSampleAllocatorEx( 1, poolSize, spAttrs.Get(), spMapType.Get() ), done );
-
-done:
-   return hr;
-}
-
-// Helper function to configure map sample allocator.
-void
-CDX12EncHMFT::ConfigureMapSampleAllocatorHelper( ComPtr<IMFVideoSampleAllocatorEx> &allocator,
-                                                 const union pipe_enc_cap_gpu_stats_map &outputStatsMap,
-                                                 uint32_t blockSize,
-                                                 BOOL &useAllocatorFlag )
-{
-   if( allocator != nullptr && outputStatsMap.bits.supported && blockSize > 0 )
-   {
-      uint32_t actualBlockSize = ( 1u << outputStatsMap.bits.log2_values_block_size );
-      uint32_t width = static_cast<uint32_t>( std::ceil( m_uiOutputWidth / static_cast<float>( actualBlockSize ) ) );
-      uint32_t height = static_cast<uint32_t>( std::ceil( m_uiOutputHeight / static_cast<float>( actualBlockSize ) ) );
-
-      if( SUCCEEDED( ConfigureMapSampleAllocator( allocator.Get(), width, height, MFVideoFormat_L32, 10 ) ) )
-      {
-         useAllocatorFlag = TRUE;
-      }
-      else
-      {
-         useAllocatorFlag = FALSE;
-      }
-   }
-}
-
 HRESULT
 CDX12EncHMFT::ConfigureBitstreamOutputSampleAttributes( IMFSample *pSample,
                                                         const LPDX12EncodeContext pDX12EncodeContext,
@@ -1134,7 +1075,6 @@ CDX12EncHMFT::ConfigureBitstreamOutputSampleAttributes( IMFSample *pSample,
    HRESULT hr = S_OK;
    UINT32 uiFrameRateNumerator = pDX12EncodeContext->GetFrameRateNumerator();
    UINT32 uiFrameRateDenominator = pDX12EncodeContext->GetFrameRateDenominator();
-   UINT64 frameDuration = 0;
    GUID guidMajorType = { 0 };
    GUID guidSubType = { 0 };
    DWORD naluInfo[MAX_NALU_LENGTH_INFO_ENTRIES] = {};
@@ -1154,10 +1094,9 @@ CDX12EncHMFT::ConfigureBitstreamOutputSampleAttributes( IMFSample *pSample,
 
    // Set frame rate and timing
    CHECKHR_GOTO( MFSetAttributeRatio( pSample, MF_MT_FRAME_RATE, uiFrameRateNumerator, uiFrameRateDenominator ), done );
-   CHECKHR_GOTO( MFFrameRateToAverageTimePerFrame( uiFrameRateNumerator, uiFrameRateDenominator, &frameDuration ), done );
-   CHECKHR_GOTO( pSample->SetSampleTime( dwReceivedInput * frameDuration ), done );
-   CHECKHR_GOTO( pSample->SetSampleDuration( frameDuration ), done );
-   CHECKHR_GOTO( pSample->SetUINT64( MFSampleExtension_DecodeTimestamp, dwReceivedInput * frameDuration ), done );
+   CHECKHR_GOTO( pSample->SetSampleTime( pDX12EncodeContext->inputSampleTime ), done );
+   CHECKHR_GOTO( pSample->SetSampleDuration( pDX12EncodeContext->inputSampleDuration ), done );
+   CHECKHR_GOTO( pSample->SetUINT64( MFSampleExtension_DecodeTimestamp, pDX12EncodeContext->inputSampleTime ), done );
 
    // Set picture type and clean point
    CHECKHR_GOTO( pSample->SetUINT32( MFSampleExtension_VideoEncodePictureType, pDX12EncodeContext->GetPictureType() ), done );
@@ -1308,7 +1247,7 @@ CDX12EncHMFT::ProcessSliceBitstreamZeroCopy( LPDX12EncodeContext pDX12EncodeCont
                                              std::vector<struct codec_unit_location_t> &mfsample_codec_unit_metadata )
 {
    std::vector<struct codec_unit_location_t> codec_unit_metadata;
-   if (!GetSliceBitstreamMetadata( pDX12EncodeContext, slice_idx, codec_unit_metadata ))
+   if( !GetSliceBitstreamMetadata( pDX12EncodeContext, slice_idx, codec_unit_metadata ) )
    {
       debug_printf( "[dx12 hmft 0x%p] Failed to get slice %u bitstream metadata\n", this, slice_idx );
       return false;
@@ -1370,7 +1309,10 @@ CDX12EncHMFT::GetSliceBitstreamMetadata( LPDX12EncodeContext pDX12EncodeContext,
                        this,
                        slice_idx,
                        unit_idx );
-         MFE_ERROR( "[dx12 hmft 0x%p] Slice %u unit %u has size overflow flag set - check the output bitstream buffer size", this, slice_idx, unit_idx );
+         MFE_ERROR( "[dx12 hmft 0x%p] Slice %u unit %u has size overflow flag set - check the output bitstream buffer size",
+                    this,
+                    slice_idx,
+                    unit_idx );
          HMFT_ETW_EVENT_STOP( "GPUIndividualSliceStatsRead", this );
          return false;
       }
@@ -1557,7 +1499,10 @@ CDX12EncHMFT::xThreadProc( void *pCtx )
 
                      if( WaitForFence( pDX12EncodeContext->pSliceFences[slice_idx], OS_TIMEOUT_INFINITE ) )
                      {
-                        if (!pThis->ProcessSliceBitstreamZeroCopy( pDX12EncodeContext, slice_idx, spMediaBuffer, codec_unit_metadata ))
+                        if( !pThis->ProcessSliceBitstreamZeroCopy( pDX12EncodeContext,
+                                                                   slice_idx,
+                                                                   spMediaBuffer,
+                                                                   codec_unit_metadata ) )
                         {
                            debug_printf( "[dx12 hmft 0x%p] Failed to process slice %u bitstream\n", pThis, slice_idx );
                            MFE_ERROR( "[dx12 hmft 0x%p] Failed to process slice %u bitstream", pThis, slice_idx );
@@ -1636,10 +1581,10 @@ CDX12EncHMFT::xThreadProc( void *pCtx )
                         ComPtr<IMFMediaBuffer> spMediaBuffer;
 
                         // Reset codec unit metadata for this slice as it will be wrapped on its own IMFSample
-                        if (!pThis->ProcessSliceBitstreamZeroCopy( pDX12EncodeContext,
-                                                              slice_idx,
-                                                              spMediaBuffer,
-                                                              cur_slice_codec_unit_metadata ))
+                        if( !pThis->ProcessSliceBitstreamZeroCopy( pDX12EncodeContext,
+                                                                   slice_idx,
+                                                                   spMediaBuffer,
+                                                                   cur_slice_codec_unit_metadata ) )
                         {
                            debug_printf( "[dx12 hmft 0x%p] Failed to process slice %u bitstream\n", pThis, slice_idx );
                            MFE_ERROR( "[dx12 hmft 0x%p] Failed to process slice %u bitstream", pThis, slice_idx );

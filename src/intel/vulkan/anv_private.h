@@ -70,6 +70,7 @@
 #endif
 #include "util/u_vector.h"
 #include "util/u_math.h"
+#include "util/u_tristate.h"
 #include "util/vma.h"
 #include "util/xmlconfig.h"
 #include "vk_acceleration_structure.h"
@@ -202,6 +203,12 @@ get_max_vbs(const struct intel_device_info *devinfo) {
 #define MAX_EMBEDDED_SAMPLERS 2048
 #define MAX_CUSTOM_BORDER_COLORS 4096
 #define MAX_DESCRIPTOR_SET_INPUT_ATTACHMENTS 256
+/* Different SKUs have different maximum values. Make things more consistent
+ * across them, by setting a maximum of 48KiB because it's what some of the
+ * other vendors report as maximum and also above the required limit from DX
+ * (16KiB on "downlevel hardware", 32KiB otherwise).
+ */
+#define MAX_SLM_SIZE (48 * 1024)
 /* We need 16 for UBO block reads to work and 32 for push UBOs. However, we
  * use 64 here to avoid cache issues. This could most likely bring it back to
  * 32 if we had different virtual addresses for the different views on a given
@@ -354,6 +361,7 @@ void __anv_perf_warn(struct anv_device *device,
 /**
  * Print a FINISHME message, including its source location.
  */
+#if MESA_DEBUG
 #define anv_finishme(format, ...) \
    do { \
       static bool reported = false; \
@@ -363,6 +371,9 @@ void __anv_perf_warn(struct anv_device *device,
          reported = true; \
       } \
    } while (0)
+#else
+#define anv_finishme(x, ...)
+#endif
 
 /**
  * Print a perf warning message.  Set INTEL_DEBUG=perf to see these.
@@ -1870,6 +1881,7 @@ enum anv_gfx_state_bits {
    ANV_GFX_STATE_WA_18019816803, /* Fake state to implement workaround */
    ANV_GFX_STATE_WA_14018283232, /* Fake state to implement workaround */
    ANV_GFX_STATE_WA_18038825448, /* Fake state to implement workaround */
+   ANV_GFX_STATE_WA_14024997852, /* Fake state to implement workaround */
    ANV_GFX_STATE_TBIMR_TILE_PASS_INFO,
    ANV_GFX_STATE_FS_MSAA_FLAGS,
    ANV_GFX_STATE_TESS_CONFIG,
@@ -2161,6 +2173,7 @@ struct anv_gfx_dynamic_state {
    /* 3DSTATE_TE */
    struct {
       uint32_t TEDomain;
+      uint32_t PatchHeaderLayout;
       uint32_t Partitioning;
       uint32_t OutputTopology;
       uint32_t TessellationDistributionMode;
@@ -2307,6 +2320,11 @@ struct anv_gfx_dynamic_state {
     * Coarse state tracking for Wa_18038825448.
     */
    enum anv_coarse_pixel_state coarse_state;
+
+   /**
+    * State tracking for Wa_14024997852.
+    */
+   bool autostrip_disabled;
 
    /** Dirty bits of what needs to be repacked */
    BITSET_DECLARE(pack_dirty, ANV_GFX_STATE_MAX);
@@ -4444,7 +4462,7 @@ struct anv_cmd_graphics_state {
    uint32_t index_size;
 
    uint32_t indirect_data_stride;
-   bool indirect_data_stride_aligned;
+   enum u_tristate indirect_data_stride_aligned;
 
    struct vk_vertex_input_state vertex_input;
    struct vk_sample_locations_state sample_locations;
@@ -5447,18 +5465,6 @@ anv_is_compressed_format_emulated(const struct anv_physical_device *pdevice,
                                               format) != VK_FORMAT_UNDEFINED;
 }
 
-static inline bool
-anv_is_storage_format_atomics_emulated(const struct intel_device_info *devinfo,
-                                       VkFormat format)
-{
-   /* No emulation required on Xe2+ */
-   if (devinfo->ver >= 20)
-      return false;
-
-   return format == VK_FORMAT_R64_SINT ||
-          format == VK_FORMAT_R64_UINT;
-}
-
 static inline struct isl_swizzle
 anv_swizzle_for_render(struct isl_swizzle swizzle)
 {
@@ -5606,7 +5612,6 @@ struct anv_image {
    struct anv_image_binding {
       struct anv_image_memory_range memory_range;
       struct anv_address address;
-      struct anv_sparse_binding_data sparse_data;
       void *host_map;
       uint64_t map_delta;
       uint64_t map_size;
@@ -5655,6 +5660,8 @@ struct anv_image {
       } aux_tt;
    } planes[3];
 
+   struct anv_sparse_binding_data sparse_data;
+
    /* Array pitch of video coding private surfaces */
    uint32_t vid_dmv_top_surface_pitch_B;
    uint32_t av1_cdf_table_pitch_B;
@@ -5669,7 +5676,7 @@ struct anv_image {
 };
 
 struct anv_image_opaque_capture_data {
-   uint64_t planes[3];
+   uint64_t main_binding;
    uint64_t private_binding;
 };
 
@@ -6071,6 +6078,7 @@ anv_image_ccs_op(struct anv_cmd_buffer *cmd_buffer,
 isl_surf_usage_flags_t
 anv_image_choose_isl_surf_usage(struct anv_physical_device *device,
                                 VkFormat vk_format,
+                                const VkImageFormatListCreateInfo *format_list_info,
                                 VkImageCreateFlags vk_create_flags,
                                 VkImageUsageFlags vk_usage,
                                 isl_surf_usage_flags_t isl_extra_usage,
@@ -6577,6 +6585,7 @@ void anv_update_vp9_tables(struct anv_cmd_buffer *cmd,
                            const StdVideoVP9Segmentation *seg);
 
 void anv_calculate_qmul(const struct VkVideoDecodeVP9PictureInfoKHR *vp9_pic,
+                        uint32_t qyac,
                         uint32_t seg_id,
                         int16_t *ptr);
 
@@ -6662,9 +6671,12 @@ anv_add_pending_pipe_bits(struct anv_cmd_buffer* cmd_buffer,
                           const char* reason)
 {
    cmd_buffer->state.pending_pipe_bits |= bits;
-   if (INTEL_DEBUG(DEBUG_PIPE_CONTROL)) {
-      anv_cmd_buffer_pending_pipe_debug(cmd_buffer, bits, reason);
+   if (unlikely(u_trace_enabled(&cmd_buffer->device->ds.trace_context))) {
+      if (cmd_buffer->batch.pc_reasons_count < ARRAY_SIZE(cmd_buffer->batch.pc_reasons))
+         cmd_buffer->batch.pc_reasons[cmd_buffer->batch.pc_reasons_count++] = reason;
    }
+   if (INTEL_DEBUG(DEBUG_PIPE_CONTROL))
+      anv_cmd_buffer_pending_pipe_debug(cmd_buffer, bits, reason);
 }
 
 struct anv_performance_configuration_intel {

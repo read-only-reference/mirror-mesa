@@ -87,14 +87,6 @@ radv_amdgpu_winsys_read_registers(struct radeon_winsys *rws, unsigned reg_offset
    return ac_drm_read_mm_registers(ws->dev, reg_offset / 4, num_registers, 0xffffffff, 0, out) == 0;
 }
 
-static const char *
-radv_amdgpu_winsys_get_chip_name(struct radeon_winsys *rws)
-{
-   ac_drm_device *dev = ((struct radv_amdgpu_winsys *)rws)->dev;
-
-   return ac_drm_get_marketing_name(dev);
-}
-
 static bool
 radv_amdgpu_winsys_query_gpuvm_fault(struct radeon_winsys *rws, struct radv_winsys_gpuvm_fault_info *fault_info)
 {
@@ -289,6 +281,7 @@ radv_amdgpu_winsys_create(int fd, uint64_t debug_flags, uint64_t perftest_flags,
    ws->chain_ib = !(debug_flags & RADV_DEBUG_NO_IB_CHAINING);
    ws->debug_all_bos = !!(debug_flags & RADV_DEBUG_ALL_BOS);
    ws->debug_log_bos = debug_flags & RADV_DEBUG_HANG;
+   ws->dump_ibs = !!(debug_flags & RADV_DEBUG_DUMP_IBS);
 
    if (debug_flags & RADV_DEBUG_DUMP_BO_HISTORY) {
       ws->bo_history_logfile = fopen("/tmp/radv_bo_history.log", "w+");
@@ -339,7 +332,6 @@ radv_amdgpu_winsys_create(int fd, uint64_t debug_flags, uint64_t perftest_flags,
    ws->base.query_info = radv_amdgpu_winsys_query_info;
    ws->base.query_value = radv_amdgpu_winsys_query_value;
    ws->base.read_registers = radv_amdgpu_winsys_read_registers;
-   ws->base.get_chip_name = radv_amdgpu_winsys_get_chip_name;
    ws->base.query_gpuvm_fault = radv_amdgpu_winsys_query_gpuvm_fault;
    ws->base.destroy = radv_amdgpu_winsys_destroy;
    ws->base.get_fd = radv_amdgpu_winsys_get_fd;

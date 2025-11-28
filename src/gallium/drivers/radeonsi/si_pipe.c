@@ -391,6 +391,13 @@ static void si_destroy_context(struct pipe_context *context)
       _mesa_hash_table_u64_destroy(sctx->ps_resolve_shaders);
    }
 
+   si_resource_reference(&sctx->task_wait_buf, NULL);
+   si_resource_reference(&sctx->task_ring, NULL);
+   si_resource_reference(&sctx->task_scratch_buffer, NULL);
+   si_resource_reference(&sctx->mesh_scratch_ring, NULL);
+   if (sctx->task_preamble_state)
+      si_pm4_free_state(sctx, sctx->task_preamble_state, ~0);
+
    FREE(sctx);
 }
 
@@ -739,6 +746,9 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
       }
    }
 
+   if (screen->caps.mesh_shader)
+      si_init_task_mesh_shader_functions(sctx);
+
    sctx->sample_mask = 0xffff;
 
    /* Initialize multimedia functions. */
@@ -788,11 +798,11 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
    sctx->tex_handles = _mesa_hash_table_create(NULL, _mesa_hash_pointer, _mesa_key_pointer_equal);
    sctx->img_handles = _mesa_hash_table_create(NULL, _mesa_hash_pointer, _mesa_key_pointer_equal);
 
-   util_dynarray_init(&sctx->resident_tex_handles, NULL);
-   util_dynarray_init(&sctx->resident_img_handles, NULL);
-   util_dynarray_init(&sctx->resident_tex_needs_color_decompress, NULL);
-   util_dynarray_init(&sctx->resident_img_needs_color_decompress, NULL);
-   util_dynarray_init(&sctx->resident_tex_needs_depth_decompress, NULL);
+   sctx->resident_tex_handles = UTIL_DYNARRAY_INIT;
+   sctx->resident_img_handles = UTIL_DYNARRAY_INIT;
+   sctx->resident_tex_needs_color_decompress = UTIL_DYNARRAY_INIT;
+   sctx->resident_img_needs_color_decompress = UTIL_DYNARRAY_INIT;
+   sctx->resident_tex_needs_depth_decompress = UTIL_DYNARRAY_INIT;
 
    sctx->dirty_implicit_resources = _mesa_pointer_hash_table_create(NULL);
    if (!sctx->dirty_implicit_resources) {
@@ -1182,8 +1192,8 @@ static void si_disk_cache_create(struct si_screen *sscreen)
    _mesa_sha1_final(&ctx, sha1);
    mesa_bytes_to_hex(cache_id, sha1, 20);
 
-   sscreen->disk_shader_cache = disk_cache_create(sscreen->info.name, cache_id,
-                                                  sscreen->info.address32_hi);
+   sscreen->disk_shader_cache = disk_cache_create(ac_get_family_name(sscreen->info.family),
+                                                  cache_id, sscreen->info.address32_hi);
 }
 
 static void si_set_max_shader_compiler_threads(struct pipe_screen *screen, unsigned max_threads)
@@ -1275,6 +1285,14 @@ static void si_setup_force_shader_use_aco(struct si_screen *sscreen, bool suppor
    }
 
    fclose(f);
+}
+
+static bool
+is_pro_graphics(struct si_screen *sscreen)
+{
+   return  strstr(sscreen->info.marketing_name, "Pro") ||
+           strstr(sscreen->info.marketing_name, "PRO") ||
+           strstr(sscreen->info.marketing_name, "Frontier");
 }
 
 static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
@@ -1385,7 +1403,7 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
       sscreen->use_ngg = !(sscreen->debug_flags & DBG(NO_NGG)) &&
                          sscreen->info.gfx_level >= GFX10 &&
                          (sscreen->info.family != CHIP_NAVI14 ||
-                          sscreen->info.is_pro_graphics);
+                          is_pro_graphics(sscreen));
       sscreen->use_ngg_culling = sscreen->use_ngg &&
                                  sscreen->info.max_render_backends >= 2 &&
                                  !(sscreen->debug_flags & DBG(NO_NGG_CULLING));
@@ -1406,7 +1424,7 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
    si_init_screen_caps(sscreen);
 
    if (sscreen->debug_flags & DBG(INFO))
-      ac_print_gpu_info(&sscreen->info, stdout);
+      ac_print_gpu_info(stdout, &sscreen->info, ws->get_fd(ws));
 
    slab_create_parent(&sscreen->pool_transfers, sizeof(struct si_transfer), 64);
 

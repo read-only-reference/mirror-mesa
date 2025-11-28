@@ -531,6 +531,23 @@ nir_visitor::visit(ir_variable *ir)
       var->data.mode = nir_var_mem_task_payload;
       break;
 
+   case ir_var_shader_pixel_local_storage:
+      switch (ir->data.pixel_local_storage) {
+      case GLSL_PIXEL_LOCAL_STORAGE_IN:
+         var->data.mode = nir_var_mem_pixel_local_in;
+         break;
+      case GLSL_PIXEL_LOCAL_STORAGE_OUT:
+         var->data.mode = nir_var_mem_pixel_local_out;
+         break;
+      case GLSL_PIXEL_LOCAL_STORAGE_INOUT:
+         var->data.mode = nir_var_mem_pixel_local_inout;
+         break;
+      default:
+         UNREACHABLE("bad pixel local storage field");
+         break;
+      }
+      break;
+
    default:
       UNREACHABLE("not reached");
    }
@@ -616,6 +633,8 @@ nir_visitor::visit(ir_variable *ir)
    } else if (var->data.mode == nir_var_shader_out) {
       var->data.xfb.buffer = ir->data.xfb_buffer;
       var->data.xfb.stride = ir->data.xfb_stride;
+   } else if (var->data.mode & nir_var_any_pixel_local) {
+      var->data.image.format = ir->data.image_format;
    }
 
    var->data.fb_fetch_output = ir->data.fb_fetch_output;
@@ -2927,7 +2946,7 @@ glsl_float64_funcs_to_nir(struct gl_context *ctx,
     */
    NIR_PASS(_, nir, nir_lower_vars_to_ssa);
    NIR_PASS(_, nir, nir_remove_dead_variables, nir_var_function_temp, NULL);
-   NIR_PASS(_, nir, nir_copy_prop);
+   NIR_PASS(_, nir, nir_opt_copy_prop);
    NIR_PASS(_, nir, nir_opt_dce);
    NIR_PASS(_, nir, nir_opt_cse);
    NIR_PASS(_, nir, nir_opt_gcm, true);

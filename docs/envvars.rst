@@ -98,6 +98,10 @@ Core Mesa environment variables
    specifies a file name for logging all errors, warnings, etc., rather
    than stderr
 
+.. envvar:: MESA_LOG_PREFIX
+
+   specifies what to to include in the log prefix (linux only) - default is ``tag,level``
+
 .. envvar:: MESA_EXTENSION_OVERRIDE
 
    can be used to enable/disable extensions. A value such as
@@ -352,6 +356,11 @@ Core Mesa environment variables
    causes the Vulkan driver to call abort() immediately after detecting a
    lost device.  This is extremely useful when testing as it prevents the
    test suite from continuing on with a lost device.
+
+.. envvar:: MESA_VK_VALIDATE_SHADER_BINARIES
+
+   enables extra validation of shader and pipeline binaries to ensure
+   consistency of driver binaries.
 
 .. envvar:: MESA_VK_ENABLE_SUBMIT_THREAD
 
@@ -1379,6 +1388,8 @@ RADV driver environment variables
       dump the BO history to /tmp/radv_bo_history.log after each BO operations
    ``checkir``
       validate the LLVM IR before LLVM compiles the shader
+   ``dumpibs``
+     dump IBs (command streams)
    ``dump_trap_handler``
       dump the trap handler shader
    ``epilogs``
@@ -1491,10 +1502,6 @@ RADV driver environment variables
    ``validatevas``
       Enable tracking of VA ranges for radv_build_is_valid_va.
 
-.. envvar:: RADV_FORCE_FAMILY
-
-   create a null device to compile shaders without a AMD GPU (e.g. VEGA10)
-
 .. envvar:: RADV_FORCE_VRS
 
    allow to force per-pipeline vertex VRS rates on GFX10.3+. This is only
@@ -1541,6 +1548,8 @@ RADV driver environment variables
       enable wave64 for ray tracing shaders (GFX10-10.3)
    ``sam``
       enable optimizations to move more driver internal objects to VRAM.
+   ``sparse``
+      enable experimental sparse binding and sparse residency on GPUs where we don't support it by default (pre Polaris)
    ``transfer_queue``
       enable experimental transfer queue support (GFX9+, not yet spec compliant)
    ``video_decode``

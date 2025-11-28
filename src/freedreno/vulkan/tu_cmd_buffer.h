@@ -345,6 +345,7 @@ struct tu_render_pass_state
    uint32_t lrz_write_disabled_at_draw;
 
    const char *gmem_disable_reason;
+   const char *cb_disable_reason;
 };
 
 /* These are the states of the suspend/resume state machine. In addition to
@@ -611,6 +612,7 @@ struct tu_cmd_state
    uint32_t total_dispatches;
 
    unsigned tile_render_pass_count;
+   bool renderpass_cb_disabled;
 };
 
 struct tu_vis_stream_patchpoint {
@@ -618,6 +620,19 @@ struct tu_vis_stream_patchpoint {
    uint32_t *data;
    uint64_t iova;
    uint32_t offset;
+};
+
+enum tu_cb_control_type {
+   TU_CB_CONTROL_TYPE_PATCHPOINT,
+   TU_CB_CONTROL_TYPE_BARRIER,
+   TU_CB_CONTROL_TYPE_CB_ENABLED,
+};
+
+struct tu_cb_control_point {
+   enum tu_cb_control_type type;
+   uint32_t *patchpoint;
+   uint32_t patch_value;
+   uint32_t original_value;
 };
 
 struct tu_cmd_buffer
@@ -639,6 +654,8 @@ struct tu_cmd_buffer
    struct util_dynarray vis_stream_patchpoints;
    struct util_dynarray vis_stream_bos;
    struct util_dynarray vis_stream_cs_bos;
+
+   struct util_dynarray cb_control_points;
 
    VkCommandBufferUsageFlags usage_flags;
 
@@ -917,5 +934,10 @@ _tu_create_fdm_bin_patchpoint(struct tu_cmd_buffer *cmd,
    _tu_create_fdm_bin_patchpoint(cmd, cs, size, flags, apply, &state, sizeof(state))
 
 VkResult tu_init_bin_preamble(struct tu_device *device);
+
+void
+tu7_set_thread_br_patchpoint(struct tu_cmd_buffer *cmd,
+                             struct tu_cs *cs,
+                             bool force_disable_cb);
 
 #endif /* TU_CMD_BUFFER_H */
