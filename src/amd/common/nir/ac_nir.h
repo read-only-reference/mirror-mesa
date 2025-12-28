@@ -238,14 +238,10 @@ ac_nir_lower_ngg_mesh(nir_shader *shader,
 
 bool
 ac_nir_lower_task_outputs_to_mem(nir_shader *shader,
-                                 unsigned task_payload_entry_bytes,
-                                 unsigned task_num_entries,
                                  bool has_query);
 
 bool
-ac_nir_lower_mesh_inputs_to_mem(nir_shader *shader,
-                                unsigned task_payload_entry_bytes,
-                                unsigned task_num_entries);
+ac_nir_lower_mesh_inputs_to_mem(nir_shader *shader);
 
 bool
 ac_nir_lower_global_access(nir_shader *shader);
@@ -433,7 +429,7 @@ ac_nir_mem_vectorize_callback(unsigned align_mul, unsigned align_offset, unsigne
                               nir_intrinsic_instr *low, nir_intrinsic_instr *high, void *data);
 
 bool
-ac_nir_scalarize_overfetching_loads_callback(const nir_instr *instr, const void *data);
+ac_nir_scalarize_overfetching_loads_callback(const nir_intrinsic_instr *intr, const void *data);
 
 bool
 ac_nir_store_may_be_subdword(const nir_intrinsic_instr *instr);

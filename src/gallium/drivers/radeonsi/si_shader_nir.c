@@ -122,7 +122,7 @@ void si_nir_opts(struct si_screen *sscreen, struct nir_shader *nir, bool has_arr
       if (nir->info.stage == MESA_SHADER_FRAGMENT)
          NIR_PASS(_, nir, nir_opt_move_discards_to_top);
 
-      if (sscreen->info.has_packed_math_16bit)
+      if (sscreen->info.cu_info.has_packed_math_16bit)
          NIR_PASS(progress, nir, nir_opt_vectorize, si_vectorize_callback, NULL);
    } while (progress);
 
@@ -324,13 +324,9 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
 
       NIR_PASS(_, nir, nir_lower_gs_intrinsics, flags);
    } else if (nir->info.stage == MESA_SHADER_TASK) {
-      NIR_PASS(_, nir, ac_nir_lower_task_outputs_to_mem,
-               sscreen->task_info.payload_entry_size,
-               sscreen->task_info.num_entries, false);
+      NIR_PASS(_, nir, ac_nir_lower_task_outputs_to_mem, false);
    } else if (nir->info.stage == MESA_SHADER_MESH) {
-      NIR_PASS(_, nir, ac_nir_lower_mesh_inputs_to_mem,
-               sscreen->task_info.payload_entry_size,
-               sscreen->task_info.num_entries);
+      NIR_PASS(_, nir, ac_nir_lower_mesh_inputs_to_mem);
    }
 
    if (mesa_shader_stage_is_compute(nir->info.stage)) {

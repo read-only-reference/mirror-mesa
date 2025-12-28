@@ -392,6 +392,11 @@ radv_sqtt_init(struct radv_device *device)
    device->sqtt.buffer_size = (uint32_t)debug_get_num_option("RADV_THREAD_TRACE_BUFFER_SIZE", 32 * 1024 * 1024);
    device->sqtt.instruction_timing_enabled = radv_is_instruction_timing_enabled();
 
+   if (device->ws->reserve_vmid(device->ws) < 0) {
+      fprintf(stderr, "radv: Failed to reserve VMID for SQTT tracing.\n");
+      return false;
+   }
+
    if (!radv_sqtt_init_bo(device))
       return false;
 
@@ -427,6 +432,9 @@ radv_sqtt_finish(struct radv_device *device)
    radv_unregister_queues(device, sqtt);
 
    ac_sqtt_finish(sqtt);
+
+   if (device->ws)
+      device->ws->unreserve_vmid(device->ws);
 }
 
 static bool
@@ -463,7 +471,7 @@ radv_begin_sqtt(struct radv_queue *queue)
       device->sqtt.start_cs[family] = NULL;
    }
 
-   radv_init_cmd_stream(&cs, radv_queue_ring(queue));
+   radv_init_cmd_stream(device, &cs, radv_queue_ring(queue));
 
    cs.b = ws->cs_create(ws, cs.hw_ip, false);
    if (!cs.b)
@@ -513,7 +521,7 @@ radv_begin_sqtt(struct radv_queue *queue)
 
    if (device->spm.bo) {
       radeon_check_space(ws, cs.b, 8);
-      ac_emit_spm_start(cs.b, cs.hw_ip);
+      ac_emit_spm_start(cs.b, cs.hw_ip, &pdev->info);
    }
 
    result = ws->cs_finalize(cs.b);
@@ -543,7 +551,7 @@ radv_end_sqtt(struct radv_queue *queue)
       device->sqtt.stop_cs[family] = NULL;
    }
 
-   radv_init_cmd_stream(&cs, radv_queue_ring(queue));
+   radv_init_cmd_stream(device, &cs, radv_queue_ring(queue));
 
    cs.b = ws->cs_create(ws, cs.hw_ip, false);
    if (!cs.b)

@@ -606,6 +606,9 @@ Intel driver environment variables
       disable fast clears
    ``noccs``
       disable lossless color compression
+   ``no-resource-barrier``
+      disable RENDER_BARRIER instruction usage by falling back to
+      PIPE_CONTROL
    ``optimizer``
       dump shader assembly to files at each optimization pass and
       iteration that make progress (Gfx < 9)
@@ -1501,6 +1504,8 @@ RADV driver environment variables
       Use bvh4 encoding on GPUs that support bvh8 encoding.
    ``validatevas``
       Enable tracking of VA ranges for radv_build_is_valid_va.
+   ``vm``
+      add a gap between all VA allocations to check for page faults
 
 .. envvar:: RADV_FORCE_VRS
 

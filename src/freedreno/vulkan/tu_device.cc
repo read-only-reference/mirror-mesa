@@ -270,6 +270,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .EXT_conditional_rendering = true,
       .EXT_conservative_rasterization = device->info->chip >= 7,
       .EXT_custom_border_color = true,
+      .EXT_custom_resolve = true,
       .EXT_depth_clamp_zero_one = true,
       .EXT_depth_clip_control = true,
       .EXT_depth_clip_enable = true,
@@ -350,6 +351,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .IMG_filter_cubic = device->info->props.has_tex_filter_cubic,
       .NV_compute_shader_derivatives = device->info->chip >= 7,
       .QCOM_fragment_density_map_offset = true,
+      .QCOM_render_pass_shader_resolve = true,
       .VALVE_fragment_density_map_layered = true,
       .VALVE_mutable_descriptor_type = true,
    } };
@@ -820,6 +822,9 @@ tu_get_features(struct tu_physical_device *pdevice,
 
    /* VK_EXT_multisampled_render_to_single_sampled */
    features->multisampledRenderToSingleSampled = true;
+
+   /* VK_EXT_custom_resolve */
+   features->customResolve = true;
 }
 
 static void
@@ -870,7 +875,7 @@ static const size_t max_descriptor_set_size = MAX_SET_SIZE / (4 * A6XX_TEX_CONST
 static const VkSampleCountFlags sample_counts =
    VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT;
 static const VkSampleCountFlags sample_location_counts =
-   VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT;
+   VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT; /* Note: update nir_shader_compiler_options.max_samples when changing this. */
 
 static void
 tu_get_physical_device_properties_1_2(struct tu_physical_device *pdevice,
@@ -954,8 +959,12 @@ tu_get_physical_device_properties_1_2(struct tu_physical_device *pdevice,
    p->maxDescriptorSetUpdateAfterBindStorageImages       = max_descriptor_set_size;
    p->maxDescriptorSetUpdateAfterBindInputAttachments    = MAX_RTS;
 
-   p->supportedDepthResolveModes    = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
-   p->supportedStencilResolveModes  = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+   p->supportedDepthResolveModes    =
+      VK_RESOLVE_MODE_SAMPLE_ZERO_BIT |
+      VK_RESOLVE_MODE_CUSTOM_BIT_EXT;
+   p->supportedStencilResolveModes  =
+      VK_RESOLVE_MODE_SAMPLE_ZERO_BIT |
+      VK_RESOLVE_MODE_CUSTOM_BIT_EXT;
    p->independentResolveNone  = false;
    p->independentResolve      = false;
 
@@ -1177,7 +1186,8 @@ tu_get_properties(struct tu_physical_device *pdevice,
             VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION))
          : VK_MAKE_VERSION(1, 0, VK_HEADER_VERSION);
    props->driverVersion = vk_get_driver_version();
-   props->vendorID = 0x5143;
+   props->vendorID = pdevice->instance->force_vk_vendor != 0 ?
+                     pdevice->instance->force_vk_vendor : 0x5143;
    props->deviceID = pdevice->dev_id.chip_id;
    props->deviceType = VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
 
@@ -1570,39 +1580,11 @@ tu_physical_device_init(struct tu_physical_device *device,
    case 7: {
       device->dev_info = info;
       device->info = &device->dev_info;
-      uint32_t depth_cache_size =
-         device->info->num_ccu * device->info->props.sysmem_per_ccu_depth_cache_size;
-      uint32_t color_cache_size =
-         (device->info->num_ccu *
-          device->info->props.sysmem_per_ccu_color_cache_size);
-      uint32_t color_cache_size_gmem =
-         color_cache_size /
-         (1 << device->info->props.gmem_ccu_color_cache_fraction);
 
-      device->ccu_depth_offset_bypass = 0;
-      device->ccu_offset_bypass =
-         device->ccu_depth_offset_bypass + depth_cache_size;
-
-      if (device->info->props.has_gmem_vpc_attr_buf) {
-         device->vpc_attr_buf_size_bypass =
-            device->info->props.sysmem_vpc_attr_buf_size;
-         device->vpc_attr_buf_offset_bypass =
-            device->ccu_offset_bypass + color_cache_size;
-
-         device->vpc_attr_buf_size_gmem =
-            device->info->props.gmem_vpc_attr_buf_size;
-         device->vpc_attr_buf_offset_gmem =
-            device->gmem_size -
-            (device->vpc_attr_buf_size_gmem * device->info->num_ccu);
-
-         device->ccu_offset_gmem =
-            device->vpc_attr_buf_offset_gmem - color_cache_size_gmem;
-
-         device->usable_gmem_size_gmem = device->vpc_attr_buf_offset_gmem;
-      } else {
-         device->ccu_offset_gmem = device->gmem_size - color_cache_size_gmem;
-         device->usable_gmem_size_gmem = device->gmem_size;
-      }
+      device->usable_gmem_size_gmem =
+         fd6_calc_gmem_cache_offsets(&info, device->gmem_size,
+                                     &device->config_gmem,
+                                     &device->config_sysmem);
 
       if (instance->reserve_descriptor_set) {
          device->usable_sets = device->reserved_set_idx = device->info->props.max_sets - 1;
@@ -1770,6 +1752,7 @@ static const driOptionDescription tu_dri_options[] = {
    DRI_CONF_SECTION_END
 
    DRI_CONF_SECTION_DEBUG
+      DRI_CONF_FORCE_VK_VENDOR()
       DRI_CONF_VK_WSI_FORCE_BGRA8_UNORM_FIRST(false)
       DRI_CONF_VK_WSI_FORCE_SWAPCHAIN_TO_CURRENT_EXTENT(false)
       DRI_CONF_VK_X11_IGNORE_SUBOPTIMAL(false)
@@ -1796,6 +1779,8 @@ tu_init_dri_options(struct tu_instance *instance)
                        instance->vk.app_info.app_name, instance->vk.app_info.app_version,
                        instance->vk.app_info.engine_name, instance->vk.app_info.engine_version);
 
+   instance->force_vk_vendor =
+         driQueryOptioni(&instance->dri_options, "force_vk_vendor");
    instance->dont_care_as_load =
          driQueryOptionb(&instance->dri_options, "vk_dont_care_as_load");
    instance->conservative_lrz =
@@ -2574,7 +2559,7 @@ tu_init_cmdbuf_start_a725_quirk(struct tu_device *device)
             .linearlocalidregid = regid(63, 0),
             .threadsize = THREAD128,
             .workitemrastorder = WORKITEMRASTORDER_TILED));
-   tu_cs_emit_regs(&sub_cs, A7XX_SP_CS_UNKNOWN_A9BE(0));
+   tu_cs_emit_regs(&sub_cs, SP_CS_HYSTERESIS(A7XX, 0));
 
    tu_cs_emit_regs(&sub_cs,
                   SP_CS_NDRANGE_0(A7XX, .kerneldim = 3,
@@ -2587,7 +2572,7 @@ tu_init_cmdbuf_start_a725_quirk(struct tu_device *device)
                   SP_CS_NDRANGE_4(A7XX, .globaloff_y = 0),
                   SP_CS_NDRANGE_5(A7XX, .globalsize_z = 1),
                   SP_CS_NDRANGE_6(A7XX, .globaloff_z = 0));
-   tu_cs_emit_regs(&sub_cs, A7XX_SP_CS_NDRANGE_7(
+   tu_cs_emit_regs(&sub_cs, SP_CS_NDRANGE_7(A7XX,
             .localsizex = 255,
             .localsizey = 0,
             .localsizez = 0));
@@ -2961,7 +2946,8 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
             goto fail_prepare_perfcntrs_pass_cs;
          }
 
-         tu_cs_emit_regs(&sub_cs, A6XX_CP_SCRATCH_REG(PERF_CNTRS_REG, 1 << i));
+         /* TODO: a8xx */
+         tu_cs_emit_regs(&sub_cs, CP_SCRATCH_REG(A6XX, PERF_CNTRS_REG, 1 << i));
          tu_cs_emit_pkt7(&sub_cs, CP_WAIT_FOR_ME, 0);
 
          device->perfcntrs_pass_cs_entries[i] =
