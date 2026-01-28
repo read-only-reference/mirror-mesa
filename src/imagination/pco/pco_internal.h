@@ -75,6 +75,7 @@ enum pco_debug_print {
    PCO_DEBUG_PRINT_BINARY = BITFIELD64_BIT(6),
    PCO_DEBUG_PRINT_VERBOSE = BITFIELD64_BIT(7),
    PCO_DEBUG_PRINT_RA = BITFIELD64_BIT(8),
+   PCO_DEBUG_PRINT_STATS = BITFIELD64_BIT(9),
 };
 
 extern uint64_t pco_debug_print;
@@ -1534,6 +1535,9 @@ static inline pco_instr *pco_prev_instr(pco_instr *instr)
  */
 static inline pco_igrp *pco_first_igrp(pco_block *block)
 {
+   if (list_is_empty(&block->instrs))
+      return NULL;
+
    return list_first_entry(&block->instrs, pco_igrp, link);
 }
 
@@ -1545,6 +1549,9 @@ static inline pco_igrp *pco_first_igrp(pco_block *block)
  */
 static inline pco_igrp *pco_last_igrp(pco_block *block)
 {
+   if (list_is_empty(&block->instrs))
+      return NULL;
+
    return list_first_entry(&block->instrs, pco_igrp, link);
 }
 
@@ -1706,6 +1713,24 @@ static inline bool pco_should_print_shader_pass(pco_shader *shader)
 static inline bool pco_should_print_binary(pco_shader *shader)
 {
    if (!PCO_DEBUG_PRINT(BINARY))
+      return false;
+
+   if (shader->is_internal && !PCO_DEBUG_PRINT(INTERNAL))
+      return false;
+
+   if (shader->stage == MESA_SHADER_VERTEX && !PCO_DEBUG_PRINT(VS))
+      return false;
+   else if (shader->stage == MESA_SHADER_FRAGMENT && !PCO_DEBUG_PRINT(FS))
+      return false;
+   else if (shader->stage == MESA_SHADER_COMPUTE && !PCO_DEBUG_PRINT(CS))
+      return false;
+
+   return true;
+}
+
+static inline bool pco_should_print_stats(pco_shader *shader)
+{
+   if (!PCO_DEBUG_PRINT(STATS))
       return false;
 
    if (shader->is_internal && !PCO_DEBUG_PRINT(INTERNAL))

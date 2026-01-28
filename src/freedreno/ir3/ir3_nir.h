@@ -19,8 +19,8 @@ BEGINC;
 
 bool ir3_nir_apply_trig_workarounds(nir_shader *shader);
 bool ir3_nir_lower_imul(nir_shader *shader);
-bool ir3_nir_lower_io_offsets(nir_shader *shader);
-bool ir3_nir_lower_load_barycentric_at_sample(nir_shader *shader);
+bool ir3_nir_lower_io_offsets(nir_shader *shader, struct ir3_compiler *c);
+bool ir3_nir_lower_load_sample_pos(nir_shader *shader);
 bool ir3_nir_lower_load_barycentric_at_offset(nir_shader *shader);
 bool ir3_nir_lower_push_consts_to_preamble(nir_shader *nir,
                                            struct ir3_shader_variant *v);
@@ -72,6 +72,7 @@ void ir3_nir_lower_io_vars_to_temporaries(nir_shader *s);
 void ir3_finalize_nir(struct ir3_compiler *compiler,
                       const struct ir3_shader_nir_options *options,
                       nir_shader *s);
+void ir3_nir_lower_io(nir_shader *s);
 void ir3_nir_post_finalize(struct ir3_shader *shader);
 void ir3_nir_lower_variant(struct ir3_shader_variant *so,
                            const struct ir3_shader_nir_options *options,

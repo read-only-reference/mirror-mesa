@@ -43,6 +43,7 @@
 #include "pipe/p_state.h"
 #include "cso_cache/cso_context.h"
 #include "nir.h"
+#include "nir/nir_lower_blend.h"
 
 #ifdef HAVE_LIBDRM
 #include <drm-uapi/drm.h>
@@ -167,8 +168,6 @@ struct lvp_physical_device {
 
 struct lvp_instance {
    struct vk_instance vk;
-
-   uint32_t apiVersion;
 
    uint64_t debug_flags;
 
@@ -541,6 +540,8 @@ struct lvp_pipeline {
       uint32_t group_count;
    } rt;
 
+   uint8_t advanced_blend_rts;
+
    unsigned num_groups;
    unsigned num_groups_total;
    VkPipeline groups[0];
@@ -579,10 +580,8 @@ struct lvp_event {
 struct lvp_buffer {
    struct vk_buffer vk;
 
-   struct lvp_device_memory *mem;
    struct pipe_resource *bo;
    uint64_t total_size;
-   uint64_t offset;
    void *map;
    struct pipe_transfer *transfer;
 };
@@ -605,7 +604,6 @@ struct lvp_buffer_view {
 struct lvp_query_pool {
    struct vk_query_pool vk;
    enum pipe_query_type base_type;
-   void *data; /* Used by queries that are not implemented by pipe_query */
    struct pipe_query *queries[0];
 };
 
@@ -755,6 +753,9 @@ lvp_vk_format_to_pipe_format(VkFormat format)
       return vk_format_to_pipe_format(format);
    }
 }
+
+void
+lvp_nir_lower_blend(nir_shader *nir, const nir_lower_blend_options *opts);
 
 void
 lvp_sampler_init(struct lvp_device *device, struct lp_descriptor *desc, const VkSamplerCreateInfo *pCreateInfo, const struct vk_sampler *sampler);

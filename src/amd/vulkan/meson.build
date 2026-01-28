@@ -17,12 +17,6 @@ radv_entrypoints_gen_command += [
   '--device-prefix', 'rmv',
   '--device-prefix', 'ctx_roll',
 
-  # Application layer entrypoints
-  '--device-prefix', 'metro_exodus',
-  '--device-prefix', 'rage2',
-  '--device-prefix', 'quantic_dream',
-  '--device-prefix', 'no_mans_sky',
-
   # Command buffer annotation layer entrypoints
   '--device-prefix', 'annotate',
 ]
@@ -37,11 +31,8 @@ radv_entrypoints = custom_target(
 
 libradv_files = files(
   'bvh/bvh.h',
+  'layers/radv_app_workarounds.c',
   'layers/radv_ctx_roll_layer.c',
-  'layers/radv_metro_exodus.c',
-  'layers/radv_rage2.c',
-  'layers/radv_quantic_dream.c',
-  'layers/radv_no_mans_sky.c',
   'layers/radv_rmv_layer.c',
   'layers/radv_rra_layer.c',
   'layers/radv_sqtt_layer.c',
@@ -71,6 +62,7 @@ libradv_files = files(
   'nir/radv_nir_apply_pipeline_layout.c',
   'nir/radv_nir_export_multiview.c',
   'nir/radv_nir_lower_abi.c',
+  'nir/radv_nir_lower_call_abi.c',
   'nir/radv_nir_lower_cooperative_matrix.c',
   'nir/radv_nir_lower_fs_barycentric.c',
   'nir/radv_nir_lower_fs_intrinsics.c',
@@ -90,6 +82,7 @@ libradv_files = files(
   'nir/radv_nir_rt_common.c',
   'nir/radv_nir_rt_stage_common.c',
   'nir/radv_nir_rt_stage_cps.c',
+  'nir/radv_nir_rt_stage_functions.c',
   'nir/radv_nir_rt_stage_monolithic.c',
   'nir/radv_nir_rt_traversal_shader.c',
   'nir/radv_nir_trim_fs_color_exports.c',

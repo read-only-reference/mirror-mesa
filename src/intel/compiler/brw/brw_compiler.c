@@ -1,24 +1,6 @@
 /*
  * Copyright © 2015-2016 Intel Corporation
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "brw_compiler.h"
@@ -46,6 +28,7 @@ const struct nir_shader_compiler_options brw_scalar_nir_options = {
    .has_f2u_sat = true,
    .has_pack_32_4x8 = true,
    .has_uclz = true,
+   .has_pixel_coord = true,
    .lower_base_vertex = true,
    .lower_bitfield_extract = true,
    .lower_bitfield_extract8 = true,
@@ -62,6 +45,7 @@ const struct nir_shader_compiler_options brw_scalar_nir_options = {
    .lower_insert_byte = true,
    .lower_insert_word = true,
    .lower_isign = true,
+   .lower_layer_fs_input_to_sysval = true,
    .lower_ldexp = true,
    .lower_pack_half_2x16 = true,
    .lower_pack_snorm_2x16 = true,
@@ -308,7 +292,7 @@ brw_device_sha1(char *hex,
    struct mesa_sha1 ctx;
    _mesa_sha1_init(&ctx);
    brw_device_sha1_update(&ctx, devinfo);
-   unsigned char result[20];
+   unsigned char result[SHA1_DIGEST_LENGTH];
    _mesa_sha1_final(&ctx, result);
    _mesa_sha1_format(hex, result);
 }

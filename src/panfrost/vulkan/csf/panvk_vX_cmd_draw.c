@@ -22,6 +22,7 @@
 #include "panvk_cmd_draw.h"
 #include "panvk_cmd_fb_preload.h"
 #include "panvk_cmd_meta.h"
+#include "panvk_cmd_precomp.h"
 #include "panvk_cmd_ts.h"
 #include "panvk_device.h"
 #include "panvk_entrypoints.h"
@@ -48,6 +49,7 @@
 #include "vk_meta.h"
 #include "vk_pipeline_layout.h"
 #include "vk_render_pass.h"
+#include "poly/geometry.h"
 
 static enum cs_reg_perm
 provoking_vertex_fn_reg_perm_cb(struct cs_builder *b, unsigned reg)
@@ -659,6 +661,8 @@ prepare_blend(struct panvk_cmd_buffer *cmdbuf)
    if (!dirty)
       return VK_SUCCESS;
 
+   const struct panvk_shader_variant *fs =
+      panvk_shader_only_variant(get_fs(cmdbuf));
    uint32_t bd_count = MAX2(cmdbuf->state.gfx.render.fb.info.rt_count, 1);
    struct cs_builder *b =
       panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_VERTEX_TILER);
@@ -668,7 +672,16 @@ prepare_blend(struct panvk_cmd_buffer *cmdbuf)
    if (bd_count && !ptr.gpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
-   panvk_per_arch(blend_emit_descs)(cmdbuf, bds);
+   if (fs) {
+      panvk_per_arch(blend_emit_descs)(cmdbuf, bds);
+   } else {
+      for (unsigned i = 0; i < bd_count; i++) {
+         pan_pack(&bds[i], BLEND, cfg) {
+            cfg.enable = false;
+            cfg.internal.mode = MALI_BLEND_MODE_OFF;
+         }
+      }
+   }
 
    cs_update_vt_ctx(b)
       cs_move64_to(b, cs_sr_reg64(b, IDVS, BLEND_DESC), ptr.gpu | bd_count);
@@ -2094,12 +2107,7 @@ prepare_dcd(struct panvk_cmd_buffer *cmdbuf,
       struct mali_dcd_flags_1_packed dcd1;
       pan_pack(&dcd1, DCD_FLAGS_1, cfg) {
          cfg.sample_mask = msaa ? dyns->ms.sample_mask : UINT16_MAX;
-
-         if (fs) {
-            cfg.render_target_mask =
-               (fs->info.outputs_written >> FRAG_RESULT_DATA0) &
-               cmdbuf->state.gfx.render.bound_attachments;
-         }
+         cfg.render_target_mask = rt_written;
       }
 
       cs_update_vt_ctx(b)
@@ -2353,6 +2361,99 @@ prepare_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info *draw)
 }
 
 static void
+update_prims_generated_query(struct panvk_cmd_buffer *cmdbuf,
+                             struct panvk_draw_info *draw)
+{
+   struct cs_builder *b =
+      panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
+   struct vk_input_assembly_state *ia = &cmdbuf->vk.dynamic_graphics_state.ia;
+   struct panvk_prims_generated_query_state *state =
+      &cmdbuf->state.gfx.prims_generated_query;
+
+   if (!state->ptr)
+      return;
+
+   assert(!draw->index.size || !ia->primitive_restart_enable);
+
+   enum mesa_prim prim = vk_topology_to_mesa(ia->primitive_topology);
+   uint32_t view_count = cmdbuf->state.gfx.render.view_mask ?
+      util_bitcount(cmdbuf->state.gfx.render.view_mask) : 1;
+
+   if (draw->index.size && ia->primitive_restart_enable) {
+      struct panvk_precomp_ctx precomp_ctx = panvk_per_arch(precomp_cs)(cmdbuf);
+
+      struct panlib_update_prims_generated_query_restart_args args = {
+         .prims_generated = state->ptr,
+         .index_buffer = cmdbuf->state.gfx.ib.dev_addr,
+         .index_buffer_size_el = cmdbuf->state.gfx.ib.size / draw->index.size,
+         .cmd_stride = draw->indirect.stride,
+         .cmd = draw->indirect.buffer_dev_addr,
+         .view_count = view_count,
+      };
+
+      struct panlib_precomp_grid grid;
+      if (draw->indirect.count_buffer_dev_addr) {
+         struct cs_index addr = cs_scratch_reg64(b, 0);
+         struct cs_index max_draw_count = cs_scratch_reg32(b, 2);
+
+         cs_update_compute_ctx(b) {
+            cs_move64_to(b, addr, draw->indirect.count_buffer_dev_addr);
+            cs_load32_to(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_X), addr, 0);
+
+            cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_Y), 1);
+            cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_Z), 1);
+
+            cs_move32_to(b, max_draw_count, draw->indirect.draw_count);
+            cs_umin32(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_X),
+                      cs_sr_reg32(b, COMPUTE, JOB_SIZE_X), max_draw_count);
+         }
+
+         grid = panlib_dynamic_csf();
+      } else {
+         grid = panlib_1d(draw->indirect.draw_count);
+      }
+
+      /* We need to WAIT in order to avoid overlapping the (non-atomic) direct
+       * draw counter updates with indirect draws. TODO: we could avoid that
+       * by having separate direct/indirect counters and adding them on read */
+      panlib_update_prims_generated_query_restart_struct(
+         &precomp_ctx, grid, PANLIB_BARRIER_CSF_WAIT, args,
+         poly_compact_prim(prim), util_logbase2(draw->index.size));
+   } else if (draw->indirect.buffer_dev_addr) {
+      struct panvk_precomp_ctx precomp_ctx = panvk_per_arch(precomp_cs)(cmdbuf);
+
+      struct panlib_update_prims_generated_query_indirect_args args = {
+         .prims_generated = state->ptr,
+         .draw_count_buffer = draw->indirect.count_buffer_dev_addr,
+         .max_draw_count = draw->indirect.draw_count,
+         .cmd_stride = draw->indirect.stride,
+         .cmd = draw->indirect.buffer_dev_addr,
+         .view_count = view_count,
+      };
+
+      /* We need to WAIT in order to avoid overlapping the (non-atomic) direct
+       * draw counter updates with indirect draws. TODO: we could avoid that
+       * by having separate direct/indirect counters and adding them on read */
+      panlib_update_prims_generated_query_indirect_struct(
+         &precomp_ctx, panlib_1d(1), PANLIB_BARRIER_CSF_WAIT, args,
+         poly_compact_prim(prim));
+   } else {
+      uint32_t prims_per_instance =
+         u_decomposed_prims_for_vertices(prim, draw->vertex.count);
+      uint32_t prims_generated =
+         prims_per_instance * draw->instance.count * view_count;
+
+      struct cs_index addr = cs_scratch_reg64(b, 0);
+      struct cs_index value = cs_scratch_reg32(b, 2);
+
+      cs_move64_to(b, addr, state->ptr);
+      cs_load32_to(b, value, addr, 0);
+      cs_add32(b, value, value, prims_generated);
+      cs_store32(b, value, addr, 0);
+   }
+}
+
+static void
 panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info *draw)
 {
    const struct cs_tracing_ctx *tracing_ctx =
@@ -2375,6 +2476,8 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info *draw)
    result = prepare_draw(cmdbuf, draw);
    if (result != VK_SUCCESS)
       return;
+
+   update_prims_generated_query(cmdbuf, draw);
 
    cs_update_vt_ctx(b) {
       cs_move32_to(b, cs_sr_reg32(b, IDVS, GLOBAL_ATTRIBUTE_OFFSET), 0);
@@ -2555,6 +2658,8 @@ panvk_cmd_draw_indirect(struct panvk_cmd_buffer *cmdbuf,
    result = prepare_draw(cmdbuf, draw);
    if (result != VK_SUCCESS)
       return;
+
+   update_prims_generated_query(cmdbuf, draw);
 
    struct panvk_shader_desc_state *vs_desc_state =
       &cmdbuf->state.gfx.vs.desc;
@@ -2937,6 +3042,193 @@ panvk_per_arch(CmdBeginRendering)(VkCommandBuffer commandBuffer,
 
    if (!resuming)
       panvk_per_arch(cmd_preload_render_area_border)(cmdbuf, pRenderingInfo);
+}
+
+static void
+set_run_fullscreen_tiler_flags(struct cs_builder *b, uint32_t view_mask)
+{
+   struct mali_primitive_flags_packed tiler_flags;
+   pan_pack(&tiler_flags, PRIMITIVE_FLAGS, cfg) {
+      cfg.draw_mode = MALI_DRAW_MODE_TRIANGLES;
+      cfg.position_fifo_format = MALI_FIFO_FORMAT_BASIC;
+      cfg.view_mask = view_mask;
+   }
+
+   cs_update_vt_ctx(b)
+      cs_move32_to(b, cs_sr_reg32(b, IDVS, TILER_FLAGS), tiler_flags.opaque[0]);
+}
+
+static void
+cmd_run_fullscreen(struct panvk_cmd_buffer *cmdbuf,
+                   uint64_t dcd, bool ignore_scissor)
+{
+   const struct cs_tracing_ctx *tracing_ctx =
+      &cmdbuf->state.cs[PANVK_SUBQUEUE_VERTEX_TILER].tracing;
+   struct cs_builder *b =
+      panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_VERTEX_TILER);
+
+   if (!inherits_render_ctx(cmdbuf)) {
+      VkResult result = get_render_ctx(cmdbuf);
+      if (result != VK_SUCCESS)
+         return;
+   }
+
+   struct cs_index draw_ptr = cs_scratch_reg64(b, 0);
+   struct cs_index tf_tmp = cs_scratch_reg32(b, 2);
+#if PAN_ARCH >= 11
+   struct cs_index tf2_tmp = cs_scratch_reg32(b, 3);
+#endif
+#if PAN_ARCH >= 13
+   struct cs_index dcd0_tmp = cs_scratch_reg32(b, 4);
+   struct cs_index dcd1_tmp = cs_scratch_reg32(b, 5);
+   struct cs_index dcd2_tmp = cs_scratch_reg32(b, 6);
+#endif
+   struct cs_index scissor_tmp = cs_scratch_reg64(b, 8);
+   struct cs_index counter = cs_scratch_reg32(b, 10);
+   struct cs_index trace_regs = cs_scratch_reg_tuple(b, 12, 4);
+
+   cs_move64_to(b, draw_ptr, dcd);
+
+   /* We need to set our own tiler flags so save them off */
+   cs_move_reg32(b, tf_tmp, cs_sr_reg32(b, IDVS, TILER_FLAGS));
+
+#if PAN_ARCH >= 11
+   cs_move_reg32(b, tf2_tmp, cs_sr_reg32(b, IDVS, TILER_FLAGS2));
+   cs_update_vt_ctx(b) {
+      struct mali_primitive_flags_2_packed tiler_flags_2;
+      pan_pack(&tiler_flags_2, PRIMITIVE_FLAGS_2, cfg) {
+      }
+      cs_move32_to(b, cs_sr_reg32(b, IDVS, TILER_FLAGS2),
+                   tiler_flags_2.opaque[0]);
+   }
+#endif
+
+   /* Starting with v13, the DCD flag registers have to match the flag fields
+    * in the DrawCallDescriptor we provide in memory so we have to save them
+    * off.
+    */
+#if PAN_ARCH >= 13
+   cs_move_reg32(b, dcd0_tmp, cs_sr_reg32(b, IDVS, DCD0));
+   cs_move_reg32(b, dcd1_tmp, cs_sr_reg32(b, IDVS, DCD1));
+   cs_move_reg32(b, dcd2_tmp, cs_sr_reg32(b, IDVS, DCD2));
+
+   cs_update_vt_ctx(b) {
+      cs_load32_to(b, cs_sr_reg32(b, IDVS, DCD0), draw_ptr, 0);
+      cs_load32_to(b, cs_sr_reg32(b, IDVS, DCD1), draw_ptr, 1 * 4);
+      cs_load32_to(b, cs_sr_reg32(b, IDVS, DCD2), draw_ptr, 5 * 4);
+   }
+#endif
+
+   /* RUN_FULLSCREEN respects scissors but for some things like barrier draws,
+    * we want to ignore the scissor so we have to save off the old one and use
+    * a default.
+    */
+   if (ignore_scissor) {
+      struct mali_scissor_packed scissor;
+      pan_pack(&scissor, SCISSOR, cfg) {
+         cfg.scissor_minimum_x = 0;
+         cfg.scissor_minimum_y = 0;
+         cfg.scissor_maximum_x = UINT16_MAX;
+         cfg.scissor_maximum_y = UINT16_MAX;
+      }
+
+      cs_move_reg64(b, scissor_tmp, cs_sr_reg64(b, IDVS, SCISSOR_BOX));
+
+      cs_update_vt_ctx(b) {
+         cs_move64_to(b, cs_sr_reg64(b, IDVS, SCISSOR_BOX),
+                      scissor.opaque[0] | (uint64_t)scissor.opaque[1] << 32);
+      }
+   }
+
+   uint32_t layer_count = cmdbuf->state.gfx.render.layer_count;
+   uint32_t view_mask = cmdbuf->state.gfx.render.view_mask;
+   uint32_t tiler_count = DIV_ROUND_UP(layer_count, MAX_LAYERS_PER_TILER_DESC);
+   if (tiler_count > 1) {
+      struct cs_index tiler_ctx_addr = cs_sr_reg64(b, IDVS, TILER_CTX);
+
+      /* Multiview always fits inside a single tiler context */
+      assert(view_mask == 0);
+
+      /* Start off with a full view mask */
+      set_run_fullscreen_tiler_flags(b,
+         BITFIELD_MASK(MAX_LAYERS_PER_TILER_DESC));
+
+      cs_move32_to(b, counter, tiler_count);
+      cs_while(b, MALI_CS_CONDITION_GREATER, counter) {
+         cs_add32(b, counter, counter, -1);
+         cs_if(b, MALI_CS_CONDITION_EQUAL, counter) {
+            set_run_fullscreen_tiler_flags(b,
+               BITFIELD_MASK(layer_count % MAX_LAYERS_PER_TILER_DESC));
+         }
+
+         cs_trace_run_fullscreen(b, tracing_ctx, trace_regs, 0, draw_ptr);
+
+         cs_update_vt_ctx(b) {
+            cs_add64(b, tiler_ctx_addr, tiler_ctx_addr,
+                     pan_size(TILER_CONTEXT));
+         }
+      }
+
+      cs_update_vt_ctx(b) {
+         cs_add64(b, tiler_ctx_addr, tiler_ctx_addr,
+                  -(tiler_count * pan_size(TILER_CONTEXT)));
+      }
+   } else {
+      set_run_fullscreen_tiler_flags(b,
+         view_mask ? view_mask : BITFIELD_MASK(layer_count));
+
+      cs_trace_run_fullscreen(b, tracing_ctx, trace_regs, 0, draw_ptr);
+   }
+
+   cs_update_vt_ctx(b) {
+      cs_move_reg32(b, cs_sr_reg32(b, IDVS, TILER_FLAGS), tf_tmp);
+#if PAN_ARCH >= 11
+      cs_move_reg32(b, cs_sr_reg32(b, IDVS, TILER_FLAGS2), tf2_tmp);
+#endif
+#if PAN_ARCH >= 13
+      cs_move_reg32(b, cs_sr_reg32(b, IDVS, DCD0), dcd0_tmp);
+      cs_move_reg32(b, cs_sr_reg32(b, IDVS, DCD1), dcd1_tmp);
+      cs_move_reg32(b, cs_sr_reg32(b, IDVS, DCD2), dcd2_tmp);
+#endif
+      if (ignore_scissor)
+         cs_move_reg64(b, cs_sr_reg64(b, IDVS, SCISSOR_BOX), scissor_tmp);
+   }
+}
+
+void
+panvk_per_arch(cmd_fb_barrier)(struct panvk_cmd_buffer *cmdbuf)
+{
+   struct pan_ptr zsd = panvk_cmd_alloc_desc(cmdbuf, DEPTH_STENCIL);
+   if (!zsd.gpu)
+      return;
+
+   pan_cast_and_pack(zsd.cpu, DEPTH_STENCIL, cfg) {
+      cfg.stencil_test_enable = false;
+      cfg.depth_write_enable = false;
+      cfg.depth_function = MALI_FUNC_ALWAYS;
+   };
+
+   struct pan_ptr dcd = panvk_cmd_alloc_desc(cmdbuf, DRAW);
+   if (!dcd.gpu)
+      return;
+
+   pan_cast_and_pack(dcd.cpu, DRAW, cfg) {
+      cfg.flags_0.allow_forward_pixel_to_kill = false;
+      cfg.flags_0.allow_forward_pixel_to_be_killed = false;
+      cfg.flags_0.primitive_barrier = true;
+      cfg.flags_0.occlusion_query = MALI_OCCLUSION_MODE_DISABLED;
+
+      cfg.flags_2.read_mask = 0;
+      cfg.flags_2.write_mask = 0;
+#if PAN_ARCH >= 11
+      cfg.flags_2.no_shader_depth_read = true;
+      cfg.flags_2.no_shader_stencil_read = true;
+#endif
+
+      cfg.depth_stencil = zsd.gpu;
+   };
+
+   cmd_run_fullscreen(cmdbuf, dcd.gpu, true);
 }
 
 static void
@@ -3374,30 +3666,6 @@ issue_fragment_jobs(struct panvk_cmd_buffer *cmdbuf)
    return VK_SUCCESS;
 }
 
-void
-panvk_per_arch(cmd_flush_draws)(struct panvk_cmd_buffer *cmdbuf)
-{
-   /* If there was no draw queued, we don't need to force a preload. */
-   if (cmdbuf->state.gfx.render.fbds.gpu || inherits_render_ctx(cmdbuf)) {
-      flush_tiling(cmdbuf);
-      issue_fragment_jobs(cmdbuf);
-      memset(&cmdbuf->state.gfx.render.fbds, 0,
-             sizeof(cmdbuf->state.gfx.render.fbds));
-      cmdbuf->state.gfx.render.tiler = 0;
-
-      panvk_per_arch(cmd_force_fb_preload)(cmdbuf, NULL);
-
-      /* We inherited the render context, and need to let the primary command
-       * buffer know that it's changed. */
-      cmdbuf->state.gfx.render.invalidate_inherited_ctx =
-         inherits_render_ctx(cmdbuf);
-
-      /* Re-emit the FB/Tiler descs if we inherited them. */
-      if (inherits_render_ctx(cmdbuf))
-         get_render_ctx(cmdbuf);
-   }
-}
-
 static void
 handle_deferred_queries(struct panvk_cmd_buffer *cmdbuf)
 {
@@ -3512,7 +3780,7 @@ panvk_per_arch(CmdEndRendering)(VkCommandBuffer commandBuffer)
 
    /* If we're not suspending, we need to resolve attachments. */
    if (!suspending)
-      panvk_per_arch(cmd_resolve_attachments)(cmdbuf);
+      panvk_per_arch(cmd_meta_resolve_attachments)(cmdbuf);
 
    struct panvk_instr_end_args instr_info = {
       .render = {

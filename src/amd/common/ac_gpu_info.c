@@ -323,6 +323,13 @@ ac_fill_cu_info(struct radeon_info *info, struct drm_amdgpu_info_device *device_
    cu_info->has_gfx6_mrt_export_bug =
       info->family == CHIP_TAHITI || info->family == CHIP_PITCAIRN || info->family == CHIP_VERDE;
    cu_info->has_vtx_format_alpha_adjust_bug = info->gfx_level <= GFX8 && info->family != CHIP_STONEY;
+
+   /* On GFX6-7, SMEM instructions access memory when num_records == 0 or offset >= num_records,
+    * which causes VM faults when reading a page that isn't mapped. To prevent the VM faults:
+    * - Use a mapped VA instead of zeroes for null descriptors
+    * - Make sure the offset stays within mapped VA ranges
+    */
+   cu_info->has_smem_oob_access_bug = info->gfx_level <= GFX7;
 }
 
 enum ac_query_gpu_info_result
@@ -939,11 +946,13 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
          info->gb_addr_config = 0;
 
       info->num_tile_pipes = 1 << G_0098F8_NUM_PIPES(info->gb_addr_config);
-      info->pipe_interleave_bytes = 256 << G_0098F8_PIPE_INTERLEAVE_SIZE_GFX9(info->gb_addr_config);
+      assert((256 << G_0098F8_PIPE_INTERLEAVE_SIZE_GFX9(info->gb_addr_config)) ==
+             AMD_MEMCHANNEL_INTERLEAVE_BYTES);
    } else {
       unsigned pipe_config = G_009910_PIPE_CONFIG(amdinfo.gb_tile_mode[CIK_TILE_MODE_COLOR_2D]);
       info->num_tile_pipes = ac_pipe_config_to_num_pipes(pipe_config);
-      info->pipe_interleave_bytes = 256 << G_0098F8_PIPE_INTERLEAVE_SIZE_GFX6(info->gb_addr_config);
+      assert((256 << G_0098F8_PIPE_INTERLEAVE_SIZE_GFX6(info->gb_addr_config)) ==
+             AMD_MEMCHANNEL_INTERLEAVE_BYTES);
    }
    info->r600_has_virtual_memory = true;
 
@@ -1092,8 +1101,6 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
     * compute is possible, the threadgroup size must be limited to 256 threads
     * on all queues to avoid the bug.
     * Only GFX6 and certain GFX7 chips are affected.
-    *
-    * FIXME: RADV doesn't limit the number of threads for async compute.
     */
    info->has_cs_regalloc_hang_bug = info->gfx_level == GFX6 ||
                                     info->family == CHIP_BONAIRE ||
@@ -1705,9 +1712,9 @@ void ac_print_gpu_info(FILE *f, const struct radeon_info *info, int fd)
    fprintf(f, "    marketing_name = %s\n", info->marketing_name);
 
    char proc_fd[32];
-   char dev_filename[32];
+   char dev_filename[32] = {0};
    snprintf(proc_fd, sizeof(proc_fd), "/proc/self/fd/%u", fd);
-   if (readlink(proc_fd, dev_filename, sizeof(dev_filename)) != -1)
+   if (readlink(proc_fd, dev_filename, sizeof(dev_filename) - 1) != -1)
       fprintf(f, "    dev_filename = %s\n", dev_filename);
 
    fprintf(f, "    num_se = %i\n", info->num_se);
@@ -1985,7 +1992,6 @@ void ac_print_gpu_info(FILE *f, const struct radeon_info *info, int fd)
    fprintf(f, "    pa_sc_tile_steering_override = 0x%x\n", info->pa_sc_tile_steering_override);
    fprintf(f, "    max_render_backends = %i\n", info->max_render_backends);
    fprintf(f, "    num_tile_pipes = %i\n", info->num_tile_pipes);
-   fprintf(f, "    pipe_interleave_bytes = %i\n", info->pipe_interleave_bytes);
    fprintf(f, "    enabled_rb_mask = 0x%" PRIx64 "\n", info->enabled_rb_mask);
    fprintf(f, "    max_alignment = %u\n", (unsigned)info->max_alignment);
    fprintf(f, "    pbb_max_alloc_count = %u\n", info->pbb_max_alloc_count);
@@ -2383,7 +2389,7 @@ void ac_get_task_info(const struct radeon_info *info,
     *    64K        | 550               | 574               | +4.3%
     *    # Adding 256 mitigates the performance loss from increasing num_entries.
     */
-   const uint32_t payload_entry_size = 16384 + 256;
+   const uint32_t payload_entry_size = 16384 + AMD_MEMCHANNEL_INTERLEAVE_BYTES;
    const uint16_t num_entries = get_task_num_entries(info->family);
    const uint32_t draw_ring_bytes = num_entries * AC_TASK_DRAW_ENTRY_BYTES;
    const uint32_t payload_ring_bytes = num_entries * payload_entry_size;

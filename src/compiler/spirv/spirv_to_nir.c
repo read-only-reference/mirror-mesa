@@ -203,6 +203,9 @@ static const struct spirv_capabilities implemented_capabilities = {
    .SubgroupVoteKHR = true,
    .Tessellation = true,
    .TessellationPointSize = true,
+   .TextureBlockMatchQCOM = true,
+   .TextureBoxFilterQCOM = true,
+   .TextureSampleWeightedQCOM = true,
    .TransformFeedback = true,
    .UniformAndStorageBuffer8BitAccess = true,
    .UniformBufferArrayDynamicIndexing = true,
@@ -923,6 +926,29 @@ vtn_handle_non_semantic_debug_info(struct vtn_builder *b, SpvOp ext_opcode,
    return true;
 }
 
+static bool
+vtn_handle_mesa_internal(struct vtn_builder *b, SpvOp ext_opcode,
+                         const uint32_t *w, unsigned count)
+{
+   uint32_t instr = w[4];
+
+   switch (instr) {
+   case SpvOpFConvertRUMesa: {
+      struct vtn_ssa_value *arg = vtn_ssa_value(b, w[5]);
+      vtn_push_nir_ssa(b, w[2], nir_f2f16_ru(&b->nb, arg->def));
+      break;
+   }
+   case SpvOpFConvertRDMesa: {
+      struct vtn_ssa_value *arg = vtn_ssa_value(b, w[5]);
+      vtn_push_nir_ssa(b, w[2], nir_f2f16_rd(&b->nb, arg->def));
+      break;
+   }
+   }
+
+   return true;
+}
+
+
 static void
 vtn_handle_extension(struct vtn_builder *b, SpvOp opcode,
                      const uint32_t *w, unsigned count)
@@ -958,6 +984,8 @@ vtn_handle_extension(struct vtn_builder *b, SpvOp opcode,
          val->ext_handler = vtn_handle_debug_printf;
       } else if (strstr(ext, "NonSemantic.") == ext) {
          val->ext_handler = vtn_handle_non_semantic_instruction;
+      } else if (strstr(ext, "MesaInternal") == ext) {
+         val->ext_handler = vtn_handle_mesa_internal;
       } else {
          vtn_fail("Unsupported extension: %s", ext);
       }
@@ -2928,7 +2956,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
          nir_const_value *srcs[3] = {
             src[0], src[1], src[2],
          };
-         nir_eval_const_opcode(op, val->constant->values,
+         nir_eval_const_opcode(op, val->constant->values, NULL,
                                num_components, bit_size, srcs,
                                b->shader->info.float_controls_execution_mode);
 
@@ -3540,6 +3568,22 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
       dest_type = nir_type_uint32;
       break;
 
+   case SpvOpImageSampleWeightedQCOM:
+      texop = nir_texop_sample_weighted_qcom;
+      break;
+
+   case SpvOpImageBoxFilterQCOM:
+      texop = nir_texop_box_filter_qcom;
+      break;
+
+   case SpvOpImageBlockMatchSADQCOM:
+      texop = nir_texop_block_match_sad_qcom;
+      break;
+
+   case SpvOpImageBlockMatchSSDQCOM:
+      texop = nir_texop_block_match_ssd_qcom;
+      break;
+
    default:
       vtn_fail_with_opcode("Unhandled opcode", opcode);
    }
@@ -3558,6 +3602,10 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
    case nir_texop_txd:
    case nir_texop_tg4:
    case nir_texop_lod:
+   case nir_texop_sample_weighted_qcom:
+   case nir_texop_box_filter_qcom:
+   case nir_texop_block_match_sad_qcom:
+   case nir_texop_block_match_ssd_qcom:
       vtn_fail_if(sampler == NULL,
                   "%s requires an image of type OpTypeSampledImage",
                   spirv_op_to_string(opcode));
@@ -3628,7 +3676,11 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
    case SpvOpImageSparseDrefGather:
    case SpvOpImageQueryLod:
    case SpvOpFragmentFetchAMD:
-   case SpvOpFragmentMaskFetchAMD: {
+   case SpvOpFragmentMaskFetchAMD:
+   case SpvOpImageSampleWeightedQCOM:
+   case SpvOpImageBoxFilterQCOM:
+   case SpvOpImageBlockMatchSADQCOM:
+   case SpvOpImageBlockMatchSSDQCOM: {
       /* All these types have the coordinate as their first real argument */
       coord_components = glsl_get_sampler_dim_coordinate_components(sampler_dim);
 
@@ -3741,6 +3793,31 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
    /* For OpFragmentFetchAMD, we always have a multisample index */
    if (opcode == SpvOpFragmentFetchAMD)
       (*p++) = vtn_tex_src(b, w[idx++], nir_tex_src_ms_index);
+
+   /* For SpvOpImageBoxFilterQCOM, we always have a box size */
+   if (opcode == SpvOpImageBoxFilterQCOM)
+      (*p++) = vtn_tex_src(b, w[idx++], nir_tex_src_box_size);
+
+   /* For SpvOpImageSampleWeightedQCOM and block matching, we have a secondary sampled image. */
+   if (opcode == SpvOpImageSampleWeightedQCOM ||
+       opcode == SpvOpImageBlockMatchSADQCOM ||
+       opcode == SpvOpImageBlockMatchSSDQCOM) {
+      struct vtn_value *sampled_val = vtn_untyped_value(b, w[idx]);
+      if (sampled_val->type->base_type == vtn_base_type_sampled_image) {
+         struct vtn_sampled_image si = vtn_get_sampled_image(b, w[idx]);
+         (*p++) = nir_tex_src_for_ssa(nir_tex_src_texture_2_deref, &si.image->def);
+         (*p++) = nir_tex_src_for_ssa(nir_tex_src_sampler_2_deref, &si.sampler->def);
+      } else {
+         vtn_err("Failed to look up sampled image for QCOM_image_processing");
+      }
+      idx++;
+   }
+
+   if (opcode == SpvOpImageBlockMatchSADQCOM ||
+       opcode == SpvOpImageBlockMatchSSDQCOM) {
+      (*p++) = vtn_tex_src(b, w[idx++], nir_tex_src_ref_coord);
+      (*p++) = vtn_tex_src(b, w[idx++], nir_tex_src_block_size);
+   }
 
    /* Now we need to handle some number of optional arguments */
    struct vtn_value *gather_offsets = NULL;
@@ -5238,16 +5315,9 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
       vtn_handle_debug_text(b, opcode, w, count);
       break;
 
-   case SpvOpExtension: {
-      /* Implementing both NV_mesh_shader and EXT_mesh_shader
-       * is difficult without knowing which we're dealing with.
-       * TODO: remove this when we stop supporting NV_mesh_shader.
-       */
-      const char *ext_name = (const char *)&w[1];
-      if (strcmp(ext_name, "SPV_NV_mesh_shader") == 0)
-         b->shader->info.mesh.nv = true;
+   case SpvOpExtension:
+      /* Nothing to do. */
       break;
-   }
 
    case SpvOpCapability: {
       SpvCapability cap = w[1];
@@ -5623,11 +5693,13 @@ vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
       break; /* OpenCL */
 
    case SpvExecutionModeContractionOff:
-      if (b->shader->info.stage != MESA_SHADER_KERNEL)
+      if (b->shader->info.stage != MESA_SHADER_KERNEL) {
          vtn_warn("ExectionMode only allowed for CL-style kernels: %s",
                   spirv_executionmode_to_string(mode->exec_mode));
-      else
-         b->exact = true;
+      } else {
+         for (unsigned i = 0; i < ARRAY_SIZE(b->fp_math_ctrl); i++)
+            b->fp_math_ctrl[i] |= nir_fp_exact;
+      }
       break;
 
    case SpvExecutionModeStencilRefReplacingEXT:
@@ -5664,9 +5736,15 @@ vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
       b->shader->info.fs.sample_interlock_unordered = true;
       break;
 
+   case SpvExecutionModeSignedZeroInfNanPreserve: {
+      const struct glsl_type *type = glsl_floatN_t_type(mode->operands[0]);
+      unsigned *fp_math_ctrl = vtn_fp_math_ctrl_for_base_type(b, glsl_get_base_type(type));
+      *fp_math_ctrl |= nir_fp_preserve_sz_inf_nan;
+      break;
+   }
+
    case SpvExecutionModeDenormPreserve:
    case SpvExecutionModeDenormFlushToZero:
-   case SpvExecutionModeSignedZeroInfNanPreserve:
    case SpvExecutionModeRoundingModeRTE:
    case SpvExecutionModeRoundingModeRTZ: {
       unsigned execution_mode = 0;
@@ -5684,14 +5762,6 @@ vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
          case 16: execution_mode = FLOAT_CONTROLS_DENORM_FLUSH_TO_ZERO_FP16; break;
          case 32: execution_mode = FLOAT_CONTROLS_DENORM_FLUSH_TO_ZERO_FP32; break;
          case 64: execution_mode = FLOAT_CONTROLS_DENORM_FLUSH_TO_ZERO_FP64; break;
-         default: vtn_fail("Floating point type not supported");
-         }
-         break;
-      case SpvExecutionModeSignedZeroInfNanPreserve:
-         switch (mode->operands[0]) {
-         case 16: b->fp_math_ctrl_fp16 |= nir_fp_preserve_sz_inf_nan; break;
-         case 32: b->fp_math_ctrl_fp32 |= nir_fp_preserve_sz_inf_nan; break;
-         case 64: b->fp_math_ctrl_fp64 |= nir_fp_preserve_sz_inf_nan; break;
          default: vtn_fail("Floating point type not supported");
          }
          break;
@@ -5855,35 +5925,29 @@ vtn_handle_execution_mode_id(struct vtn_builder *b, struct vtn_value *entry_poin
       struct vtn_type *type = vtn_get_type(b, mode->operands[0]);
       SpvFPFastMathModeMask flags = vtn_constant_uint(b, mode->operands[1]);
 
+      enum glsl_base_type base_type = glsl_get_base_type(type->type);
+      unsigned *fp_math_ctrl = vtn_fp_math_ctrl_for_base_type(b, base_type);
+
+      if (!fp_math_ctrl)
+         vtn_fail("Unkown float type for FPFastMathDefault");
+
       SpvFPFastMathModeMask can_fast_math =
          SpvFPFastMathModeAllowRecipMask |
          SpvFPFastMathModeAllowContractMask |
          SpvFPFastMathModeAllowReassocMask |
          SpvFPFastMathModeAllowTransformMask;
       if ((flags & can_fast_math) != can_fast_math)
-         b->exact = true;
+         *fp_math_ctrl |= nir_fp_exact;
 
-      if (!(flags & SpvFPFastMathModeNotNaNMask)) {
-         switch (glsl_get_bit_size(type->type)) {
-         case 16: b->fp_math_ctrl_fp16 |= nir_fp_preserve_nan; break;
-         case 32: b->fp_math_ctrl_fp32 |= nir_fp_preserve_nan; break;
-         case 64: b->fp_math_ctrl_fp64 |= nir_fp_preserve_nan; break;
-         }
-      }
-      if (!(flags & SpvFPFastMathModeNotInfMask)) {
-         switch (glsl_get_bit_size(type->type)) {
-         case 16: b->fp_math_ctrl_fp16 |= nir_fp_preserve_inf; break;
-         case 32: b->fp_math_ctrl_fp32 |= nir_fp_preserve_inf; break;
-         case 64: b->fp_math_ctrl_fp64 |= nir_fp_preserve_inf; break;
-         }
-      }
-      if (!(flags & SpvFPFastMathModeNSZMask)) {
-         switch (glsl_get_bit_size(type->type)) {
-         case 16: b->fp_math_ctrl_fp16 |= nir_fp_preserve_signed_zero; break;
-         case 32: b->fp_math_ctrl_fp32 |= nir_fp_preserve_signed_zero; break;
-         case 64: b->fp_math_ctrl_fp64 |= nir_fp_preserve_signed_zero; break;
-         }
-      }
+      if (!(flags & SpvFPFastMathModeNotNaNMask))
+         *fp_math_ctrl |= nir_fp_preserve_nan;
+
+      if (!(flags & SpvFPFastMathModeNotInfMask))
+         *fp_math_ctrl |= nir_fp_preserve_inf;
+
+      if (!(flags & SpvFPFastMathModeNSZMask))
+         *fp_math_ctrl |= nir_fp_preserve_signed_zero;
+
       break;
    }
 
@@ -6576,6 +6640,10 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
    case SpvOpImageDrefGather:
    case SpvOpImageSparseDrefGather:
    case SpvOpImageQueryLod:
+   case SpvOpImageSampleWeightedQCOM:
+   case SpvOpImageBoxFilterQCOM:
+   case SpvOpImageBlockMatchSADQCOM:
+   case SpvOpImageBlockMatchSSDQCOM:
       vtn_handle_texture(b, opcode, w, count);
       break;
 
@@ -7019,6 +7087,7 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
       vtn_fail_with_opcode("Unhandled opcode", opcode);
    }
 
+   vtn_assert(b->nb.fp_math_ctrl == nir_fp_fast_math);
    return true;
 }
 
@@ -7403,6 +7472,12 @@ spirv_to_nir(const uint32_t *words, size_t word_count,
                                    (dxsc && !b->enabled_capabilities.DemoteToHelperInvocation) ||
                                    (is_glslang(b) && b->source_lang == SpvSourceLanguageHLSL)) &&
                                   b->supported_capabilities.DemoteToHelperInvocation;
+
+   /* Implementing both NV_mesh_shader and EXT_mesh_shader
+    * is difficult without knowing which we're dealing with.
+    * TODO: remove this when we stop supporting NV_mesh_shader.
+    */
+   b->shader->info.mesh.nv = b->enabled_capabilities.MeshShadingNV;
 
    if (!options->create_library && b->entry_point == NULL) {
       vtn_fail("Entry point not found for %s shader \"%s\"",

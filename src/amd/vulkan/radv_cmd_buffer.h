@@ -232,7 +232,7 @@ struct radv_rendering_state {
    struct radv_attachment color_att[MAX_RTS];
    struct radv_attachment ds_att;
    VkImageAspectFlags ds_att_aspects;
-   bool has_hiz_his; /* GFX12+ */
+   bool gfx12_has_hiz;
    struct radv_attachment vrs_att;
    VkExtent2D vrs_texel_size;
 };
@@ -454,6 +454,8 @@ struct radv_enc_state {
    uint32_t *copy_start;
    VkVideoEncodeRateControlModeFlagBitsKHR rate_control_mode;
    uint32_t rate_control_num_layers;
+   uint32_t coded_width;
+   uint32_t coded_height;
 };
 
 struct radv_cmd_buffer_upload {

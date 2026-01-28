@@ -474,8 +474,9 @@ radv_image_view_can_fast_clear(const struct radv_device *device, const struct ra
    if (!radv_image_can_fast_clear(device, image))
       return false;
 
-   /* Only fast clear if all layers are bound. */
-   if (iview->vk.base_array_layer > 0 || iview->vk.layer_count != image->vk.array_layers)
+   /* Only fast clear if all layers are bound when comp-to-single isn't supported. */
+   const bool all_slices = iview->vk.base_array_layer == 0 && iview->vk.layer_count == image->vk.array_layers;
+   if (!all_slices && !image->support_comp_to_single)
       return false;
 
    /* Only fast clear if the view covers the whole image. */
@@ -499,9 +500,9 @@ radv_image_view_init(struct radv_image_view *iview, struct radv_device *device,
 
    if (!extra_create_info || !extra_create_info->from_client)
       assert(pCreateInfo->flags & VK_IMAGE_VIEW_CREATE_DRIVER_INTERNAL_BIT_MESA);
-   vk_image_view_init(&device->vk, &iview->vk, pCreateInfo);
 
-   memset(&iview->descriptor, 0, sizeof(iview->descriptor));
+   memset(iview, 0, sizeof(*iview));
+   vk_image_view_init(&device->vk, &iview->vk, pCreateInfo);
 
    iview->image = image;
    iview->plane_id = radv_plane_from_aspect(pCreateInfo->subresourceRange.aspectMask);
@@ -663,12 +664,12 @@ radv_hiz_image_view_init(struct radv_image_view *iview, struct radv_device *devi
    VK_FROM_HANDLE(radv_image, image, pCreateInfo->image);
 
    assert(pCreateInfo->flags & VK_IMAGE_VIEW_CREATE_DRIVER_INTERNAL_BIT_MESA);
+
+   memset(iview, 0, sizeof(*iview));
    vk_image_view_init(&device->vk, &iview->vk, pCreateInfo);
 
    assert(vk_format_has_depth(image->vk.format) && vk_format_has_stencil(image->vk.format));
    assert(iview->vk.aspects == VK_IMAGE_ASPECT_DEPTH_BIT);
-
-   memset(&iview->descriptor, 0, sizeof(iview->descriptor));
 
    iview->image = image;
 

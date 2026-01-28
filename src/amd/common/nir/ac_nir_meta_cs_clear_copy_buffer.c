@@ -486,11 +486,15 @@ ac_prepare_cs_clear_copy_buffer(const struct ac_cs_clear_copy_buffer_options *op
       case GFX10:
       case GFX10_3:
       case GFX11:
-      case GFX12:
-         /* Optimal for Gfx12xx, Navi31, Navi21, Navi10. */
+      case GFX11_5:
+         /* Optimal for Navi31, Navi21, Navi10. */
          break;
 
       default:
+      case GFX12:
+         /* Optimal for Navi48. */
+         if (!is_copy && clear_value_size == 12 && info->size <= 512 * 1024)
+            dwords_per_thread = 3;
          break;
       }
    }
@@ -570,8 +574,11 @@ ac_prepare_cs_clear_copy_buffer(const struct ac_cs_clear_copy_buffer_options *op
     * Clearing/copying whole 256B blocks per wave isn't possible if dwords_per_thread isn't 2^n.
     */
    unsigned start_thread =
-      dst_offset_bound % 256 && util_is_power_of_two_nonzero(dwords_per_thread) ?
-            DIV_ROUND_UP(256 - dst_offset_bound % 256, dwords_per_thread * 4) : 0;
+      dst_offset_bound % AMD_MEMCHANNEL_INTERLEAVE_BYTES &&
+      util_is_power_of_two_nonzero(dwords_per_thread) ?
+            DIV_ROUND_UP(AMD_MEMCHANNEL_INTERLEAVE_BYTES -
+                         dst_offset_bound % AMD_MEMCHANNEL_INTERLEAVE_BYTES,
+                         dwords_per_thread * 4) : 0;
    out->shader_key.has_start_thread = start_thread != 0;
 
    /* Set the value of the last thread ID, so that the shader knows which thread is the last one. */
@@ -598,5 +605,14 @@ ac_prepare_cs_clear_copy_buffer(const struct ac_cs_clear_copy_buffer_options *op
    out->num_ssbos = is_copy ? 2 : 1;
    out->workgroup_size = 64;
    out->num_threads = start_thread + num_threads;
+
+   /* Determine optimal COMPUTE_DISPATCH_INTERLEAVE.INTERLEAVE/INTERLEAVE_1D.
+    * Verified on Navi48.
+    */
+   if (is_copy)
+      out->dispatch_interleave = info->size <= 2048 ? 64 : 256;
+   else
+      out->dispatch_interleave = info->size <= 256 * 1024 ? 64 : 256;
+
    return true;
 }

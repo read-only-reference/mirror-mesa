@@ -22,9 +22,9 @@
  */
 
 #include "v3dv_private.h"
-#include "broadcom/common/v3d_macros.h"
+#include "v3dv_format_table.h"
+#include "v3dvx_format_table.h"
 #include "broadcom/common/v3d_util.h"
-#include "broadcom/cle/v3dx_pack.h"
 #include "broadcom/compiler/v3d_compiler.h"
 
 #include "util/half_float.h"
@@ -829,19 +829,27 @@ set_rcl_early_z_config(struct v3dv_job *job,
  * seems to be the equivalent for no-clamp on 4.2), but not pq or hlg. In
  * summary right now we are just porting what we were doing on 4.2
  */
-uint32_t
-v3dX(clamp_for_format_and_type)(uint32_t rt_type,
+
+#if V3D_VERSION == 42
+enum V3DX(Render_Target_Clamp)
+v3dX(clamp_for_format_and_type)(enum V3DX(Internal_Type) rt_type,
                                 VkFormat vk_format)
 {
-#if V3D_VERSION == 42
    if (vk_format_is_int(vk_format))
       return V3D_RENDER_TARGET_CLAMP_INT;
    else if (vk_format_is_srgb(vk_format))
       return V3D_RENDER_TARGET_CLAMP_NORM;
    else
       return V3D_RENDER_TARGET_CLAMP_NONE;
+   UNREACHABLE("Wrong V3D_VERSION");
+}
 #endif
+
 #if V3D_VERSION >= 71
+enum V3DX(Render_Target_Type_Clamp)
+v3dX(clamp_for_format_and_type)(enum V3DX(Internal_Type) rt_type,
+                                VkFormat vk_format)
+{
    switch (rt_type) {
    case V3D_INTERNAL_TYPE_8I:
       return V3D_RENDER_TARGET_TYPE_CLAMP_8I_CLAMPED;
@@ -868,10 +876,11 @@ v3dX(clamp_for_format_and_type)(uint32_t rt_type,
    default:
       UNREACHABLE("Unknown internal render target type");
    }
-
    return V3D_RENDER_TARGET_TYPE_CLAMP_INVALID;
-#endif
+
+   UNREACHABLE("Wrong V3D_VERSION");
 }
+#endif
 
 static void
 cmd_buffer_render_pass_setup_render_target(struct v3dv_cmd_buffer *cmd_buffer,
@@ -2257,22 +2266,25 @@ v3dX(cmd_buffer_execute_inside_pass)(struct v3dv_cmd_buffer *primary,
              * primary's job list right after it.
              */
             v3dv_cmd_buffer_finish_job(primary);
-            v3dv_job_clone_in_cmd_buffer(secondary_job, primary);
+            struct v3dv_job *job =
+               v3dv_job_clone_in_cmd_buffer(secondary_job, primary);
+            if (!job)
+               return;
+
             if (pending_barrier.dst_mask) {
-               /* FIXME: do the same we do for primaries and only choose the
-                * relevant src masks.
-                */
-               secondary_job->serialize = pending_barrier.src_mask_graphics |
-                                          pending_barrier.src_mask_transfer |
-                                          pending_barrier.src_mask_compute;
-               if (pending_barrier.bcl_buffer_access ||
-                   pending_barrier.bcl_image_access) {
-                  secondary_job->needs_bcl_sync = true;
+               const uint8_t prev_dst_mask = pending_barrier.dst_mask;
+               v3dv_job_apply_barrier_state(job, &pending_barrier);
+
+               if ((prev_dst_mask & V3DV_BARRIER_GRAPHICS_BIT) &&
+                   !(pending_barrier.dst_mask & V3DV_BARRIER_GRAPHICS_BIT) &&
+                   (pending_barrier.bcl_buffer_access ||
+                    pending_barrier.bcl_image_access)) {
+                  job->needs_bcl_sync = true;
+                  pending_barrier.bcl_buffer_access = 0;
+                  pending_barrier.bcl_image_access = 0;
                }
             }
          }
-
-         memset(&pending_barrier, 0, sizeof(pending_barrier));
       }
 
       /* If the secondary has recorded any vkCmdEndQuery commands, we need to
@@ -2363,7 +2375,7 @@ emit_tes_gs_common_params(struct v3dv_job *job,
    }
 }
 
-static uint8_t
+static enum V3DX(Pack_Mode)
 simd_width_to_gs_pack_mode(uint32_t width)
 {
    switch (width) {

@@ -1651,7 +1651,7 @@ assign_spill_slots(spill_ctx& ctx, unsigned spills_to_vgpr)
 
                /* check if the linear vgpr already exists */
                if (vgpr_spill_temps[spill_slot / ctx.wave_size] == Temp()) {
-                  Temp linear_vgpr = ctx.program->allocateTmp(v1.as_linear());
+                  Temp linear_vgpr = ctx.program->allocateTmp(lv1);
                   vgpr_spill_temps[spill_slot / ctx.wave_size] = linear_vgpr;
                   aco_ptr<Instruction> create{
                      create_instruction(aco_opcode::p_start_linear_vgpr, Format::PSEUDO, 0, 1)};
@@ -1696,7 +1696,7 @@ assign_spill_slots(spill_ctx& ctx, unsigned spills_to_vgpr)
 
                /* check if the linear vgpr already exists */
                if (vgpr_spill_temps[spill_slot / ctx.wave_size] == Temp()) {
-                  Temp linear_vgpr = ctx.program->allocateTmp(v1.as_linear());
+                  Temp linear_vgpr = ctx.program->allocateTmp(lv1);
                   vgpr_spill_temps[spill_slot / ctx.wave_size] = linear_vgpr;
                   aco_ptr<Instruction> create{
                      create_instruction(aco_opcode::p_start_linear_vgpr, Format::PSEUDO, 0, 1)};
@@ -1778,8 +1778,8 @@ spill(Program* program)
             new_startpgm->definitions[i] = old_startpgm->definitions[i];
 
          unsigned abi_sgpr_spills = limit.sgpr - callee_limit.sgpr;
-         Temp abi_sgpr_spill_space = program->allocateTmp(
-            RegClass(RegType::vgpr, DIV_ROUND_UP(abi_sgpr_spills, program->wave_size)).as_linear());
+         Temp abi_sgpr_spill_space =
+            program->allocateTmp(lv1.resize(DIV_ROUND_UP(abi_sgpr_spills, program->wave_size) * 4));
 
          new_startpgm->definitions.back() = Definition(abi_sgpr_spill_space);
          old_startpgm = aco_ptr<Instruction>(new_startpgm);
@@ -1792,11 +1792,15 @@ spill(Program* program)
                                                  instr->opcode == aco_opcode::p_reload_preserved ||
                                                  instr->opcode == aco_opcode::p_logical_end;
                                        });
-            /* If we encounter p_logical_end, we know there is no reload in the block so we can
-             * skip searching the other instructions.
+            if (reload == block.instructions.rend())
+               continue;
+            /* p_reload_preserved is always inserted just before p_logical_end - if we hit
+             * p_logical_end, check the previous instruction
              */
-            if (reload == block.instructions.rend() ||
-                (*reload)->opcode == aco_opcode::p_logical_end)
+            if ((*reload)->opcode == aco_opcode::p_logical_end)
+               ++reload;
+            if ((*reload)->opcode != aco_opcode::p_return &&
+                (*reload)->opcode != aco_opcode::p_reload_preserved)
                continue;
             (*reload)->operands[0] = Operand(abi_sgpr_spill_space);
          }

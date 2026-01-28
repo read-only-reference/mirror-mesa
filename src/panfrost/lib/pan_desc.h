@@ -1,28 +1,6 @@
 /*
  * Copyright (C) 2021 Collabora, Ltd.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- * Authors:
- *   Alyssa Rosenzweig <alyssa.rosenzweig@collabora.com>
- *   Boris Brezillon <boris.brezillon@collabora.com>
+ * SPDX-License-Identifier: MIT
  */
 
 #ifndef __PAN_DESC_H
@@ -42,6 +20,7 @@ struct pan_buffer_view {
    } astc;
    unsigned width_el;
    uint64_t base;
+   uint32_t offset;
 };
 
 struct pan_compute_dim {
@@ -311,6 +290,18 @@ void GENX(pan_emit_afbc_s_attachment)(const struct pan_fb_info *fb,
 #endif
 
 #if PAN_ARCH >= 10
+void
+GENX(pan_emit_interleaved_64k_color_attachment)(const struct pan_fb_info *fb,
+                                                unsigned rt_idx,
+                                                unsigned layer_or_z_slice,
+                                                unsigned cbuf_offset, void *payload);
+void GENX(pan_emit_interleaved_64k_zs_attachment)(const struct pan_fb_info *fb,
+                                                  unsigned layer_or_z_slice,
+                                                  void *payload);
+void GENX(pan_emit_interleaved_64k_s_attachment)(const struct pan_fb_info *fb,
+                                                 unsigned layer_or_z_slice,
+                                                 void *payload);
+
 void GENX(pan_emit_afrc_color_attachment)(const struct pan_fb_info *fb,
                                           unsigned rt_idx,
                                           unsigned layer_or_z_slice,

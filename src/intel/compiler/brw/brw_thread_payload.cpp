@@ -1,24 +1,6 @@
 /*
  * Copyright © 2006-2022 Intel Corporation
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "brw_shader.h"
@@ -380,19 +362,9 @@ void
 brw_cs_thread_payload::load_subgroup_id(const brw_builder &bld,
                                     brw_reg &dest) const
 {
-   auto devinfo = bld.shader->devinfo;
+   assert(bld.shader->devinfo->verx10 >= 125);
    dest = retype(dest, BRW_TYPE_UD);
-
-   if (subgroup_id_.file != BAD_FILE) {
-      assert(devinfo->verx10 >= 125);
-      bld.AND(dest, subgroup_id_, brw_imm_ud(INTEL_MASK(7, 0)));
-   } else {
-      assert(devinfo->verx10 < 125);
-      assert(mesa_shader_stage_is_compute(bld.shader->stage));
-      int index = brw_get_subgroup_id_param_index(devinfo,
-                                                  bld.shader->prog_data);
-      bld.MOV(dest, brw_uniform_reg(index, BRW_TYPE_UD));
-   }
+   bld.AND(dest, subgroup_id_, brw_imm_ud(INTEL_MASK(7, 0)));
 }
 
 brw_task_mesh_thread_payload::brw_task_mesh_thread_payload(brw_shader &v)

@@ -320,6 +320,7 @@ a6xx_base = GPUProps(
         has_hw_multiview = True,
         has_fs_tex_prefetch = True,
         has_sampler_minmax = True,
+        has_astc_hdr = True,
 
         supports_double_threadsize = True,
 
@@ -349,6 +350,7 @@ a6xx_gen1_low = GPUProps(
         has_gmem_fast_clear = False,
         has_hw_multiview = False,
         has_sampler_minmax = False,
+        has_astc_hdr = False,
         has_fs_tex_prefetch = False,
         sysmem_per_ccu_color_cache_size = 8 * 1024,
         sysmem_per_ccu_depth_cache_size = 8 * 1024,
@@ -958,6 +960,7 @@ a7xx_base = GPUProps(
         has_z24uint_s8uint = True,
         tess_use_shared = True,
         storage_16bit = True,
+        storage_8bit = True,
         has_tex_filter_cubic = True,
         has_separate_chroma_filter = True,
         has_sample_locations = True,
@@ -988,6 +991,7 @@ a7xx_base = GPUProps(
         has_sel_b_fneg = True,
         has_pred_bit = True,
         has_pc_dgen_so_cntl = True,
+        has_eolm_eogm = True,
     )
 
 a7xx_gen1 = GPUProps(
@@ -1012,6 +1016,7 @@ a7xx_gen2 = GPUProps(
         reading_shading_rate_requires_smask_quirk = True,
         has_ray_intersection = True,
         has_hw_bin_scaling = True,
+        has_image_processing = True,
     )
 
 a7xx_gen3 = GPUProps(
@@ -1026,7 +1031,6 @@ a7xx_gen3 = GPUProps(
         has_generic_clear = True,
         r8g8_faulty_fast_clear_quirk = True,
         gs_vpc_adjacency_quirk = True,
-        storage_8bit = True,
         ubwc_all_formats_compatible = True,
         has_compliant_dp4acc = True,
         ubwc_coherency_quirk = True,
@@ -1040,6 +1044,7 @@ a7xx_gen3 = GPUProps(
         has_abs_bin_mask = True,
         new_control_regs = True,
         has_hw_bin_scaling = True,
+        has_image_processing = True,
     )
 
 a730_magic_regs = dict(
@@ -1433,6 +1438,9 @@ add_gpus([
 a8xx_base = GPUProps(
         has_dp2acc = False,
         reg_size_vec4 = 96,
+        has_rt_workaround = False,
+        supports_double_threadsize = False,
+        has_dual_wave_dispatch = True,
     )
 
 a8xx_gen2 = GPUProps(
@@ -1452,6 +1460,9 @@ a8xx_gen2 = GPUProps(
         gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,
         gmem_per_ccu_depth_cache_size = 256 * 1024,
         has_fs_tex_prefetch = False,
+
+        # tbd if this applies to a8xx_gen1 as well:
+        has_salu_int_narrowing_quirk = True
 )
 
 # Totally fake, just to get cffdump to work:
@@ -1480,12 +1491,12 @@ add_gpus([
 # programming moves into the kernel, and what remains
 # should be easier to share between devices
 a8xx_gen2_raw_magic_regs = [
-        [A6XXRegs.REG_A8XX_GRAS_UNKNOWN_8228, 0x00000000],
-        [A6XXRegs.REG_A8XX_GRAS_UNKNOWN_8229, 0x00000000],
-        [A6XXRegs.REG_A8XX_GRAS_UNKNOWN_822A, 0x00000000],
-        [A6XXRegs.REG_A8XX_GRAS_UNKNOWN_822B, 0x00000000],
-        [A6XXRegs.REG_A8XX_GRAS_UNKNOWN_822C, 0x00000000],
-        [A6XXRegs.REG_A8XX_GRAS_UNKNOWN_822D, 0x00000000],
+        [A6XXRegs.REG_A8XX_GRAS_BIN_FOVEAT_XY_FDM_OFFSET + 0, 0x00000000],
+        [A6XXRegs.REG_A8XX_GRAS_BIN_FOVEAT_XY_FDM_OFFSET + 1, 0x00000000],
+        [A6XXRegs.REG_A8XX_GRAS_BIN_FOVEAT_XY_FDM_OFFSET + 2, 0x00000000],
+        [A6XXRegs.REG_A8XX_GRAS_BIN_FOVEAT_XY_FDM_OFFSET + 3, 0x00000000],
+        [A6XXRegs.REG_A8XX_GRAS_BIN_FOVEAT_XY_FDM_OFFSET + 4, 0x00000000],
+        [A6XXRegs.REG_A8XX_GRAS_BIN_FOVEAT_XY_FDM_OFFSET + 5, 0x00000000],
 
         [A6XXRegs.REG_A6XX_RB_UNKNOWN_8818,   0x00000000],
         [A6XXRegs.REG_A6XX_RB_UNKNOWN_8819,   0x00000000],
@@ -1497,7 +1508,7 @@ a8xx_gen2_raw_magic_regs = [
         [A6XXRegs.REG_A7XX_RB_LRZ_CNTL2,      0x00000000],
         [A6XXRegs.REG_A8XX_RB_RESOLVE_CNTL_5, 0x00000001],
 
-        [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB01,   0x00000001],
+        [A6XXRegs.REG_A7XX_SP_UNKNOWN_AB01,   0x00000000],
         [A6XXRegs.REG_A7XX_SP_HLSQ_MODE_CNTL, 0x00000000],
         [A6XXRegs.REG_A8XX_SP_UNKNOWN_AB23,   0x00000000],
 
@@ -1514,7 +1525,8 @@ add_gpus([
         GPUId(chip_id=0xffff44050A31, name="Adreno (TM) 840"),
     ], A6xxGPUInfo(
         CHIP.A8XX,
-        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2],
+        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2,
+         GPUProps(shading_rate_matches_vk = True)],
         num_ccu = 6,
         num_slices = 3,
         tile_align_w = 96,

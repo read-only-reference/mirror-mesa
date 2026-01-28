@@ -103,6 +103,7 @@ struct si_state_rasterizer {
    unsigned polygon_mode_is_points : 1;
    unsigned perpendicular_end_caps : 1;
    unsigned bottom_edge_rule : 1;
+   bool point_size_per_vertex : 1;
    int force_front_face_input : 2;
 };
 
@@ -134,7 +135,6 @@ struct si_state_dsa {
    unsigned spi_shader_user_data_ps_alpha_ref;
    unsigned db_stencil_read_mask;
    unsigned db_stencil_write_mask;
-   unsigned db_render_override;     /* only gfx12 */
 
    /* 0 = without stencil buffer, 1 = when both Z and S buffers are present */
    struct si_dsa_order_invariance order_invariance[2];
@@ -146,6 +146,7 @@ struct si_state_dsa {
    bool stencil_write_enabled : 1;
    bool db_can_write : 1;
    bool depth_bounds_enabled : 1;
+   bool gfx12_force_stencil_valid : 1;
 };
 
 struct si_stencil_ref {
@@ -474,10 +475,10 @@ void si_emit_dpbb_state(struct si_context *sctx, unsigned index);
 
 /* si_state_shaders.cpp */
 void si_get_ir_cache_key(struct si_shader_selector *sel, bool ngg, bool es,
-                         unsigned wave_size, unsigned char ir_sha1_cache_key[20]);
-bool si_shader_cache_load_shader(struct si_screen *sscreen, unsigned char ir_sha1_cache_key[20],
+                         unsigned wave_size, unsigned char ir_sha1_cache_key[SHA1_DIGEST_LENGTH]);
+bool si_shader_cache_load_shader(struct si_screen *sscreen, unsigned char ir_sha1_cache_key[SHA1_DIGEST_LENGTH],
                                  struct si_shader *shader);
-void si_shader_cache_insert_shader(struct si_screen *sscreen, unsigned char ir_sha1_cache_key[20],
+void si_shader_cache_insert_shader(struct si_screen *sscreen, unsigned char ir_sha1_cache_key[SHA1_DIGEST_LENGTH],
                                    struct si_shader *shader, bool insert_into_disk_cache);
 bool si_shader_mem_ordered(struct si_shader *shader);
 void si_init_screen_live_shader_cache(struct si_screen *sscreen);
@@ -488,8 +489,6 @@ void si_schedule_initial_compile(struct si_context *sctx, mesa_shader_stage stag
                                  struct util_queue_fence *ready_fence,
                                  struct si_compiler_ctx_state *compiler_ctx_state, void *job,
                                  util_queue_execute_func execute);
-void si_get_active_slot_masks(struct si_screen *sscreen, const struct si_shader_info *info,
-                              uint64_t *const_and_shader_buffers, uint64_t *samplers_and_images);
 int si_shader_select(struct pipe_context *ctx, struct si_shader_ctx_state *state);
 void si_vs_key_update_inputs(struct si_context *sctx);
 void si_update_ps_inputs_read_or_disabled(struct si_context *sctx);

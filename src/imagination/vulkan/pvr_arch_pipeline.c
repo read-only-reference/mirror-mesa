@@ -47,10 +47,12 @@
 #include "pvr_entrypoints.h"
 #include "pvr_hw_pass.h"
 #include "pvr_macros.h"
+#include "pvr_nir_lower_ycbcr.h"
 #include "pvr_pass.h"
 #include "pvr_pds.h"
 #include "pvr_physical_device.h"
 #include "pvr_robustness.h"
+#include "pvr_sampler.h"
 #include "pvr_types.h"
 #include "pvr_usc.h"
 
@@ -930,6 +932,40 @@ static void pvr_postprocess_shader_data(pco_data *data,
                                         struct vk_pipeline_layout *layout,
                                         struct usc_mrt_setup *setup);
 
+struct lower_ycbcr_state {
+   uint32_t set_layout_count;
+   struct vk_descriptor_set_layout *const *set_layouts;
+};
+
+static const struct vk_ycbcr_conversion_state *
+lookup_ycbcr_conversion(const void *_state,
+                        uint32_t set,
+                        uint32_t binding,
+                        uint32_t array_index)
+{
+   const struct lower_ycbcr_state *state = _state;
+   assert(set < state->set_layout_count);
+   assert(state->set_layouts[set] != NULL);
+   const struct pvr_descriptor_set_layout *set_layout =
+      vk_to_pvr_descriptor_set_layout(state->set_layouts[set]);
+   assert(binding < set_layout->binding_count);
+
+   const struct pvr_descriptor_set_layout_binding *bind_layout =
+      &set_layout->bindings[binding];
+
+   if (bind_layout->immutable_samplers == NULL)
+      return NULL;
+
+   array_index = MIN2(array_index, bind_layout->immutable_sampler_count - 1);
+
+   const struct pvr_sampler *sampler =
+      bind_layout->immutable_samplers[array_index];
+
+   return sampler && sampler->vk.ycbcr_conversion
+             ? &sampler->vk.ycbcr_conversion->state
+             : NULL;
+}
+
 /******************************************************************************
    Compute pipeline functions
  ******************************************************************************/
@@ -983,6 +1019,16 @@ static VkResult pvr_compute_pipeline_compile(
                               layout,
                               NULL,
                               NULL);
+
+   const struct lower_ycbcr_state ycbcr_state = {
+      .set_layout_count = layout->set_count,
+      .set_layouts = layout->set_layouts,
+   };
+   NIR_PASS(_,
+            nir,
+            nir_pvr_lower_ycbcr_tex,
+            lookup_ycbcr_conversion,
+            &ycbcr_state);
    pco_lower_nir(pco_ctx, nir, &shader_data);
    pco_postprocess_nir(pco_ctx, nir, &shader_data);
    pvr_postprocess_shader_data(&shader_data, nir, pCreateInfo, layout, NULL);
@@ -2144,7 +2190,7 @@ static void pvr_init_fs_blend(pco_data *data,
    for (unsigned u = 0; u < count; ++u) {
       const struct vk_color_blend_attachment_state *rt = &cb->attachments[u];
       gl_frag_result location = FRAG_RESULT_DATA0 + u;
-      blend_opts->format[u] = data->fs.output_formats[location];
+      blend_opts->rt[u].format = data->fs.output_formats[location];
 
       if (cb->logic_op_enable) {
          /* No blending, but we get the colour mask below */
@@ -2691,7 +2737,10 @@ static void pvr_early_init_shader_data(pco_data *data,
          const VkPipelineRenderingCreateInfo *ri =
             vk_find_struct_const(pGraphicsCreateInfo->pNext,
                                  PIPELINE_RENDERING_CREATE_INFO);
-         data->common.multiview = !!ri->viewMask;
+         if (ri)
+            data->common.multiview = !!ri->viewMask;
+         else
+            data->common.multiview = false;
       }
 
       nir_foreach_variable_with_modes (var, nir, nir_var_system_value) {
@@ -2736,10 +2785,10 @@ pvr_graphics_pipeline_compile(struct pvr_device *const device,
    if (!pCreateInfo->renderPass) {
       const struct vk_render_pass_state *rp = state->rp;
 
-      result = pvr_init_usc_mrt_setup(device,
-                                      rp->color_attachment_count,
-                                      rp->color_attachment_formats,
-                                      &mrt_setup);
+      result = pvr_arch_init_usc_mrt_setup(device,
+                                           rp->color_attachment_count,
+                                           rp->color_attachment_formats,
+                                           &mrt_setup);
       if (result != VK_SUCCESS)
          return result;
    }
@@ -2819,6 +2868,15 @@ pvr_graphics_pipeline_compile(struct pvr_device *const device,
                                  state,
                                  &mrt_setup);
 
+      const struct lower_ycbcr_state ycbcr_state = {
+         .set_layout_count = layout->set_count,
+         .set_layouts = layout->set_layouts,
+      };
+      NIR_PASS(_,
+               nir_shaders[stage],
+               nir_pvr_lower_ycbcr_tex,
+               lookup_ycbcr_conversion,
+               &ycbcr_state);
       pco_lower_nir(pco_ctx, nir_shaders[stage], &shader_data[stage]);
 
       pco_postprocess_nir(pco_ctx, nir_shaders[stage], &shader_data[stage]);
@@ -2831,7 +2889,7 @@ pvr_graphics_pipeline_compile(struct pvr_device *const device,
    }
 
    if (!pCreateInfo->renderPass)
-      pvr_destroy_mrt_setup(device, &mrt_setup);
+      pvr_arch_destroy_mrt_setup(device, &mrt_setup);
 
    for (mesa_shader_stage stage = 0; stage < MESA_SHADER_STAGES; ++stage) {
       pco_shader **pco = &pco_shaders[stage];
@@ -2971,7 +3029,7 @@ err_free_vertex_bo:
 err_free_build_context:
    ralloc_free(shader_mem_ctx);
    if (!pCreateInfo->renderPass)
-      pvr_destroy_mrt_setup(device, &mrt_setup);
+      pvr_arch_destroy_mrt_setup(device, &mrt_setup);
    return result;
 }
 

@@ -4,26 +4,7 @@
  * Copyright (C) 2018 Alyssa Rosenzweig
  * Copyright (C) 2019 Collabora, Ltd.
  * Copyright (C) 2012 Rob Clark <robclark@freedesktop.org>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
+ * SPDX-License-Identifier: MIT
  */
 
 #include "draw/draw_context.h"
@@ -419,6 +400,13 @@ panfrost_walk_dmabuf_modifiers(struct pipe_screen *screen,
 
    for (unsigned i = 0; i < ARRAY_SIZE(native_mods); ++i) {
       uint64_t mod =  native_mods[i];
+
+      /* We don't implement the WSI interface for
+       * DRM_FORMAT_MOD_ARM_INTERLEAVED_64K so let's just not advertise images
+       * using this modifier, which will take care of it being advertised for
+       * WSI. */
+      if (mod == DRM_FORMAT_MOD_ARM_INTERLEAVED_64K)
+         continue;
 
       if ((dev->debug & PAN_DBG_NO_AFBC) && drm_is_afbc(mod))
          continue;
@@ -941,6 +929,9 @@ panfrost_init_screen_caps(struct panfrost_screen *screen)
 
    /* We hard-code this value as it is dictated by driver uAPI */
    caps->max_label_length = 4096;
+
+   /* Avoid emulating non-perspective interpolation when not needed */
+   caps->prefer_persp = true;
 }
 
 static void
@@ -1061,8 +1052,12 @@ panfrost_create_screen(int fd, const struct pipe_screen_config *config,
       return NULL;
    }
 
+   unsigned core_id_range;
+   unsigned core_count =
+      pan_query_core_count(&dev->kmod.dev->props, &core_id_range);
+
    snprintf(screen->renderer_string, sizeof(screen->renderer_string),
-            "%s (Panfrost)", dev->model->name);
+            "%s MC%u (Panfrost)", dev->model->name, core_count);
 
    screen->afbc_tiled = driQueryOptionb(config->options, "pan_afbc_tiled");
 

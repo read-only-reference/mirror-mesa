@@ -61,10 +61,17 @@
 # error "Unsupported generation"
 #endif
 
+#if GFX_VER < 9
 #define load_param(b, bit_size, struct_name, field_name)          \
    nir_load_uniform(b, 1, bit_size, nir_imm_int(b, 0),            \
-                    .base = offsetof(struct_name, field_name),   \
+                    .base = offsetof(struct_name, field_name),    \
                     .range = bit_size / 8)
+#else
+#define load_param(b, bit_size, struct_name, field_name)                \
+   nir_load_push_data_intel(b, 1, bit_size, nir_imm_int(b, 0),          \
+                            .base = offsetof(struct_name, field_name),  \
+                            .range = bit_size / 8)
+#endif
 
 static nir_def *
 load_fragment_index(nir_builder *b)
@@ -291,8 +298,7 @@ emit_indirect_generate_draw(struct iris_batch *batch,
 
       ps.BindingTableEntryCount = GFX_VER == 9 ? 1 : 0;
 #if GFX_VER < 20
-      ps.PushConstantEnable     = shader->nr_params > 0 ||
-                                  shader->ubo_ranges[0].length;
+      ps.PushConstantEnable     = shader->push_sizes[0] > 0;
 #endif
 
 #if GFX_VER >= 9

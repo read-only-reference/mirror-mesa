@@ -138,7 +138,7 @@ static bool si_update_shaders_shared_by_vertex_and_mesh_pipe(struct si_context *
 
    bool fixed_func_face_culling_needed = !NGG || !si_shader_culling_enabled(new_vs);
    bool fixed_func_face_culling_has_effect = (!HAS_TESS && !HAS_GS && !HAS_MS) ||
-                                             new_vs->selector->rast_prim == MESA_PRIM_TRIANGLES;
+                                             new_vs->selector->info.rast_prim == MESA_PRIM_TRIANGLES;
 
    if (sctx->fixed_func_face_culling_needed != fixed_func_face_culling_needed ||
        sctx->fixed_func_face_culling_has_effect != fixed_func_face_culling_has_effect) {
@@ -424,8 +424,8 @@ static bool si_update_shaders(struct si_context *sctx)
    }
 
    struct si_shader *api_vs = si_get_api_vs_inline(sctx, GFX_VERSION, HAS_TESS, HAS_GS);
-   sctx->vs_uses_base_instance = api_vs->info.uses_base_instance;
-   sctx->vs_uses_draw_id = api_vs->info.uses_draw_id;
+   sctx->vs_uses_base_instance = api_vs->info.uses_sysval_base_instance;
+   sctx->vs_uses_draw_id = api_vs->info.uses_sysval_draw_id;
    sctx->vs_uses_vs_state_indexed = api_vs->info.uses_vs_state_indexed;
 
    struct si_shader *hw_vs = si_get_vs_inline(sctx, HAS_TESS, HAS_GS)->current;
@@ -789,17 +789,11 @@ static unsigned si_get_init_multi_vgt_param(struct si_screen *sscreen, union si_
       /* WD_SWITCH_ON_EOP has no effect on GPUs with less than
        * 4 shader engines. Set 1 to pass the assertion below.
        * The other cases are hardware requirements.
-       *
-       * Polaris supports primitive restart with WD_SWITCH_ON_EOP=0
-       * for points, line strips, and tri strips.
        */
       if (sscreen->info.max_se <= 2 || key->u.prim == MESA_PRIM_POLYGON ||
           key->u.prim == MESA_PRIM_LINE_LOOP || key->u.prim == MESA_PRIM_TRIANGLE_FAN ||
           key->u.prim == MESA_PRIM_TRIANGLE_STRIP_ADJACENCY ||
-          (key->u.primitive_restart &&
-           (sscreen->info.family < CHIP_POLARIS10 ||
-            (key->u.prim != MESA_PRIM_POINTS && key->u.prim != MESA_PRIM_LINE_STRIP &&
-             key->u.prim != MESA_PRIM_TRIANGLE_STRIP))) ||
+          key->u.primitive_restart ||
           key->u.count_from_stream_output)
          wd_switch_on_eop = true;
 
@@ -993,7 +987,7 @@ static unsigned si_get_ia_multi_vgt_param(struct si_context *sctx,
          /* The cache flushes should have been emitted already. */
          assert(sctx->barrier_flags == 0);
          sctx->barrier_flags = SI_BARRIER_EVENT_VGT_FLUSH;
-         si_emit_barrier_direct(sctx);
+         si_emit_barrier_direct(sctx, 0);
       }
    }
 
@@ -2264,8 +2258,7 @@ static void si_draw(struct pipe_context *ctx,
          index_size = 2;
 
          /* GFX6-7 don't read index buffers through L2. */
-         sctx->barrier_flags |= SI_BARRIER_WB_L2 | SI_BARRIER_PFP_SYNC_ME;
-         si_mark_atom_dirty(sctx, &sctx->atoms.s.barrier);
+         si_set_barrier_flags(sctx, SI_BARRIER_WB_L2 | SI_BARRIER_PFP_SYNC_ME);
          si_resource(indexbuf)->L2_cache_dirty = false;
       } else if (!IS_DRAW_VERTEX_STATE && info->has_user_indices) {
          struct pipe_resource *release_buf = NULL;
@@ -2293,8 +2286,7 @@ static void si_draw(struct pipe_context *ctx,
                  si_resource(indexbuf)->L2_cache_dirty) {
          /* GFX8-GFX11.5 reads index buffers through L2, so it doesn't
           * need this. */
-         sctx->barrier_flags |= SI_BARRIER_WB_L2 | SI_BARRIER_PFP_SYNC_ME;
-         si_mark_atom_dirty(sctx, &sctx->atoms.s.barrier);
+         si_set_barrier_flags(sctx, SI_BARRIER_WB_L2 | SI_BARRIER_PFP_SYNC_ME);
          si_resource(indexbuf)->L2_cache_dirty = false;
       }
    }
@@ -2308,15 +2300,13 @@ static void si_draw(struct pipe_context *ctx,
       /* Indirect buffers use L2 on GFX9-GFX11.5, but not other hw. */
       if (GFX_VERSION <= GFX8 || GFX_VERSION == GFX12) {
          if (indirect->buffer && si_resource(indirect->buffer)->L2_cache_dirty) {
-            sctx->barrier_flags |= SI_BARRIER_WB_L2 | SI_BARRIER_PFP_SYNC_ME;
-            si_mark_atom_dirty(sctx, &sctx->atoms.s.barrier);
+            si_set_barrier_flags(sctx, SI_BARRIER_WB_L2 | SI_BARRIER_PFP_SYNC_ME);
             si_resource(indirect->buffer)->L2_cache_dirty = false;
          }
 
          if (indirect->indirect_draw_count &&
              si_resource(indirect->indirect_draw_count)->L2_cache_dirty) {
-            sctx->barrier_flags |= SI_BARRIER_WB_L2 | SI_BARRIER_PFP_SYNC_ME;
-            si_mark_atom_dirty(sctx, &sctx->atoms.s.barrier);
+            si_set_barrier_flags(sctx, SI_BARRIER_WB_L2 | SI_BARRIER_PFP_SYNC_ME);
             si_resource(indirect->indirect_draw_count)->L2_cache_dirty = false;
          }
       }
@@ -2396,12 +2386,12 @@ static void si_draw(struct pipe_context *ctx,
           (old_ngg_culling ||
            /* If tess or GS is enabled, the shader just has to allow culling. */
            /* If tess and GS are disabled, the draw has to pass the total_direct_count check. */
-           (HAS_TESS || HAS_GS ? hw_vs->ngg_cull_vert_threshold == 0
-                               : total_direct_count > hw_vs->ngg_cull_vert_threshold))) {
+           (HAS_TESS || HAS_GS ? hw_vs->info.ngg_cull_vert_threshold == 0
+                               : total_direct_count > hw_vs->info.ngg_cull_vert_threshold))) {
          struct si_state_rasterizer *rs = sctx->queued.named.rasterizer;
 
          /* Check that the current shader allows culling. */
-         assert(hw_vs->ngg_cull_vert_threshold != UINT_MAX);
+         assert(hw_vs->info.ngg_cull_vert_threshold != UINT_MAX);
 
          uint16_t ngg_culling;
 

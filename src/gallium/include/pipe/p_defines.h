@@ -697,7 +697,18 @@ enum pipe_conservative_raster_mode
 #define PIPE_SHADER_SUBGROUP_FEATURE_SHUFFLE_RELATIVE (1 << 5)
 #define PIPE_SHADER_SUBGROUP_FEATURE_CLUSTERED        (1 << 6)
 #define PIPE_SHADER_SUBGROUP_FEATURE_QUAD             (1 << 7)
+/** GL supported subgroup features */
 #define PIPE_SHADER_SUBGROUP_NUM_FEATURES             8
+
+/* VK_SUBGROUP_FEATURE_ROTATE_BIT */
+#define PIPE_SHADER_SUBGROUP_FEATURE_ROTATE           (1 << 9)
+/* VK_SUBGROUP_FEATURE_ROTATE_CLUSTERED_BIT */
+#define PIPE_SHADER_SUBGROUP_FEATURE_ROTATE_CLUSTERED (1 << 10)
+/** Vulkan and OpenCL supported subgroup features */
+#define PIPE_SHADER_SUBGROUP_FEATURE_MASK \
+   (BITFIELD_MASK(PIPE_SHADER_SUBGROUP_NUM_FEATURES) | \
+   PIPE_SHADER_SUBGROUP_FEATURE_ROTATE | \
+   PIPE_SHADER_SUBGROUP_FEATURE_ROTATE_CLUSTERED)
 
 enum pipe_point_size_lower_mode {
    PIPE_POINT_SIZE_LOWER_ALWAYS,
@@ -916,6 +927,7 @@ struct pipe_caps {
    bool shareable_shaders;
    bool copy_between_compressed_and_plain_formats;
    bool clear_scissored;
+   bool clear_masked;
    bool draw_parameters;
    bool shader_pack_half_float;
    bool multi_draw_indirect;
@@ -1045,6 +1057,7 @@ struct pipe_caps {
    bool call_finalize_nir_in_linker;
    bool mesh_shader;
    bool representative_fragment_test;
+   bool prefer_persp;
 
    int accelerated;
    int min_texel_offset;

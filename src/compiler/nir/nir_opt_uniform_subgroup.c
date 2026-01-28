@@ -211,14 +211,29 @@ opt_uniform_subgroup_instr(nir_builder *b, nir_intrinsic_instr *intrin, void *_s
 
       if (intrin->intrinsic == nir_intrinsic_vote_feq) {
          nir_def *x = intrin->src[0].ssa;
-         b->exact = true;
+         b->fp_math_ctrl = nir_fp_exact;
          replacement = nir_feq(b, x, x);
-         b->exact = false;
+         b->fp_math_ctrl = nir_fp_fast_math;
       } else if (intrin->intrinsic == nir_intrinsic_vote_ieq) {
          replacement = nir_imm_true(b);
       } else {
          replacement = intrin->src[0].ssa;
       }
+      break;
+
+   case nir_intrinsic_ddx:
+   case nir_intrinsic_ddx_coarse:
+   case nir_intrinsic_ddx_fine:
+   case nir_intrinsic_ddy:
+   case nir_intrinsic_ddy_coarse:
+   case nir_intrinsic_ddy_fine:
+      if (nir_src_is_divergent(&intrin->src[0]))
+         return false;
+
+      nir_def *x = intrin->src[0].ssa;
+      b->fp_math_ctrl = nir_fp_no_fast_math;
+      replacement = nir_fsub(b, x, x);
+      b->fp_math_ctrl = nir_fp_fast_math;
       break;
 
    case nir_intrinsic_reduce:

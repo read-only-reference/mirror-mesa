@@ -771,7 +771,7 @@ pvr_rogue_get_geom_state_stream_out_words(struct pvr_pds_upload *pds_program,
 
 static void pvr_render_ctx_ws_static_state_init(
    struct pvr_render_ctx *ctx,
-   struct pvr_winsys_render_ctx_static_state *static_state)
+   struct PVR_PER_ARCH(winsys_render_ctx_static_state) * static_state)
 {
    uint64_t *q_dst;
    uint32_t *d_dst;
@@ -850,12 +850,16 @@ static void pvr_render_ctx_ws_create_info_init(
    create_info->priority = priority;
    create_info->vdm_callstack_addr = ctx->vdm_callstack_bo->vma->dev_addr;
 
-   pvr_render_ctx_ws_static_state_init(ctx, &create_info->static_state);
+#if defined(PVR_BUILD_ARCH_ROGUE)
+   pvr_render_ctx_ws_static_state_init(ctx, &create_info->static_state.rogue);
+#else
+#   error "Missing arch"
+#endif
 }
 
-VkResult PVR_PER_ARCH(render_ctx_create)(struct pvr_device *device,
-                                         enum pvr_winsys_ctx_priority priority,
-                                         struct pvr_render_ctx **const ctx_out)
+VkResult pvr_arch_render_ctx_create(struct pvr_device *device,
+                                    enum pvr_winsys_ctx_priority priority,
+                                    struct pvr_render_ctx **const ctx_out)
 {
    const uint64_t vdm_callstack_size =
       sizeof(uint64_t) * PVR_VDM_CALLSTACK_MAX_DEPTH;
@@ -920,7 +924,7 @@ err_vk_free_ctx:
    return result;
 }
 
-void PVR_PER_ARCH(render_ctx_destroy)(struct pvr_render_ctx *ctx)
+void pvr_arch_render_ctx_destroy(struct pvr_render_ctx *ctx)
 {
    struct pvr_device *device = ctx->device;
 
@@ -988,7 +992,7 @@ static VkResult pvr_pds_sr_fence_terminate_program_create_and_upload(
 static void pvr_compute_ctx_ws_static_state_init(
    const struct pvr_device_info *const dev_info,
    const struct pvr_compute_ctx *const ctx,
-   struct pvr_winsys_compute_ctx_static_state *const static_state)
+   struct PVR_PER_ARCH(winsys_compute_ctx_static_state) *const static_state)
 {
    const struct pvr_compute_ctx_switch *const ctx_switch = &ctx->ctx_switch;
 
@@ -1098,15 +1102,18 @@ static void pvr_compute_ctx_ws_create_info_init(
 {
    create_info->priority = priority;
 
+#if defined(PVR_BUILD_ARCH_ROGUE)
    pvr_compute_ctx_ws_static_state_init(&ctx->device->pdevice->dev_info,
                                         ctx,
-                                        &create_info->static_state);
+                                        &create_info->static_state.rogue);
+#else
+#   error "Missing arch"
+#endif
 }
 
-VkResult
-PVR_PER_ARCH(compute_ctx_create)(struct pvr_device *const device,
-                                 enum pvr_winsys_ctx_priority priority,
-                                 struct pvr_compute_ctx **const ctx_out)
+VkResult pvr_arch_compute_ctx_create(struct pvr_device *const device,
+                                     enum pvr_winsys_ctx_priority priority,
+                                     struct pvr_compute_ctx **const ctx_out)
 {
    struct pvr_winsys_compute_ctx_create_info create_info;
    struct pvr_compute_ctx *ctx;
@@ -1190,7 +1197,7 @@ err_free_ctx:
    return result;
 }
 
-void PVR_PER_ARCH(compute_ctx_destroy)(struct pvr_compute_ctx *const ctx)
+void pvr_arch_compute_ctx_destroy(struct pvr_compute_ctx *const ctx)
 {
    struct pvr_device *device = ctx->device;
 
@@ -1305,10 +1312,9 @@ static void pvr_transfer_ctx_shaders_fini(struct pvr_device *device,
    pvr_transfer_frag_store_fini(device, &ctx->frag_store);
 }
 
-VkResult
-PVR_PER_ARCH(transfer_ctx_create)(struct pvr_device *const device,
-                                  enum pvr_winsys_ctx_priority priority,
-                                  struct pvr_transfer_ctx **const ctx_out)
+VkResult pvr_arch_transfer_ctx_create(struct pvr_device *const device,
+                                      enum pvr_winsys_ctx_priority priority,
+                                      struct pvr_transfer_ctx **const ctx_out)
 {
    struct pvr_winsys_transfer_ctx_create_info create_info;
    struct pvr_transfer_ctx *ctx;
@@ -1345,7 +1351,7 @@ PVR_PER_ARCH(transfer_ctx_create)(struct pvr_device *const device,
          if (i == 0U && j == 0U)
             continue;
 
-         result = pvr_pds_unitex_state_program_create_and_upload(
+         result = pvr_arch_pds_unitex_state_program_create_and_upload(
             device,
             NULL,
             i,
@@ -1385,7 +1391,7 @@ err_free_ctx:
    return result;
 }
 
-void PVR_PER_ARCH(transfer_ctx_destroy)(struct pvr_transfer_ctx *const ctx)
+void pvr_arch_transfer_ctx_destroy(struct pvr_transfer_ctx *const ctx)
 {
    struct pvr_device *device = ctx->device;
 

@@ -16,7 +16,7 @@ static Builder
 create_alu_builder(isel_context* ctx, nir_alu_instr* instr)
 {
    Builder bld(ctx->program, ctx->block);
-   bld.is_precise = instr->exact;
+   bld.is_precise = nir_alu_instr_is_exact(instr);
    bld.is_sz_preserve = nir_alu_instr_is_signed_zero_preserve(instr);
    bld.is_inf_preserve = nir_alu_instr_is_inf_preserve(instr);
    bld.is_nan_preserve = nir_alu_instr_is_nan_preserve(instr);
@@ -2615,6 +2615,13 @@ visit_alu_instr(isel_context* ctx, nir_alu_instr* instr)
       }
       break;
    }
+   case nir_op_f2f16_ru:
+   case nir_op_f2f16_rd:
+      ctx->program->needs_fp_mode_insertion = true;
+      bld.vop1(instr->op == nir_op_f2f16_ru ? aco_opcode::p_v_cvt_f16_f32_rtpi
+                                            : aco_opcode::p_v_cvt_f16_f32_rtni,
+               Definition(dst), Operand(get_alu_src(ctx, instr->src[0])));
+      break;
    case nir_op_f2f32: {
       if (dst.regClass() == s1) {
          assert(instr->src[0].src.ssa->bit_size == 16);
@@ -3132,8 +3139,12 @@ visit_alu_instr(isel_context* ctx, nir_alu_instr* instr)
       } else if (nir_src_is_undef(instr->src[1].src)) {
          bld.copy(Definition(dst), src0);
       } else if (nir_src_is_undef(instr->src[0].src)) {
-         bld.pseudo(aco_opcode::p_insert, Definition(dst), bld.def(s1, scc), src1, Operand::c32(1),
-                    Operand::c32(16));
+         if (nir_src_is_const(instr->src[1].src)) {
+            bld.copy(Definition(dst), Operand::c32(nir_src_as_uint(instr->src[1].src) << 16));
+         } else {
+            bld.pseudo(aco_opcode::p_insert, Definition(dst), bld.def(s1, scc), src1,
+                       Operand::c32(1), Operand::c32(16));
+         }
       } else if (ctx->program->gfx_level >= GFX9) {
          bld.sop2(aco_opcode::s_pack_ll_b32_b16, Definition(dst), src0, src1);
       } else {

@@ -45,6 +45,7 @@
 #include "vk_sync.h"
 #include "vk_ycbcr_conversion.h"
 
+#include "nir/radv_nir_rt_stage_functions.h"
 #include "aco_shader_info.h"
 #include "radv_aco_shader_info.h"
 #if AMD_LLVM_AVAILABLE
@@ -105,9 +106,21 @@ vectorize_vec2_16bit(const nir_instr *instr, const void *_)
       return 1;
 }
 
+bool
+radv_is_traversal_shader(nir_shader *nir)
+{
+   return nir && nir->info.stage == MESA_SHADER_INTERSECTION && nir->info.internal;
+}
+
 static bool
 is_meta_shader(nir_shader *nir)
 {
+   /* The built-in traversal shader is marked as "internal", to distinguish
+    * it from intersection shaders even though both share the INTERSECTION
+    * shader stage. It is not a meta shader, though, so special-case it here.
+    */
+   if (radv_is_traversal_shader(nir))
+      return false;
    return nir && nir->info.internal;
 }
 
@@ -140,7 +153,7 @@ radv_can_dump_shader(struct radv_device *device, nir_shader *nir)
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const struct radv_instance *instance = radv_physical_device_instance(pdev);
 
-   if (is_meta_shader(nir))
+   if (is_meta_shader(nir) && nir->info.stage != MESA_SHADER_INTERSECTION)
       return instance->debug_flags & RADV_DEBUG_DUMP_META_SHADERS;
 
    if (!nir)
@@ -220,7 +233,9 @@ radv_optimize_nir(struct nir_shader *shader, bool optimize_conservatively)
 
    NIR_PASS(progress, shader, nir_opt_move, nir_move_load_ubo);
 
-   nir_shader_gather_info(shader, nir_shader_get_entrypoint(shader));
+   /* radv_get_rt_shader_entrypoint returns the entrypoint for non-RT shaders too. */
+   nir_function_impl *entrypoint = radv_get_rt_shader_entrypoint(shader);
+   nir_shader_gather_info(shader, entrypoint);
 }
 
 void
@@ -825,6 +840,22 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_shader_st
    /* Gather info in the case that nir_vk_lower_ycbcr_tex might have emitted resinfo instructions. */
    if (progress)
       nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+
+   if (pdev->info.has_cs_regalloc_hang_bug &&
+       mesa_shader_stage_is_compute(nir->info.stage)) {
+      const uint32_t wg_size = nir->info.workgroup_size[0] *
+                               nir->info.workgroup_size[1] *
+                               nir->info.workgroup_size[2];
+
+      if (wg_size > 256) {
+         NIR_PASS(progress, nir, nir_lower_workgroup_size, 256);
+
+         if (!stage->key.optimisations_disabled)
+            radv_optimize_nir(nir, false);
+
+         nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+      }
+   }
 
    return nir;
 }
@@ -3405,13 +3436,12 @@ radv_aco_build_shader_part(void **bin, uint32_t num_sgprs, uint32_t num_vgprs, c
 }
 
 struct radv_shader *
-radv_create_rt_prolog(struct radv_device *device)
+radv_create_rt_prolog(struct radv_device *device, unsigned raygen_param_count, nir_parameter *raygen_params)
 {
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const struct radv_instance *instance = radv_physical_device_instance(pdev);
    struct radv_shader *prolog;
    struct radv_shader_args in_args = {0};
-   struct radv_shader_args out_args = {0};
    struct radv_nir_compiler_options options = {0};
    radv_fill_nir_compiler_options(&options, device, NULL, false, instance->debug_flags & RADV_DEBUG_DUMP_PROLOGS,
                                   radv_device_fault_detection_enabled(device), false);
@@ -3424,16 +3454,14 @@ radv_create_rt_prolog(struct radv_device *device)
    info.workgroup_size = info.wave_size;
    info.user_data_0 = R_00B900_COMPUTE_USER_DATA_0;
    info.type = RADV_SHADER_TYPE_RT_PROLOG;
-   info.cs.block_size[0] = 8;
-   info.cs.block_size[1] = pdev->rt_wave_size == 64 ? 8 : 4;
+   info.cs.block_size[0] = pdev->rt_wave_size;
+   info.cs.block_size[1] = 1;
    info.cs.block_size[2] = 1;
    info.cs.uses_thread_id[0] = true;
-   info.cs.uses_thread_id[1] = true;
    for (unsigned i = 0; i < 3; i++)
       info.cs.uses_block_id[i] = true;
 
    radv_declare_shader_args(device, NULL, &info, MESA_SHADER_COMPUTE, MESA_SHADER_NONE, &in_args);
-   radv_declare_rt_shader_args(options.info->gfx_level, &out_args);
    info.user_sgprs_locs = in_args.user_sgprs_locs;
 
 #if AMD_LLVM_AVAILABLE
@@ -3447,8 +3475,8 @@ radv_create_rt_prolog(struct radv_device *device)
    struct aco_compiler_options ac_opts;
    radv_aco_convert_shader_info(&ac_info, &info, &in_args, &device->cache_key, options.info->gfx_level);
    radv_aco_convert_opts(&ac_opts, &options, &in_args, &stage_key);
-   aco_compile_rt_prolog(&ac_opts, &ac_info, &in_args.ac, &out_args.ac, &radv_aco_build_shader_binary,
-                         (void **)&binary);
+   aco_compile_rt_prolog(&ac_opts, &ac_info, &in_args.ac, &in_args.descriptors[0], raygen_param_count, raygen_params,
+                         &radv_aco_build_shader_binary, (void **)&binary);
    binary->info = info;
 
    radv_postprocess_binary_config(device, binary, &in_args);
@@ -3739,8 +3767,15 @@ radv_compute_spi_ps_input(const struct radv_physical_device *pdev, const struct 
       /* At least one of PERSP_* (0xF) or LINEAR_* (0x70) or LINE_STIPPLE_TEX must be enabled.
        * LINE_STIPPLE_TEX uses the least number of initialized VGPRs, so let's use it because
        * pixel throughput is limited by the number of initialized VGPRs.
+       *
+       * We can't set LINE_STIPPLE_TEX on GFX12 because it reduces primitive throughput to only
+       * 1 SE. Other gens are fine (tested on Navi10, Navi21, Navi31).
+       * TODO: Test Strix Halo.
        */
-      spi_ps_input |= S_0286CC_LINE_STIPPLE_TEX_ENA(1);
+      if (pdev->info.gfx_level == GFX12)
+         spi_ps_input |= S_0286CC_PERSP_SAMPLE_ENA(1);
+      else
+         spi_ps_input |= S_0286CC_LINE_STIPPLE_TEX_ENA(1);
    }
 
    return spi_ps_input;
@@ -3784,7 +3819,7 @@ radv_get_tess_wg_info(const struct radv_physical_device *pdev, const ac_nir_tess
 
 VkResult
 radv_dump_shader_stats(struct radv_device *device, struct radv_pipeline *pipeline, struct radv_shader *shader,
-                       mesa_shader_stage stage, FILE *output)
+                       FILE *output)
 {
    VkPipelineExecutablePropertiesKHR *props = NULL;
    uint32_t prop_count = 0;
@@ -3807,7 +3842,8 @@ radv_dump_shader_stats(struct radv_device *device, struct radv_pipeline *pipelin
       goto fail;
 
    for (unsigned exec_idx = 0; exec_idx < prop_count; exec_idx++) {
-      if (!(props[exec_idx].stages & mesa_to_vk_shader_stage(stage)))
+      mesa_shader_stage stage;
+      if (radv_get_shader_from_executable_index(pipeline, exec_idx, &stage) != shader)
          continue;
 
       VkPipelineExecutableStatisticKHR *stats = NULL;

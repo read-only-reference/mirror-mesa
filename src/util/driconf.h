@@ -353,6 +353,14 @@
 #define DRI_CONFIG_INTEL_TBIMR(def) \
    DRI_CONF_OPT_B(intel_tbimr, def, "Enable TBIMR tiled rendering")
 
+#define DRI_CONFIG_INTEL_FORCE_COMPUTE_SURFACE_PREFETCH(def) \
+   DRI_CONF_OPT_B(intel_force_compute_surface_prefetch, def, \
+                  "Enable binding table surface prefteching for compute shaders")
+
+#define DRI_CONFIG_INTEL_FORCE_SAMPLER_PREFETCH(def) \
+   DRI_CONF_OPT_B(intel_force_sampler_prefetch, def, \
+                  "Enable binding table sampler prefteching")
+
 #define DRI_CONFIG_INTEL_VF_DISTRIBUTION(def) \
    DRI_CONF_OPT_B(intel_vf_distribution, def, "Enable geometry distribution")
 
@@ -365,6 +373,10 @@
 #define DRI_CONF_INTEL_ENABLE_WA_14018912822(def) \
    DRI_CONF_OPT_B(intel_enable_wa_14018912822, def, \
                   "Intel workaround for using zero blend constants")
+
+#define DRI_CONF_INTEL_ENABLE_WA_14024015672_MSAA(def) \
+   DRI_CONF_OPT_B(intel_enable_wa_14024015672_msaa, def, \
+                  "Intel workaround for RHWO MSAA")
 
 #define DRI_CONF_INTEL_SAMPLER_ROUTE_TO_LSC(def) \
    DRI_CONF_OPT_B(intel_sampler_route_to_lsc, def, \
@@ -515,6 +527,10 @@
    DRI_CONF_OPT_B(allow_rgb10_configs, def, \
                   "Allow exposure of visuals and fbconfigs with rgb10a2 formats")
 
+#define DRI_CONF_ALLOW_RGB16_CONFIGS(def) \
+   DRI_CONF_OPT_B(allow_rgb16_configs, def, \
+                  "Allow exposure of visuals and fbconfigs with rgb16 and rgba16 formats")
+
 #define DRI_CONF_ALLOW_RGB565_CONFIGS(def) \
    DRI_CONF_OPT_B(allow_rgb565_configs, def, \
                   "Allow exposure of visuals and fbconfigs with rgb565 formats")
@@ -572,6 +588,10 @@
 #define DRI_CONF_WGL_SWAP_INTERVAL(def) \
    DRI_CONF_OPT_I(wgl_swap_interval, def, 1, 4, \
                   "Override default swap interval")
+
+#define DRI_CONF_WGL_REQUIRE_GDI_COMPAT(def) \
+   DRI_CONF_OPT_B(wgl_require_gdi_compat, def, \
+                  "Require all pixel formats to have PFD_SUPPORT_GDI flag")
 
 /**
  * \brief virgl specific configuration options
@@ -789,6 +809,10 @@
    DRI_CONF_OPT_B(radv_no_implicit_varying_subgroup_size, def, \
                   "Do not assume VK_PIPELINE_SHADER_STAGE_CREATE_ALLOW_VARYING_SUBGROUP_SIZE for SPIR-V 1.6.")
 
+#define DRI_CONF_RADV_PREFER_2D_SWIZZLE_FOR_3D_STORAGE(def) \
+   DRI_CONF_OPT_B(radv_prefer_2d_swizzle_for_3d_storage, def, \
+                  "Prefer 2D swizzle mode for 3D storage images.")
+
 /**
  * Overrides for forcing re-compilation of pipelines when RADV_BUILD_ID_OVERRIDE is enabled.
  * These need to be bumped every time a compiler bugfix is backported (up to 8 shader
@@ -924,6 +948,10 @@
 #define DRI_CONF_ANV_DISABLE_DRM_AUX_MODIFIERS(def) \
    DRI_CONF_OPT_B(anv_disable_drm_ccs_modifiers, def, \
                   "Disable DRM CCS modifier usage")
+
+#define DRI_CONF_ANV_DISABLE_LINK_TIME_OPTIMIZATION(def) \
+   DRI_CONF_OPT_B(anv_disable_link_time_optimization, def, \
+                  "Disable linking of graphics pipeline shaders")
 
 /**
  * \brief HASVK specific configuration options

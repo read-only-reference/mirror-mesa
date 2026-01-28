@@ -2,25 +2,7 @@
  * Copyright (C) 2017-2019 Alyssa Rosenzweig
  * Copyright (C) 2017-2019 Connor Abbott
  * Copyright (C) 2019 Collabora, Ltd.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "decode.h"
@@ -68,6 +50,35 @@ pandecode_midgard_tiler_descriptor(struct pandecode_context *ctx,
 #endif
 
 #if PAN_ARCH >= 5
+static const char *
+block_format_string(enum mali_block_format block_format)
+{
+   switch (block_format) {
+#if PAN_ARCH >= 7
+   case MALI_BLOCK_FORMAT_NO_WRITE:
+#else
+   case MALI_BLOCK_FORMAT_TILED_LINEAR:
+#endif
+   case MALI_BLOCK_FORMAT_TILED_U_INTERLEAVED:
+      return "U-Tiled";
+   case MALI_BLOCK_FORMAT_LINEAR:
+      return "Linear";
+#if PAN_ARCH >= 10
+   case MALI_BLOCK_FORMAT_INTERLEAVED_64K:
+      return "Interleaved 64K";
+#endif
+   case MALI_BLOCK_FORMAT_AFBC:
+      return "AFBC";
+#if PAN_ARCH >= 7
+   case MALI_BLOCK_FORMAT_AFBC_TILED:
+      return "AFBC-Tiled";
+#endif
+   default:
+      UNREACHABLE("unsupported block format");
+      return "???";
+   }
+}
+
 static void
 pandecode_rt(struct pandecode_context *ctx, unsigned index, uint64_t gpu_va)
 {
@@ -92,7 +103,8 @@ pandecode_rt(struct pandecode_context *ctx, unsigned index, uint64_t gpu_va)
    }
 #endif
 
-   switch (rt.rgb.writeback_block_format) {
+   enum mali_block_format writeback_block_format = rt.rgb.writeback_block_format;
+   switch (writeback_block_format) {
 #if PAN_ARCH >= 7
    case MALI_BLOCK_FORMAT_NO_WRITE:
 #else
@@ -100,19 +112,18 @@ pandecode_rt(struct pandecode_context *ctx, unsigned index, uint64_t gpu_va)
 #endif
    case MALI_BLOCK_FORMAT_TILED_U_INTERLEAVED:
    case MALI_BLOCK_FORMAT_LINEAR:
+#if PAN_ARCH >= 10
+   case MALI_BLOCK_FORMAT_INTERLEAVED_64K:
+#endif
       if (rt.rgb.yuv_enable) {
          DUMP_UNPACKED(ctx, YUV_RENDER_TARGET, rt.yuv,
                        "%s YUV Color Render Target %d:\n",
-                       rt.rgb.writeback_block_format == MALI_BLOCK_FORMAT_LINEAR
-                          ? "Linear"
-                          : "U-Tiled",
+                       block_format_string(writeback_block_format),
                        index);
       } else {
          DUMP_UNPACKED(ctx, RGB_RENDER_TARGET, rt.rgb,
                        "%s RGB Color Render Target %d:\n",
-                       rt.rgb.writeback_block_format == MALI_BLOCK_FORMAT_LINEAR
-                          ? "Linear"
-                          : "U-Tiled",
+                       block_format_string(writeback_block_format),
                        index);
       }
       break;
@@ -123,7 +134,9 @@ pandecode_rt(struct pandecode_context *ctx, unsigned index, uint64_t gpu_va)
 #if PAN_ARCH >= 6
       if (rt.rgb.yuv_enable) {
          DUMP_UNPACKED(ctx, AFBC_YUV_RENDER_TARGET, rt.afbc_yuv,
-                       "AFBC YUV Color Render Target %d:\n", index);
+                       "%s YUV Color Render Target %d:\n",
+                       block_format_string(writeback_block_format),
+                       index);
          break;
       }
 #else
@@ -131,9 +144,12 @@ pandecode_rt(struct pandecode_context *ctx, unsigned index, uint64_t gpu_va)
 #endif
 
       DUMP_UNPACKED(ctx, AFBC_RGB_RENDER_TARGET, rt.afbc_rgb,
-                    "AFBC RGB Color Render Target %d:\n", index);
+                    "%s RGB Color Render Target %d:\n",
+                    block_format_string(writeback_block_format),
+                    index);
       break;
    }
+
 }
 
 static void

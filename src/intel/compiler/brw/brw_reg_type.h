@@ -1,24 +1,6 @@
 /*
  * Copyright © 2017 Intel Corporation
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #pragma once
@@ -165,6 +147,16 @@ brw_type_with_size(enum brw_reg_type ref_type, unsigned bit_size)
           bit_size == 32 || bit_size == 64);
    assert(brw_type_is_int(ref_type) || bit_size >= 16);
    unsigned base_field = ref_type & BRW_TYPE_BASE_MASK;
+   unsigned size_field = ffs(bit_size) - 4;
+   return (enum brw_reg_type)(base_field | size_field);
+}
+
+static inline enum brw_reg_type
+brw_float_type_for_reg_type(enum brw_reg_type ref_type)
+{
+   unsigned bit_size = brw_type_size_bits(ref_type);
+   assert(bit_size == 16 || bit_size == 32 || bit_size == 64);
+   unsigned base_field = BRW_TYPE_F & BRW_TYPE_BASE_MASK;
    unsigned size_field = ffs(bit_size) - 4;
    return (enum brw_reg_type)(base_field | size_field);
 }

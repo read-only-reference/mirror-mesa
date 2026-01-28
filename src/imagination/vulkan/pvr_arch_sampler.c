@@ -78,7 +78,7 @@ VkResult PVR_PER_ARCH(CreateSampler)(VkDevice _device,
    mag_filter = pCreateInfo->magFilter;
    min_filter = pCreateInfo->minFilter;
 
-   result = pvr_border_color_table_get_or_create_entry(
+   result = pvr_arch_border_color_table_get_or_create_entry(
       device,
       sampler,
       device->border_color_table,
@@ -190,9 +190,29 @@ VkResult PVR_PER_ARCH(CreateSampler)(VkDevice _device,
 
       if (pCreateInfo->unnormalizedCoordinates)
          word.non_normalized_coords = true;
+
+      /* These fields overlap with plane addresses on rogue */
+      if (sampler->vk.ycbcr_conversion) {
+         word.bordercolor_index = 0;
+         word.addrmode_w = ROGUE_TEXSTATE_ADDRMODE_REPEAT;
+      }
    }
 
    pvr_csb_pack (&sampler->descriptor.words[1], TEXSTATE_SAMPLER_WORD1, word) {}
+
+#ifndef NDEBUG
+   /* YUV plane addresses are stored in the sampler on rogue. We need to add
+    * them whilst writing descriptor sets. We assert here that none of the
+    * bits that overlap with plane addresses are set.
+    */
+   if (sampler->vk.ycbcr_conversion) {
+      uint64_t yuv_word0_addr_mask = 0;
+      pvr_csb_pack (&yuv_word0_addr_mask, TEXSTATE_SAMPLER_WORD0, word) {
+         word.texaddr_plane2_lo = PVR_DEV_ADDR(~0);
+      }
+      assert(!(sampler->descriptor.words[0] & yuv_word0_addr_mask));
+   }
+#endif
 
    /* Setup gather sampler. */
 
@@ -229,8 +249,8 @@ void PVR_PER_ARCH(DestroySampler)(VkDevice _device,
    if (!sampler)
       return;
 
-   pvr_border_color_table_release_entry(device->border_color_table,
-                                        sampler->border_color_table_index);
+   pvr_arch_border_color_table_release_entry(device->border_color_table,
+                                             sampler->border_color_table_index);
 
    vk_sampler_destroy(&device->vk, pAllocator, &sampler->vk);
 }

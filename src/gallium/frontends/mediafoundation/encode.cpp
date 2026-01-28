@@ -44,6 +44,8 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
    UINT textureHeight = 0u;
    bool bReceivedDirtyRectBlob = false;
    uint32_t dirtyRectFrameNum = UINT32_MAX;
+   bool bReceivedMoveRegionBlob = false;
+   uint32_t moveRegionFrameNum = UINT32_MAX;
    LONGLONG inputSampleTime = 0;
    LONGLONG inputSampleDuration = 0;
 
@@ -323,6 +325,28 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
       }
    }
 
+   // Try to get MFSampleExtension_MoveRegions blob only when the HW supports it.
+   if( m_EncoderCapabilities.m_HWSupportMoveRects.bits.supports_precision_full_pixel &&
+       m_EncoderCapabilities.m_HWSupportMoveRects.bits.max_motion_hints > 0 )
+   {
+      UINT32 cMoveRegionBlob = 0;
+      pSample->GetBlobSize( MFSampleExtension_MoveRegions, &cMoveRegionBlob );
+      if( cMoveRegionBlob >= sizeof( MOVEREGION_INFO ) )
+      {
+         if( m_pMoveRegionBlob.size() < cMoveRegionBlob )
+         {
+            m_pMoveRegionBlob.resize( cMoveRegionBlob );
+         }
+         if( S_OK ==
+             pSample->GetBlob( MFSampleExtension_MoveRegions, m_pMoveRegionBlob.data(), cMoveRegionBlob, &cMoveRegionBlob ) )
+         {
+            MOVEREGION_INFO *pMoveRegionInfo = (MOVEREGION_INFO *) m_pMoveRegionBlob.data();
+            moveRegionFrameNum = pMoveRegionInfo->FrameNumber;
+            bReceivedMoveRegionBlob = true;
+         }
+      }
+   }
+
    if( m_pGOPTracker == nullptr )
    {
       CHECKHR_GOTO( CreateGOPTracker( textureWidth, textureHeight ), done );
@@ -383,18 +407,17 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
             uint16_t height0 = static_cast<uint16_t>( std::ceil( m_uiOutputHeight / static_cast<float>( block_size ) ) );
 
             CHECKHR_GOTO( stats_buffer_manager::Create( this,
-                                                        m_pVlScreen,
-                                                        m_pPipeContext,
+                                                        m_spDevice.Get(),
                                                         MFSampleExtension_VideoEncodeSatdMap,
                                                         width0,
                                                         height0,
                                                         format,
                                                         1,
-                                                        ( m_bLowLatency ? MFT_STAT_POOL_MIN_SIZE : MFT_INPUT_QUEUE_DEPTH ),
+                                                        MFT_STAT_POOL_MIN_SIZE,
                                                         m_spSatdStatsBufferPool.GetAddressOf() ),
                           done );
          }
-         pDX12EncodeContext->pPipeResourceSATDMapStats = m_spSatdStatsBufferPool->get_new_tracked_buffer();
+         pDX12EncodeContext->pPipeResourceSATDMapStats = m_spSatdStatsBufferPool->get_new_tracked_buffer( m_pVlScreen );
          CHECKNULL_GOTO( pDX12EncodeContext->pPipeResourceSATDMapStats, E_OUTOFMEMORY, done );
       }
 
@@ -410,18 +433,17 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
             uint16_t height0 = static_cast<uint16_t>( std::ceil( m_uiOutputHeight / static_cast<float>( block_size ) ) );
 
             CHECKHR_GOTO( stats_buffer_manager::Create( this,
-                                                        m_pVlScreen,
-                                                        m_pPipeContext,
+                                                        m_spDevice.Get(),
                                                         MFSampleExtension_VideoEncodeBitsUsedMap,
                                                         width0,
                                                         height0,
                                                         format,
                                                         1,
-                                                        ( m_bLowLatency ? MFT_STAT_POOL_MIN_SIZE : MFT_INPUT_QUEUE_DEPTH ),
+                                                        MFT_STAT_POOL_MIN_SIZE,
                                                         m_spBitsUsedStatsBufferPool.GetAddressOf() ),
                           done );
          }
-         pDX12EncodeContext->pPipeResourceRCBitAllocMapStats = m_spBitsUsedStatsBufferPool->get_new_tracked_buffer();
+         pDX12EncodeContext->pPipeResourceRCBitAllocMapStats = m_spBitsUsedStatsBufferPool->get_new_tracked_buffer( m_pVlScreen );
          CHECKNULL_GOTO( pDX12EncodeContext->pPipeResourceRCBitAllocMapStats, E_OUTOFMEMORY, done );
       }
 
@@ -435,18 +457,17 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
             uint16_t height0 = static_cast<uint16_t>( std::ceil( m_uiOutputHeight / static_cast<float>( block_size ) ) );
 
             CHECKHR_GOTO( stats_buffer_manager::Create( this,
-                                                        m_pVlScreen,
-                                                        m_pPipeContext,
+                                                        m_spDevice.Get(),
                                                         MFSampleExtension_VideoEncodeQPMap,
                                                         width0,
                                                         height0,
                                                         format,
                                                         1,
-                                                        ( m_bLowLatency ? MFT_STAT_POOL_MIN_SIZE : MFT_INPUT_QUEUE_DEPTH ),
+                                                        MFT_STAT_POOL_MIN_SIZE,
                                                         m_spQPMapStatsBufferPool.GetAddressOf() ),
                           done );
          }
-         pDX12EncodeContext->pPipeResourceQPMapStats = m_spQPMapStatsBufferPool->get_new_tracked_buffer();
+         pDX12EncodeContext->pPipeResourceQPMapStats = m_spQPMapStatsBufferPool->get_new_tracked_buffer( m_pVlScreen );
          CHECKNULL_GOTO( pDX12EncodeContext->pPipeResourceQPMapStats, E_OUTOFMEMORY, done );
       }
 
@@ -471,9 +492,6 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
                          done );
       }
    }
-
-   // pDX12EncodeContext->encoderPicInfo is initialized to zero in DX12EncodeContext constructor already
-   pDX12EncodeContext->encoderPicInfo.base.profile = m_outputPipeProfile;
 
    // Encode region of interest
    // When m_bVideoROIEnabled, app can (or not) set MFSampleExtension_ROIRectangle on separate frames optionally
@@ -540,7 +558,12 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
    // Call the helper for encoder specific work
    pDX12EncodeContext->encoderPicInfo.base.in_fence = pPipeEncoderInputFenceHandle;
    pDX12EncodeContext->encoderPicInfo.base.in_fence_value = pipeEncoderInputFenceHandleValue;
-   CHECKHR_GOTO( PrepareForEncodeHelper( pDX12EncodeContext, bReceivedDirtyRectBlob, dirtyRectFrameNum ), done );
+   CHECKHR_GOTO( PrepareForEncodeHelper( pDX12EncodeContext,
+                                         bReceivedDirtyRectBlob,
+                                         dirtyRectFrameNum,
+                                         bReceivedMoveRegionBlob,
+                                         moveRegionFrameNum ),
+                 done );
 
    // Needs to be run after PrepareForEncodeHelper to know if current frame is used as reference
    // Only allocate reconstructed picture copy buffer if feature is enabled and supported
@@ -550,14 +573,13 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
       if( !m_spReconstructedPictureBufferPool )
       {
          CHECKHR_GOTO( stats_buffer_manager::Create( this,
-                                                     m_pVlScreen,
-                                                     m_pPipeContext,
-                                                     MFSampleExtension_VideoEncodeReconstructedPicture,
+                                                     m_spDevice.Get(),
+                                                     MFSampleExtension_VideoEncodeD3D12ReconstructedPicture,
                                                      pDX12EncodeContext->pPipeVideoBuffer->width,
                                                      static_cast<uint16_t>( pDX12EncodeContext->pPipeVideoBuffer->height ),
                                                      pDX12EncodeContext->pPipeVideoBuffer->buffer_format,
                                                      1,
-                                                     ( m_bLowLatency ? MFT_STAT_POOL_MIN_SIZE : MFT_INPUT_QUEUE_DEPTH ),
+                                                     MFT_STAT_POOL_MIN_SIZE,
                                                      m_spReconstructedPictureBufferPool.GetAddressOf() ),
                        done );
       }
@@ -565,7 +587,9 @@ CDX12EncHMFT::PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12E
       // Only allocate the reconstructed picture copy buffer if the current frame is used as reference
       if( pDX12EncodeContext->get_current_dpb_pic_resource() != nullptr )
       {
-         pDX12EncodeContext->pPipeResourceReconstructedPicture = m_spReconstructedPictureBufferPool->get_new_tracked_buffer();
+         pDX12EncodeContext->pipeResourceReconstructedPictureCopyMode = true;
+         pDX12EncodeContext->pPipeResourceReconstructedPicture =
+            m_spReconstructedPictureBufferPool->get_new_tracked_buffer( m_pVlScreen );
          pDX12EncodeContext->PipeResourceReconstructedPictureSubresource = 0;
          CHECKNULL_GOTO( pDX12EncodeContext->pPipeResourceReconstructedPicture, E_OUTOFMEMORY, done );
       }

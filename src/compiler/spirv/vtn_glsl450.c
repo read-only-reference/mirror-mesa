@@ -325,7 +325,6 @@ handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
 
    struct vtn_ssa_value *dest = vtn_create_ssa_value(b, dest_type);
 
-   b->nb.exact |= vtn_has_decoration(b, vtn_untyped_value(b, w[2]), SpvDecorationNoContraction);
    switch (entrypoint) {
    case GLSLstd450Radians:
       dest->def = nir_radians(nb, src[0]);
@@ -393,12 +392,12 @@ handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
        * implemented using sge(src1, src0), but that produces incorrect
        * results for NaN.  Instead, we use the identity b2f(!x) = 1 - b2f(x).
        */
-      const bool exact = nb->exact;
-      nb->exact = true;
+      const unsigned save_math_ctrl = nb->fp_math_ctrl;
+      nb->fp_math_ctrl |= nir_fp_exact;
 
       nir_def *cmp = nir_slt(nb, src[1], src[0]);
 
-      nb->exact = exact;
+      nb->fp_math_ctrl = save_math_ctrl;
       dest->def = nir_fsub_imm(nb, 1.0f, cmp);
       break;
    }
@@ -424,11 +423,15 @@ handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
    case GLSLstd450FClamp:
       dest->def = nir_fclamp(nb, src[0], src[1], src[2]);
       break;
-   case GLSLstd450NClamp:
-      nb->exact = true;
+   case GLSLstd450NClamp: {
+      const unsigned save_math_ctrl = nb->fp_math_ctrl;
+      nb->fp_math_ctrl |= nir_fp_exact;
+
       dest->def = nir_fclamp(nb, src[0], src[1], src[2]);
-      nb->exact = false;
+
+      nb->fp_math_ctrl = save_math_ctrl;
       break;
+   }
    case GLSLstd450UClamp:
       dest->def = nir_uclamp(nb, src[0], src[1], src[2]);
       break;
@@ -531,9 +534,9 @@ handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
        *
        *    result = abs(s) > 0.0 ? ... : s;
        */
-      const bool exact = nb->exact;
+      const unsigned save_math_ctrl = nb->fp_math_ctrl;
 
-      nb->exact = true;
+      nb->fp_math_ctrl |= nir_fp_exact;
       nir_def *is_regular = nir_flt(nb,
                                         nir_imm_floatN_t(nb, 0, bit_size),
                                         nir_fabs(nb, src[0]));
@@ -544,7 +547,7 @@ handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
       nir_def *flushed = nir_fmul(nb,
                                       src[0],
                                       nir_imm_floatN_t(nb, 1.0, bit_size));
-      nb->exact = exact;
+      nb->fp_math_ctrl = save_math_ctrl;
 
       dest->def = nir_bcsel(nb,
                             is_regular,
@@ -626,12 +629,12 @@ handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
       bool exact;
       nir_op op = vtn_nir_alu_op_for_spirv_glsl_opcode(b, entrypoint, execution_mode, &exact);
       /* don't override explicit decoration */
-      b->nb.exact |= exact;
+      if (exact)
+         b->nb.fp_math_ctrl |= nir_fp_exact;
       dest->def = nir_build_alu(&b->nb, op, src[0], src[1], src[2], NULL);
       break;
    }
    }
-   b->nb.exact = false;
 
    if (mediump_16bit)
       vtn_mediump_upconvert_value(b, dest);
@@ -708,7 +711,7 @@ bool
 vtn_handle_glsl450_instruction(struct vtn_builder *b, SpvOp ext_opcode,
                                const uint32_t *w, unsigned count)
 {
-   vtn_handle_fp_fast_math(b, vtn_untyped_value(b, w[2]));
+   vtn_handle_fp_fast_math(b, vtn_untyped_value(b, w[2]), vtn_untyped_value(b, w[5]));
    switch ((enum GLSLstd450)ext_opcode) {
    case GLSLstd450Determinant: {
       vtn_push_nir_ssa(b, w[2], build_mat_det(b, vtn_ssa_value(b, w[5])));
@@ -728,7 +731,9 @@ vtn_handle_glsl450_instruction(struct vtn_builder *b, SpvOp ext_opcode,
 
    default:
       handle_glsl450_alu(b, (enum GLSLstd450)ext_opcode, w, count);
+      break;
    }
 
+   b->nb.fp_math_ctrl = nir_fp_fast_math;
    return true;
 }

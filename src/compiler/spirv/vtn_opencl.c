@@ -280,6 +280,19 @@ handle_instr(struct vtn_builder *b, uint32_t opcode,
    }
 }
 
+static void
+handle_alu_instr(struct vtn_builder *b, uint32_t opcode,
+                 const uint32_t *w_src, unsigned num_srcs, const uint32_t *w_dest, nir_handler handler)
+{
+   assert(w_dest);
+
+   vtn_handle_fp_fast_math(b, vtn_untyped_value(b, w_dest[2]), vtn_untyped_value(b, w_src[0]));
+
+   handle_instr(b, opcode, w_src, num_srcs, w_dest, handler);
+
+   b->nb.fp_math_ctrl = nir_fp_fast_math;
+}
+
 static nir_op
 nir_alu_op_for_opencl_opcode(struct vtn_builder *b,
                              enum OpenCLstd_Entrypoints opcode)
@@ -656,16 +669,16 @@ handle_special(struct vtn_builder *b, uint32_t opcode,
           (nb->shader->options->lower_ffma32 && srcs[0]->bit_size == 32) ||
           (nb->shader->options->lower_ffma64 && srcs[0]->bit_size == 64));
 
-      const bool save_exact = nb->exact;
+      const unsigned save_math_ctrl = nb->fp_math_ctrl;
       nir_def *res;
 
-      nb->exact = true;
+      nb->fp_math_ctrl |= nir_fp_exact;
       if (lower)
          res = nir_fmad(nb, srcs[0], srcs[1], srcs[2]);
       else
          res = nir_ffma(nb, srcs[0], srcs[1], srcs[2]);
 
-      nb->exact = save_exact;
+      nb->fp_math_ctrl = save_math_ctrl;
       return res;
    }
    case OpenCLstd_Maxmag:
@@ -709,10 +722,10 @@ handle_special(struct vtn_builder *b, uint32_t opcode,
          break;
 
       /* OpenCL FMA is not allowed to be split. */
-      const bool save_exact = nb->exact;
-      nb->exact = true;
+      const bool save_math_ctrl = nb->fp_math_ctrl;
+      nb->fp_math_ctrl |= nir_fp_exact;
       nir_def *res = nir_ffma(nb, srcs[0], srcs[1], srcs[2]);
-      nb->exact = save_exact;
+      nb->fp_math_ctrl = save_math_ctrl;
       return res;
    }
    case OpenCLstd_Rotate:
@@ -1117,7 +1130,7 @@ vtn_handle_opencl_instruction(struct vtn_builder *b, SpvOp ext_opcode,
    case OpenCLstd_Half_recip:
    case OpenCLstd_FMin_common:
    case OpenCLstd_FMax_common:
-      handle_instr(b, ext_opcode, w + 5, count - 5, w + 1, handle_alu);
+      handle_alu_instr(b, ext_opcode, w + 5, count - 5, w + 1, handle_alu);
       return true;
    case OpenCLstd_SAbs_diff:
    case OpenCLstd_UAbs_diff:
@@ -1224,7 +1237,7 @@ vtn_handle_opencl_instruction(struct vtn_builder *b, SpvOp ext_opcode,
    case OpenCLstd_Half_powr:
    case OpenCLstd_Half_sin:
    case OpenCLstd_Half_tan:
-      handle_instr(b, ext_opcode, w + 5, count - 5, w + 1, handle_special);
+      handle_alu_instr(b, ext_opcode, w + 5, count - 5, w + 1, handle_special);
       return true;
    case OpenCLstd_Vloadn:
    case OpenCLstd_Vload_half:

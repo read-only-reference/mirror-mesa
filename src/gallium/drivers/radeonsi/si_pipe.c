@@ -129,6 +129,7 @@ static const struct debug_named_value radeonsi_shader_debug_options[] = {
 static const struct debug_named_value radeonsi_multimedia_debug_options[] = {
    /* Multimedia options: */
    {"noefc", DBG(NO_EFC), "Disable hardware based encoder colour format conversion."},
+   {"lowlatencydec", DBG(LOW_LATENCY_DECODE), "Enable low latency decoding."},
    {"lowlatencyenc", DBG(LOW_LATENCY_ENCODE), "Enable low latency encoding."},
    {"novideotiling", DBG(NO_VIDEO_TILING), "Disable tiling for video."},
    {"nodectier1", DBG(NO_DECODE_TIER1), "Disable tier1 for video decode."},
@@ -213,7 +214,6 @@ static void si_destroy_context(struct pipe_context *context)
       context->set_debug_callback(context, NULL);
 
    util_unreference_framebuffer_state(&sctx->framebuffer.state);
-   util_framebuffer_init(context, NULL, sctx->framebuffer.fb_cbufs, &sctx->framebuffer.fb_zsbuf);
    si_release_all_descriptors(sctx);
 
    if (sctx->gfx_level >= GFX10 && sctx->is_gfx_queue)
@@ -533,7 +533,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
       return NULL;
    }
 
-   sctx->is_gfx_queue = sscreen->info.has_cs_regalloc_hang_bug ||
+   sctx->is_gfx_queue = sscreen->info.gfx_level == GFX6 ||
                         /* Compute queues hang on Raven and derivatives, see:
                          * https://gitlab.freedesktop.org/mesa/mesa/-/issues/12310 */
                         ((sscreen->info.family == CHIP_RAVEN ||
@@ -1162,8 +1162,8 @@ static void si_disk_cache_create(struct si_screen *sscreen)
       return;
 
    struct mesa_sha1 ctx;
-   unsigned char sha1[20];
-   char cache_id[20 * 2 + 1];
+   unsigned char sha1[SHA1_DIGEST_LENGTH];
+   char cache_id[SHA1_DIGEST_STRING_LENGTH];
 
    _mesa_sha1_init(&ctx);
 
@@ -1190,7 +1190,7 @@ static void si_disk_cache_create(struct si_screen *sscreen)
    _mesa_sha1_update(&ctx, &sscreen->use_aco, sizeof(sscreen->use_aco));
 
    _mesa_sha1_final(&ctx, sha1);
-   mesa_bytes_to_hex(cache_id, sha1, 20);
+   mesa_bytes_to_hex(cache_id, sha1, SHA1_DIGEST_LENGTH);
 
    sscreen->disk_shader_cache = disk_cache_create(ac_get_family_name(sscreen->info.family),
                                                   cache_id, sscreen->info.address32_hi);

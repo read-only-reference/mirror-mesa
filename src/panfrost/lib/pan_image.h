@@ -3,7 +3,6 @@
  * Copyright (C) 2014 Broadcom
  * Copyright (C) 2018-2019 Alyssa Rosenzweig
  * Copyright (C) 2019-2020 Collabora, Ltd.
- *
  * SPDX-License-Identifier: MIT
  */
 
@@ -255,6 +254,9 @@ bool pan_image_layout_init(
 struct pan_image_usage {
    /* PAN_BIND_xxx flags. */
    uint32_t bind;
+
+   /* Image needs to be mappable at standard sparse block granularity. */
+   bool standard_sparse_mapping_granularity;
 
    /* Image filled directly from the CPU. */
    bool host_copy;

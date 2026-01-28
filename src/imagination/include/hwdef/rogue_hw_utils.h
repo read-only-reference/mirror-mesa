@@ -92,12 +92,13 @@ rogue_get_isp_samples_per_tile_xy(const struct pvr_device_info *dev_info,
       if (samples_per_pixel == 2 || samples_per_pixel == 4)
          *x_out *= 2;
 
-      if (samples_per_pixel == 2)
+      if (samples_per_pixel == 4)
          *y_out *= 2;
 
       break;
    case 8:
-      *y_out *= 2;
+      if (samples_per_pixel == 2)
+         *y_out *= 2;
       break;
    default:
       assert(!"Unsupported number of samples");
@@ -494,5 +495,17 @@ static inline uint32_t rogue_usc_indexed_pixel_output_index_scale(
       return 4;
 
    return 1;
+}
+
+static inline uint32_t
+rogue_get_total_instance_count(const struct pvr_device_info *dev_info)
+{
+   /* Number of instances calculated as such:
+    * USC_SLOTS * INSTANCES_PER_SLOT * MAX_NUM_CORES * NUM_CLUSTERS
+    */
+   /* TODO: Optimise tile buffer size to use core_count, not max_num_cores. */
+   return rogue_get_max_total_instances(dev_info) *
+          rogue_get_max_num_cores(dev_info) *
+          PVR_GET_FEATURE_VALUE(dev_info, num_clusters, 1);
 }
 #endif /* ROGUE_HW_UTILS_H */

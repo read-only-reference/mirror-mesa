@@ -7,24 +7,7 @@
  * Copyright © 2016 Bas Nieuwenhuizen
  * Copyright © 2015 Intel Corporation
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "pan_afbc.h"
@@ -124,6 +107,8 @@ get_iusage(struct panvk_image *image, const VkImageCreateInfo *create_info)
    if (image->vk.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
       iusage.bind |= PAN_BIND_RENDER_TARGET;
 
+   iusage.standard_sparse_mapping_granularity =
+      !!(image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT);
    iusage.host_copy =
       !!(image->vk.usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT);
    iusage.legacy_scanout = wsi_info && wsi_info->scanout;
@@ -287,8 +272,8 @@ panvk_image_can_use_mod(struct panvk_image *image,
        * sampled/storage image, frag_coord patching for color attachments). Let's
        * keep things simple for now and make all compressed images that
        * have VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT set linear. */
-      return !(image->vk.create_flags &
-               VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT);
+      if (image->vk.create_flags & VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT)
+         return false;
    }
 
    /* Defer the rest of the checks to the mod handler. */
@@ -437,10 +422,6 @@ panvk_image_init_layouts(struct panvk_image *image,
    struct pan_image_layout_constraints plane_layout = {
       .offset_B = 0,
    };
-   if (pCreateInfo->flags & VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT) {
-      plane_layout.array_align_B = panvk_get_sparse_block_desc(pCreateInfo->imageType, pCreateInfo->format).size_B;
-      plane_layout.u_tiled.row_align_B = panvk_get_gpu_page_size(dev);
-   }
    for (uint8_t plane = 0; plane < image->plane_count; plane++) {
       enum pipe_format pfmt =
          select_plane_pfmt(image, image->vk.drm_format_mod, plane);
@@ -1042,7 +1023,8 @@ panvk_get_sparse_block_desc(VkImageType type, VkFormat format)
    uint32_t texel_block_size_B = fmt_desc->block.bits / 8;
 
    switch (type) {
-   case VK_IMAGE_TYPE_2D: {
+   case VK_IMAGE_TYPE_2D:
+   case VK_IMAGE_TYPE_3D: {
       if (!util_is_power_of_two_nonzero(texel_block_size_B))
          break;
 
@@ -1060,7 +1042,7 @@ panvk_get_sparse_block_desc(VkImageType type, VkFormat format)
       return (struct panvk_sparse_block_desc){
          .extent = extent,
          .size_B = STANDARD_SPARSE_BLOCK_SIZE_B,
-         .standard = true,
+         .standard = type == VK_IMAGE_TYPE_2D,
       };
    }
 

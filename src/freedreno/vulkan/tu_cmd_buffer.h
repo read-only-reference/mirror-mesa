@@ -76,8 +76,10 @@ enum tu_cmd_dirty_bits
    TU_CMD_DIRTY_FS = BIT(14),
    TU_CMD_DIRTY_SHADING_RATE = BIT(15),
    TU_CMD_DIRTY_DISABLE_FS = BIT(16),
+   TU_CMD_DIRTY_TCS = BIT(17),
+
    /* all draw states were disabled and need to be re-enabled: */
-   TU_CMD_DIRTY_DRAW_STATE = BIT(17)
+   TU_CMD_DIRTY_DRAW_STATE = BIT(18)
 };
 
 /* There are only three cache domains we have to care about: the CCU, or
@@ -530,7 +532,8 @@ struct tu_cmd_state
    const struct tu_subpass *subpass;
    const struct tu_framebuffer *framebuffer;
    const struct tu_tiling_config *tiling;
-   VkRect2D render_area;
+   VkRect2D render_areas[MAX_VIEWS];
+   bool per_layer_render_area;
 
    const struct tu_image_view **attachments;
    VkClearValue *clear_values;
@@ -544,7 +547,8 @@ struct tu_cmd_state
       const struct tu_render_pass *pass;
       const struct tu_subpass *subpass;
       const struct tu_framebuffer *framebuffer;
-      VkRect2D render_area;
+      VkRect2D render_areas[MAX_VIEWS];
+      bool per_layer_render_area;
       enum tu_gmem_layout gmem_layout;
 
       const struct tu_image_view **attachments;
@@ -843,6 +847,9 @@ template <chip CHIP>
 void tu6_emit_window_scissor(struct tu_cs *cs, uint32_t x1, uint32_t y1, uint32_t x2, uint32_t y2);
 
 void tu6_emit_window_offset(struct tu_cs *cs, uint32_t x1, uint32_t y1);
+
+void tu6_emit_blit_scissor(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
+                           unsigned view, bool align);
 
 void tu_disable_draw_states(struct tu_cmd_buffer *cmd, struct tu_cs *cs);
 

@@ -512,6 +512,10 @@ vn_physical_device_sanitize_properties(struct vn_physical_device *physical_dev)
    struct vn_instance *instance = physical_dev->instance;
    struct vk_properties *props = &physical_dev->base.vk.properties;
 
+   /* store renderer driver info for implementation specific workarounds */
+   physical_dev->renderer_driver_id = props->driverID;
+   physical_dev->renderer_driver_version = props->driverVersion;
+
    const uint32_t version_override = vk_get_version_override();
    if (version_override) {
       props->apiVersion = version_override;
@@ -560,8 +564,6 @@ vn_physical_device_sanitize_properties(struct vn_physical_device *physical_dev)
    }
    memcpy(props->deviceName, device_name, device_name_len + 1);
 
-   /* store renderer VkDriverId for implementation specific workarounds */
-   physical_dev->renderer_driver_id = props->driverID;
    props->driverID = VK_DRIVER_ID_MESA_VENUS;
 
    snprintf(props->driverName, sizeof(props->driverName), "venus");
@@ -1600,6 +1602,7 @@ static void
 vn_image_format_cache_debug_dump(
    struct vn_image_format_properties_cache *cache)
 {
+   vn_log(NULL, "dumping image format cache statistics");
    vn_log(NULL, "  hit %u\n", cache->debug.cache_hit_count);
    vn_log(NULL, "  miss %u\n", cache->debug.cache_miss_count);
    vn_log(NULL, "  skip %u\n", cache->debug.cache_skip_count);

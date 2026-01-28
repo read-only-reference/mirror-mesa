@@ -404,6 +404,8 @@ static enum sqtt_memory_type ac_vram_type_to_sqtt_memory_type(uint32_t vram_type
 }
 
 static void ac_sqtt_fill_asic_info(const struct radeon_info *rad_info,
+                                   uint32_t trace_shader_core_clock,
+                                   uint32_t trace_memory_clock,
                                    struct sqtt_file_chunk_asic_info *chunk)
 {
    bool has_wave32 = rad_info->gfx_level >= GFX10;
@@ -426,8 +428,8 @@ static void ac_sqtt_fill_asic_info(const struct radeon_info *rad_info,
    if (rad_info->gfx_level >= GFX9)
       chunk->flags |= SQTT_FILE_CHUNK_ASIC_INFO_FLAG_PS1_EVENT_TOKENS_ENABLED;
 
-   chunk->trace_shader_core_clock = rad_info->max_gpu_freq_mhz * 1000000ull;
-   chunk->trace_memory_clock = rad_info->memory_freq_mhz * 1000000ull;
+   chunk->trace_shader_core_clock = trace_shader_core_clock * 1000000ull;
+   chunk->trace_memory_clock = trace_memory_clock * 1000000ull;
 
    /* RGP gets very confused if these clocks are 0. The numbers here are for profile_peak on
     * VGH since that is the chips where we've seen the need for this workaround. */
@@ -1096,8 +1098,7 @@ static void ac_sqtt_dump_derived_spm(const struct ac_spm_derived_trace *spm_deri
       fwrite(group_descr->name, group_info.group_name_length, 1, output);
 
       for (uint32_t j = 0; j < group_descr->num_counters; j++) {
-         const struct ac_spm_derived_counter_descr *counter_descr = group_descr->counters[j];
-         uint32_t counter_id = counter_descr->id;
+         uint32_t counter_id = group->counter_ids[j];
 
          file_offset += sizeof(uint32_t);
          fwrite(&counter_id, sizeof(uint32_t), 1, output);
@@ -1129,8 +1130,7 @@ static void ac_sqtt_dump_derived_spm(const struct ac_spm_derived_trace *spm_deri
       fwrite(counter_descr->desc, counter_info.counter_description_length, 1, output);
 
       for (uint32_t j = 0; j < counter_descr->num_components; j++) {
-         const struct ac_spm_derived_component_descr *component_descr = counter_descr->components[j];
-         uint32_t component_id = component_descr->id;
+         uint32_t component_id = counter->component_ids[j];
 
          file_offset += sizeof(uint32_t);
          fwrite(&component_id, sizeof(uint32_t), 1, output);
@@ -1217,7 +1217,8 @@ ac_sqtt_dump_data(const struct radeon_info *rad_info, struct ac_sqtt_trace *sqtt
    fwrite(&cpu_info, sizeof(cpu_info), 1, output);
 
    /* SQTT asic chunk. */
-   ac_sqtt_fill_asic_info(rad_info, &asic_info);
+   ac_sqtt_fill_asic_info(rad_info, sqtt_trace->trace_shader_core_clock,
+                          sqtt_trace->trace_memory_clock, &asic_info);
    file_offset += sizeof(asic_info);
    fwrite(&asic_info, sizeof(asic_info), 1, output);
 
@@ -1405,8 +1406,7 @@ ac_use_derived_spm_trace(const struct radeon_info *info,
    if (!spm_trace)
       return false;
 
-   /* TODO: Enable for GFX12. */
-   return info->gfx_level >= GFX10 && info->gfx_level < GFX12;
+   return info->gfx_level >= GFX10;
 }
 
 int

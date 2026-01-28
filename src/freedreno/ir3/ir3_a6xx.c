@@ -24,7 +24,7 @@ lower_ssbo_offset(struct ir3_context *ctx, nir_intrinsic_instr *intr,
                   nir_src *offset_src,
                   struct ir3_instruction **offset, unsigned *imm_offset)
 {
-   if (ctx->compiler->has_ssbo_imm_offsets) {
+   if (ctx->compiler->info->props.has_ssbo_imm_offsets) {
       ir3_lower_imm_offset(ctx, intr, offset_src, 7, offset, imm_offset);
    } else {
       assert(nir_intrinsic_base(intr) == 0);
@@ -71,7 +71,7 @@ emit_load_uav(struct ir3_context *ctx, nir_intrinsic_instr *intr,
    ldib->barrier_conflict = IR3_BARRIER_BUFFER_W;
 
    if (imm_offset_val) {
-      assert(ctx->compiler->has_ssbo_imm_offsets);
+      assert(ctx->compiler->info->props.has_ssbo_imm_offsets);
       ldib->flags |= IR3_INSTR_IMM_OFFSET;
    }
 
@@ -163,7 +163,7 @@ emit_intrinsic_store_ssbo(struct ir3_context *ctx, nir_intrinsic_instr *intr)
    stib->barrier_conflict = IR3_BARRIER_BUFFER_R | IR3_BARRIER_BUFFER_W;
 
    if (imm_offset_val) {
-      assert(ctx->compiler->has_ssbo_imm_offsets);
+      assert(ctx->compiler->info->props.has_ssbo_imm_offsets);
       stib->flags |= IR3_INSTR_IMM_OFFSET;
    }
 
@@ -230,9 +230,6 @@ emit_intrinsic_atomic_ssbo(struct ir3_context *ctx, nir_intrinsic_instr *intr)
    type_t type = nir_atomic_op_type(op) == nir_type_int ? TYPE_S32 : TYPE_U32;
    if (intr->def.bit_size == 64) {
       type = TYPE_ATOMIC_U64;
-      /* Note: 64-bit atomics are strange and have a shift like 2-byte accesses.
-       */
-      assert(nir_intrinsic_offset_shift(intr) == 1);
    } else {
       assert(nir_intrinsic_offset_shift(intr) ==
              util_logbase2(intr->def.bit_size / 8));

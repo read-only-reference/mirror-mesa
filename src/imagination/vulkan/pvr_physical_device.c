@@ -123,7 +123,7 @@ static void pvr_physical_device_get_supported_extensions(
 {
    *extensions = (struct vk_device_extension_table){
       .KHR_bind_memory2 = true,
-      .KHR_buffer_device_address = true,
+      .KHR_buffer_device_address = false,
       .KHR_copy_commands2 = true,
       .KHR_create_renderpass2 = true,
       .KHR_dedicated_allocation = true,
@@ -140,6 +140,7 @@ static void pvr_physical_device_get_supported_extensions(
       .KHR_external_semaphore_fd = PVR_USE_WSI_PLATFORM,
       .KHR_format_feature_flags2 = false,
       .KHR_get_memory_requirements2 = true,
+      .KHR_incremental_present = PVR_USE_WSI_PLATFORM,
       .KHR_image_format_list = true,
       .KHR_imageless_framebuffer = true,
       .KHR_index_type_uint8 = false,
@@ -154,6 +155,7 @@ static void pvr_physical_device_get_supported_extensions(
       .KHR_relaxed_block_layout = true,
       .KHR_robustness2 = true,
       .KHR_sampler_mirror_clamp_to_edge = true,
+      .KHR_sampler_ycbcr_conversion = true,
       .KHR_separate_depth_stencil_layouts = true,
       .KHR_shader_draw_parameters = true,
       .KHR_shader_expect_assume = false,
@@ -175,6 +177,7 @@ static void pvr_physical_device_get_supported_extensions(
       .EXT_custom_border_color = true,
       .EXT_depth_clamp_zero_one = true,
       .EXT_depth_clip_enable = true,
+      .EXT_image_drm_format_modifier = true,
       .EXT_extended_dynamic_state = true,
       .EXT_extended_dynamic_state2 = true,
       .EXT_extended_dynamic_state3 = true,
@@ -269,7 +272,7 @@ static void pvr_physical_device_get_supported_features(
       .storageInputOutput16 = false,
       .variablePointers = false,
       .protectedMemory = false,
-      .samplerYcbcrConversion = false,
+      .samplerYcbcrConversion = true,
 
       /* Vulkan 1.2 */
       .samplerMirrorClampToEdge = true,
@@ -417,7 +420,7 @@ static void pvr_physical_device_get_supported_features(
       .texelBufferAlignment = true,
 
       /* Vulkan 1.2 / VK_KHR_buffer_device_address */
-      .bufferDeviceAddress = true,
+      .bufferDeviceAddress = false,
       .bufferDeviceAddressCaptureReplay = false,
       .bufferDeviceAddressMultiDevice = false,
 
@@ -1194,7 +1197,7 @@ void pvr_GetPhysicalDeviceMemoryProperties2(
    void pvr_##arch##_destroy_device(struct pvr_device *device,                \
                                     const VkAllocationCallbacks *pAllocator); \
                                                                               \
-   const struct pvr_format *pvr_##arch##_get_format_table(unsigned *num_formats)
+   struct pvr_format_table pvr_##arch##_get_format_table(void)
 
 PER_ARCH_FUNCS(rogue);
 
@@ -1231,10 +1234,7 @@ static void
 pvr_physical_device_setup_formats(struct pvr_physical_device *const pdevice)
 {
    enum pvr_device_arch arch = pdevice->dev_info.ident.arch;
-   PVR_ARCH_DISPATCH_RET(get_format_table,
-                         arch,
-                         pdevice->formats,
-                         &pdevice->num_formats);
+   PVR_ARCH_DISPATCH_RET(get_format_table, arch, pdevice->formats);
 }
 
 /* Leave this at the very end, to avoid leakage of HW-defs here */

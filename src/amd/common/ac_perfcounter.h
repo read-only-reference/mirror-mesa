@@ -88,7 +88,16 @@ enum ac_pc_gpu_block {
    GEDIST  = 0x2E,
    GESE    = 0x2F,
    DF      = 0x30,
-   SQ_WGP  = 0x31, /* GFX11+ */
+   /* GFX11+ */
+   SQ_WGP  = 0x31,
+   PC      = 0x32,
+   /* GFX12+ */
+   GL1XA   = 0x33,
+   GL1XC   = 0x34,
+   WGS     = 0x35,
+   GCEA_CPWD = 0x36,
+   GCEA_SE   = 0x37,
+   RLC_USER = 0x38,
    NUM_GPU_BLOCK,
 };
 
@@ -111,8 +120,15 @@ struct ac_pc_block_base {
    unsigned counter0_lo;
    unsigned *counters;
 
+   /* Config style */
+   unsigned cfg_cntl;
+   unsigned *cfg_regs;
+   unsigned cfg_counter_lo;
+
    /* SPM */
-   unsigned num_spm_counters;
+   unsigned num_16bit_spm_counters;
+   unsigned num_32bit_spm_counters;
+   unsigned num_spm_modules;
    unsigned num_spm_wires;
    unsigned *select1;
    unsigned spm_block_select;
@@ -126,8 +142,8 @@ struct ac_pc_block_gfxdescr {
 
 struct ac_pc_block {
    const struct ac_pc_block_gfxdescr *b;
+   unsigned num_scoped_instances;
    unsigned num_instances;
-   unsigned num_global_instances;
 
    unsigned num_groups;
    char *group_names;
@@ -176,7 +192,7 @@ ac_pc_block_has_per_instance_groups(const struct ac_perfcounters *pc,
                                     const struct ac_pc_block *block)
 {
    return block->b->b->flags & AC_PC_BLOCK_INSTANCE_GROUPS ||
-          (block->num_instances > 1 && pc->separate_instance);
+          (block->num_scoped_instances > 1 && pc->separate_instance);
 }
 
 struct ac_pc_block *ac_lookup_counter(const struct ac_perfcounters *pc,
@@ -200,5 +216,14 @@ void ac_destroy_perfcounters(struct ac_perfcounters *pc);
 
 const struct ac_pc_block_gfxdescr *
 ac_gfx12_get_perfcounters(uint32_t *num_blocks);
+
+const struct ac_pc_block_gfxdescr *
+ac_gfx11_get_perfcounters(uint32_t *num_blocks);
+
+const struct ac_pc_block_gfxdescr *
+ac_gfx103_get_perfcounters(uint32_t *num_blocks);
+
+const struct ac_pc_block_gfxdescr *
+ac_gfx10_get_perfcounters(uint32_t *num_blocks);
 
 #endif

@@ -132,7 +132,7 @@ struct iris_vtable {
                                      uint32_t offset);
 
    unsigned (*derived_program_state_size)(enum iris_program_cache_id id);
-   void (*store_derived_program_state)(const struct intel_device_info *devinfo,
+   void (*store_derived_program_state)(const struct iris_screen *screen,
                                        enum iris_program_cache_id cache_id,
                                        struct iris_compiled_shader *shader);
    uint32_t *(*create_so_decl_list)(const struct pipe_stream_output_info *sol,
@@ -203,11 +203,14 @@ struct iris_screen {
       bool limit_trig_input_range;
       float lower_depth_range_rate;
       bool intel_enable_wa_14018912822;
+      bool intel_enable_wa_14024015672_msaa;
       bool enable_tbimr;
       bool enable_vf_distribution;
       bool enable_te_distribution;
       unsigned generated_indirect_threshold;
       bool disable_threaded_context;
+      bool force_sampler_prefetch;
+      bool force_compute_surface_prefetch;
    } driconf;
 
    /** Does the kernel support various features (KERNEL_HAS_* bitfield)? */

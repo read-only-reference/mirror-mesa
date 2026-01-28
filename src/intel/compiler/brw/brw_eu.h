@@ -1,33 +1,10 @@
 /*
- Copyright (C) Intel Corp.  2006.  All Rights Reserved.
- Intel funded Tungsten Graphics to
- develop this 3D driver.
-
- Permission is hereby granted, free of charge, to any person obtaining
- a copy of this software and associated documentation files (the
- "Software"), to deal in the Software without restriction, including
- without limitation the rights to use, copy, modify, merge, publish,
- distribute, sublicense, and/or sell copies of the Software, and to
- permit persons to whom the Software is furnished to do so, subject to
- the following conditions:
-
- The above copyright notice and this permission notice (including the
- next paragraph) shall be included in all copies or substantial
- portions of the Software.
-
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
- IN NO EVENT SHALL THE COPYRIGHT OWNER(S) AND/OR ITS SUPPLIERS BE
- LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
- OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
- WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
- **********************************************************************/
- /*
-  * Authors:
-  *   Keith Whitwell <keithw@vmware.com>
-  */
+ * Copyright © 2006 Intel Corporation
+ * SPDX-License-Identifier: MIT
+ *
+ * Intel funded Tungsten Graphics to develop this 3D driver.
+ * File originally authored by: Keith Whitwell <keithw@vmware.com>
+ */
 
 #pragma once
 
@@ -79,13 +56,6 @@ struct brw_insn_state {
    bool acc_wr_control:1;
 };
 
-
-/* A helper for accessing the last instruction emitted.  This makes it easy
- * to set various bits on an instruction without having to create temporary
- * variable and assign the emitted instruction to those.
- */
-#define brw_last_inst (&p->store[p->nr_insn - 1])
-
 struct brw_codegen {
    brw_eu_inst *store;
    int store_size;
@@ -132,6 +102,12 @@ struct brw_label {
    struct brw_label *next;
 };
 
+static inline brw_eu_inst *
+brw_eu_last_inst(struct brw_codegen *p)
+{
+   return &p->store[p->nr_insn - 1];
+}
+
 void brw_pop_insn_state( struct brw_codegen *p );
 void brw_push_insn_state( struct brw_codegen *p );
 unsigned brw_get_default_exec_size(struct brw_codegen *p);
@@ -176,6 +152,13 @@ void brw_add_reloc(struct brw_codegen *p, uint32_t id,
                    uint32_t offset, uint32_t delta);
 void brw_set_dest(struct brw_codegen *p, brw_eu_inst *insn, struct brw_reg dest);
 void brw_set_src0(struct brw_codegen *p, brw_eu_inst *insn, struct brw_reg reg);
+
+brw_eu_inst *brw_alu1(struct brw_codegen *p, unsigned opcode, struct brw_reg dest,
+                      struct brw_reg src);
+brw_eu_inst *brw_alu2(struct brw_codegen *p, unsigned opcode, struct brw_reg dest,
+                      struct brw_reg src0, struct brw_reg src1);
+brw_eu_inst *brw_alu3(struct brw_codegen *p, unsigned opcode, struct brw_reg dest,
+                      struct brw_reg src0, struct brw_reg src1, struct brw_reg src2);
 
 /* Helpers for regular instructions:
  */
@@ -1582,7 +1565,7 @@ brw_set_desc(struct brw_codegen *p, brw_eu_inst *insn, unsigned desc, bool gathe
    brw_set_desc_ex(p, insn, desc, 0, gather);
 }
 
-void brw_set_uip_jip(struct brw_codegen *p, int start_offset);
+void brw_set_uip_jip(struct brw_codegen *p, int start_offset, int final_halt_offset);
 
 enum brw_conditional_mod brw_negate_cmod(enum brw_conditional_mod cmod);
 enum brw_conditional_mod brw_swap_cmod(enum brw_conditional_mod cmod);

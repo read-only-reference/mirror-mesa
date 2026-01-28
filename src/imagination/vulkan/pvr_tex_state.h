@@ -107,6 +107,16 @@ struct pvr_texture_state_info {
    uint32_t layer_size;
    uint32_t buffer_elems;
    uint32_t z_slice;
+
+   /**
+    * YCbCr CSC matrix
+    */
+   uint8_t csc_coeff_index;
+
+   /**
+    * Use a YVU format instead of YUV
+    */
+   bool swap_chroma;
 };
 
 #ifdef PVR_PER_ARCH
@@ -115,7 +125,7 @@ VkResult PVR_PER_ARCH(pack_tex_state)(struct pvr_device *device,
                                       const struct pvr_texture_state_info *info,
                                       struct pvr_image_descriptor *state);
 
-#   define pvr_pack_tex_state PVR_PER_ARCH(pack_tex_state)
+#   define pvr_arch_pack_tex_state PVR_PER_ARCH(pack_tex_state)
 
 #endif
 

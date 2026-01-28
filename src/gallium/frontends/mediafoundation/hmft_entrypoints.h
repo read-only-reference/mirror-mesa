@@ -269,98 +269,37 @@ DEFINE_CODECAPI_GUID( AVEncVideoEnableSpatialAdaptiveQuantization,
    DEFINE_CODECAPI_GUIDNAMED( AVEncVideoEnableSpatialAdaptiveQuantization )
 #endif
 
-#ifndef CODECAPI_AVEncVideoOutputQPMapBlockSize
-// AVEncVideoOutputQPMapBlockSize (VT_UI4)
-// The block size used in reporting the output QP map for each block in an encoded video frame.
-// ulVal should be zero or power of 2, such as 16 or 32, etc.
-// Zero value is used to disable the QP map reporting.
-DEFINE_CODECAPI_GUID( AVEncVideoOutputQPMapBlockSize,
-                      "97038743-4AE3-44C3-A0F2-5BD58A4634EF",
-                      0x97038743,
-                      0x4ae3,
-                      0x44c3,
-                      0xa0,
-                      0xf2,
-                      0x5b,
-                      0xd5,
-                      0x8a,
-                      0x46,
-                      0x34,
-                      0xef )
-#define CODECAPI_AVEncVideoOutputQPMapBlockSize DEFINE_CODECAPI_GUIDNAMED( AVEncVideoOutputQPMapBlockSize )
+#ifndef CODECAPI_AVEncVideoD3D12ReconstructedPictureOutputMode
 
-// MFSampleExtension_VideoEncodeQPMap {2C68A331-B712-49CA-860A-3A1D58237D88}
+// MFSampleExtension_VideoEncodeD3D12ReconstructedPicture {3E8A1B7F-5C92-4D6E-B834-F0A729E65C48}
 // Type: IMFMediaBuffer
-// The QP map of an encoded video frame.
-DEFINE_GUID( MFSampleExtension_VideoEncodeQPMap, 0x2c68a331, 0xb712, 0x49ca, 0x86, 0x0a, 0x3a, 0x1d, 0x58, 0x23, 0x7d, 0x88 );
+// The reconstructed picture data of an encoded video frame from a D3D12-based MFT (Experimental).
+DEFINE_GUID( MFSampleExtension_VideoEncodeD3D12ReconstructedPicture,
+             0x3e8a1b7f,
+             0x5c92,
+             0x4d6e,
+             0xb8,
+             0x34,
+             0xf0,
+             0xa7,
+             0x29,
+             0xe6,
+             0x5c,
+             0x48 );
 
-#endif
+enum eAVEncVideoD3D12ReconstructedPictureOutputMode
+{
+   eAVEncVideoEncodeD3D12ReconstructedPictureMode_None = 0,   // Does not return a D3D12 reconstructed buffer.
+   eAVEncVideoEncodeD3D12ReconstructedPictureMode_Copy =
+      1,   // Returns a copy of the D3D12 reconstructed buffer used by the encoder.
+   eAVEncVideoEncodeD3D12ReconstructedPictureMode_Shared =
+      2   // Returns the D3D12 reconstructed buffer written by the encoder without a copy.
+};
 
-#ifndef CODECAPI_AVEncVideoOutputBitsUsedMapBlockSize
-// AVEncVideoOutputBitsUsedMapBlockSize (VT_UI4)
-// The block size used in reporting the output bits used map for each block in an encoded video frame.
-// ulVal should be zero or power of 2, such as 16 or 32, etc.
-// Zero value is used to disable the bits used map reporting.
-DEFINE_CODECAPI_GUID( AVEncVideoOutputBitsUsedMapBlockSize,
-                      "6C2CD11A-CA3B-44BD-9A9E-93B03634C36E",
-                      0x6c2cd11a,
-                      0xca3b,
-                      0x44bd,
-                      0x9a,
-                      0x9e,
-                      0x93,
-                      0xb0,
-                      0x36,
-                      0x34,
-                      0xc3,
-                      0x6e )
-#define CODECAPI_AVEncVideoOutputBitsUsedMapBlockSize DEFINE_CODECAPI_GUIDNAMED( AVEncVideoOutputBitsUsedMapBlockSize )
-
-// MFSampleExtension_VideoEncodeBitsUsedMap {6894263D-E6E2-4BCC-849D-8570365F5114}
-// Type: IMFMediaBuffer
-// The bits used map of an encoded video frame.
-DEFINE_GUID( MFSampleExtension_VideoEncodeBitsUsedMap, 0x6894263d, 0xe6e2, 0x4bcc, 0x84, 0x9d, 0x85, 0x70, 0x36, 0x5f, 0x51, 0x14 );
-
-#endif
-
-#ifndef CODECAPI_AVEncVideoSatdMapBlockSize
-// AVEncVideoSatdMapBlockSize (VT_UI4)
-// The block size used in reporting the output SATD map for each block in an encoded video frame.
-// ulVal should be zero or power of 2, such as 16 or 32.
-// A zero value disables the SATD map reporting.
-DEFINE_CODECAPI_GUID( AVEncVideoSatdMapBlockSize,
-                      "596F1106-8CE0-4302-AF79-C4EC67AADC6D",
-                      0x596f1106,
-                      0x8ce0,
-                      0x4302,
-                      0xaf,
-                      0x79,
-                      0xc4,
-                      0xec,
-                      0x67,
-                      0xaa,
-                      0xdc,
-                      0x6d )
-#define CODECAPI_AVEncVideoSatdMapBlockSize DEFINE_CODECAPI_GUIDNAMED( AVEncVideoSatdMapBlockSize )
-
-// MFSampleExtension_VideoEncodeSatdMap {ADF61D96-C2D3-4B57-A138-DDE4D351EAA9}
-// Type: IMFMediaBuffer
-// The SATD map of an encoded video frame.
-DEFINE_GUID( MFSampleExtension_VideoEncodeSatdMap, 0xadf61d96, 0xc2d3, 0x4b57, 0xa1, 0x38, 0xdd, 0xe4, 0xd3, 0x51, 0xea, 0xa9 );
-
-#endif
-
-// MFSampleExtension_VideoEncodeReconstructedPicture {3E8A1B7F-5C92-4D6E-B834-F0A729E65C48}
-// Type: IMFMediaBuffer
-// The reconstructed picture data of an encoded video frame (Experimental).
-DEFINE_GUID(
-   MFSampleExtension_VideoEncodeReconstructedPicture, 0x3e8a1b7f, 0x5c92, 0x4d6e, 0xb8, 0x34, 0xf0, 0xa7, 0x29, 0xe6, 0x5c, 0x48 );
-
-#ifndef CODECAPI_AVEncVideoReconstructedPictureOutputMode
-// AVEncVideoReconstructedPictureOutputMode (VT_UI4) (Experimental, Testing only)
-// Specifies the reconstructed picture output mode for video encoding.
-// 0: disable; 1: blit copy; 2: read-only shared resource
-DEFINE_CODECAPI_GUID( AVEncVideoReconstructedPictureOutputMode,
+// AVEncVideoD3D12ReconstructedPictureOutputMode (VT_UI4) (Experimental, Testing only)
+// This property controls the output of D3D12 reconstructed picture data from a D3D12-based encoder.
+// ulVal must be a value from the eAVEncVideoD3D12ReconstructedPictureOutputMode enumeration.
+DEFINE_CODECAPI_GUID( AVEncVideoD3D12ReconstructedPictureOutputMode,
                       "4A7B2E8F-1D93-4C6A-B548-91E2F8C5A7D3",
                       0x4a7b2e8f,
                       0x1d93,
@@ -373,7 +312,8 @@ DEFINE_CODECAPI_GUID( AVEncVideoReconstructedPictureOutputMode,
                       0xc5,
                       0xa7,
                       0xd3 )
-#define CODECAPI_AVEncVideoReconstructedPictureOutputMode DEFINE_CODECAPI_GUIDNAMED( AVEncVideoReconstructedPictureOutputMode )
+#define CODECAPI_AVEncVideoD3D12ReconstructedPictureOutputMode                                                                     \
+   DEFINE_CODECAPI_GUIDNAMED( AVEncVideoD3D12ReconstructedPictureOutputMode )
 
 #endif
 
@@ -548,8 +488,11 @@ DEFINE_CODECAPI_GUID( AVEncWorkProcessPriority,
 #endif
 
 #define MFT_INPUT_QUEUE_DEPTH 8
-#define MFT_STAT_POOL_MIN_SIZE                                                                                                     \
-   2   // when MFSample is destroyed, the stat texture is returned via some other threads and it could be after ProcessInput.
+
+// For low latency mode we should only need 2 if we have guarantee that the output sample is returned quickly.  However,
+// when using mp4 sink via SinkWriter, it buffers the input sample so we will hit no resource sample and error out, choosing 11 to
+// be safe.
+#define MFT_STAT_POOL_MIN_SIZE 11
 
 class __declspec( uuid( HMFT_GUID ) ) CDX12EncHMFT : CMFD3DManager,
                                                      public RuntimeClass<RuntimeClassFlags<RuntimeClassType::WinRtClassicComMix>,
@@ -818,10 +761,32 @@ class __declspec( uuid( HMFT_GUID ) ) CDX12EncHMFT : CMFD3DManager,
    bool m_bUnlocked = false;
    HRESULT IsUnlocked( void );
 
-   HRESULT PrepareForEncodeHelper( LPDX12EncodeContext pDX12EncodeContext, bool dirtyRectFrameNumSet, uint32_t dirtyRectFrameNum );
+#if MFT_CODEC_H264ENC
+   HRESULT UpdateH264EncPictureDesc( pipe_h264_enc_picture_desc *pPicInfo, const uint32_t intra_period, const uint32_t ip_period );
+#endif
+
+#if MFT_CODEC_H265ENC
+   HRESULT UpdateH265EncPictureDesc( pipe_h265_enc_picture_desc *pPicInfo,
+                                     const uint32_t intra_period,
+                                     const uint32_t ip_period,
+                                     const uint8_t log2_max_pic_order_cnt_lsb_minus4,
+                                     const uint16_t pic_width_in_luma_samples,
+                                     const uint16_t pic_height_in_luma_samples );
+#endif
+
+#if MFT_CODEC_AV1ENC
+   HRESULT UpdateAV1EncPictureDesc( pipe_av1_enc_picture_desc *pPicInfo );
+#endif
+
+   HRESULT PrepareForEncodeHelper( LPDX12EncodeContext pDX12EncodeContext,
+                                   bool dirtyRectFrameNumSet,
+                                   uint32_t dirtyRectFrameNum,
+                                   bool moveRegionFrameNumSet,
+                                   uint32_t moveRegionFrameNum );
    HRESULT PrepareForEncode( IMFSample *pSample, LPDX12EncodeContext *ppDX12EncodeContext );
 
    std::vector<BYTE> m_pDirtyRectBlob = std::vector<BYTE>( sizeof( DIRTYRECT_INFO ) );
+   std::vector<BYTE> m_pMoveRegionBlob = std::vector<BYTE>( sizeof( MOVEREGION_INFO ) );
 
  public:
    CDX12EncHMFT();

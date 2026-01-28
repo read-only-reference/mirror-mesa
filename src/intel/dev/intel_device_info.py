@@ -145,13 +145,10 @@ Struct("intel_memory_class_instance",
          Member("int", "instance")])
 
 Enum("intel_device_info_mmap_mode",
-      [EnumValue("INTEL_DEVICE_INFO_MMAP_MODE_UC", value=0),
+      [EnumValue("INTEL_DEVICE_INFO_MMAP_MODE_INVALID",
+                 comment=dedent("""No CPU access allowed.""")),
        EnumValue("INTEL_DEVICE_INFO_MMAP_MODE_WC"),
-       EnumValue("INTEL_DEVICE_INFO_MMAP_MODE_WB"),
-       EnumValue("INTEL_DEVICE_INFO_MMAP_MODE_XD",
-                 comment=dedent("""\
-                 Xe2+ only. Only supported in GPU side and used for displayable
-                 buffers."""))
+       EnumValue("INTEL_DEVICE_INFO_MMAP_MODE_WB")
        ])
 
 Struct("intel_device_info_pat_entry",
@@ -310,6 +307,7 @@ Struct("intel_device_info",
         Member("bool", "has_set_pat_uapi"),
         Member("bool", "has_indirect_unroll"),
         Member("bool", "supports_low_latency_hint"),
+        Member("bool", "xe2_has_no_compression_hint"),
 
         Member("bool", "has_coarse_pixel_primitive_and_cb", compiler_field=True,
                comment=dedent("""\

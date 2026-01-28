@@ -63,6 +63,24 @@ static enum ROGUE_TEXSTATE_SWIZ pvr_get_hw_swizzle(VkComponentSwizzle comp,
    };
 }
 
+static enum ROGUE_TEXSTATE_FORMAT
+pvr_chroma_swap_format(enum ROGUE_TEXSTATE_FORMAT format)
+{
+   switch (format) {
+   case ROGUE_TEXSTATE_FORMAT_YUV420_2PLANE:
+      return ROGUE_TEXSTATE_FORMAT_YVU420_2PLANE;
+   case ROGUE_TEXSTATE_FORMAT_YUV420_3PLANE:
+      return ROGUE_TEXSTATE_FORMAT_YVU420_3PLANE;
+   case ROGUE_TEXSTATE_FORMAT_YVU420_2PLANE:
+      return ROGUE_TEXSTATE_FORMAT_YUV420_2PLANE;
+   case ROGUE_TEXSTATE_FORMAT_YVU420_3PLANE:
+      return ROGUE_TEXSTATE_FORMAT_YUV420_3PLANE;
+   default:
+      UNREACHABLE("Unsupported format");
+      return ROGUE_TEXSTATE_FORMAT_INVALID;
+   }
+}
+
 static uint32_t setup_pck_info(VkFormat vk_format)
 {
    /* TODO NEXT: commonize this.*/
@@ -135,8 +153,9 @@ static uint32_t setup_pck_info(VkFormat vk_format)
       break;
    }
 
+   /* Invalidate the format bits, but clear the rest so they can still be set. */
    if (pck_format == ~0)
-      return pck_format;
+      pck_format = 0b11111;
 
    uint32_t pck_info = pck_format;
    if (split)
@@ -148,14 +167,19 @@ static uint32_t setup_pck_info(VkFormat vk_format)
    if (roundzero)
       pck_info |= BITFIELD_BIT(7);
 
+   if (util_format_is_unorm(format))
+      pck_info |= BITFIELD_BIT(8);
+
    return pck_info;
 }
 
-VkResult PVR_PER_ARCH(pack_tex_state)(struct pvr_device *device,
-                                      const struct pvr_texture_state_info *info,
-                                      struct pvr_image_descriptor *state)
+VkResult pvr_arch_pack_tex_state(struct pvr_device *device,
+                                 const struct pvr_texture_state_info *info,
+                                 struct pvr_image_descriptor *state)
 {
    const struct pvr_device_info *dev_info = &device->pdevice->dev_info;
+   const struct vk_format_ycbcr_info *ycbcr =
+      vk_format_get_ycbcr_info(info->format);
    enum pvr_memlayout mem_layout;
    VkImageViewType iview_type;
 
@@ -226,7 +250,12 @@ VkResult PVR_PER_ARCH(pack_tex_state)(struct pvr_device *device,
        * to avoid this.
        */
       word0.texformat =
-         pvr_get_tex_format_aspect(info->format, info->aspect_mask);
+         pvr_arch_get_tex_format_aspect(info->format, info->aspect_mask);
+
+      if (info->swap_chroma) {
+         word0.texformat = pvr_chroma_swap_format(word0.texformat);
+      }
+
       word0.smpcnt = util_logbase2(info->sample_count);
       word0.swiz0 =
          pvr_get_hw_swizzle(VK_COMPONENT_SWIZZLE_R, info->swizzle[0]);
@@ -266,7 +295,15 @@ VkResult PVR_PER_ARCH(pack_tex_state)(struct pvr_device *device,
          word0.height = info->extent.height - 1;
    }
 
-   if (mem_layout == PVR_MEMLAYOUT_LINEAR) {
+   if (ycbcr) {
+      pvr_csb_pack (&state->words[1], TEXSTATE_YUV_IMAGE_WORD1, word1) {
+         word1.chroma_interpolation_v = 0;
+         word1.chroma_interpolation_u = 0;
+         word1.stride = info->extent.width - 1;
+         word1.texaddr = PVR_DEV_ADDR_OFFSET(info->addr, info->offset);
+         word1.csc_coeff_index = info->csc_coeff_index;
+      }
+   } else if (mem_layout == PVR_MEMLAYOUT_LINEAR) {
       pvr_csb_pack (&state->words[1], TEXSTATE_STRIDE_IMAGE_WORD1, word1) {
          assert(info->stride > 0U);
          word1.stride = info->stride - 1U;

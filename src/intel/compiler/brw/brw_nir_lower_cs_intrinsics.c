@@ -1,24 +1,6 @@
 /*
- * Copyright (c) 2016 Intel Corporation
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
+ * Copyright © 2016 Intel Corporation
+ * SPDX-License-Identifier: MIT
  */
 
 #include "brw_nir.h"
@@ -33,7 +15,6 @@ struct lower_intrinsics_state {
 
    /* Per-block cached values. */
    bool computed;
-   nir_def *hw_index;
    nir_def *local_index;
    nir_def *local_id;
 };
@@ -42,7 +23,6 @@ static void
 compute_local_index_id(struct lower_intrinsics_state *state, nir_intrinsic_instr *current)
 {
    assert(!state->computed);
-   state->hw_index = NULL;
    state->local_index = NULL;
    state->local_id = NULL;
    state->computed = true;
@@ -86,13 +66,8 @@ compute_local_index_id(struct lower_intrinsics_state *state, nir_intrinsic_instr
    nir_def *linear;
 
    if (nir->info.stage == MESA_SHADER_MESH || nir->info.stage == MESA_SHADER_TASK) {
-      /* Thread payload provides a linear index, keep track of it
-       * so it doesn't get removed.
-       */
-      state->hw_index =
-         current->intrinsic == nir_intrinsic_load_local_invocation_index ?
-         &current->def : nir_load_local_invocation_index(b);
-      linear = state->hw_index;
+      /* Thread payload provides a linear index, just use that. */
+      linear = nir_load_local_invocation_index_intel(b);
    } else {
       nir_def *subgroup_id = nir_load_subgroup_id(b);
       nir_def *thread_local_id =
@@ -263,10 +238,6 @@ lower_cs_intrinsics_convert_block(struct lower_intrinsics_state *state,
          if (!state->computed)
             compute_local_index_id(state, intrinsic);
 
-         /* Will be lowered later by the backend. */
-         if (&intrinsic->def == state->hw_index)
-            continue;
-
          assert(state->local_index);
          sysval = state->local_index;
          break;
@@ -386,4 +357,37 @@ brw_nir_lower_cs_intrinsics(nir_shader *nir,
    }
 
    return state.progress;
+}
+
+static bool
+lower_cs_subgroup_id_instr(nir_builder *b,
+                           nir_intrinsic_instr *intrin,
+                           void *data)
+{
+   if (intrin->intrinsic != nir_intrinsic_load_subgroup_id)
+      return false;
+
+   const unsigned *subgroup_id_offset_ptr = data;
+
+   b->cursor = nir_before_instr(&intrin->instr);
+   nir_def_replace(&intrin->def,
+                   nir_load_push_data_intel(
+                      b, 1, 32, nir_imm_int(b, 0),
+                      .base = *subgroup_id_offset_ptr,
+                      .range = 4));
+
+   return true;
+}
+
+bool
+brw_nir_lower_cs_subgroup_id(nir_shader *nir,
+                             const struct intel_device_info *devinfo,
+                             unsigned subgroup_id_offset)
+{
+   if (devinfo->verx10 >= 125)
+      return false;
+
+   return nir_shader_intrinsics_pass(nir, lower_cs_subgroup_id_instr,
+                                     nir_metadata_control_flow,
+                                     &subgroup_id_offset);
 }

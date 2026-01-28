@@ -612,9 +612,6 @@ anv_bo_ref(struct anv_bo *bo)
    return bo;
 }
 
-enum intel_device_info_mmap_mode
-anv_bo_get_mmap_mode(struct anv_device *device, struct anv_bo *bo);
-
 static inline bool
 anv_bo_needs_host_cache_flush(enum anv_bo_alloc_flags alloc_flags)
 {
@@ -628,7 +625,7 @@ struct anv_address {
    bool protected;
 };
 
-#define ANV_NULL_ADDRESS ((struct anv_address) { NULL, 0 })
+#define ANV_NULL_ADDRESS ((struct anv_address) { 0 })
 
 static inline struct anv_address
 anv_address_from_u64(uint64_t addr_u64)
@@ -1172,9 +1169,9 @@ enum anv_pipeline_bind_mask {
 #define ANV_PIPELINE_BIND_MASK_SET(i) (ANV_PIPELINE_BIND_MASK_SET0 << i)
 
 struct anv_pipeline_bind_map {
-   unsigned char                                surface_sha1[20];
-   unsigned char                                sampler_sha1[20];
-   unsigned char                                push_sha1[20];
+   unsigned char                                surface_sha1[SHA1_DIGEST_LENGTH];
+   unsigned char                                sampler_sha1[SHA1_DIGEST_LENGTH];
+   unsigned char                                push_sha1[SHA1_DIGEST_LENGTH];
 
    /* enum anv_descriptor_set_layout_type */
    uint16_t layout_type;
@@ -1283,12 +1280,19 @@ struct anv_shader_alloc anv_shader_heap_alloc(struct anv_shader_heap *heap,
                                               uint64_t size,
                                               uint64_t align,
                                               bool capture_replay,
-                                              uint64_t requested_addr);
+                                              uint64_t requested_offset);
 void anv_shader_heap_free(struct anv_shader_heap *heap, struct anv_shader_alloc alloc);
 
 void anv_shader_heap_upload(struct anv_shader_heap *heap,
                             struct anv_shader_alloc alloc,
                             const void *data, uint64_t size);
+
+struct anv_shader_group_rt_replay {
+   uint64_t general;
+   uint64_t closest_hit;
+   uint64_t any_hit;
+   uint64_t intersection;
+};
 
 struct anv_shader {
    struct vk_shader vk;
@@ -1317,6 +1321,10 @@ struct anv_shader {
     * Array of pointers of length bind_map.embedded_sampler_count
     */
    struct anv_embedded_sampler **embedded_samplers;
+
+   /* Mutex to protect the lazy replay allocation */
+   simple_mtx_t replay_mutex;
+   struct anv_shader_alloc replay_kernel;
 
    struct anv_reloc_list relocs;
 
@@ -1393,6 +1401,23 @@ struct anv_shader {
 };
 
 extern struct vk_device_shader_ops anv_device_shader_ops;
+
+void anv_write_rt_shader_group(struct vk_device *vk_device,
+                               VkRayTracingShaderGroupTypeKHR type,
+                               const struct vk_shader **shaders,
+                               uint32_t shader_count,
+                               void *output);
+
+void anv_write_rt_shader_group_replay_handle(struct vk_device *vk_device,
+                                             const struct vk_shader **shaders,
+                                             uint32_t shader_count,
+                                             void *output);
+
+void anv_replay_rt_shader_group(struct vk_device *vk_device,
+                                VkRayTracingShaderGroupTypeKHR type,
+                                uint32_t shader_count,
+                                struct vk_shader **vk_shaders,
+                                const void *replay_data);
 
 /* Physical device */
 
@@ -1649,7 +1674,7 @@ struct anv_physical_device {
     struct anv_memregion                        vram_mappable;
     struct anv_memregion                        vram_non_mappable;
     struct anv_memregion                        sys;
-    uint8_t                                     driver_build_sha1[20];
+    uint8_t                                     driver_build_sha1[SHA1_DIGEST_LENGTH];
     uint8_t                                     shader_binary_uuid[VK_UUID_SIZE];
     uint8_t                                     pipeline_cache_uuid[VK_UUID_SIZE];
     uint8_t                                     driver_uuid[VK_UUID_SIZE];
@@ -1785,10 +1810,18 @@ struct anv_instance {
     bool                                        custom_border_colors_without_format;
     bool                                        vf_component_packing;
     bool                                        large_workgroup_non_coherent_image_workaround;
+    bool                                        force_sampler_prefetch;
+    bool                                        force_compute_surface_prefetch;
 
     /* HW workarounds */
     bool                                        no_16bit;
     bool                                        intel_enable_wa_14018912822;
+    bool                                        intel_enable_wa_14024015672_msaa;
+
+    /**
+     * Performance workarounds
+     */
+    bool                                        disable_lto;
 
     /**
      * Ray tracing configuration.
@@ -1876,14 +1909,14 @@ struct nir_shader *
 anv_device_search_for_nir(struct anv_device *device,
                           struct vk_pipeline_cache *cache,
                           const struct nir_shader_compiler_options *nir_options,
-                          unsigned char sha1_key[20],
+                          unsigned char sha1_key[SHA1_DIGEST_LENGTH],
                           void *mem_ctx);
 
 void
 anv_device_upload_nir(struct anv_device *device,
                       struct vk_pipeline_cache *cache,
                       const struct nir_shader *nir,
-                      unsigned char sha1_key[20]);
+                      unsigned char sha1_key[SHA1_DIGEST_LENGTH]);
 
 void
 anv_load_fp64_shader(struct anv_device *device);
@@ -4247,7 +4280,11 @@ struct anv_push_constants {
     */
    uint32_t surfaces_base_offset;
 
-   /** Ray query globals (RT_DISPATCH_GLOBALS) */
+   /** Ray query globals
+    *
+    * Pointer to a couple of RT_DISPATCH_GLOBALS structures (see
+    * genX(cmd_buffer_ray_query_globals))
+    */
    uint64_t ray_query_globals;
 
    union {
@@ -4720,9 +4757,9 @@ struct anv_cmd_state {
    struct anv_state                             binding_tables[MESA_VULKAN_SHADER_STAGES];
    struct anv_state                             samplers[MESA_VULKAN_SHADER_STAGES];
 
-   unsigned char                                sampler_sha1s[MESA_VULKAN_SHADER_STAGES][20];
-   unsigned char                                surface_sha1s[MESA_VULKAN_SHADER_STAGES][20];
-   unsigned char                                push_sha1s[MESA_VULKAN_SHADER_STAGES][20];
+   unsigned char                                sampler_sha1s[MESA_VULKAN_SHADER_STAGES][SHA1_DIGEST_LENGTH];
+   unsigned char                                surface_sha1s[MESA_VULKAN_SHADER_STAGES][SHA1_DIGEST_LENGTH];
+   unsigned char                                push_sha1s[MESA_VULKAN_SHADER_STAGES][SHA1_DIGEST_LENGTH];
 
    /* The last auxiliary surface operation (or equivalent operation) provided
     * to genX(cmd_buffer_update_color_aux_op).
@@ -4730,7 +4767,7 @@ struct anv_cmd_state {
    enum isl_aux_op                              color_aux_op;
 
    /**
-    * Whether RHWO optimization is enabled (Wa_1508744258).
+    * Whether RHWO optimization is enabled (Wa_1508744258 and Wa_14024015672).
     */
    bool                                         rhwo_optimization_enabled;
 
@@ -5268,18 +5305,6 @@ struct anv_shader_internal {
 
    struct genisa_stats stats[3];
    uint32_t num_stats;
-
-   struct nir_xfb_info *xfb_info;
-
-   struct anv_push_descriptor_info push_desc_info;
-
-   struct anv_pipeline_bind_map bind_map;
-
-   /* Not saved in the pipeline cache.
-    *
-    * Array of pointers of length bind_map.embedded_sampler_count
-    */
-   struct anv_embedded_sampler **embedded_samplers;
 };
 
 static inline struct anv_shader_internal *
@@ -6133,6 +6158,15 @@ void
 anv_attachment_external_resolve(struct anv_cmd_buffer *cmd_buffer,
                                 const struct anv_attachment *att);
 
+bool
+anv_image_pixel_is_default_value(const struct intel_device_info *devinfo,
+                                 const struct anv_image *image,
+                                 const uint32_t *view_pixel);
+
+union isl_color_value
+anv_image_color_clear_value(const struct intel_device_info * const devinfo,
+                            const struct anv_image *image);
+
 static inline union isl_color_value
 anv_image_hiz_clear_value(const struct anv_image *image)
 {
@@ -6156,6 +6190,7 @@ void
 anv_image_hiz_clear(struct anv_cmd_buffer *cmd_buffer,
                     const struct anv_image *image,
                     VkImageAspectFlags aspects,
+                    VkImageLayout depth_layout, VkImageLayout stencil_layout,
                     uint32_t level,
                     uint32_t base_layer, uint32_t layer_count,
                     VkRect2D area,
@@ -6281,6 +6316,7 @@ anv_can_fast_clear_color(const struct anv_cmd_buffer *cmd_buffer,
                          const struct VkClearRect *clear_rect,
                          VkImageLayout layout,
                          enum isl_format view_format,
+                         struct isl_swizzle view_swizzle,
                          union isl_color_value clear_color);
 
 enum isl_aux_state ATTRIBUTE_PURE
@@ -6823,8 +6859,6 @@ anv_add_pending_pipe_bits(struct anv_cmd_buffer* cmd_buffer,
 
 struct anv_performance_configuration_intel {
    struct vk_object_base      base;
-
-   struct intel_perf_registers *register_config;
 
    uint64_t                   config_id;
 };

@@ -163,8 +163,6 @@ iris_upload_shader(struct iris_screen *screen,
                    const void *key,
                    const void *assembly)
 {
-   const struct intel_device_info *devinfo = screen->devinfo;
-
    u_upload_alloc_ref(uploader, 0, shader->program_size, 64,
                   &shader->assembly.offset, &shader->assembly.res,
                   &shader->map);
@@ -200,7 +198,7 @@ iris_upload_shader(struct iris_screen *screen,
    }
 
    /* Store the 3DSTATE shader packets and other derived state. */
-   screen->vtbl.store_derived_program_state(devinfo, cache_id, shader);
+   screen->vtbl.store_derived_program_state(screen, cache_id, shader);
 
    util_queue_fence_signal(&shader->ready);
 
@@ -278,7 +276,7 @@ iris_blorp_upload_shader(struct blorp_batch *blorp_batch, uint32_t stage,
    memcpy(prog_data, prog_data_templ, prog_data_size);
 
    if (screen->brw) {
-      iris_apply_brw_prog_data(shader, prog_data);
+      iris_apply_brw_prog_data(shader, prog_data, NULL);
    } else {
 #ifdef INTEL_USE_ELK
       assert(screen->elk);
@@ -445,9 +443,7 @@ iris_ensure_indirect_generation_shader(struct iris_batch *batch)
 
       struct brw_wm_prog_data *prog_data = ralloc_size(NULL, sizeof(*prog_data));
       memset(prog_data, 0, sizeof(*prog_data));
-      prog_data->base.nr_params = nir->num_uniforms / 4;
-
-      brw_nir_analyze_ubo_ranges(screen->brw, nir, prog_data->base.ubo_ranges);
+      prog_data->base.push_sizes[0] = uniform_size;
 
       struct genisa_stats stats[3];
       struct brw_compile_fs_params params = {
@@ -463,7 +459,7 @@ iris_ensure_indirect_generation_shader(struct iris_batch *batch)
       };
       program = brw_compile_fs(screen->brw, &params);
       assert(program);
-      iris_apply_brw_prog_data(shader, &prog_data->base);
+      iris_apply_brw_prog_data(shader, &prog_data->base, NULL);
    } else {
 #ifdef INTEL_USE_ELK
       union elk_any_prog_key prog_key;
