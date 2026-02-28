@@ -228,6 +228,9 @@ index("unsigned", "align_offset")
 # other than bytes (i.e., where the shift is implicit).
 index("unsigned", "offset_shift")
 
+# Similar to offset_shift except it is applied only to the non uniform offset src, not the base.
+index("unsigned", "offset_shift_nv")
+
 # The Vulkan descriptor type for a vulkan_resource_[re]index intrinsic.
 index("unsigned", "desc_type")
 
@@ -447,10 +450,10 @@ intrinsic("deref_implicit_array_length", src_comp=[-1], dest_comp=1,
 
 # Ask the driver for the size of a given SSBO. It takes the buffer index
 # as source.
-intrinsic("get_ssbo_size", src_comp=[-1], dest_comp=1, bit_sizes=[32],
+intrinsic("get_ssbo_size", src_comp=[-1], dest_comp=1,
           indices=[ACCESS], flags=[CAN_ELIMINATE, CAN_REORDER])
 intrinsic("get_ubo_size", src_comp=[-1], dest_comp=1,
-          flags=[CAN_ELIMINATE, CAN_REORDER])
+          indices=[ACCESS], flags=[CAN_ELIMINATE, CAN_REORDER])
 
 intrinsic("ssbo_descriptor_amd", src_comp=[-1], dest_comp=4, bit_sizes=[32],
           indices=[ACCESS], flags=[CAN_ELIMINATE, CAN_REORDER])
@@ -905,6 +908,9 @@ intrinsic("load_vulkan_descriptor", src_comp=[-1], dest_comp=0,
 # AGX global variants take a 64-bit base address plus a 32-bit offset in words.
 # The offset is sign-extended or zero-extended based on the SIGN_EXTEND index.
 #
+# NV variants all come with a 24 bit base, that is unsigned with a constant 0 address,
+# signed otherwise.
+#
 # PCO global variants use a vec3 for the memory address and data, where component X
 # has the low 32 address bits, component Y has the high 32 address bits, and component Z
 # has the data parameter.
@@ -912,21 +918,25 @@ intrinsic("load_vulkan_descriptor", src_comp=[-1], dest_comp=0,
 intrinsic("deref_atomic",  src_comp=[-1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP])
 intrinsic("ssbo_atomic",  src_comp=[-1, 1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP, OFFSET_SHIFT])
 intrinsic("shared_atomic",  src_comp=[1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
+intrinsic("shared_atomic_nv",  src_comp=[1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP, OFFSET_SHIFT_NV])
 intrinsic("task_payload_atomic",  src_comp=[1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
 intrinsic("global_atomic",  src_comp=[1, 1], dest_comp=1, indices=[ATOMIC_OP])
 intrinsic("global_atomic_2x32",  src_comp=[2, 1], dest_comp=1, indices=[ATOMIC_OP])
 intrinsic("global_atomic_amd",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
 intrinsic("global_atomic_agx",  src_comp=[1, 1, 1], dest_comp=1, indices=[ATOMIC_OP, SIGN_EXTEND])
+intrinsic("global_atomic_nv",  src_comp=[1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
 intrinsic("global_atomic_pco",  src_comp=[3], dest_comp=1, indices=[ATOMIC_OP], bit_sizes=[32])
 
 intrinsic("deref_atomic_swap",  src_comp=[-1, 1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP])
 intrinsic("ssbo_atomic_swap",  src_comp=[-1, 1, 1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP, OFFSET_SHIFT])
 intrinsic("shared_atomic_swap",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
+intrinsic("shared_atomic_swap_nv",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP, OFFSET_SHIFT_NV])
 intrinsic("task_payload_atomic_swap",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
 intrinsic("global_atomic_swap",  src_comp=[1, 1, 1], dest_comp=1, indices=[ATOMIC_OP])
 intrinsic("global_atomic_swap_2x32",  src_comp=[2, 1, 1], dest_comp=1, indices=[ATOMIC_OP])
 intrinsic("global_atomic_swap_amd",  src_comp=[1, 1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
 intrinsic("global_atomic_swap_agx",  src_comp=[1, 1, 1, 1], dest_comp=1, indices=[ATOMIC_OP, SIGN_EXTEND])
+intrinsic("global_atomic_swap_nv",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
 intrinsic("global_atomic_swap_pco",  src_comp=[4], dest_comp=1, indices=[ATOMIC_OP], bit_sizes=[32])
 
 def system_value(name, dest_comp, indices=[], bit_sizes=[32], can_reorder=True):
@@ -1738,6 +1748,14 @@ system_value("multisampled_pan", 1, bit_sizes=[32])
 # noperspective, this is 32 bits and starts from VARYING_SLOT_VAR0.
 system_value("noperspective_varyings_pan", 1, bit_sizes=[32])
 
+# Render area of the framebuffer.  Used by framebuffer load shaders.
+# The returned vector is (min_x, min_y, max_x, max_y)
+system_value("fb_render_area_pan", 4, bit_sizes=[16])
+
+# Loads the clear color for the given render target
+load("clear_value_pan", [], [IO_SEMANTICS, DEST_TYPE],
+     [CAN_ELIMINATE, CAN_REORDER])
+
 # Cumulative coverage mask, the start of the atest/zt/blend chain
 system_value("cumulative_coverage_pan", 1, bit_sizes=[32])
 system_value("blend_descriptor_pan", 1, bit_sizes=[64], indices=[BASE])
@@ -1804,7 +1822,7 @@ intrinsic("unit_test_assert_eq", src_comp=[0, 0], flags=[])
 # src[] = { descriptor, vector byte offset, scalar byte offset, index offset }
 # The index offset is multiplied by the stride in the descriptor.
 # The vector/scalar offsets are in bytes, BASE is a constant byte offset.
-intrinsic("load_buffer_amd", src_comp=[4, 1, 1, 1], dest_comp=0, indices=[BASE, MEMORY_MODES, ACCESS, ALIGN_MUL, ALIGN_OFFSET], flags=[CAN_ELIMINATE])
+intrinsic("load_buffer_amd", src_comp=[4, 1, 1, 1], dest_comp=0, indices=[BASE, MEMORY_MODES, ACCESS, ALIGN_MUL, ALIGN_OFFSET, DEST_TYPE], flags=[CAN_ELIMINATE])
 # src[] = { store value, descriptor, vector byte offset, scalar byte offset, index offset }
 intrinsic("store_buffer_amd", src_comp=[0, 4, 1, 1, 1], indices=[BASE, WRITE_MASK, MEMORY_MODES, ACCESS, ALIGN_MUL, ALIGN_OFFSET])
 
@@ -1824,6 +1842,15 @@ intrinsic("load_typed_buffer_amd", src_comp=[4, 1, 1, 1], dest_comp=0, indices=[
 load("global_amd", [1, 1], indices=[BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET], flags=[CAN_ELIMINATE])
 # src[] = { value, address, unsigned 32-bit offset }.
 store("global_amd", [1, 1], indices=[BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET, WRITE_MASK])
+
+# src[] = { address }. BASE is a 24 bit unsigned offset if a constant 0 address is given,
+# signed otherwise.
+load("global_nv", [1], indices=[BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET], flags=[CAN_ELIMINATE])
+store("global_nv", [1], indices=[BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET])
+load("scratch_nv", [1], indices=[BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET], flags=[CAN_ELIMINATE])
+store("scratch_nv", [1], indices=[BASE, ALIGN_MUL, ALIGN_OFFSET])
+load("shared_nv", [1], indices=[BASE, OFFSET_SHIFT_NV, ACCESS, ALIGN_MUL, ALIGN_OFFSET], flags=[CAN_ELIMINATE])
+store("shared_nv", [1], indices=[BASE, OFFSET_SHIFT_NV, ACCESS, ALIGN_MUL, ALIGN_OFFSET])
 
 # Same as shared_atomic_add, but with GDS. src[] = {store_val, gds_addr, m0}
 intrinsic("gds_atomic_add_amd",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE])
@@ -2038,6 +2065,9 @@ intrinsic("load_ray_payload_ptr_amd", dest_comp=1, indices=[BASE])
 # Load forced VRS rates.
 intrinsic("load_force_vrs_rates_amd", dest_comp=1, bit_sizes=[32], flags=[CAN_ELIMINATE, CAN_REORDER])
 
+intrinsic("load_ttmp_register_amd", dest_comp=1, bit_sizes=[32],
+          indices=[BASE, ARG_UPPER_BOUND_U32_AMD],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
 intrinsic("load_scalar_arg_amd", dest_comp=0, bit_sizes=[32],
           indices=[BASE, ARG_UPPER_BOUND_U32_AMD],
           flags=[CAN_ELIMINATE, CAN_REORDER])
@@ -2614,7 +2644,9 @@ system_value("urb_output_handle_intel", 1)
 load("urb_input_handle_indexed_intel", [1], [], [CAN_ELIMINATE, CAN_REORDER])
 
 # Inline register delivery (available on Gfx12.5+ for CS/Mesh/Task stages)
-load("inline_data_intel", [], [BASE], [CAN_ELIMINATE, CAN_REORDER])
+#
+# src[] = { offset }
+load("inline_data_intel", [1], [BASE, RANGE], [CAN_ELIMINATE, CAN_REORDER])
 
 # Load push data on Intel VS,TCS,TES,GS,FS stages
 # src[] = { offset }
@@ -2627,8 +2659,8 @@ load("push_data_intel", [1], [BASE, RANGE, ACCESS], [CAN_ELIMINATE, CAN_REORDER]
 # Dynamic tesselation parameters (see intel_tess_config).
 system_value("tess_config_intel", 1)
 
-# Dynamic fragment shader parameters (see intel_msaa_flags) .
-system_value("fs_msaa_intel", 1)
+# Dynamic fragment shader parameters (see intel_fs_config) .
+system_value("fs_config_intel", 1)
 
 # Per primitive remapping table offset.
 system_value("per_primitive_remap_intel", 1)
@@ -2701,7 +2733,7 @@ intrinsic("convert_cmat_intel", dest_comp=0, src_comp=[-1],
 # NVIDIA-specific intrinsics
 # src[] = { index, offset }.
 intrinsic("ldc_nv", dest_comp=0, src_comp=[1, 1],
-          indices=[ACCESS, ALIGN_MUL, ALIGN_OFFSET],
+          indices=[BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET],
           flags=[CAN_ELIMINATE, CAN_REORDER])
 # [Un]pins an LDCX handle around non-uniform control-flow sections
 # src[] = { handle }.
@@ -2709,14 +2741,15 @@ intrinsic("pin_cx_handle_nv", src_comp=[1])
 intrinsic("unpin_cx_handle_nv", src_comp=[1])
 # src[] = { handle, offset }.
 intrinsic("ldcx_nv", dest_comp=0, src_comp=[1, 1],
-          indices=[ACCESS, ALIGN_MUL, ALIGN_OFFSET],
+          indices=[BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET],
           flags=[CAN_ELIMINATE, CAN_REORDER])
 intrinsic("load_sysval_nv", dest_comp=1, src_comp=[], bit_sizes=[32, 64],
           indices=[ACCESS, BASE, DIVERGENT], flags=[CAN_ELIMINATE])
 intrinsic("isberd_nv", dest_comp=1, src_comp=[1], bit_sizes=[32],
           flags=[CAN_ELIMINATE, CAN_REORDER])
 intrinsic("vild_nv", dest_comp=1, src_comp=[1], bit_sizes=[32],
-          flags=[CAN_ELIMINATE, CAN_REORDER])
+          flags=[CAN_ELIMINATE, CAN_REORDER],
+          indices=[BASE])
 intrinsic("al2p_nv", dest_comp=1, src_comp=[1], bit_sizes=[32],
           indices=[BASE, FLAGS], flags=[CAN_ELIMINATE, CAN_REORDER])
 # src[] = { vtx, offset }.
@@ -2763,8 +2796,8 @@ intrinsic("sustga_nv", src_comp=[2, 1, 1, 0],
           indices=[ACCESS, FLAGS], bit_sizes=[32])
 # Nvidia Kepler specific load-lock store-unlock
 # used to lower shared atomics.
-intrinsic("load_shared_lock_nv", src_comp=[1], dest_comp=2)
-intrinsic("store_shared_unlock_nv", src_comp=[1, 1], dest_comp=1)
+intrinsic("load_shared_lock_nv", src_comp=[1], dest_comp=2, indices=[BASE])
+intrinsic("store_shared_unlock_nv", src_comp=[1, 1], dest_comp=1, indices=[BASE])
 
 # NVIDIA-specific Geometry Shader intrinsics.
 # These contain an additional integer source and destination with the primitive handle input/output.

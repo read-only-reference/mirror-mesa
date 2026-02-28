@@ -8,7 +8,6 @@
 #include "si_pipe.h"
 
 #include "driver_ddebug/dd_util.h"
-#include "radeon_uvd.h"
 #include "si_public.h"
 #include "sid.h"
 #include "ac_shader_util.h"
@@ -23,6 +22,7 @@
 #include "util/u_upload_mgr.h"
 #include "util/xmlconfig.h"
 #include "si_utrace.h"
+#include "si_video.h"
 
 #include "aco_interface.h"
 
@@ -145,7 +145,6 @@ static const struct debug_named_value test_options[] = {
    {"clearbuffer", DBG(TEST_CLEAR_BUFFER), "Test correctness of the clear_buffer compute shader"},
    {"copybuffer", DBG(TEST_COPY_BUFFER), "Test correctness of the copy_buffer compute shader"},
    {"imagecopy", DBG(TEST_IMAGE_COPY), "Invoke resource_copy_region tests with images and exit."},
-   {"cbresolve", DBG(TEST_CB_RESOLVE), "Invoke MSAA resolve tests and exit."},
    {"computeblit", DBG(TEST_COMPUTE_BLIT), "Invoke blits tests and exit."},
    {"testvmfaultcp", DBG(TEST_VMFAULT_CP), "Invoke a CP VM fault test and exit."},
    {"testvmfaultshader", DBG(TEST_VMFAULT_SHADER), "Invoke a shader VM fault test and exit."},
@@ -210,6 +209,9 @@ static void si_destroy_context(struct pipe_context *context)
 {
    struct si_context *sctx = (struct si_context *)context;
 
+   util_queue_finish(&sctx->screen->shader_compiler_queue);
+   util_queue_finish(&sctx->screen->shader_compiler_queue_opt_variants);
+
    if (context->set_debug_callback)
       context->set_debug_callback(context, NULL);
 
@@ -221,6 +223,9 @@ static void si_destroy_context(struct pipe_context *context)
 
    if (sctx->sqtt) {
       struct si_screen *sscreen = sctx->screen;
+
+      si_handle_sqtt(sctx, &sctx->gfx_cs);
+
       if (sscreen->b.num_contexts == 1 && !(sctx->context_flags & SI_CONTEXT_FLAG_AUX))
           sscreen->ws->cs_set_pstate(&sctx->gfx_cs, RADEON_CTX_PSTATE_NONE);
 
@@ -255,8 +260,6 @@ static void si_destroy_context(struct pipe_context *context)
 
    if (sctx->custom_dsa_flush)
       sctx->b.delete_depth_stencil_alpha_state(&sctx->b, sctx->custom_dsa_flush);
-   if (sctx->custom_blend_resolve)
-      sctx->b.delete_blend_state(&sctx->b, sctx->custom_blend_resolve);
    if (sctx->custom_blend_fmask_decompress)
       sctx->b.delete_blend_state(&sctx->b, sctx->custom_blend_fmask_decompress);
    if (sctx->custom_blend_eliminate_fastclear)
@@ -631,7 +634,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
    }
 
    /* Border colors. */
-   if (sscreen->info.has_3d_cube_border_color_mipmap) {
+   if (sscreen->info.cu_info.has_3d_cube_border_color_mipmap) {
       sctx->border_color_table = malloc(SI_MAX_BORDER_COLORS * sizeof(*sctx->border_color_table));
       if (!sctx->border_color_table) {
          mesa_loge("can't create border_color_table");
@@ -758,7 +761,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
        sscreen->info.ip[AMD_IP_VCN_JPEG].num_queues || sscreen->info.ip[AMD_IP_VCE].num_queues ||
        sscreen->info.ip[AMD_IP_UVD_ENC].num_queues || sscreen->info.ip[AMD_IP_VCN_ENC].num_queues ||
        sscreen->info.ip[AMD_IP_VPE].num_queues) {
-      sctx->b.create_video_codec = si_uvd_create_decoder;
+      sctx->b.create_video_codec = si_video_codec_create;
       sctx->b.create_video_buffer = si_video_buffer_create;
       if (screen->resource_create_with_modifiers)
          sctx->b.create_video_buffer_with_modifiers = si_video_buffer_create_with_modifiers;
@@ -960,25 +963,31 @@ static struct pipe_context *si_pipe_create_context(struct pipe_screen *screen, v
 {
    struct si_screen *sscreen = (struct si_screen *)screen;
    struct pipe_context *ctx;
+   struct si_context *sctx;
 
    if (sscreen->debug_flags & DBG(CHECK_VM))
       flags |= PIPE_CONTEXT_DEBUG;
 
    ctx = si_create_context(screen, flags);
+   sctx = (struct si_context *)ctx;
 
    if (ctx && sscreen->info.gfx_level >= GFX9 && sscreen->debug_flags & DBG(SQTT)) {
       /* Auto-enable stable performance profile if possible. */
       if (screen->num_contexts == 1)
-          sscreen->ws->cs_set_pstate(&((struct si_context *)ctx)->gfx_cs, RADEON_CTX_PSTATE_PEAK);
+          sscreen->ws->cs_set_pstate(&sctx->gfx_cs, RADEON_CTX_PSTATE_PEAK);
 
       if (ac_check_profile_state(&sscreen->info)) {
          mesa_loge("Canceling RGP trace request as a hang condition has been "
                    "detected. Force the GPU into a profiling mode with e.g. "
                    "\"echo profile_peak  > "
                    "/sys/class/drm/card0/device/power_dpm_force_performance_level\"");
-      } else if (!si_init_sqtt((struct si_context *)ctx)) {
-         FREE(ctx);
-         return NULL;
+      } else {
+         if (!si_init_sqtt(sctx)) {
+            FREE(ctx);
+            return NULL;
+         }
+
+         si_handle_sqtt(sctx, &sctx->gfx_cs);
       }
    }
 
@@ -1006,7 +1015,7 @@ static struct pipe_context *si_pipe_create_context(struct pipe_screen *screen, v
                                  .driver_calls_flush_notify = true,
                                  .unsynchronized_create_fence_fd = true,
                               },
-                              &((struct si_context *)ctx)->tc);
+                              &sctx->tc);
 
    if (tc && tc != ctx)
       threaded_context_init_bytes_mapped_limit((struct threaded_context *)tc, 4);
@@ -1097,6 +1106,7 @@ void si_destroy_screen(struct pipe_screen *pscreen)
    simple_mtx_destroy(&sscreen->gpu_load_mutex);
    simple_mtx_destroy(&sscreen->gds_mutex);
    simple_mtx_destroy(&sscreen->tess_ring_lock);
+   simple_mtx_destroy(&sscreen->print_ib_mutex);
 
    radeon_bo_reference(sscreen->ws, &sscreen->gds_oa, NULL);
 
@@ -1443,6 +1453,7 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
    (void)simple_mtx_init(&sscreen->gpu_load_mutex, mtx_plain);
    (void)simple_mtx_init(&sscreen->gds_mutex, mtx_plain);
    (void)simple_mtx_init(&sscreen->tess_ring_lock, mtx_plain);
+   (void)simple_mtx_init(&sscreen->print_ib_mutex, mtx_plain);
 
    si_init_gs_info(sscreen);
    if (!si_init_shader_cache(sscreen)) {
@@ -1658,7 +1669,7 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
    if (test_flags & DBG(TEST_IMAGE_COPY))
       si_test_image_copy_region(sscreen);
 
-   if (test_flags & (DBG(TEST_CB_RESOLVE) | DBG(TEST_COMPUTE_BLIT)))
+   if (test_flags & DBG(TEST_COMPUTE_BLIT))
       si_test_blit(sscreen, test_flags);
 
    if (test_flags & DBG(TEST_DMA_PERF))

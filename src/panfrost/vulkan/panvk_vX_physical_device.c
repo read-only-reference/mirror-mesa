@@ -113,9 +113,12 @@ panvk_per_arch(get_physical_device_extensions)(
       .KHR_spirv_1_4 = PAN_ARCH >= 10,
       .KHR_storage_buffer_storage_class = true,
 #ifdef PANVK_USE_WSI_PLATFORM
+      .KHR_present_id = true,
       .KHR_present_id2 = true,
+      .KHR_present_wait = true,
       .KHR_present_wait2 = true,
       .KHR_swapchain = true,
+      .KHR_swapchain_mutable_format = true,
 #endif
       .KHR_synchronization2 = true,
       .KHR_timeline_semaphore = true,
@@ -130,8 +133,10 @@ panvk_per_arch(get_physical_device_extensions)(
       .EXT_buffer_device_address = true,
       .EXT_calibrated_timestamps =
          device->kmod.dev->props.gpu_can_query_timestamp,
+      .EXT_color_write_enable = true,
       .EXT_custom_border_color = true,
       .EXT_depth_bias_control = true,
+      .EXT_depth_clamp_control = true,
       .EXT_depth_clamp_zero_one = true,
       .EXT_depth_clip_enable = true,
       .EXT_depth_clip_control = true,
@@ -154,7 +159,9 @@ panvk_per_arch(get_physical_device_extensions)(
       /* EXT_image_drm_format_modifier depends on KHR_sampler_ycbcr_conversion */
       .EXT_image_drm_format_modifier = true,
       .EXT_image_robustness = true,
+      .EXT_image_view_min_lod = true,
       .EXT_index_type_uint8 = true,
+      .EXT_legacy_dithering = true,
       .EXT_line_rasterization = true,
       .EXT_load_store_op_none = true,
       .EXT_non_seamless_cube_map = true,
@@ -183,12 +190,14 @@ panvk_per_arch(get_physical_device_extensions)(
       .EXT_shader_subgroup_vote = true,
       .EXT_subgroup_size_control = has_vk1_1,
       .EXT_texel_buffer_alignment = true,
+      .EXT_astc_decode_mode = PAN_ARCH >= 9,
       .EXT_texture_compression_astc_hdr = true,
       .EXT_tooling_info = true,
       .EXT_vertex_attribute_divisor = true,
       .EXT_vertex_input_dynamic_state = true,
       .EXT_ycbcr_2plane_444_formats = PAN_ARCH >= 10,
       .EXT_ycbcr_image_arrays = PAN_ARCH >= 10,
+      .EXT_zero_initialize_device_memory = true,
       .EXT_inline_uniform_block = true,
       .ANDROID_external_memory_android_hardware_buffer = has_gralloc,
       .ANDROID_native_buffer = has_gralloc,
@@ -371,7 +380,9 @@ panvk_per_arch(get_physical_device_features)(
       .hostQueryReset = true,
       .timelineSemaphore = true,
       .bufferDeviceAddress = true,
-      .bufferDeviceAddressCaptureReplay = false,
+      /* only expose for CSF/panthor, and if we have extended VA ranges */
+      .bufferDeviceAddressCaptureReplay =
+         (PAN_ARCH >= 10) && (device->memory.max_supported_va > (1ull << 32)),
       .bufferDeviceAddressMultiDevice = false,
       .vulkanMemoryModel = true,
       .vulkanMemoryModelDeviceScope = true,
@@ -393,6 +404,10 @@ panvk_per_arch(get_physical_device_features)(
       .synchronization2 = true,
       .textureCompressionASTC_HDR = has_texture_compression_astc_hdr(device),
       .shaderZeroInitializeWorkgroupMemory = true,
+
+      /* VK_EXT_astc_decode_mode */
+      .decodeModeSharedExponent = false,
+
       .dynamicRendering = true,
       .shaderIntegerDotProduct = true,
       .maintenance4 = true,
@@ -444,6 +459,9 @@ panvk_per_arch(get_physical_device_features)(
       .floatRepresentation = false,
       .depthBiasExact = true,
 
+      /* VK_EXT_depth_clamp_control */
+      .depthClampControl = true,
+
       /* VK_EXT_depth_clip_control */
       .depthClipControl = true,
 
@@ -462,6 +480,9 @@ panvk_per_arch(get_physical_device_features)(
       .formatA4R4G4B4 = true,
       .formatA4B4G4R4 = true,
 
+      /* VK_EXT_color_write_enable */
+      .colorWriteEnable = true,
+
       /* VK_EXT_custom_border_color */
       .customBorderColors = true,
 
@@ -472,6 +493,9 @@ panvk_per_arch(get_physical_device_features)(
       /* VK_EXT_image_2d_view_of_3d */
       .image2DViewOf3D = true,
       .sampler2DViewOf3D = true,
+
+      /* VK_EXT_image_view_min_lod */
+      .minLod = true,
 
       /* VK_EXT_primitive_topology_list_restart */
       .primitiveTopologyListRestart = true,
@@ -530,6 +554,9 @@ panvk_per_arch(get_physical_device_features)(
       /* VK_EXT_ycbcr_image_arrays */
       .ycbcrImageArrays = PAN_ARCH >= 10,
 
+      /* VK_EXT_legacy_dithering */
+      .legacyDithering = true,
+
       /* VK_EXT_non_seamless_cube_map */
       .nonSeamlessCubeMap = true,
 
@@ -538,12 +565,21 @@ panvk_per_arch(get_physical_device_features)(
       /* Video is not currently supported, so set to false */
       .unifiedImageLayoutsVideo = false,
 
+      /* VK_EXT_zero_initialize_device_memory */
+      .zeroInitializeDeviceMemory = true,
+
       /* VK_EXT_mutable_descriptor_type */
       .mutableDescriptorType = PAN_ARCH >= 9,
 
 #ifdef PANVK_USE_WSI_PLATFORM
+      /* VK_KHR_present_id */
+      .presentId = true,
+
       /* VK_KHR_present_id2 */
       .presentId2 = true,
+
+      /* VK_KHR_present_wait */
+      .presentWait = true,
 
       /* VK_KHR_present_wait2 */
       .presentWait2 = true,
@@ -1139,6 +1175,7 @@ panvk_per_arch(get_physical_device_properties)(
       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
       VK_IMAGE_LAYOUT_PREINITIALIZED,
+      VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT,
 
       /* Only if vk1.1+ is supported */
 #if PAN_ARCH >= 10

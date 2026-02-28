@@ -1,26 +1,7 @@
 /*
  * Copyright © 2017 Intel Corporation
+ * SPDX-License-Identifier: MIT
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included
- * in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
- * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
- */
-
-/**
  * @file iris_screen.c
  *
  * Screen related driver hooks and capability lists.
@@ -441,7 +422,7 @@ iris_init_screen_caps(struct iris_screen *screen)
     * extensive checking in the driver for correctness, e.g. to prevent
     * illegal snoop <-> snoop transfers.
     */
-   caps->resource_from_user_memory = devinfo->has_llc;
+   caps->resource_from_user_memory = devinfo->has_llc && devinfo->has_userptr_uapi;
    caps->throttle = !screen->driconf.disable_throttling;
 
    caps->context_priority_mask =
@@ -500,6 +481,12 @@ iris_init_screen_caps(struct iris_screen *screen)
     */
    caps->max_vma = intel_48b_address(UINT64_MAX) >> 1;
 
+   /* We could implement two-sided color via SBE attribute swizzling but
+    * opt to use common NIR lowering instead of maintaining the complexity
+    * for a minor improvement for a long deprecated feature.
+    */
+   caps->two_sided_color = false;
+
    if (devinfo->ver >= 9) {
       caps->shader_subgroup_size = 32;
       caps->shader_subgroup_supported_stages = BITFIELD_MASK(MESA_SHADER_STAGES);
@@ -542,6 +529,7 @@ iris_screen_destroy(struct iris_screen *screen)
    u_transfer_helper_destroy(screen->base.transfer_helper);
    iris_bufmgr_unref(screen->bufmgr);
    disk_cache_destroy(screen->disk_cache);
+   intel_virtio_unref_fd(screen->winsys_fd);
    close(screen->winsys_fd);
    ralloc_free(screen);
 }
@@ -685,6 +673,9 @@ iris_screen_create(int fd, const struct pipe_screen_config *config)
       bo_reuse = true;
       break;
    }
+
+   if (intel_virtio_init_fd(fd) < 0)
+      return NULL;
 
    process_intel_debug_variable();
 

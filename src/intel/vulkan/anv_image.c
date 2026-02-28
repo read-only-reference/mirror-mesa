@@ -453,7 +453,7 @@ formats_ccs_e_compatible(const struct anv_physical_device *physical_device,
 {
    const struct intel_device_info *devinfo = &physical_device->info;
 
-   if (!anv_format_supports_ccs_e(physical_device, format))
+   if (!isl_format_supports_ccs_e(devinfo, format))
       return false;
 
    /* For images created without MUTABLE_FORMAT_BIT set, we know that they will
@@ -479,19 +479,6 @@ formats_ccs_e_compatible(const struct anv_physical_device *physical_device,
    }
 
    return true;
-}
-
-bool
-anv_format_supports_ccs_e(const struct anv_physical_device *physical_device,
-                          const enum isl_format format)
-{
-   /* CCS_E for YCRCB_NORMAL and YCRCB_SWAP_UV is not currently supported by
-    * ANV so leave it disabled for now.
-    */
-   if (isl_format_is_yuv(format))
-      return false;
-
-   return isl_format_supports_ccs_e(&physical_device->info, format);
 }
 
 bool
@@ -657,31 +644,24 @@ add_aux_state_tracking_buffer(struct anv_device *device,
       }
    }
 
-   enum anv_image_memory_binding binding =
-      ANV_IMAGE_MEMORY_BINDING_PLANE_0 + plane;
-
    const struct isl_drm_modifier_info *mod_info =
       isl_drm_modifier_get_info(image->vk.drm_format_mod);
 
-   /* If an auxiliary surface is used for an externally-shareable image,
-    * we have to hide this from the memory of the image since other
-    * processes with access to the memory may not be aware of it or of
-    * its current state. So put that auxiliary data into a separate
-    * buffer (ANV_IMAGE_MEMORY_BINDING_PRIVATE).
+   /* If the image is created with a drm modifier that supports clear color,
+    * it will be exported along with main surface. Otherwise, place the
+    * aux-tracking state in a separate, suballocated buffer to achieve better
+    * memory utilization.
     *
-    * But when the image is created with a drm modifier that supports
-    * clear color, it will be exported along with main surface.
-    */
-   if (anv_image_is_externally_shared(image) &&
-       !mod_info->supports_clear_color)
-      binding = ANV_IMAGE_MEMORY_BINDING_PRIVATE;
-
-   /* The indirect clear color BO requires 64B-alignment on gfx11+. If we're
+    * The indirect clear color BO requires 64B-alignment on gfx11+. If we're
     * using a modifier with clear color, then some kernels might require a 4k
     * alignment.
     */
-   const uint32_t clear_color_alignment =
-      (mod_info && mod_info->supports_clear_color) ? 4096 : 64;
+   enum anv_image_memory_binding binding = ANV_IMAGE_MEMORY_BINDING_PRIVATE;
+   uint32_t clear_color_alignment = 64;
+   if (mod_info && mod_info->supports_clear_color) {
+      binding = ANV_IMAGE_MEMORY_BINDING_PLANE_0 + plane;
+      clear_color_alignment = 4096;
+   }
 
    return image_binding_grow(device, image, binding,
                              state_offset, state_size, clear_color_alignment,
@@ -1159,20 +1139,16 @@ check_memory_bindings(const struct anv_device *device,
       /* Check fast clear state */
       if (plane->fast_clear_memory_range.size > 0) {
          enum anv_image_memory_binding binding = primary_binding;
+         const struct isl_drm_modifier_info *mod_info =
+            isl_drm_modifier_get_info(image->vk.drm_format_mod);
 
-         /* If an auxiliary surface is used for an externally-shareable image,
-          * we have to hide this from the memory of the image since other
-          * processes with access to the memory may not be aware of it or of
-          * its current state. So put that auxiliary data into a separate
-          * buffer (ANV_IMAGE_MEMORY_BINDING_PRIVATE).
-          *
-          * But when the image is created with a drm modifier that supports
-          * clear color, it will be exported along with main surface.
+         /* If the image is created with a drm modifier that supports clear
+          * color, it will be exported along with main surface. Otherwise,
+          * place the aux-tracking state in a separate, suballocated buffer
+          * to achieve better memory utilization.
           */
-         if (anv_image_is_externally_shared(image)
-             && !isl_drm_modifier_get_info(image->vk.drm_format_mod)->supports_clear_color) {
+         if (!mod_info || !mod_info->supports_clear_color)
             binding = ANV_IMAGE_MEMORY_BINDING_PRIVATE;
-         }
 
          /* The indirect clear color BO requires 64B-alignment on gfx11+. */
          assert(plane->fast_clear_memory_range.alignment % 64 == 0);
@@ -1677,6 +1653,11 @@ alloc_private_binding(struct anv_device *device,
                                          &binding->address.bo);
    ANV_DMR_BO_ALLOC(&image->vk.base, binding->address.bo, result);
 
+   struct anv_address addr = anv_address_add(binding->address,
+                                             image->bindings[ANV_IMAGE_MEMORY_BINDING_PRIVATE].memory_range.offset);
+   ANV_ADDR_BINDING_REPORT_ADDR_BIND(device, &image->vk.base, addr,
+                                     image->bindings[ANV_IMAGE_MEMORY_BINDING_PRIVATE].memory_range.size);
+
    return result;
 }
 
@@ -1848,7 +1829,10 @@ anv_image_init(struct anv_device *device, struct anv_image *image,
    const struct wsi_image_create_info *wsi_info =
       vk_find_struct_const(pCreateInfo->pNext, WSI_IMAGE_CREATE_INFO_MESA);
    image->from_wsi = wsi_info != NULL;
-   image->wsi_blit_src = wsi_info && wsi_info->blit_src;
+
+   /* Non-intermediate WSI images are displayable. */
+   if (wsi_info && !wsi_info->blit_src)
+      isl_extra_usage_flags |= ISL_SURF_USAGE_DISPLAY_BIT;
 
    /* The Vulkan 1.2.165 glossary says:
     *
@@ -1910,10 +1894,6 @@ anv_image_init(struct anv_device *device, struct anv_image *image,
       isl_extra_usage_flags |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
    }
 
-   /* Mark WSI images with the right surf usage. */
-   if (image->from_wsi)
-      isl_extra_usage_flags |= ISL_SURF_USAGE_DISPLAY_BIT;
-
    const VkImageFormatListCreateInfo *fmt_list =
       vk_find_struct_const(pCreateInfo->pNext,
                            IMAGE_FORMAT_LIST_CREATE_INFO);
@@ -1954,7 +1934,7 @@ anv_image_init(struct anv_device *device, struct anv_image *image,
       }
 
       /* Workaround to disable XE2 CCS modifiers from drirc. */
-      if (device->info->ver == 20 &&
+      if (device->info->ver >= 20 &&
           image->vk.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT &&
           device->physical->instance->disable_xe2_drm_ccs_modifiers)
          isl_extra_usage_flags |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
@@ -2323,6 +2303,17 @@ anv_DestroyImage(VkDevice _device, VkImage _image,
    ANV_RMV(image_destroy, device, image);
 
    assert(&device->vk == image->vk.base.device);
+
+   /* Report UNBIND events for all bindings */
+   for (uint32_t b = 0; b < ARRAY_SIZE(image->bindings); b++) {
+      if (image->bindings[b].address.bo) {
+         struct anv_address addr = anv_address_add(image->bindings[b].address,
+                                                   image->bindings[b].memory_range.offset);
+         ANV_ADDR_BINDING_REPORT_ADDR_UNBIND(device, &image->vk.base, addr,
+                                             image->bindings[b].memory_range.size);
+      }
+   }
+
    anv_image_finish(image);
 
    vk_free2(&device->vk.alloc, pAllocator, image);
@@ -2969,6 +2960,12 @@ anv_image_bind_address(struct anv_device *device,
       }
    }
 
+   struct anv_address addr = anv_address_add(address,
+                                             image->bindings[binding].memory_range.offset);
+
+   ANV_ADDR_BINDING_REPORT_ADDR_BIND(device, &image->vk.base, addr,
+                                     image->bindings[binding].memory_range.size);
+
    ANV_RMV(image_bind, device, image, binding);
 
    return VK_SUCCESS;
@@ -3479,40 +3476,41 @@ anv_layout_to_aux_state(const struct intel_device_info * const devinfo,
    case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR: {
       assert(image->vk.aspects == VK_IMAGE_ASPECT_COLOR_BIT);
 
-      /* Handle transition to present layout for non wsi images just like
-       * normal images. Some apps like gfx-reconstruct incorrectly use this
-       * layout on non-wsi image which is against spec. It's easy enough to
-       * deal with it here and potentially avoid unnecessary resolve
-       * operations.
+      /* If this is a WSI blit source, it will never be scanout directly to
+       * display but will be copied to a dma-buf that can be scanout.
+       *
+       * GFXReconstruct's Virtual Swapchain feature behaves in a similar
+       * manner. Although this is against spec, it's easy enough to deal with
+       * it here.
        */
-      if (!image->from_wsi)
-         break;
+      const isl_surf_usage_flags_t surf_usage =
+         image->planes[plane].primary_surface.isl.usage;
+      if (!image->from_wsi || !isl_surf_usage_is_display(surf_usage)) {
+         return anv_layout_to_aux_state(devinfo, image, aspect,
+                                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                        queue_flags);
+      }
 
+      assert(image->vk.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT);
       enum isl_aux_state aux_state =
          isl_drm_modifier_get_default_aux_state(image->vk.drm_format_mod);
 
       switch (aux_state) {
       case ISL_AUX_STATE_AUX_INVALID:
          /* The modifier does not support compression. But, if we arrived
-          * here, then we have enabled compression on it anyway. If this is a
-          * WSI blit source, keep compression as we can do a compressed to
-          * uncompressed copy.
-          */
-         assert(devinfo->ver <= 11);
-         if (image->wsi_blit_src)
-            return ISL_AUX_STATE_COMPRESSED_CLEAR;
-
-         /* If this is not a WSI blit source, we must resolve the aux surface
-          * before we release ownership to the presentation engine (because,
-          * having no modifier, the presentation engine will not be aware of
-          * the aux surface). The presentation engine will not access the aux
-          * surface (because it is unware of it), and so the aux surface will
-          * still be resolved when we re-acquire ownership.
+          * here, then we have enabled compression on it anyway, in which case
+          * we must resolve the aux surface before we release ownership to the
+          * presentation engine (because, having no modifier, the presentation
+          * engine will not be aware of the aux surface). The presentation
+          * engine will not access the aux surface (because it is unware of
+          * it), and so the aux surface will still be resolved when we
+          * re-acquire ownership.
           *
           * Therefore, at ownership transfers in either direction, there does
           * exist an aux surface despite the lack of modifier and its state is
           * pass-through.
           */
+         assert(devinfo->ver <= 11);
          return ISL_AUX_STATE_PASS_THROUGH;
       case ISL_AUX_STATE_COMPRESSED_CLEAR:
          return ISL_AUX_STATE_COMPRESSED_CLEAR;

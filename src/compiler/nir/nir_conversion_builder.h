@@ -163,7 +163,10 @@ nir_round_int_to_float(nir_builder *b, nir_def *src,
       UNREACHABLE("unexpected rounding mode");
    } else {
       nir_def *mantissa_bit_size = nir_imm_int(b, mantissa_bits);
-      nir_def *msb = nir_imax(b, nir_ufind_msb(b, src), mantissa_bit_size);
+      nir_def *ufind_msb_src = src;
+      if (src->bit_size < 32)
+         ufind_msb_src = nir_u2u32(b, src);
+      nir_def *msb = nir_imax(b, nir_ufind_msb(b, ufind_msb_src), mantissa_bit_size);
       nir_def *bits_to_lose = nir_isub(b, msb, mantissa_bit_size);
       nir_def *one = nir_imm_intN_t(b, 1, src->bit_size);
       nir_def *adjust = nir_ishl(b, one, bits_to_lose);
@@ -486,6 +489,15 @@ nir_convert_with_rounding(nir_builder *b,
    if (trivial_convert)
       return nir_type_convert(b, src, src_type, dest_type, round);
 
+   /* Nontrivial float conversions have special infinity handling when
+    * clamping, so we can't have fast math enabled.
+    */
+   unsigned old_fp_ctrl = b->fp_math_ctrl;
+
+   if (src_base_type == nir_type_float || dest_base_type == nir_type_float) {
+      b->fp_math_ctrl = nir_fp_no_fast_math;
+   }
+
    nir_def *dest = src;
 
    /* clamp the result into range */
@@ -514,6 +526,7 @@ nir_convert_with_rounding(nir_builder *b,
    if (clamp_after_conversion)
       dest = nir_clamp_to_type_range(b, dest, dest_type, src, src_type, dest_type);
 
+   b->fp_math_ctrl = old_fp_ctrl;
    return dest;
 }
 

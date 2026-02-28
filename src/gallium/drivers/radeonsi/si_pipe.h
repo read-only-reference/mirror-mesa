@@ -133,32 +133,6 @@ enum si_has_ms {
    MS_ON,
 };
 
-#define DCC_CODE(x) (((x) << 24) | ((x) << 16) | ((x) << 8) | (x))
-
-enum si_clear_code
-{
-   /* Common clear codes. */
-   DCC_CLEAR_0000    = DCC_CODE(0x00), /* all bits are 0 */
-   DCC_UNCOMPRESSED  = DCC_CODE(0xFF),
-
-   GFX8_DCC_CLEAR_0000     = DCC_CLEAR_0000,
-   GFX8_DCC_CLEAR_0001     = DCC_CODE(0x40),
-   GFX8_DCC_CLEAR_1110     = DCC_CODE(0x80),
-   GFX8_DCC_CLEAR_1111     = DCC_CODE(0xC0),
-   GFX8_DCC_CLEAR_REG      = DCC_CODE(0x20),
-   GFX9_DCC_CLEAR_SINGLE   = DCC_CODE(0x10),
-
-   GFX11_DCC_CLEAR_SINGLE     = DCC_CODE(0x01),
-   GFX11_DCC_CLEAR_0000       = DCC_CLEAR_0000, /* all bits are 0 */
-   GFX11_DCC_CLEAR_1111_UNORM = DCC_CODE(0x02), /* all bits are 1 */
-   GFX11_DCC_CLEAR_1111_FP16  = DCC_CODE(0x04), /* all 16-bit words are 0x3c00, max 64bpp */
-   GFX11_DCC_CLEAR_1111_FP32  = DCC_CODE(0x06), /* all 32-bit words are 0x3f800000 */
-   /* Color bits are 0, alpha bits are 1; only 88, 8888, 16161616 */
-   GFX11_DCC_CLEAR_0001_UNORM = DCC_CODE(0x08),
-   /* Color bits are 1, alpha bits are 0, only 88, 8888, 16161616 */
-   GFX11_DCC_CLEAR_1110_UNORM = DCC_CODE(0x0A),
-};
-
 #define SI_IMAGE_ACCESS_DCC_OFF              (1 << 8)
 #define SI_IMAGE_ACCESS_ALLOW_DCC_STORE      (1 << 9)
 #define SI_IMAGE_ACCESS_BLOCK_FORMAT_AS_UINT (1 << 10) /* for compressed/subsampled images */
@@ -279,7 +253,6 @@ enum
    DBG_TEST_CLEAR_BUFFER,
    DBG_TEST_COPY_BUFFER,
    DBG_TEST_IMAGE_COPY,
-   DBG_TEST_CB_RESOLVE,
    DBG_TEST_COMPUTE_BLIT,
    DBG_TEST_VMFAULT_CP,
    DBG_TEST_VMFAULT_SHADER,
@@ -385,9 +358,6 @@ struct si_texture {
    struct si_resource *cmask_buffer;
    unsigned cb_color_info; /* fast clear enable bit */
    unsigned color_clear_value[2]; /* not on gfx11 */
-   unsigned last_msaa_resolve_target_micro_mode;
-   bool swap_rgb_to_bgr_on_next_clear;
-   bool swap_rgb_to_bgr;
    unsigned num_level0_transfers;
    unsigned plane_index; /* other planes are different pipe_resources */
    unsigned num_planes;
@@ -692,6 +662,9 @@ struct si_screen {
 
    /* mesh shader */
    struct ac_task_info task_info;
+
+   /* To sync different context print IB */
+   simple_mtx_t print_ib_mutex;
 };
 
 struct si_compute {
@@ -969,7 +942,6 @@ struct si_context {
    void *no_velems_state;
    void *discard_rasterizer_state;
    void *custom_dsa_flush;
-   void *custom_blend_resolve;
    void *custom_blend_fmask_decompress;
    void *custom_blend_eliminate_fastclear;
    void *custom_blend_dcc_decompress;
@@ -1437,8 +1409,6 @@ void si_gfx_copy_image(struct si_context *sctx, struct pipe_resource *dst,
                        const struct pipe_box *src_box);
 void si_decompress_dcc(struct si_context *sctx, struct si_texture *tex);
 void si_flush_implicit_resources(struct si_context *sctx);
-bool si_msaa_resolve_blit_via_CB(struct pipe_context *ctx, const struct pipe_blit_info *info,
-                                 bool fail_if_slow);
 void si_gfx_blit(struct pipe_context *ctx, const struct pipe_blit_info *info);
 
 /* si_nir_optim.c */
@@ -1701,17 +1671,6 @@ void si_test_copy_buffer(struct si_screen *sscreen);
 
 /* si_test_blit_perf.c */
 void si_test_blit_perf(struct si_screen *sscreen);
-
-/* si_uvd.c */
-struct pipe_video_codec *si_uvd_create_decoder(struct pipe_context *context,
-                                               const struct pipe_video_codec *templ);
-
-struct pipe_video_buffer *si_video_buffer_create(struct pipe_context *pipe,
-                                                 const struct pipe_video_buffer *tmpl);
-struct pipe_video_buffer *si_video_buffer_create_with_modifiers(struct pipe_context *pipe,
-                                                                const struct pipe_video_buffer *tmpl,
-                                                                const uint64_t *modifiers,
-                                                                unsigned int modifiers_count);
 
 /* si_state_viewport.c */
 void si_update_vs_viewport_state(struct si_context *ctx);

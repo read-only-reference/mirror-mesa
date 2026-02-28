@@ -49,6 +49,8 @@ static const struct debug_control panvk_debug_options[] = {
    {"no_wb_mmap", PANVK_DEBUG_NO_WB_MMAP},
    {"no_user_mmap_sync", PANVK_DEBUG_NO_USER_MMAP_SYNC},
    {"coherent_before_cached", PANVK_DEBUG_COHERENT_BEFORE_CACHED},
+   {"no_extended_va_range", PANVK_DEBUG_NO_EXTENDED_VA_RANGE},
+   {"hsr_prepass", PANVK_DEBUG_HSR_PREPASS},
    {NULL, 0},
 };
 
@@ -92,11 +94,16 @@ static const struct vk_instance_extension_table panvk_instance_extensions = {
    .KHR_external_semaphore_capabilities = true,
    .KHR_external_fence_capabilities = true,
    .KHR_get_physical_device_properties2 = true,
+#ifdef VK_USE_PLATFORM_DISPLAY_KHR
+   .KHR_get_display_properties2 = true,
+#endif
 #ifdef PANVK_USE_WSI_PLATFORM
+   .KHR_get_surface_capabilities2 = true,
    .KHR_surface = true,
 #endif
 #ifdef VK_USE_PLATFORM_DISPLAY_KHR
    .KHR_display = true,
+   .EXT_acquire_drm_display = true,
    .EXT_direct_mode_display = true,
    .EXT_display_surface_counter = true,
 #endif

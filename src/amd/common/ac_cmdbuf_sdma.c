@@ -222,10 +222,12 @@ static uint32_t
 ac_sdma_get_tiled_info_dword(const struct radeon_info *info,
                              const struct ac_sdma_surf_tiled *tiled)
 {
-   const uint32_t swizzle_mode = tiled->surf->has_stencil ? tiled->surf->u.gfx9.zs.stencil_swizzle_mode
-                                                          : tiled->surf->u.gfx9.swizzle_mode;
-   const uint16_t epitch = tiled->surf->has_stencil ? tiled->surf->u.gfx9.zs.stencil_epitch
-                                                    : tiled->surf->u.gfx9.epitch;
+   const uint32_t swizzle_mode =
+      tiled->is_stencil ? tiled->surf->u.gfx9.zs.stencil_swizzle_mode
+                        : tiled->surf->u.gfx9.swizzle_mode;
+   const uint16_t epitch =
+      tiled->is_stencil ? tiled->surf->u.gfx9.zs.stencil_epitch
+                        : tiled->surf->u.gfx9.epitch;
    const enum gfx9_resource_type dimension =
       ac_sdma_get_tiled_resource_dim(info->sdma_ip_version, tiled);
    const uint32_t mip_max = MAX2(tiled->num_levels, 1);
@@ -284,6 +286,7 @@ ac_sdma_get_tiled_metadata_config(const struct radeon_info *info,
    } else {
       const bool dcc_pipe_aligned = tiled->htile_enabled ||
                                     tiled->surf->u.gfx9.color.dcc.pipe_aligned;
+      const bool dcc_write_compress = !detile && !tiled->htile_enabled;
 
       return SDMA5_DCC_DATA_FORMAT(data_format) |
              SDMA5_DCC_ALPHA_IS_ON_MSB(alpha_is_on_msb) |
@@ -292,7 +295,7 @@ ac_sdma_get_tiled_metadata_config(const struct radeon_info *info,
              SDMA5_DCC_MAX_COM(dcc_max_compressed_block_size) |
              SDMA5_DCC_PIPE_ALIGNED(dcc_pipe_aligned) |
              SDMA5_DCC_MAX_UCOM(V_028C78_MAX_BLOCK_SIZE_256B) |
-             SDMA5_DCC_WRITE_COMPRESS(!detile) |
+             SDMA5_DCC_WRITE_COMPRESS(dcc_write_compress) |
              SDMA5_DCC_TMZ(tmz);
    }
 }

@@ -236,7 +236,11 @@ static bool handle_env_var_force_family(struct radeon_info *info)
 void
 ac_fill_cu_info(struct radeon_info *info, struct drm_amdgpu_info_device *device_info)
 {
+   STATIC_ASSERT(sizeof(struct ac_cu_info) == 48);
+
    struct ac_cu_info *cu_info = &info->cu_info;
+
+   cu_info->gfx_level = info->gfx_level;
 
    if (info->gfx_level >= GFX10_3)
       cu_info->max_waves_per_simd = 16;
@@ -320,6 +324,21 @@ ac_fill_cu_info(struct radeon_info *info, struct drm_amdgpu_info_device *device_
    /* GFX1013 is GFX10 plus ray tracing instructions */
    cu_info->has_image_bvh_intersect_ray = info->gfx_level >= GFX10_3 || info->family == CHIP_GFX1013;
 
+   /* On newer chips, it is not necessary for NGG shaders to request
+    * the allocation of GS space in passthrough mode, when they set
+    * PRIMGEN_PASSTHRU_NO_MSG.
+    */
+   cu_info->has_ngg_passthru_no_msg = info->family >= CHIP_NAVI23;
+
+   cu_info->local_invocation_ids_packed =
+      info->gfx_level >= GFX11 || (!info->has_graphics && info->family >= CHIP_MI200);
+
+   cu_info->has_3d_cube_border_color_mipmap = info->has_graphics || info->family == CHIP_MI100;
+
+   cu_info->conformant_trunc_coord =
+      info->drm_minor >= 52 && device_info &&
+      device_info->ids_flags & AMDGPU_IDS_FLAGS_CONFORMANT_TRUNC_COORD;
+
    cu_info->has_gfx6_mrt_export_bug =
       info->family == CHIP_TAHITI || info->family == CHIP_PITCAIRN || info->family == CHIP_VERDE;
    cu_info->has_vtx_format_alpha_adjust_bug = info->gfx_level <= GFX8 && info->family != CHIP_STONEY;
@@ -330,6 +349,26 @@ ac_fill_cu_info(struct radeon_info *info, struct drm_amdgpu_info_device *device_
     * - Make sure the offset stays within mapped VA ranges
     */
    cu_info->has_smem_oob_access_bug = info->gfx_level <= GFX7;
+
+   /* Whether chips are affected by the image load/sample/gather hw bug when
+    * DCC is enabled (ie. WRITE_COMPRESS_ENABLE should be 0).
+    */
+   cu_info->has_image_load_dcc_bug = info->family == CHIP_NAVI23 ||
+                                     info->family == CHIP_VANGOGH ||
+                                     info->family == CHIP_REMBRANDT;
+
+   cu_info->has_ls_vgpr_init_bug = info->family == CHIP_VEGA10 || info->family == CHIP_RAVEN;
+
+   /* On GFX6 and GFX7 except Hawaii, the CB doesn't clamp outputs
+    * to the range supported by the type if a channel has less
+    * than 16 bits and the export format is 16_ABGR.
+    * See waCbNoLt16BitIntClamp in PAL.
+    */
+   cu_info->has_cb_lt16bit_int_clamp_bug = info->gfx_level <= GFX7 &&
+                                           info->family != CHIP_HAWAII;
+
+   cu_info->has_vrs_frag_pos_z_bug =
+      info->family == CHIP_NAVI21 || info->family == CHIP_NAVI22 || info->family == CHIP_VANGOGH;
 }
 
 enum ac_query_gpu_info_result
@@ -1041,8 +1080,6 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       (info->family >= CHIP_POLARIS10 && info->family <= CHIP_POLARIS12) ||
       info->family == CHIP_VEGA10 || info->family == CHIP_RAVEN;
 
-   info->has_ls_vgpr_init_bug = info->family == CHIP_VEGA10 || info->family == CHIP_RAVEN;
-
    /* DB_DFSM_CONTROL.POPS_DRAIN_PS_ON_OVERLAP must be enabled for 8 or more coverage or
     * depth/stencil samples with POPS (PAL waMiscPopsMissedOverlap).
     */
@@ -1055,21 +1092,6 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
     * Drawing from 0-sized index buffers causes hangs on gfx10.
     */
    info->has_zero_index_buffer_bug = info->gfx_level == GFX6 || info->gfx_level == GFX10;
-
-   /* On GFX6 and GFX7 except Hawaii, the CB doesn't clamp outputs
-    * to the range supported by the type if a channel has less
-    * than 16 bits and the export format is 16_ABGR.
-    * See waCbNoLt16BitIntClamp in PAL.
-    */
-   info->has_cb_lt16bit_int_clamp_bug = info->gfx_level <= GFX7 &&
-                                        info->family != CHIP_HAWAII;
-
-   /* Whether chips are affected by the image load/sample/gather hw bug when
-    * DCC is enabled (ie. WRITE_COMPRESS_ENABLE should be 0).
-    */
-   info->has_image_load_dcc_bug = info->family == CHIP_NAVI23 ||
-                                  info->family == CHIP_VANGOGH ||
-                                  info->family == CHIP_REMBRANDT;
 
    /* DB has a bug when ITERATE_256 is set to 1 that can cause a hang. The
     * workaround is to set DECOMPRESS_ON_Z_PLANES to 2 for 4X MSAA D/S images.
@@ -1137,12 +1159,6 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
     * The workaround is to always export a single degenerate triangle.
     */
    info->has_ngg_fully_culled_bug = info->gfx_level == GFX10;
-
-   /* On newer chips, it is not necessary for NGG shaders to request
-    * the allocation of GS space in passthrough mode, when they set
-    * PRIMGEN_PASSTHRU_NO_MSG.
-    */
-   info->has_ngg_passthru_no_msg = info->family >= CHIP_NAVI23;
 
    info->has_export_conflict_bug = info->gfx_level == GFX11;
 
@@ -1348,7 +1364,6 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       }
    }
 
-   info->has_3d_cube_border_color_mipmap = info->has_graphics || info->family == CHIP_MI100;
    info->has_image_opcodes = debug_get_bool_option("AMD_IMAGE_OPCODES",
                                                    info->has_graphics || info->family < CHIP_GFX940);
    info->never_stop_sq_perf_counters = info->gfx_level == GFX10 ||
@@ -1495,10 +1510,6 @@ ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       info->pos_ring_offset = attribute_ring_size;
       info->prim_ring_offset = info->pos_ring_offset + pos_ring_size;
       info->total_attribute_pos_prim_ring_size = info->prim_ring_offset + prim_ring_size;
-
-      info->conformant_trunc_coord =
-         info->drm_minor >= 52 &&
-         device_info.ids_flags & AMDGPU_IDS_FLAGS_CONFORMANT_TRUNC_COORD;
 
       info->has_attr_ring = info->attribute_ring_size_per_se > 0;
    }
@@ -1793,10 +1804,10 @@ void ac_print_gpu_info(FILE *f, const struct radeon_info *info, int fd)
    fprintf(f, "    has_htile_tc_z_clear_bug_without_stencil = %i\n", info->has_htile_tc_z_clear_bug_without_stencil);
    fprintf(f, "    has_htile_tc_z_clear_bug_with_stencil = %i\n", info->has_htile_tc_z_clear_bug_with_stencil);
    fprintf(f, "    has_small_prim_filter_sample_loc_bug = %i\n", info->has_small_prim_filter_sample_loc_bug);
-   fprintf(f, "    has_ls_vgpr_init_bug = %i\n", info->has_ls_vgpr_init_bug);
+   fprintf(f, "    has_ls_vgpr_init_bug = %i\n", info->cu_info.has_ls_vgpr_init_bug);
    fprintf(f, "    has_pops_missed_overlap_bug = %i\n", info->has_pops_missed_overlap_bug);
    fprintf(f, "    has_32bit_predication = %i\n", info->has_32bit_predication);
-   fprintf(f, "    has_3d_cube_border_color_mipmap = %i\n", info->has_3d_cube_border_color_mipmap);
+   fprintf(f, "    has_3d_cube_border_color_mipmap = %i\n", info->cu_info.has_3d_cube_border_color_mipmap);
    fprintf(f, "    has_image_opcodes = %i\n", info->has_image_opcodes);
    fprintf(f, "    never_stop_sq_perf_counters = %i\n", info->never_stop_sq_perf_counters);
    fprintf(f, "    has_sqtt_rb_harvest_bug = %i\n", info->has_sqtt_rb_harvest_bug);
@@ -1809,7 +1820,7 @@ void ac_print_gpu_info(FILE *f, const struct radeon_info *info, int fd)
    fprintf(f, "    has_set_sh_pairs = %i\n", info->has_set_sh_pairs);
    fprintf(f, "    has_set_sh_pairs_packed = %i\n", info->has_set_sh_pairs_packed);
    fprintf(f, "    has_set_uconfig_pairs = %i\n", info->has_set_uconfig_pairs);
-   fprintf(f, "    conformant_trunc_coord = %i\n", info->conformant_trunc_coord);
+   fprintf(f, "    conformant_trunc_coord = %i\n", info->cu_info.conformant_trunc_coord);
    fprintf(f, "    mesh_fast_launch_2 = %i\n", info->mesh_fast_launch_2);
 
    if (info->gfx_level < GFX12) {
@@ -2332,11 +2343,8 @@ static uint16_t get_task_num_entries(enum radeon_family fam)
     * Use a low number on smaller chips so we don't waste space,
     * but keep it high on bigger chips so it doesn't inhibit parallelism.
     *
-    * This number is compiled into task/mesh shaders as a constant.
-    * In order to ensure this works fine with the shader cache, we must
-    * base this decision on the chip family, not the number of CUs in
-    * the current GPU. (So, the cache remains consistent for all
-    * chips in the same family.)
+    * TODO: should we base this decision on the number of CUs in the
+    * current GPU instead of the family?
     */
    switch (fam) {
    case CHIP_VANGOGH:

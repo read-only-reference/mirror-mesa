@@ -270,8 +270,7 @@ ir3_get_reg_independent_max_waves(struct ir3_shader_variant *v,
    }
 
    /* If this is a compute shader, compute the limit based on shared size */
-   if ((v->type == MESA_SHADER_COMPUTE) ||
-       (v->type == MESA_SHADER_KERNEL)) {
+   if (ir3_shader_compute(v)) {
       unsigned threads_per_wg =
          v->local_size[0] * v->local_size[1] * v->local_size[2];
       unsigned waves_per_wg =
@@ -1971,7 +1970,7 @@ ir3_valid_immediate(struct ir3_instruction *instr, int32_t immed)
    }
 
    /* Other than cat1 (mov) we can only encode up to 10 bits, sign-extended: */
-   return !(immed & ~0x1ff) || !(-immed & ~0x1ff);
+   return !(immed & ~0x1ff) || !(-(uint32_t)immed & ~0x1ff);
 }
 
 struct ir3_instruction *

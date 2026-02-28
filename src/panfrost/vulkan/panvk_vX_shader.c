@@ -377,6 +377,7 @@ panvk_get_spirv_options(UNUSED struct vk_physical_device *vk_pdev,
       .ssbo_addr_format = panvk_buffer_ssbo_addr_format(rs->storage_buffers),
       .phys_ssbo_addr_format = nir_address_format_64bit_global,
       .shared_addr_format = nir_address_format_32bit_offset,
+      .debug_info = pan_want_debug_info(PAN_ARCH),
    };
 }
 
@@ -804,7 +805,9 @@ panvk_lower_nir(struct panvk_device *dev, nir_shader *nir,
       nir_lower_non_uniform_ubo_access |
       nir_lower_non_uniform_ssbo_access |
       nir_lower_non_uniform_texture_access |
+      nir_lower_non_uniform_texture_query |
       nir_lower_non_uniform_image_access |
+      nir_lower_non_uniform_image_query |
       nir_lower_non_uniform_get_ssbo_size;
 #if PAN_ARCH < 9
    lower_non_uniform_access_types |=

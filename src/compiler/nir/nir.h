@@ -225,6 +225,7 @@ typedef enum {
    nir_resource_intel_sampler = 1u << 2,
    nir_resource_intel_non_uniform = 1u << 3,
    nir_resource_intel_sampler_embedded = 1u << 4,
+   nir_resource_intel_internal = 1u << 5,
 } nir_resource_data_intel;
 
 /**
@@ -1480,6 +1481,8 @@ typedef struct nir_op_info {
 
    /** Whether this represents a numeric conversion opcode */
    bool is_conversion;
+
+   uint8_t valid_fp_math_ctrl;
 } nir_op_info;
 
 /** Metadata for each nir_op, indexed by opcode */
@@ -1525,10 +1528,6 @@ typedef enum {
     * it must ensure that the resulting value is bit-for-bit identical to the
     * original, with the exception of undefindness allowed by other
     * nir_fp_math_control bits and NaN patterns.
-    *
-    * TODO This is currently also used to control NaN behavior of
-    * floating point comparisons and fmin/fmax/fsat.
-    * This should be changed to only depend on nir_fp_preserve_nan.
     */
    nir_fp_exact = BITFIELD_BIT(3),
 
@@ -1578,33 +1577,39 @@ typedef struct nir_alu_instr {
 } nir_alu_instr;
 
 static inline bool
-nir_alu_instr_is_signed_zero_preserve(nir_alu_instr *alu)
+nir_alu_instr_is_signed_zero_preserve(const nir_alu_instr *alu)
 {
    return alu->fp_math_ctrl & nir_fp_preserve_signed_zero;
 }
 
 static inline bool
-nir_alu_instr_is_inf_preserve(nir_alu_instr *alu)
+nir_alu_instr_is_inf_preserve(const nir_alu_instr *alu)
 {
    return alu->fp_math_ctrl & nir_fp_preserve_inf;
 }
 
 static inline bool
-nir_alu_instr_is_nan_preserve(nir_alu_instr *alu)
+nir_alu_instr_is_nan_preserve(const nir_alu_instr *alu)
 {
    return alu->fp_math_ctrl & nir_fp_preserve_nan;
 }
 
 static inline bool
-nir_alu_instr_is_signed_zero_inf_nan_preserve(nir_alu_instr *alu)
+nir_alu_instr_is_signed_zero_inf_nan_preserve(const nir_alu_instr *alu)
 {
    return alu->fp_math_ctrl & nir_fp_preserve_sz_inf_nan;
 }
 
 static inline bool
-nir_alu_instr_is_exact(nir_alu_instr *alu)
+nir_alu_instr_is_exact(const nir_alu_instr *alu)
 {
    return alu->fp_math_ctrl & nir_fp_exact;
+}
+
+static inline unsigned
+nir_op_valid_fp_math_ctrl(nir_op op, unsigned fp_math_ctrl)
+{
+   return fp_math_ctrl & nir_op_infos[op].valid_fp_math_ctrl;
 }
 
 void nir_alu_src_copy(nir_alu_src *dest, const nir_alu_src *src);
@@ -5194,12 +5199,6 @@ void nir_find_inlinable_uniforms(nir_shader *shader);
 bool nir_inline_uniforms(nir_shader *shader, unsigned num_uniforms,
                          const uint32_t *uniform_values,
                          const uint16_t *uniform_dw_offsets);
-bool nir_collect_src_uniforms(const nir_src *src, int component,
-                              uint32_t *uni_offsets, uint8_t *num_offsets,
-                              unsigned max_num_bo, unsigned max_offset);
-void nir_add_inlinable_uniforms(const nir_src *cond, nir_loop_info *info,
-                                uint32_t *uni_offsets, uint8_t *num_offsets,
-                                unsigned max_num_bo, unsigned max_offset);
 
 bool nir_inline_sysval(nir_shader *shader, nir_intrinsic_op op, uint64_t imm);
 
@@ -5536,6 +5535,7 @@ typedef struct nir_load_store_vectorize_options {
    unsigned (*round_up_components)(unsigned);
    nir_variable_mode modes;
    nir_variable_mode robust_modes;
+   nir_variable_mode bounds_checked_modes; /* modes with per-component bounds-checking */
    void *cb_data;
    bool has_shared2_amd;
    bool round_up_store_components;
@@ -5588,12 +5588,42 @@ nir_lower_shader_calls(nir_shader *shader,
 
 int nir_get_io_offset_src_number(const nir_intrinsic_instr *instr);
 int nir_get_io_index_src_number(const nir_intrinsic_instr *instr);
+int nir_get_io_data_src_number(const nir_intrinsic_instr *instr);
 int nir_get_io_arrayed_index_src_number(const nir_intrinsic_instr *instr);
 
 nir_src *nir_get_io_offset_src(nir_intrinsic_instr *instr);
 nir_src *nir_get_io_index_src(nir_intrinsic_instr *instr);
+nir_src *nir_get_io_data_src(nir_intrinsic_instr *instr);
 nir_src *nir_get_io_arrayed_index_src(nir_intrinsic_instr *instr);
 nir_src *nir_get_shader_call_payload_src(nir_intrinsic_instr *call);
+
+static inline unsigned
+nir_get_io_base_size_nv(const nir_intrinsic_instr *intr)
+{
+   switch (intr->intrinsic) {
+   case nir_intrinsic_global_atomic_nv:
+   case nir_intrinsic_global_atomic_swap_nv:
+   case nir_intrinsic_shared_atomic_nv:
+   case nir_intrinsic_shared_atomic_swap_nv:
+   case nir_intrinsic_load_global_nv:
+   case nir_intrinsic_load_scratch_nv:
+   case nir_intrinsic_load_shared_nv:
+   case nir_intrinsic_load_shared_lock_nv:
+   case nir_intrinsic_store_global_nv:
+   case nir_intrinsic_store_scratch_nv:
+   case nir_intrinsic_store_shared_nv:
+   case nir_intrinsic_store_shared_unlock_nv:
+      return 24;
+   case nir_intrinsic_ldc_nv:
+   case nir_intrinsic_ldcx_nv:
+      return 16;
+   case nir_intrinsic_vild_nv:
+      return 8;
+   default:
+      UNREACHABLE("unknown nvidia intrinsic");
+      return -1;
+   }
+}
 
 bool nir_is_shared_access(nir_intrinsic_instr *intr);
 bool nir_is_output_load(nir_intrinsic_instr *intr);
@@ -5757,6 +5787,7 @@ typedef struct nir_lower_subgroups_options {
    uint8_t ballot_bit_size;
    uint8_t ballot_components;
    bool lower_to_scalar : 1;
+   bool lower_vote : 1;
    bool lower_vote_trivial : 1;
    bool lower_vote_feq : 1;
    bool lower_vote_ieq : 1;
@@ -6121,7 +6152,9 @@ enum nir_lower_non_uniform_access_type {
    nir_lower_non_uniform_image_access = (1 << 3),
    nir_lower_non_uniform_get_ssbo_size = (1 << 4),
    nir_lower_non_uniform_texture_offset_access = (1 << 5),
-   nir_lower_non_uniform_access_type_count = 6,
+   nir_lower_non_uniform_texture_query = (1 << 6),
+   nir_lower_non_uniform_image_query = (1 << 7),
+   nir_lower_non_uniform_access_type_count = 8,
 };
 
 typedef bool (*nir_lower_non_uniform_src_access_callback)(const nir_tex_instr *, unsigned, void *);

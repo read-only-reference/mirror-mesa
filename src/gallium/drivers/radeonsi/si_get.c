@@ -10,7 +10,7 @@
 #include "ac_shader_util.h"
 #include "radeon_uvd_enc.h"
 #include "radeon_vce.h"
-#include "radeon_video.h"
+#include "si_video.h"
 #include "si_pipe.h"
 #include "util/u_cpu_detect.h"
 #include "util/u_screen.h"
@@ -1198,6 +1198,7 @@ void si_init_screen_caps(struct si_screen *sscreen)
    caps->has_const_bw = true;
    caps->cl_gl_sharing = true;
    caps->call_finalize_nir_in_linker = true;
+   caps->blit_3d = true;
 
    /* Fixup dmabuf caps for the virtio + vpipe case (when fd=-1, u_init_pipe_screen_caps
     * fails to set this capability). */
@@ -1227,7 +1228,7 @@ void si_init_screen_caps(struct si_screen *sscreen)
    caps->seamless_cube_map =
    caps->seamless_cube_map_per_texture =
    caps->cube_map_array =
-      sscreen->info.has_3d_cube_border_color_mipmap;
+      sscreen->info.cu_info.has_3d_cube_border_color_mipmap;
 
    caps->post_depth_coverage = sscreen->info.gfx_level >= GFX10;
 
@@ -1331,9 +1332,9 @@ void si_init_screen_caps(struct si_screen *sscreen)
    caps->max_vertex_attrib_stride = 2048;
 
    caps->max_texture_2d_size = sscreen->info.gfx_level >= GFX12 ? 65536 : 16384;
-   caps->max_texture_cube_levels = sscreen->info.has_3d_cube_border_color_mipmap ?
+   caps->max_texture_cube_levels = sscreen->info.cu_info.has_3d_cube_border_color_mipmap ?
       (sscreen->info.gfx_level >= GFX12 ? 17 : 15) /* 64K : 16K */ : 0;
-   caps->max_texture_3d_levels = sscreen->info.has_3d_cube_border_color_mipmap ?
+   caps->max_texture_3d_levels = sscreen->info.cu_info.has_3d_cube_border_color_mipmap ?
       /* This is limited by maximums that both the texture unit and layered rendering support. */
       (sscreen->info.gfx_level >= GFX12 ? 15 : /* 16K */
        (sscreen->info.gfx_level >= GFX10 ? 14 : 12)) /* 8K : 2K */ : 0;

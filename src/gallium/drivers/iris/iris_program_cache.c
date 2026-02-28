@@ -1,26 +1,7 @@
 /*
  * Copyright © 2017 Intel Corporation
+ * SPDX-License-Identifier: MIT
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included
- * in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
- * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
- */
-
-/**
  * @file iris_program_cache.c
  *
  * The in-memory program cache.  This is basically a hash table mapping
@@ -373,6 +354,7 @@ iris_ensure_indirect_generation_shader(struct iris_batch *batch)
 
    uint32_t uniform_size =
       screen->vtbl.call_generation_shader(screen, &b);
+   uniform_size = align(uniform_size, REG_SIZE);
 
    nir_shader *nir = b.shader;
 
@@ -441,7 +423,7 @@ iris_ensure_indirect_generation_shader(struct iris_batch *batch)
       union brw_any_prog_key prog_key;
       memset(&prog_key, 0, sizeof(prog_key));
 
-      struct brw_wm_prog_data *prog_data = ralloc_size(NULL, sizeof(*prog_data));
+      struct brw_fs_prog_data *prog_data = ralloc_size(NULL, sizeof(*prog_data));
       memset(prog_data, 0, sizeof(*prog_data));
       prog_data->base.push_sizes[0] = uniform_size;
 
@@ -454,7 +436,7 @@ iris_ensure_indirect_generation_shader(struct iris_batch *batch)
             .stats = stats,
             .mem_ctx = nir,
          },
-         .key = &prog_key.wm,
+         .key = &prog_key.fs,
          .prog_data = prog_data,
       };
       program = brw_compile_fs(screen->brw, &params);
@@ -465,7 +447,7 @@ iris_ensure_indirect_generation_shader(struct iris_batch *batch)
       union elk_any_prog_key prog_key;
       memset(&prog_key, 0, sizeof(prog_key));
 
-      struct elk_wm_prog_data *prog_data = ralloc_size(NULL, sizeof(*prog_data));
+      struct elk_fs_prog_data *prog_data = ralloc_size(NULL, sizeof(*prog_data));
       memset(prog_data, 0, sizeof(*prog_data));
       prog_data->base.nr_params = nir->num_uniforms / 4;
 
@@ -480,7 +462,7 @@ iris_ensure_indirect_generation_shader(struct iris_batch *batch)
             .stats = stats,
             .mem_ctx = nir,
          },
-         .key = &prog_key.wm,
+         .key = &prog_key.fs,
          .prog_data = prog_data,
       };
       program = elk_compile_fs(screen->elk, &params);

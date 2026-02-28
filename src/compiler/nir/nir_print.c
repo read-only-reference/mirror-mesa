@@ -482,6 +482,41 @@ print_alu_src(nir_alu_instr *instr, unsigned src, print_state *state)
 }
 
 static void
+print_fp_math_ctrl(unsigned fp_math_ctrl, print_state *state)
+{
+   FILE *fp = state->fp;
+
+   if (fp_math_ctrl & nir_fp_exact) {
+      fprintf(fp, "exact");
+      if (fp_math_ctrl & ~nir_fp_exact)
+         fprintf(fp, ", ");
+   }
+
+   if (fp_math_ctrl & nir_fp_preserve_sz_inf_nan) {
+      fprintf(fp, "preserve:");
+
+      static const struct {
+         nir_fp_math_control bit;
+         const char *name;
+      } preserve_bits[] = {
+         { nir_fp_preserve_signed_zero, "sz" },
+         { nir_fp_preserve_inf, "inf" },
+         { nir_fp_preserve_nan, "nan" },
+      };
+
+      bool first = true;
+      for (unsigned i = 0; i < ARRAY_SIZE(preserve_bits); i++) {
+         if (fp_math_ctrl & preserve_bits[i].bit) {
+            if (!first)
+               fprintf(fp, ",");
+            first = false;
+            fprintf(fp, "%s", preserve_bits[i].name);
+         }
+      }
+   }
+}
+
+static void
 print_alu_instr(nir_alu_instr *instr, print_state *state)
 {
    FILE *fp = state->fp;
@@ -489,8 +524,6 @@ print_alu_instr(nir_alu_instr *instr, print_state *state)
    print_def(&instr->def, state);
 
    fprintf(fp, " = %s", nir_op_infos[instr->op].name);
-   if (nir_alu_instr_is_exact(instr))
-      fprintf(fp, "!");
    if (instr->no_signed_wrap)
       fprintf(fp, ".nsw");
    if (instr->no_unsigned_wrap)
@@ -502,6 +535,11 @@ print_alu_instr(nir_alu_instr *instr, print_state *state)
          fprintf(fp, ", ");
 
       print_alu_src(instr, i, state);
+   }
+
+   if (instr->fp_math_ctrl) {
+      fprintf(fp, " // ");
+      print_fp_math_ctrl(instr->fp_math_ctrl, state);
    }
 }
 
@@ -859,6 +897,7 @@ print_access(enum gl_access_qualifier access, print_state *state, const char *se
       { ACCESS_SKIP_HELPERS, "skip-helpers" },
       { ACCESS_ATOMIC, "atomic" },
       { ACCESS_FUSED_EU_DISABLE_INTEL, "fused-eu-disable-intel" },
+      { ACCESS_SPARSE, "sparse" },
    };
 
    bool first = true;
@@ -1233,6 +1272,7 @@ static const char *sampler_dim_name[] = {
    [GLSL_SAMPLER_DIM_CUBE] = "Cube",
    [GLSL_SAMPLER_DIM_RECT] = "Rect",
    [GLSL_SAMPLER_DIM_BUF] = "Buf",
+   [GLSL_SAMPLER_DIM_EXTERNAL] = "External",
    [GLSL_SAMPLER_DIM_MS] = "2D-MSAA",
    [GLSL_SAMPLER_DIM_SUBPASS] = "Subpass",
    [GLSL_SAMPLER_DIM_SUBPASS_MS] = "Subpass-MSAA",
@@ -1479,13 +1519,18 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
 
          case nir_intrinsic_load_output:
          case nir_intrinsic_load_per_vertex_output:
-         case nir_intrinsic_load_tile_pan:
-         case nir_intrinsic_load_tile_res_pan:
          case nir_intrinsic_load_per_primitive_output:
          case nir_intrinsic_store_output:
          case nir_intrinsic_store_per_primitive_output:
          case nir_intrinsic_store_per_vertex_output:
          case nir_intrinsic_store_per_view_output:
+         case nir_intrinsic_blend_pan:
+         case nir_intrinsic_blend2_pan:
+         case nir_intrinsic_load_blend_input_pan:
+         case nir_intrinsic_load_clear_value_pan:
+         case nir_intrinsic_load_tile_pan:
+         case nir_intrinsic_load_tile_res_pan:
+         case nir_intrinsic_store_tile_pan:
             mode = nir_var_shader_out;
             break;
 
@@ -1666,6 +1711,9 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
                break;
             case nir_resource_intel_sampler_embedded:
                fprintf(fp, "sampler-embedded");
+               break;
+            case nir_resource_intel_internal:
+               fprintf(fp, "internal");
                break;
             default:
                fprintf(fp, "unknown");

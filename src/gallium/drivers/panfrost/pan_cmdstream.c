@@ -18,7 +18,6 @@
 #include "util/u_sample_positions.h"
 #include "util/u_vbuf.h"
 #include "util/u_viewport.h"
-#include "util/perf/cpu_trace.h"
 
 #include "decode.h"
 
@@ -28,6 +27,7 @@
 #include "pan_mod_conv_cso.h"
 #include "pan_blend.h"
 #include "pan_bo.h"
+#include "pan_buffer.h"
 #include "pan_cmdstream.h"
 #include "pan_context.h"
 #include "pan_csf.h"
@@ -43,6 +43,7 @@
 #include "pan_texture.h"
 #include "pan_util.h"
 #include "pan_desc.h"
+#include "pan_trace.h"
 
 /* JOBX() is used to select the job backend helpers to call from generic
  * functions. */
@@ -195,6 +196,8 @@ static void *
 panfrost_create_sampler_state(struct pipe_context *pctx,
                               const struct pipe_sampler_state *cso)
 {
+   PAN_TRACE_FUNC(PAN_TRACE_GL_CMDSTREAM);
+
    struct panfrost_sampler_state *so = CALLOC_STRUCT(panfrost_sampler_state);
    so->base = *cso;
 
@@ -294,6 +297,20 @@ panfrost_emit_blend(struct panfrost_batch *batch, void *rts,
       enum pipe_format format = batch->key.cbufs[i].format;
       float cons =
          pan_blend_get_constant(info.constant_mask, ctx->blend_color.color);
+      const struct pipe_rt_blend_state *rtso = &so->base.rt[i];
+      /*
+       * a fixed function blend with DST_ALPHA on a destination without
+       * alpha will actually be opaque (since alpha=1). The fixed function
+       * hardware doesn't handle this correctly, so force it to be opaque.
+       */
+      if (!blend_shaders[i] && rtso->blend_enable &&
+          rtso->rgb_src_factor == PIPE_BLENDFACTOR_DST_ALPHA &&
+          rtso->rgb_dst_factor == PIPE_BLENDFACTOR_INV_DST_ALPHA &&
+          rtso->rgb_func == PIPE_BLEND_ADD &&
+          !util_format_has_alpha(format))
+      {
+         info.opaque = true;
+      }
 
       /* Word 0: Flags and constant */
       pan_pack(packed, BLEND, cfg) {
@@ -323,18 +340,22 @@ panfrost_emit_blend(struct panfrost_batch *batch, void *rts,
       }
 
 #if PAN_ARCH >= 6
+#if PAN_ARCH <= 7
       struct panfrost_compiled_shader *fs = ctx->prog[MESA_SHADER_FRAGMENT];
+#endif
       struct mali_internal_blend_packed *internal_blend_packed =
          (struct mali_internal_blend_packed *)&packed->opaque[2];
 
       /* Words 2 and 3: Internal blend */
       if (blend_shaders[i]) {
+#if PAN_ARCH <= 7
          /* The blend shader's address needs to be at
           * the same top 32 bit as the fragment shader.
           * TODO: Ensure that's always the case.
           */
          assert(!fs->bin.bo || (blend_shaders[i] & (0xffffffffull << 32)) ==
                                   (fs->bin.gpu & (0xffffffffull << 32)));
+#endif
 
          pan_pack(internal_blend_packed, INTERNAL_BLEND, cfg) {
             cfg.mode = MALI_BLEND_MODE_SHADER;
@@ -2923,6 +2944,8 @@ emit_tls(struct panfrost_batch *batch)
 static void
 emit_fbd(struct panfrost_batch *batch, struct pan_fb_info *fb)
 {
+   PAN_TRACE_FUNC(PAN_TRACE_GL_CMDSTREAM);
+
    struct panfrost_device *dev = pan_device(batch->ctx->base.screen);
 
    struct pan_tls_info tls = get_tls_info(dev, batch);
@@ -3597,7 +3620,7 @@ panfrost_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
                   const struct pipe_draw_start_count_bias *draws,
                   unsigned num_draws)
 {
-   MESA_TRACE_FUNC();
+   PAN_TRACE_FUNC(PAN_TRACE_GL_CMDSTREAM);
 
    struct panfrost_context *ctx = pan_context(pipe);
 
@@ -3623,6 +3646,8 @@ panfrost_launch_grid_on_batch(struct pipe_context *pipe,
                               struct panfrost_batch *batch,
                               const struct pipe_grid_info *info)
 {
+   PAN_TRACE_FUNC(PAN_TRACE_GL_CMDSTREAM);
+
    struct panfrost_context *ctx = pan_context(pipe);
 
    util_dynarray_foreach(&ctx->global_buffers, struct pipe_resource *, res) {
@@ -3740,7 +3765,7 @@ panfrost_afbc_size(struct panfrost_batch *batch, struct panfrost_resource *src,
                    struct panfrost_bo *layout, unsigned offset,
                    unsigned level)
 {
-   MESA_TRACE_FUNC();
+   PAN_TRACE_FUNC(PAN_TRACE_GL_CMDSTREAM);
 
    struct pan_image_slice_layout *slice = &src->plane.layout.slices[level];
    struct panfrost_afbc_size_info consts = {
@@ -3768,7 +3793,7 @@ panfrost_afbc_pack(struct panfrost_batch *batch, struct panfrost_resource *src,
                    struct panfrost_bo *layout, unsigned layout_offset_B,
                    unsigned level)
 {
-   MESA_TRACE_FUNC();
+   PAN_TRACE_FUNC(PAN_TRACE_GL_CMDSTREAM);
 
    struct panfrost_device *dev = pan_device(src->base.screen);
    struct pan_image_slice_layout *src_slice = &src->plane.layout.slices[level];
@@ -3801,7 +3826,7 @@ panfrost_afbc_pack(struct panfrost_batch *batch, struct panfrost_resource *src,
 static void
 panfrost_mtk_detile_compute(struct panfrost_context *ctx, struct pipe_blit_info *info)
 {
-   MESA_TRACE_FUNC();
+   PAN_TRACE_FUNC(PAN_TRACE_GL_CMDSTREAM);
 
    struct pipe_context *pipe = &ctx->base;
    struct pipe_resource *y_src = info->src.resource;
@@ -3942,6 +3967,8 @@ static void *
 panfrost_create_rasterizer_state(struct pipe_context *pctx,
                                  const struct pipe_rasterizer_state *cso)
 {
+   PAN_TRACE_FUNC(PAN_TRACE_GL_CMDSTREAM);
+
    struct panfrost_rasterizer *so = CALLOC_STRUCT(panfrost_rasterizer);
 
    so->base = *cso;
@@ -4012,6 +4039,8 @@ panfrost_create_vertex_elements_state(struct pipe_context *pctx,
                                       unsigned num_elements,
                                       const struct pipe_vertex_element *elements)
 {
+   PAN_TRACE_FUNC(PAN_TRACE_GL_CMDSTREAM);
+
    struct panfrost_vertex_state *so = CALLOC_STRUCT(panfrost_vertex_state);
    UNUSED struct panfrost_device *dev = pan_device(pctx->screen);
 
@@ -4110,6 +4139,8 @@ static void *
 panfrost_create_depth_stencil_state(
    struct pipe_context *pipe, const struct pipe_depth_stencil_alpha_state *zsa)
 {
+   PAN_TRACE_FUNC(PAN_TRACE_GL_CMDSTREAM);
+
    struct panfrost_zsa_state *so = CALLOC_STRUCT(panfrost_zsa_state);
    so->base = *zsa;
 
@@ -4237,6 +4268,8 @@ static void *
 panfrost_create_blend_state(struct pipe_context *pipe,
                             const struct pipe_blend_state *blend)
 {
+   PAN_TRACE_FUNC(PAN_TRACE_GL_CMDSTREAM);
+
    struct panfrost_blend_state *so = CALLOC_STRUCT(panfrost_blend_state);
    so->base = *blend;
 
@@ -4281,12 +4314,12 @@ panfrost_create_blend_state(struct pipe_context *pipe,
          /* Could this possibly be fixed-function? */
          .fixed_function =
             !blend->logicop_enable &&
-            pan_blend_can_fixed_function(equation, supports_2src) &&
+            pan_blend_can_fixed_function(PAN_ARCH, equation, supports_2src) &&
             (!constant_mask || pan_blend_supports_constant(PAN_ARCH, c)),
 
          .fixed_function_float =
             !blend->logicop_enable &&
-            pan_blend_can_fixed_function(float_equation, supports_2src) &&
+            pan_blend_can_fixed_function(PAN_ARCH, float_equation, supports_2src) &&
             (!constant_mask || pan_blend_supports_constant(PAN_ARCH, c)),
 
          .alpha_zero_nop = pan_blend_alpha_zero_nop(equation),
@@ -4339,6 +4372,8 @@ static void
 prepare_shader(struct panfrost_compiled_shader *state,
                struct panfrost_pool *pool, bool upload)
 {
+   PAN_TRACE_FUNC(PAN_TRACE_GL_CMDSTREAM);
+
 #if PAN_ARCH <= 7
    struct mali_renderer_state_packed *out =
       (struct mali_renderer_state_packed *)&state->partial_rsd;
@@ -4438,6 +4473,8 @@ prepare_shader(struct panfrost_compiled_shader *state,
 static void
 screen_destroy(struct pipe_screen *pscreen)
 {
+   PAN_TRACE_FUNC(PAN_TRACE_GL_CMDSTREAM);
+
    struct panfrost_device *dev = pan_device(pscreen);
    GENX(pan_fb_preload_cache_cleanup)(&dev->fb_preload_cache);
    pan_blend_shader_cache_cleanup(&dev->blend_shaders);
@@ -4447,6 +4484,8 @@ static void
 panfrost_sampler_view_destroy(struct pipe_context *pctx,
                               struct pipe_sampler_view *pview)
 {
+   PAN_TRACE_FUNC(PAN_TRACE_GL_CMDSTREAM);
+
    struct panfrost_sampler_view *view = (struct panfrost_sampler_view *)pview;
 
    pipe_resource_reference(&pview->texture, NULL);

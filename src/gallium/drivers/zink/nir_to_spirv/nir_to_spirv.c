@@ -33,6 +33,15 @@
 
 #define SLOT_UNSET ((unsigned char) -1)
 
+static const SpvFPFastMathModeMask default_fp_mode =
+   SpvFPFastMathModeNSZMask |
+   SpvFPFastMathModeNotInfMask |
+   SpvFPFastMathModeNotNaNMask |
+   SpvFPFastMathModeAllowRecipMask |
+   SpvFPFastMathModeAllowContractMask |
+   SpvFPFastMathModeAllowReassocMask |
+   SpvFPFastMathModeAllowTransformMask;
+
 struct ntv_context {
    void *mem_ctx;
 
@@ -1066,6 +1075,7 @@ emit_output(struct ntv_context *ctx, struct nir_variable *var)
 static void
 emit_shader_temp(struct ntv_context *ctx, struct nir_variable *var)
 {
+   assert(!var->constant_initializer);
    SpvId var_type = get_glsl_type(ctx, var->type, true);
 
    SpvId pointer_type = spirv_builder_type_pointer(&ctx->builder,
@@ -1085,6 +1095,7 @@ emit_shader_temp(struct ntv_context *ctx, struct nir_variable *var)
 static void
 emit_temp(struct ntv_context *ctx, struct nir_variable *var)
 {
+   assert(!var->constant_initializer);
    SpvId var_type = get_glsl_type(ctx, var->type, true);
 
    SpvId pointer_type = spirv_builder_type_pointer(&ctx->builder,
@@ -1492,7 +1503,7 @@ emit_bo(struct ntv_context *ctx, struct nir_variable *var, bool aliased)
 
    unsigned idx = bitsize >> 4;
    assert(idx < ARRAY_SIZE(ctx->ssbos));
-   if (ssbo) {
+   if (ssbo && !ctx->sinfo->is_native_vulkan) {
       assert(!ctx->ssbos[idx]);
       ctx->ssbos[idx] = var_id;
       if (bitsize == 32)
@@ -2094,8 +2105,8 @@ emit_alu(struct ntv_context *ctx, nir_alu_instr *alu)
       result = emit_builtin_binop(ctx, spirv_op, dest_type, src[0], src[1]); \
       break;
 
-   BUILTIN_BINOP(nir_op_fmin, GLSLstd450FMin)
-   BUILTIN_BINOP(nir_op_fmax, GLSLstd450FMax)
+   BUILTIN_BINOP(nir_op_fmin, nir_alu_instr_is_nan_preserve(alu) ? GLSLstd450NMin : GLSLstd450FMin)
+   BUILTIN_BINOP(nir_op_fmax, nir_alu_instr_is_nan_preserve(alu) ? GLSLstd450NMax : GLSLstd450FMax)
    BUILTIN_BINOP(nir_op_imin, GLSLstd450SMin)
    BUILTIN_BINOP(nir_op_imax, GLSLstd450SMax)
    BUILTIN_BINOP(nir_op_umin, GLSLstd450UMin)
@@ -2286,8 +2297,33 @@ emit_alu(struct ntv_context *ctx, nir_alu_instr *alu)
       UNREACHABLE("unsupported opcode");
       return;
    }
-   if (nir_alu_instr_is_exact(alu))
-      spirv_builder_emit_decoration(&ctx->builder, result, SpvDecorationNoContraction);
+
+   if (ctx->sinfo->have_float_controls2) {
+      SpvFPFastMathModeMask fp_mode = 0;
+
+      if (!nir_alu_instr_is_signed_zero_preserve(alu))
+         fp_mode |= SpvFPFastMathModeNSZMask;
+
+      if (!nir_alu_instr_is_inf_preserve(alu))
+         fp_mode |= SpvFPFastMathModeNotInfMask;
+
+      if (!nir_alu_instr_is_nan_preserve(alu))
+         fp_mode |= SpvFPFastMathModeNotNaNMask;
+
+      if (!nir_alu_instr_is_exact(alu)) {
+         fp_mode |=
+            SpvFPFastMathModeAllowRecipMask |
+            SpvFPFastMathModeAllowContractMask |
+            SpvFPFastMathModeAllowReassocMask |
+            SpvFPFastMathModeAllowTransformMask;
+      }
+
+      if (fp_mode != default_fp_mode)
+         spirv_builder_emit_fp_fast_math_mode(&ctx->builder, result, fp_mode);
+   } else {
+      if (nir_alu_instr_is_exact(alu))
+         spirv_builder_emit_decoration(&ctx->builder, result, SpvDecorationNoContraction);
+   }
 
    store_alu_result(ctx, alu, result, atype);
 }
@@ -2973,6 +3009,7 @@ emit_global_atomic_intrinsic(struct ntv_context *ctx, nir_intrinsic_instr *intr)
 static void
 emit_get_ssbo_size(struct ntv_context *ctx, nir_intrinsic_instr *intr)
 {
+   assert(!ctx->sinfo->is_native_vulkan);
    SpvId uint_type = get_uvec_type(ctx, 32, 1);
    nir_variable *var = ctx->ssbo_vars;
    const struct glsl_type *bare_type = glsl_without_array(var->type);
@@ -3776,6 +3813,7 @@ emit_intrinsic(struct ntv_context *ctx, nir_intrinsic_instr *intr)
       break;
 
    case nir_intrinsic_load_base_vertex:
+   case nir_intrinsic_load_first_vertex:
       emit_load_uint_input(ctx, intr, &ctx->base_vertex_var, "gl_BaseVertex", SpvBuiltInBaseVertex);
       break;
 
@@ -4563,7 +4601,10 @@ emit_deref_array(struct ntv_context *ctx, nir_deref_instr *deref)
       /* this is either the array<buffers> deref or the array<uint> deref */
       if (glsl_type_is_struct_or_ifc(deref->type)) {
          /* array<buffers> */
-         type = get_bo_struct_type(ctx, var);
+         bool is_zink_bo = !ctx->sinfo->is_native_vulkan;
+         type = is_zink_bo ?
+                get_bo_struct_type(ctx, var) :
+                get_glsl_type(ctx, deref->type, false);
          break;
       }
       /* array<uint> */
@@ -4968,6 +5009,7 @@ nir_to_spirv(struct nir_shader *s, const struct ntv_info *sinfo)
       if (BITSET_TEST(s->info.system_values_read, SYSTEM_VALUE_INSTANCE_ID) ||
           BITSET_TEST(s->info.system_values_read, SYSTEM_VALUE_DRAW_ID) ||
           BITSET_TEST(s->info.system_values_read, SYSTEM_VALUE_BASE_INSTANCE) ||
+          BITSET_TEST(s->info.system_values_read, SYSTEM_VALUE_FIRST_VERTEX) ||
           BITSET_TEST(s->info.system_values_read, SYSTEM_VALUE_BASE_VERTEX)) {
          if (sinfo->spirv_version < SPIRV_VERSION(1, 3))
             spirv_builder_emit_extension(&ctx.builder, "SPV_KHR_shader_draw_parameters");
@@ -5163,7 +5205,8 @@ nir_to_spirv(struct nir_shader *s, const struct ntv_info *sinfo)
          emit_image(&ctx, var, get_bare_image_type(&ctx, var, false));
    }
 
-   if (sinfo->float_controls.flush_denorms) {
+   if (sinfo->float_controls.flush_denorms ||
+       sinfo->float_controls.preserve_denorms) {
       unsigned execution_mode = s->info.float_controls_execution_mode;
       bool flush_16_bit = nir_is_denorm_flush_to_zero(execution_mode, 16);
       bool flush_32_bit = nir_is_denorm_flush_to_zero(execution_mode, 32);
@@ -5228,6 +5271,20 @@ nir_to_spirv(struct nir_shader *s, const struct ntv_info *sinfo)
          spirv_builder_emit_cap(&ctx.builder, SpvCapabilityDenormFlushToZero);
       if (emit_cap_preserve)
          spirv_builder_emit_cap(&ctx.builder, SpvCapabilityDenormPreserve);
+   }
+
+   if (sinfo->have_float_controls2 && s->info.bit_sizes_float) {
+      spirv_builder_emit_extension(&ctx.builder, "SPV_KHR_float_controls2");
+      spirv_builder_emit_cap(&ctx.builder, SpvCapabilityFloatControls2);
+
+      SpvId defaults = spirv_builder_const_uint(&ctx.builder, 32, default_fp_mode);
+      u_foreach_bit(log_size, s->info.bit_sizes_float) {
+         SpvId float_type = spirv_builder_type_float(&ctx.builder, 1 << log_size);
+         SpvId params[2] = {float_type, defaults};
+         spirv_builder_emit_exec_mode_id(&ctx.builder, entry_point,
+                                          SpvExecutionModeFPFastMathDefault,
+                                          params, 2);
+      }
    }
 
    switch (s->info.stage) {
@@ -5316,9 +5373,9 @@ nir_to_spirv(struct nir_shader *s, const struct ntv_info *sinfo)
 
          /* WorkgroupSize is deprecated in SPIR-V 1.6 */
          if (sinfo->spirv_version >= SPIRV_VERSION(1, 6)) {
-            spirv_builder_emit_exec_mode_id3(&ctx.builder, entry_point,
-                                                  SpvExecutionModeLocalSizeId,
-                                                  sizes);
+            spirv_builder_emit_exec_mode_id(&ctx.builder, entry_point,
+                                            SpvExecutionModeLocalSizeId,
+                                            sizes, 3);
          } else {
             spirv_builder_emit_builtin(&ctx.builder, ctx.local_group_size_var, SpvBuiltInWorkgroupSize);
          }
@@ -5592,7 +5649,10 @@ ntv_shader_prepare(nir_shader *nir)
    NIR_PASS(_, nir, nir_split_per_member_structs);
    NIR_PASS(_, nir, nir_lower_returns);
    NIR_PASS(_, nir, nir_inline_functions);
+   nir_cleanup_functions(nir);
    optimize_nir(nir);
+   NIR_PASS(_, nir, nir_lower_variable_initializers, nir_var_shader_temp);
+   NIR_PASS(_, nir, nir_remove_dead_variables, nir_var_shader_temp, NULL);
    /* required until phi support is complete */
    NIR_PASS(_, nir, nir_convert_from_ssa, true, false);
    nir_foreach_variable_in_shader(var, nir) {
@@ -5610,4 +5670,5 @@ ntv_shader_prepare(nir_shader *nir)
          var->data.driver_location = var->data.binding;
       }
    }
+   nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 }

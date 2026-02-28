@@ -3126,9 +3126,9 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
       create_rpt = true;
       break;
    case nir_intrinsic_load_subgroup_size: {
-      assert(ctx->so->type == MESA_SHADER_COMPUTE ||
+      assert(ir3_shader_compute(ctx->so) ||
              ctx->so->type == MESA_SHADER_FRAGMENT);
-      unsigned size = ctx->so->type == MESA_SHADER_COMPUTE ?
+      unsigned size = ctx->so->type != MESA_SHADER_FRAGMENT ?
          IR3_DP_CS(subgroup_size) : IR3_DP_FS(subgroup_size);
       dst[0] = create_driver_param(ctx, size);
       break;
@@ -4608,6 +4608,30 @@ instr_can_be_predicated(nir_instr *instr)
 }
 
 static bool
+block_can_be_predicated(nir_block *block)
+{
+   unsigned num_instrs = 0;
+
+   nir_foreach_instr (instr, block) {
+      if (!instr_can_be_predicated(instr)) {
+         return false;
+      }
+
+      /* Limit the size of predicated blocks: even when the branch condition is
+       * divergent, it may still be uniform within a wave. When this happens for
+       * very large blocks, predication causes a large overhead because the
+       * instructions in the false block are not simply jumped over. Therefore,
+       * we fall back to normal branches for large blocks.
+       */
+      if (++num_instrs > 32) {
+         return false;
+      }
+   }
+
+   return true;
+}
+
+static bool
 nif_can_be_predicated(nir_if *nif)
 {
    /* For non-divergent branches, predication is more expensive than a branch
@@ -4627,17 +4651,8 @@ nif_can_be_predicated(nir_if *nif)
       return false;
    }
 
-   nir_foreach_instr (instr, nir_if_first_then_block(nif)) {
-      if (!instr_can_be_predicated(instr))
-         return false;
-   }
-
-   nir_foreach_instr (instr, nir_if_first_else_block(nif)) {
-      if (!instr_can_be_predicated(instr))
-         return false;
-   }
-
-   return true;
+   return block_can_be_predicated(nir_if_first_then_block(nif)) &&
+          block_can_be_predicated(nir_if_first_else_block(nif));
 }
 
 /* A typical if-else block like this:
@@ -5842,8 +5857,9 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
       chsh->barrier_conflict = IR3_BARRIER_EVERYTHING;
    } else {
       assert((ctx->noutputs % 4) == 0);
-      unsigned outidxs[ctx->noutputs / 4];
-      struct ir3_instruction *outputs[ctx->noutputs / 4];
+      unsigned alloc_noutputs = ctx->noutputs == 0 ? 1 : ctx->noutputs / 4;
+      unsigned outidxs[alloc_noutputs];
+      struct ir3_instruction *outputs[alloc_noutputs];
       unsigned outputs_count = 0;
 
       struct ir3_block *b = ctx->block;
@@ -6120,7 +6136,7 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
     */
    IR3_PASS(ir, ir3_legalize, so, &max_bary);
 
-   if (ctx->compiler->cs_lock_unlock_quirk && so->type == MESA_SHADER_COMPUTE) {
+   if (ctx->compiler->cs_lock_unlock_quirk && ir3_shader_compute(so)) {
       struct ir3_instruction *end = ir3_find_end(so->ir);
       struct ir3_instruction *lock =
          ir3_build_instr(&ctx->build, OPC_LOCK, 0, 0);

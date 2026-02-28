@@ -350,6 +350,10 @@
    DRI_CONF_OPT_B(fake_sparse, def, \
                   "Advertise support for sparse binding of textures regardless of real support")
 
+#define DRI_CONF_INTEL_BINDING_TABLE_BLOCK_SIZE(def,min,max) \
+   DRI_CONF_OPT_I(intel_binding_table_block_size, def, min, max, \
+                  "Intel binding table block allocation size (3DSTATE_BINDING_TABLE_POOL_ALLOC)")
+
 #define DRI_CONFIG_INTEL_TBIMR(def) \
    DRI_CONF_OPT_B(intel_tbimr, def, "Enable TBIMR tiled rendering")
 
@@ -973,5 +977,11 @@
 
 #define DRI_CONF_DZN_DISABLE(def) \
    DRI_CONF_OPT_B(dzn_disable, def, "Fail instance creation")
+
+/**
+ * \brief NVK specific configuration options
+ */
+
+ #define DRI_CONF_NVK_APP_LAYER() DRI_CONF_OPT_S_NODEF(nvk_app_layer, "Select an application layer.")
 
 #endif

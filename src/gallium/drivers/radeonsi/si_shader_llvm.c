@@ -116,7 +116,7 @@ static void si_llvm_context_init(struct si_shader_context *ctx, struct si_screen
    ctx->screen = sscreen;
    ctx->compiler = compiler;
 
-   ac_llvm_context_init(&ctx->ac, compiler, &sscreen->info, float_mode,
+   ac_llvm_context_init(&ctx->ac, compiler, &sscreen->info.cu_info, float_mode,
                         wave_size, exports_color_null, exports_mrtz);
 }
 
@@ -544,7 +544,6 @@ static bool si_llvm_translate_nir(struct si_shader_context *ctx, struct si_shade
 
    ctx->abi.clamp_shadow_reference = true;
    ctx->abi.robust_buffer_access = true;
-   ctx->abi.load_grid_size_from_user_sgpr = true;
    ctx->abi.clamp_div_by_zero = ctx->screen->options.clamp_div_by_zero ||
                                 info->options & SI_PROFILE_CLAMP_DIV_BY_ZERO;
    ctx->abi.disable_aniso_single_level = true;

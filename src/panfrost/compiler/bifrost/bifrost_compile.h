@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2019 Alyssa Rosenzweig <alyssa@rosenzweig.io>
+ * Copyright (C) 2018-2019 Alyssa Rosenzweig
  * SPDX-License-Identifier: MIT
  */
 
@@ -70,6 +70,7 @@ void bifrost_lower_texture_nir(nir_shader *nir, unsigned gpu_id);
 void bifrost_lower_texture_late_nir(nir_shader *nir, unsigned gpu_id);
 
 bool bifrost_will_dump_shaders(void);
+bool bifrost_want_debug_info(void);
 
 void bifrost_compile_shader_nir(nir_shader *nir,
                                 const struct pan_compile_inputs *inputs,
@@ -106,6 +107,7 @@ valhal_writes_extended_fifo(uint64_t outputs_written,
 #define DEFINE_OPTIONS(arch)                                                   \
    static const nir_shader_compiler_options bifrost_nir_options_v##arch = {    \
       .lower_scmp = true,                                                      \
+      .lower_vector_cmp = true,                                                \
       .lower_flrp16 = true,                                                    \
       .lower_flrp32 = true,                                                    \
       .lower_flrp64 = true,                                                    \

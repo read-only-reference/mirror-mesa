@@ -119,6 +119,7 @@ zink_debug_options[] = {
    { "msaaopt", ZINK_DEBUG_MSAAOPT, "Optimize out loads/stores of MSAA attachments" },
    { "rploads", ZINK_DEBUG_RPLOADS, "Zap renderpass loads for DONT_CARE" },
    { "nogeneral", ZINK_DEBUG_NOGENERAL, "Disable GENERAL layout usage for supported hardware" },
+   { "rpstores", ZINK_DEBUG_RPSTORES, "Zap renderpass stores for DONT_CARE" },
    DEBUG_NAMED_VALUE_END
 };
 
@@ -1057,10 +1058,14 @@ zink_init_screen_caps(struct zink_screen *screen)
    caps->shader_buffer_offset_alignment =
       screen->info.props.limits.minStorageBufferOffsetAlignment;
 
-   caps->pci_group =
-   caps->pci_bus =
-   caps->pci_device =
-   caps->pci_function = 0; /* TODO: figure these out */
+   if (screen->info.have_EXT_pci_bus_info) {
+      caps->pci_group = screen->info.pci_props.pciDomain;
+      caps->pci_bus = screen->info.pci_props.pciBus;
+      caps->pci_device = screen->info.pci_props.pciDevice;
+      caps->pci_function = screen->info.pci_props.pciFunction;
+   } else {
+      caps->pci_group = caps->pci_bus = caps->pci_device = caps->pci_function = 0;
+   }
 
    caps->cull_distance = screen->info.feats.features.shaderCullDistance;
 
@@ -1299,7 +1304,7 @@ zink_is_format_supported(struct pipe_screen *pscreen,
    }
 
    /* always use superset to determine feature support */
-   VkFormat vkformat = zink_get_format(screen, PIPE_FORMAT_A8_UNORM ? zink_format_get_emulated_alpha(format) : format);
+   VkFormat vkformat = zink_get_format(screen, format == PIPE_FORMAT_A8_UNORM ? zink_format_get_emulated_alpha(format) : format);
    if (vkformat == VK_FORMAT_UNDEFINED)
       return false;
 
@@ -2832,7 +2837,6 @@ check_base_requirements(struct zink_screen *screen)
       screen->info.have_EXT_scalar_block_layout = true;
    }
    if (!screen->info.feats.features.logicOp ||
-       !screen->info.feats.features.shaderClipDistance ||
        !(screen->info.feats12.scalarBlockLayout ||
          screen->info.have_EXT_scalar_block_layout) ||
        !screen->info.have_KHR_maintenance1 ||
@@ -2845,7 +2849,6 @@ check_base_requirements(struct zink_screen *screen)
       if (!screen->info.X) \
          fprintf(stderr, "%s ", #X)
       CHECK_OR_PRINT(feats.features.logicOp);
-      CHECK_OR_PRINT(feats.features.shaderClipDistance);
       if (!screen->info.feats12.scalarBlockLayout && !screen->info.have_EXT_scalar_block_layout)
          fprintf(stderr, "scalarBlockLayout OR EXT_scalar_block_layout ");
       CHECK_OR_PRINT(have_KHR_maintenance1);
@@ -3077,6 +3080,8 @@ init_driver_workarounds(struct zink_screen *screen)
    case VK_DRIVER_ID_MESA_TURNIP:
    case VK_DRIVER_ID_MESA_NVK:
    case VK_DRIVER_ID_MESA_LLVMPIPE:
+   case VK_DRIVER_ID_MESA_PANVK:
+   case VK_DRIVER_ID_ARM_PROPRIETARY:
       screen->driver_workarounds.can_do_invalid_linear_modifier = true;
       break;
    default:
@@ -3148,6 +3153,16 @@ init_driver_workarounds(struct zink_screen *screen)
 
    if (!screen->resizable_bar)
       screen->info.have_EXT_host_image_copy = false;
+
+   /* msrtss being enabled for all singlesampled images has a massive memory usage implication on this
+    * driver. temporary, could be removed after the driver handles shadow images better. */
+   switch (zink_driverid(screen)) {
+   case VK_DRIVER_ID_MESA_PANVK:
+      screen->info.have_EXT_multisampled_render_to_single_sampled = false;
+      break;
+   default:
+      break;
+   }
 }
 
 static void

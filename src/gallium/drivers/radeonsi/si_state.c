@@ -546,7 +546,8 @@ static void *si_create_blend_state_mode(struct pipe_context *ctx,
          ac_pm4_set_reg(&pm4->base, R_028760_SX_MRT0_BLEND_OPT + i * 4, sx_mrt_blend_opt[i]);
 
       /* RB+ doesn't work with dual source blending, logic op, and RESOLVE. */
-      if (blend->dual_src_blend || logicop_enable || mode == V_028808_CB_RESOLVE ||
+      assert(sctx->gfx_level >= GFX11 || mode != V_028808_CB_RESOLVE); /* never used */
+      if (blend->dual_src_blend || logicop_enable ||
           /* Disabling RB+ improves blending performance in synthetic tests on GFX11. */
           (sctx->gfx_level == GFX11 && blend->blend_enable_4bit))
          color_control |= S_028808_DISABLE_DUAL_QUAD(1);
@@ -1910,7 +1911,7 @@ static uint32_t si_translate_texformat(struct pipe_screen *screen, enum pipe_for
 
 static unsigned is_wrap_mode_legal(struct si_screen *screen, unsigned wrap)
 {
-   if (!screen->info.has_3d_cube_border_color_mipmap) {
+   if (!screen->info.cu_info.has_3d_cube_border_color_mipmap) {
       switch (wrap) {
       case PIPE_TEX_WRAP_CLAMP:
       case PIPE_TEX_WRAP_CLAMP_TO_BORDER:
@@ -2185,6 +2186,8 @@ static bool si_is_format_supported(struct pipe_screen *screen, enum pipe_format 
    struct si_screen *sscreen = (struct si_screen *)screen;
    unsigned retval = 0;
 
+   usage &= ~PIPE_BIND_OPENCL;
+
    if (target >= PIPE_MAX_TEXTURE_TYPES) {
       PRINT_ERR("radeonsi: unsupported texture type %d\n", target);
       return false;
@@ -2197,7 +2200,7 @@ static bool si_is_format_supported(struct pipe_screen *screen, enum pipe_format 
       usage |= PIPE_BIND_SAMPLER_VIEW;
 
    if ((target == PIPE_TEXTURE_3D || target == PIPE_TEXTURE_CUBE) &&
-        !sscreen->info.has_3d_cube_border_color_mipmap)
+        !sscreen->info.cu_info.has_3d_cube_border_color_mipmap)
       return false;
 
    if (util_format_get_num_planes(format) >= 2)
@@ -2477,6 +2480,11 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
       return;
    }
 
+   ASSERTED bool is_msaa_resolve = state->nr_cbufs == 2 &&
+                                   state->cbufs[0].texture && state->cbufs[0].texture->nr_samples > 1 &&
+                                   state->cbufs[1].texture && state->cbufs[1].texture->nr_samples <= 1;
+   assert(!is_msaa_resolve); /* CB_RESOLVE is never used (also not supported by GFX11+). */
+
    si_fb_barrier_after_rendering(sctx, SI_FB_BARRIER_SYNC_ALL);
 
    /* Take the maximum of the old and new count. If the new count is lower,
@@ -2563,16 +2571,6 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
          sctx->framebuffer.compressed_cb_mask |= 1 << i;
       else
          sctx->framebuffer.uncompressed_cb_mask |= 1 << i;
-
-      /* Don't update nr_color_samples for non-AA buffers.
-       * (e.g. destination of MSAA resolve)
-       */
-      if (tex->buffer.b.b.nr_samples >= 2 &&
-          tex->buffer.b.b.nr_storage_samples < tex->buffer.b.b.nr_samples) {
-         sctx->framebuffer.nr_color_samples =
-            MIN2(sctx->framebuffer.nr_color_samples, tex->buffer.b.b.nr_storage_samples);
-         sctx->framebuffer.nr_color_samples = MAX2(1, sctx->framebuffer.nr_color_samples);
-      }
 
       if (tex->surface.is_linear)
          sctx->framebuffer.any_dst_linear = true;
@@ -2692,12 +2690,6 @@ static void gfx6_emit_framebuffer_state(struct si_context *sctx, unsigned index)
    struct radeon_cmdbuf *cs = &sctx->gfx_cs;
    struct pipe_framebuffer_state *state = &sctx->framebuffer.state;
    unsigned i, nr_cbufs = state->nr_cbufs;
-   bool is_msaa_resolve = state->nr_cbufs == 2 &&
-                          state->cbufs[0].texture && state->cbufs[0].texture->nr_samples > 1 &&
-                          state->cbufs[1].texture && state->cbufs[1].texture->nr_samples <= 1;
-
-   /* CB can't do MSAA resolve on gfx11. */
-   assert(!is_msaa_resolve || sctx->gfx_level < GFX11);
 
    radeon_begin(cs);
 
@@ -2752,8 +2744,7 @@ static void gfx6_emit_framebuffer_state(struct si_context *sctx, unsigned index)
          /* CMASK and fast clears are configured elsewhere. */
          .cmask_enabled = false,
          .fast_clear_enabled = false,
-         .dcc_enabled = vi_dcc_enabled(tex, cb_psurf->level) &&
-                        (i != 1 || !is_msaa_resolve),
+         .dcc_enabled = vi_dcc_enabled(tex, cb_psurf->level),
       };
       struct ac_cb_surface cb_surf;
 
@@ -2762,20 +2753,6 @@ static void gfx6_emit_framebuffer_state(struct si_context *sctx, unsigned index)
       cb_surf.cb_color_info |= tex->cb_color_info;
 
       if (sctx->gfx_level < GFX11) {
-         if (tex->swap_rgb_to_bgr) {
-            /* Swap R and B channels. */
-            static unsigned rgb_to_bgr[4] = {
-               [V_028C70_SWAP_STD] = V_028C70_SWAP_ALT,
-               [V_028C70_SWAP_ALT] = V_028C70_SWAP_STD,
-               [V_028C70_SWAP_STD_REV] = V_028C70_SWAP_ALT_REV,
-               [V_028C70_SWAP_ALT_REV] = V_028C70_SWAP_STD_REV,
-            };
-            unsigned swap = rgb_to_bgr[G_028C70_COMP_SWAP(cb_surf.cb_color_info)];
-
-            cb_surf.cb_color_info &= C_028C70_COMP_SWAP;
-            cb_surf.cb_color_info |= S_028C70_COMP_SWAP(swap);
-         }
-
          if (cb_psurf->level > 0)
             cb_surf.cb_color_info &= C_028C70_FAST_CLEAR;
          else
@@ -2990,12 +2967,6 @@ static void gfx11_dgpu_emit_framebuffer_state(struct si_context *sctx, unsigned 
    struct radeon_cmdbuf *cs = &sctx->gfx_cs;
    struct pipe_framebuffer_state *state = &sctx->framebuffer.state;
    unsigned i, nr_cbufs = state->nr_cbufs;
-   bool is_msaa_resolve = state->nr_cbufs == 2 &&
-                          state->cbufs[0].texture && state->cbufs[0].texture->nr_samples > 1 &&
-                          state->cbufs[1].texture && state->cbufs[1].texture->nr_samples <= 1;
-
-   /* CB can't do MSAA resolve on gfx11. */
-   assert(!is_msaa_resolve);
 
    radeon_begin(cs);
    gfx11_begin_packed_context_regs();
@@ -3137,12 +3108,6 @@ static void gfx12_emit_framebuffer_state(struct si_context *sctx, unsigned index
    struct radeon_cmdbuf *cs = &sctx->gfx_cs;
    struct pipe_framebuffer_state *state = &sctx->framebuffer.state;
    unsigned i, nr_cbufs = state->nr_cbufs;
-   bool is_msaa_resolve = state->nr_cbufs == 2 &&
-                          state->cbufs[0].texture && state->cbufs[0].texture->nr_samples > 1 &&
-                          state->cbufs[1].texture && state->cbufs[1].texture->nr_samples <= 1;
-
-   /* CB can't do MSAA resolve. */
-   assert(!is_msaa_resolve);
 
    radeon_begin(cs);
    gfx12_begin_context_regs();
@@ -4157,7 +4122,7 @@ static void *si_create_sampler_state(struct pipe_context *ctx,
    bool trunc_coord = (state->min_img_filter == PIPE_TEX_FILTER_NEAREST &&
                        state->mag_img_filter == PIPE_TEX_FILTER_NEAREST &&
                        state->compare_mode == PIPE_TEX_COMPARE_NONE) ||
-                      sscreen->info.conformant_trunc_coord;
+                      sscreen->info.cu_info.conformant_trunc_coord;
    union pipe_color_union clamped_border_color;
 
    if (!rstate) {
@@ -4168,7 +4133,7 @@ static void *si_create_sampler_state(struct pipe_context *ctx,
    if (!is_wrap_mode_legal(sscreen, state->wrap_s) ||
        !is_wrap_mode_legal(sscreen, state->wrap_t) ||
        !is_wrap_mode_legal(sscreen, state->wrap_r) ||
-       (!sscreen->info.has_3d_cube_border_color_mipmap &&
+       (!sscreen->info.cu_info.has_3d_cube_border_color_mipmap &&
         (state->min_mip_filter != PIPE_TEX_MIPFILTER_NONE ||
          state->max_anisotropy > 0))) {
       assert(0);
@@ -4799,7 +4764,6 @@ void si_init_state_functions(struct si_context *sctx)
    sctx->custom_dsa_flush = si_create_db_flush_dsa(sctx);
 
    if (sctx->gfx_level < GFX11) {
-      sctx->custom_blend_resolve = si_create_blend_custom(sctx, V_028808_CB_RESOLVE);
       sctx->custom_blend_fmask_decompress = si_create_blend_custom(sctx, V_028808_CB_FMASK_DECOMPRESS);
       sctx->custom_blend_eliminate_fastclear =
          si_create_blend_custom(sctx, V_028808_CB_ELIMINATE_FAST_CLEAR);

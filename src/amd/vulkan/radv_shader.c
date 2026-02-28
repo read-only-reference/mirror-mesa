@@ -743,7 +743,7 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_shader_st
             });
 
    NIR_PASS(_, nir, nir_lower_load_const_to_scalar);
-   NIR_PASS(_, nir, nir_opt_shrink_stores, !instance->drirc.debug.disable_shrink_image_store);
+   NIR_PASS(_, nir, nir_opt_shrink_stores, !pdev->cache_key.disable_shrink_image_store);
    if (nir->info.stage == MESA_SHADER_FRAGMENT && nir->info.fs.uses_discard)
       NIR_PASS(_, nir, nir_lower_discard_if, nir_move_terminate_out_of_loops);
 
@@ -823,7 +823,7 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_shader_st
     * considered too large for unrolling.
     */
    bool indirect_derefs_lowered = false;
-   NIR_PASS(indirect_derefs_lowered, nir, ac_nir_lower_indirect_derefs, pdev->info.gfx_level);
+   NIR_PASS(indirect_derefs_lowered, nir, ac_nir_lower_indirect_derefs);
    NIR_PASS(_, nir, nir_lower_vars_to_ssa);
 
    if (indirect_derefs_lowered && !stage->key.optimisations_disabled &&
@@ -1008,6 +1008,7 @@ radv_lower_ngg(struct radv_device *device, struct radv_shader_stage *ngg_stage,
                options.has_param_exports, &scratch_ring, info->wave_size, hw_workgroup_size,
                gfx_state->has_multiview_view_index, info->ms.has_query);
       ngg_stage->info.ms.needs_ms_scratch_ring = scratch_ring;
+      ngg_stage->info.ngg_wave_id_en = scratch_ring;
    } else {
       UNREACHABLE("invalid SW stage passed to radv_lower_ngg");
    }
@@ -1739,6 +1740,8 @@ radv_precompute_registers_hw_gs(struct radv_device *device, const struct radv_sh
    }
 
    regs->vgt_gs_max_vert_out = gs_info->gs.vertices_out;
+
+   radv_get_esgs_gsvs_ring_size(device, regs, NULL, gs_info);
 }
 
 void

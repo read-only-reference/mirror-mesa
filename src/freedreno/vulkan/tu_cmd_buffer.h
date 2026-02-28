@@ -344,6 +344,7 @@ struct tu_render_pass_state
 
    const char *lrz_disable_reason;
    uint32_t lrz_disabled_at_draw;
+   const char *lrz_write_disable_reason;
    uint32_t lrz_write_disabled_at_draw;
 
    const char *gmem_disable_reason;
@@ -944,6 +945,9 @@ _tu_create_fdm_bin_patchpoint(struct tu_cmd_buffer *cmd,
    _tu_create_fdm_bin_patchpoint(cmd, cs, size, flags, apply, &state, sizeof(state))
 
 VkResult tu_init_bin_preamble(struct tu_device *device);
+
+template <chip CHIP>
+void tu_init_hw_rp(struct tu_cs *cs);
 
 void
 tu7_set_thread_br_patchpoint(struct tu_cmd_buffer *cmd,

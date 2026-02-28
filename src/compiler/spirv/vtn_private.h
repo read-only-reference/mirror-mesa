@@ -43,6 +43,7 @@ extern uint32_t mesa_spirv_debug;
 #define MESA_SPIRV_DEBUG_VALUES         (1u << 1)
 #define MESA_SPIRV_DEBUG_ASM            (1u << 2)
 #define MESA_SPIRV_DEBUG_COLOR          (1u << 3)
+#define MESA_SPIRV_DEBUG_OFFSETS        (1u << 4)
 
 struct vtn_builder;
 struct vtn_decoration;
@@ -974,7 +975,8 @@ nir_alu_type vtn_convert_op_src_type(SpvOp opcode);
 nir_alu_type vtn_convert_op_dst_type(SpvOp opcode);
 
 nir_op vtn_nir_alu_op_for_spirv_opcode(struct vtn_builder *b,
-                                       SpvOp opcode, bool *swap, bool *exact,
+                                       SpvOp opcode, bool *swap,
+                                       unsigned *extra_fp_math_ctrl,
                                        const glsl_type *src_type,
                                        const glsl_type *dst_type);
 

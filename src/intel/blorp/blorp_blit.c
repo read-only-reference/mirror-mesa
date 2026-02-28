@@ -1493,8 +1493,10 @@ blorp_build_nir_shader(struct blorp_context *blorp,
 
       if (key->dst_samples > 1) {
          nir_def *num_layers_data =
-            nir_load_inline_data_intel(&b, 1, 32,
-               .base = BLORP_INLINE_PARAM_THREAD_GROUP_ID_Z_DIMENSION);
+            nir_load_inline_data_intel(
+               &b, 1, 32, nir_imm_int(&b, 0),
+               .base = BLORP_INLINE_PARAM_THREAD_GROUP_ID_Z_DIMENSION,
+               .range = 4);
 
          nir_def *z_pos = nir_umod(&b, nir_channel(&b, store_pos, 2),
                                    num_layers_data);
@@ -1549,7 +1551,7 @@ blorp_get_blit_kernel_fs(struct blorp_batch *batch,
    struct blorp_context *blorp = batch->blorp;
 
    if (blorp->lookup_shader(batch, key, sizeof(*key),
-                            &params->wm_prog_kernel, &params->wm_prog_data))
+                            &params->wm_prog_kernel, &params->fs_prog_data))
       return true;
 
    void *mem_ctx = ralloc_context(NULL);
@@ -1570,7 +1572,7 @@ blorp_get_blit_kernel_fs(struct blorp_batch *batch,
                            key, sizeof(*key),
                            p.kernel, p.kernel_size,
                            p.prog_data, p.prog_data_size,
-                           &params->wm_prog_kernel, &params->wm_prog_data);
+                           &params->wm_prog_kernel, &params->fs_prog_data);
 
    ralloc_free(mem_ctx);
    return result;
@@ -2787,18 +2789,6 @@ get_ccs_compatible_uint_format(const struct isl_format_layout *fmtl)
 
    case ISL_FORMAT_R8G8_SNORM:
    case ISL_FORMAT_R8G8_SINT:
-      return ISL_FORMAT_R8G8_UINT;
-
-   case ISL_FORMAT_YCRCB_NORMAL:
-   case ISL_FORMAT_YCRCB_SWAPY:
-   case ISL_FORMAT_YCRCB_SWAPUV:
-   case ISL_FORMAT_YCRCB_SWAPUVY:
-      /* Tiger Lake starts claiming CCS_E support for certain YCRCB formats.
-       * BLORP chooses to take the CCS-compatible format path whenever ISL
-       * claims CCS_E support on a format, not when CCS_E is actually used.
-       * Therefore, if these formats are going to be used with BLORP, we need
-       * a CCS-compatible format. R8G8_UINT seems as good as any.
-       */
       return ISL_FORMAT_R8G8_UINT;
 
    case ISL_FORMAT_R8_SNORM:

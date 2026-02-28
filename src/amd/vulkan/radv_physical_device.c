@@ -283,7 +283,7 @@ radv_physical_device_init_cache_key(struct radv_physical_device *pdev)
 
    key->family = pdev->info.family;
    key->ptr_size = sizeof(void *);
-   key->conformant_trunc_coord = pdev->info.conformant_trunc_coord;
+   key->conformant_trunc_coord = pdev->info.cu_info.conformant_trunc_coord;
 
    key->clear_lds = instance->drirc.misc.clear_lds;
    key->cs_wave32 = pdev->cs_wave_size == 32;
@@ -730,7 +730,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
                                VIDEO_CODEC_AV1DEC && pdev->video_decode_enabled),
       .KHR_video_decode_queue = pdev->video_decode_enabled,
       .KHR_video_decode_h264 = VIDEO_CODEC_H264DEC && pdev->video_decode_enabled,
-      .KHR_video_decode_h265 = VIDEO_CODEC_H265DEC && pdev->video_decode_enabled,
+      .KHR_video_decode_h265 = pdev->info.family >= CHIP_TONGA && VIDEO_CODEC_H265DEC && pdev->video_decode_enabled,
       .KHR_video_decode_vp9 =
          (radv_video_decode_vp9_supported(pdev) && VIDEO_CODEC_VP9DEC && pdev->video_decode_enabled),
       .KHR_video_encode_h264 = VIDEO_CODEC_H264ENC && pdev->video_encode_enabled,
@@ -882,6 +882,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .NV_compute_shader_derivatives = true,
       .NV_cooperative_matrix2 = radv_cooperative_matrix2_nv_enabled(pdev),
       .VALVE_mutable_descriptor_type = true,
+      .VALVE_shader_mixed_float_dot_product = pdev->info.cu_info.has_accelerated_dot_product,
       .VALVE_video_encode_rgb_conversion =
          pdev->video_encode_enabled && pdev->info.vcn_ip_version >= VCN_2_0_0 && pdev->info.vcn_ip_version != VCN_2_2_0,
    };
@@ -1518,6 +1519,12 @@ radv_physical_device_get_features(const struct radv_physical_device *pdev, struc
 
       /* VK_KHR_internally_synchronized_queues */
       .internallySynchronizedQueues = true,
+
+      /* VK_VALVE_shader_mixed_float_dot_product */
+      .shaderMixedFloatDotProductFloat16AccFloat32 = true,
+      .shaderMixedFloatDotProductFloat16AccFloat16 = pdev->info.gfx_level >= GFX11,
+      .shaderMixedFloatDotProductBFloat16Acc = radv_bfloat16_enabled(pdev),
+      .shaderMixedFloatDotProductFloat8AccFloat32 = pdev->info.gfx_level >= GFX12,
    };
 }
 
@@ -1699,7 +1706,7 @@ radv_get_physical_device_properties(struct radv_physical_device *pdev)
       .maxFragmentOutputAttachments = 8,
       .maxFragmentDualSrcAttachments = 1,
       .maxFragmentCombinedOutputResources = max_descriptor_set_size,
-      .maxComputeSharedMemorySize = pdev->max_shared_size,
+      .maxComputeSharedMemorySize = pdev->info.lds_size_per_workgroup,
       .maxComputeWorkGroupCount = {4294967295, 65535, 65535},
       .maxComputeWorkGroupInvocations = 1024,
       .maxComputeWorkGroupSize = {1024, 1024, 1024},
@@ -2248,7 +2255,6 @@ radv_get_physical_device_properties(struct radv_physical_device *pdev)
       VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR,
       VK_IMAGE_LAYOUT_VIDEO_DECODE_SRC_KHR,
       VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR,
-      VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR,
       VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR,
       VK_IMAGE_LAYOUT_VIDEO_ENCODE_DST_KHR,
       VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR,
@@ -2523,8 +2529,6 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
 
    radv_probe_video_decode(pdev);
    radv_probe_video_encode(pdev);
-
-   pdev->max_shared_size = pdev->info.gfx_level >= GFX7 ? 65536 : 32768;
 
    radv_physical_device_init_mem_types(pdev);
 

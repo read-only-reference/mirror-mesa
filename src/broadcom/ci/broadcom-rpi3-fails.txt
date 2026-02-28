@@ -43,6 +43,14 @@ dEQP-GLES2.functional.texture.mipmap.2d.basic.nearest_linear_repeat_non_square,F
 # mag.  Also a line of pixels through the image in minification.
 dEQP-GLES2.functional.texture.wrap.clamp_clamp_nearest_npot_etc1,Fail
 
+# VC4 hardware doesn't have support for non-uniform loops in the vertex shader.
+# The execution of non-uniform loops in VS can cause infinite loops and lead
+# to GPU hangs. Therefore, the compiler fails shader linking in the presence of
+# divergent loops.
+spec@glsl-1.10@execution@glsl-vs-if-nested-loop,Fail
+shaders@glsl-vs-loop,Fail
+shaders@glsl-vs-loop-nested,Fail
+
 # Despite exposing GL 2.1, the HW doesn't actually support 3D textures so we set
 # 0 max levels.  These tests fail (or assertion fail) as a result.
 spec@!opengl 1.1@max-texture-size,Crash
@@ -765,7 +773,6 @@ spec@!opengl 1.1@clipflat@glDrawElements(GL_TRIANGLE_STRIP)- glFrontFace(GL_CW)-
 spec@!opengl 1.1@clipflat@glDrawElements(GL_TRIANGLE_STRIP)- glFrontFace(GL_CW)- glPolygonMode(GL_LINE)- quadrant: right bottom PV: FIRST,Fail
 spec@!opengl 1.1@clipflat@glDrawElements(GL_TRIANGLE_STRIP)- glFrontFace(GL_CW)- glPolygonMode(GL_LINE)- quadrant: right middle PV: FIRST,Fail
 spec@!opengl 1.1@clipflat@glDrawElements(GL_TRIANGLE_STRIP)- glFrontFace(GL_CW)- glPolygonMode(GL_LINE)- quadrant: right top PV: FIRST,Fail
-spec@!opengl 1.1@depthstencil-default_fb-drawpixels-float-and-ushort samples=4,Fail
 spec@arb_clear_texture@arb_clear_texture-3d,Fail
 spec@arb_clear_texture@arb_clear_texture-sized-formats,Fail
 spec@glsl-1.10@execution@glsl-fs-inline-explosion,Crash
@@ -774,9 +781,6 @@ spec@glsl-1.10@execution@glsl-vs-inline-explosion,Crash
 # A sub-case involving polygon stipple fails because driver doesn't implement
 # stipple
 spec@!opengl 1.0@gl-1.0-no-op-paths,Fail
-
-# Bisected to b3133e250e1 ("gallium: add pipe_context::resource_release to eliminate buffer refcounting")
-spec@!opengl 1.1@longprim,Crash
 
 # Crashes in this group are CMA allocation fails
 spec@!opengl 1.1@depthstencil-default_fb-clear samples=2,Fail
@@ -964,8 +968,6 @@ spec@arb_texture_rectangle@texrect-many,Crash
 spec@arb_vertex_program@minmax,Fail
 spec@egl 1.4@eglterminate then unbind context,Fail
 spec@egl 1.4@largest possible eglcreatepbuffersurface and then glclear,Fail
-spec@egl_khr_gl_image@egl_khr_gl_renderbuffer_image-clear-shared-image gl_depth_component24,Fail
-spec@egl_khr_gl_image@egl_khr_gl_renderbuffer_image-clear-shared-image gl_rgba,Fail
 spec@egl_khr_surfaceless_context@viewport,Fail
 spec@egl_mesa_configless_context@basic,Fail
 spec@ext_direct_state_access@multi-texture,Crash
@@ -1203,9 +1205,6 @@ spec@ext_framebuffer_multisample@unaligned-blit 4 stencil msaa,Fail
 
 # https://gitlab.freedesktop.org/mesa/piglit/-/merge_requests/817
 spec@intel_performance_query@intel_performance_query-issue_2235,Fail
-
-# Couldn't reproduce locally
-spec@oes_packed_depth_stencil@depth_stencil texture gles2,Fail
 
 # Failures from arm32
 arm32-KHR-GLES2.core.internalformat.texture2d.depth_component_unsigned_int_depth_component16,Fail

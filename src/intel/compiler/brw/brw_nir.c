@@ -92,10 +92,17 @@ io_component(nir_intrinsic_instr *io,
       const int offset = cb_data->per_primitive_byte_offsets[sem.location];
       assert(offset != -1);
       c += (offset % 16) / 4;
-   } else if (nir_intrinsic_has_io_semantics(io) &&
-              nir_intrinsic_io_semantics(io).location == VARYING_SLOT_PSIZ) {
-      /* Point Size lives in component .w of the VUE header */
-      c += 3;
+   } else if (nir_intrinsic_has_io_semantics(io)) {
+      const nir_io_semantics sem = nir_intrinsic_io_semantics(io);
+      /* The VUE header stores Primitive Shading Rate (.x), Layer (.y),
+       * Viewport (.z), and Point Size (.w) in a single vec4.
+       */
+      if (sem.location == VARYING_SLOT_LAYER)
+         c += 1;
+      else if (sem.location == VARYING_SLOT_VIEWPORT)
+         c += 2;
+      else if (sem.location == VARYING_SLOT_PSIZ)
+         c += 3;
    }
 
    return c;
@@ -178,6 +185,23 @@ urb_offset(nir_builder *b,
 }
 
 static nir_def *
+input_handle(nir_builder *b, nir_intrinsic_instr *intrin)
+{
+   const enum mesa_shader_stage stage = b->shader->info.stage;
+   nir_src *vertex = nir_get_io_arrayed_index_src(intrin);
+
+   return stage == MESA_SHADER_TESS_CTRL || stage == MESA_SHADER_GEOMETRY ?
+          nir_load_urb_input_handle_indexed_intel(b, 1, 32, vertex->ssa) :
+          nir_load_urb_input_handle_intel(b);
+}
+
+static nir_def *
+output_handle(nir_builder *b)
+{
+   return nir_load_urb_output_handle_intel(b);
+}
+
+static nir_def *
 load_urb(nir_builder *b,
          const struct brw_lower_urb_cb_data *cb_data,
          nir_intrinsic_instr *intrin,
@@ -256,7 +280,6 @@ static void
 store_urb(nir_builder *b,
           const struct brw_lower_urb_cb_data *cb_data,
           nir_intrinsic_instr *intrin,
-          nir_def *urb_handle,
           nir_def *offset)
 {
    const struct intel_device_info *devinfo = cb_data->devinfo;
@@ -268,7 +291,7 @@ store_urb(nir_builder *b,
 
    if (devinfo->ver >= 20) {
       offset = nir_ishl_imm(b, offset, cb_data->vec4_access ? 4 : 2);
-      nir_def *addr = nir_iadd(b, urb_handle, offset);
+      nir_def *addr = nir_iadd(b, output_handle(b), offset);
       while (mask) {
          int start, count;
          u_bit_scan_consecutive_range(&mask, &start, &count);
@@ -313,25 +336,8 @@ store_urb(nir_builder *b,
    nir_def *vec4_offset =
       cb_data->vec4_access ? offset : nir_ishr_imm(b, offset, 2);
 
-   nir_store_urb_vec4_intel(b, src, urb_handle, vec4_offset, channel_mask,
-                            .base = base);
-}
-
-static nir_def *
-input_handle(nir_builder *b, nir_intrinsic_instr *intrin)
-{
-   const enum mesa_shader_stage stage = b->shader->info.stage;
-   nir_src *vertex = nir_get_io_arrayed_index_src(intrin);
-
-   return stage == MESA_SHADER_TESS_CTRL || stage == MESA_SHADER_GEOMETRY ?
-          nir_load_urb_input_handle_indexed_intel(b, 1, 32, vertex->ssa) :
-          nir_load_urb_input_handle_intel(b);
-}
-
-static nir_def *
-output_handle(nir_builder *b)
-{
-   return nir_load_urb_output_handle_intel(b);
+   nir_store_urb_vec4_intel(b, src, output_handle(b), vec4_offset,
+                            channel_mask, .base = base);
 }
 
 static nir_def *
@@ -424,8 +430,7 @@ lower_urb_outputs(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
    case nir_intrinsic_store_output:
    case nir_intrinsic_store_per_vertex_output:
    case nir_intrinsic_store_per_primitive_output:
-      store_urb(b, cb_data, intrin, output_handle(b),
-                urb_offset(b, cb_data, intrin));
+      store_urb(b, cb_data, intrin, urb_offset(b, cb_data, intrin));
       break;
    case nir_intrinsic_load_per_view_output:
    case nir_intrinsic_store_per_view_output:
@@ -458,6 +463,159 @@ brw_nir_lower_outputs_to_urb_intrinsics(nir_shader *nir,
                                      nir_metadata_control_flow, (void *) cd);
 }
 
+/* See if comps[0..3] has any non-undef values. */
+static bool
+slot_defined(nir_scalar *comps)
+{
+   for (unsigned i = 0; i < 4; i++) {
+      if (comps[i].def && !nir_def_is_undef(comps[i].def))
+         return true;
+   }
+   return false;
+}
+
+/* Replace any NULL defs in comps[0..(n-1)] with undef */
+static void
+fill_undefs(nir_scalar *comps, nir_def *undef, unsigned n)
+{
+   for (unsigned i = 0; i < n; i++) {
+      if (!comps[i].def)
+         comps[i] = nir_get_scalar(undef, 0);
+   }
+}
+
+static void
+emit_urb_writes(nir_builder *b,
+                const struct intel_device_info *devinfo,
+                nir_scalar *outputs,
+                unsigned num_slots,
+                nir_def *offset)
+{
+   nir_def *undef = nir_undef(b, 1, 32);
+
+   /* Primitive Shading Rate defaults to (1, 1) in half-float */
+   if (devinfo->has_coarse_pixel_primitive_and_cb && !outputs[0].def)
+      outputs[0] = nir_get_scalar(nir_imm_int(b, 0x3C003C00), 0);
+
+   /* Viewport, Layer, and Point Size default to 0 */
+   for (unsigned i = 0; i < 4; i++) {
+      if (!outputs[i].def)
+         outputs[i] = nir_get_scalar(nir_imm_int(b, 0), 0);
+   }
+
+   /* Emit URB writes */
+   for (unsigned slot = 0; slot < num_slots; slot++) {
+      if (!slot_defined(&outputs[4 * slot]))
+         continue;
+
+      const bool vec8 = slot + 1 < num_slots &&
+                        slot_defined(&outputs[4 * (slot + 1)]);
+
+      fill_undefs(&outputs[4 * slot], undef, vec8 ? 8 : 4);
+
+      nir_def *val = nir_vec_scalars(b, &outputs[4 * slot], vec8 ? 8 : 4);
+
+      if (devinfo->ver >= 20) {
+         nir_def *addr = nir_iadd(b, output_handle(b),
+                                  nir_imul_imm(b, offset, 16));
+         nir_store_urb_lsc_intel(b, val, addr, .base = 16 * slot);
+      } else {
+         nir_store_urb_vec4_intel(b, val, output_handle(b), offset,
+                                  nir_imm_int(b, vec8 ? 0xff : 0xf),
+                                  .base = slot);
+      }
+
+      if (vec8)
+         slot++;
+   }
+}
+
+bool
+brw_nir_lower_deferred_urb_writes(nir_shader *nir,
+                                  const struct intel_device_info *devinfo,
+                                  const struct intel_vue_map *vue_map,
+                                  unsigned extra_urb_slot_offset,
+                                  unsigned gs_vertex_stride)
+{
+   nir_scalar *outputs = calloc(vue_map->num_slots, 4 * sizeof(nir_scalar));
+
+   nir_function_impl *impl = nir_shader_get_entrypoint(nir);
+
+   nir_foreach_block(block, impl) {
+      nir_foreach_instr_safe(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+
+         nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+         switch (intrin->intrinsic) {
+         case nir_intrinsic_store_output:
+         case nir_intrinsic_store_per_view_output: {
+            nir_src *view_index = nir_get_io_arrayed_index_src(intrin);
+            nir_src *offset = nir_get_io_offset_src(intrin);
+
+            const nir_io_semantics sem = nir_intrinsic_io_semantics(intrin);
+            const unsigned slot =
+               vue_map->varying_to_slot[sem.location] +
+               (view_index ? nir_src_as_uint(*view_index) : 0);
+               nir_src_as_uint(*offset);
+            const unsigned c = io_component(intrin, NULL);
+            const unsigned mask = nir_intrinsic_write_mask(intrin);
+            assert(slot != -1);
+            assert(c < 4);
+
+            u_foreach_bit(i, mask) {
+               outputs[4 * slot + c + i] =
+                  nir_scalar_resolved(intrin->src[0].ssa, i);
+            }
+
+            nir_instr_remove(instr);
+            break;
+         }
+
+         case nir_intrinsic_emit_vertex_with_counter: {
+            /* The only purpose of primitives sent to non-zero streams
+             * is to be recorded by transform feedback, so if it is disabled,
+             * we can discard all geometry bound for those streams.
+             */
+            if (nir_intrinsic_stream_id(intrin) > 0 &&
+                !nir->info.has_transform_feedback_varyings) {
+               nir_instr_remove(instr);
+               break;
+            }
+
+            nir_builder b = nir_builder_at(nir_before_instr(instr));
+            b.constant_fold_alu = true;
+            nir_def *offset =
+               nir_iadd_imm(&b, nir_imul_imm(&b, intrin->src[0].ssa,
+                                                 gs_vertex_stride),
+                            extra_urb_slot_offset);
+
+            emit_urb_writes(&b, devinfo, outputs, vue_map->num_slots, offset);
+            /* After EmitVertex() all outputs are undefined */
+            memset(outputs, 0, 4 * vue_map->num_slots * sizeof(nir_scalar));
+
+            /* Leave emit_vertex_with_counter for control data writes */
+            break;
+         }
+
+         default:
+            break;
+         }
+      }
+   }
+
+   if (nir->info.stage != MESA_SHADER_GEOMETRY) {
+      nir_builder b = nir_builder_at(nir_after_impl(impl));
+      emit_urb_writes(&b, devinfo, outputs, vue_map->num_slots,
+                      nir_imm_int(&b, 0));
+   }
+
+   free(outputs);
+
+   return nir_progress(true, impl, nir_metadata_control_flow);
+}
+
+
 static bool
 lower_task_payload_to_urb(nir_builder *b, nir_intrinsic_instr *io, void *data)
 {
@@ -475,7 +633,7 @@ lower_task_payload_to_urb(nir_builder *b, nir_intrinsic_instr *io, void *data)
    nir_def *offset = nir_ishr_imm(b, nir_get_io_offset_src(io)->ssa, 2);
 
    if (io->intrinsic == nir_intrinsic_store_task_payload) {
-      store_urb(b, cb_data, io, output_handle(b), offset);
+      store_urb(b, cb_data, io, offset);
       nir_instr_remove(&io->instr);
    } else {
       const bool input = stage == MESA_SHADER_MESH;
@@ -728,60 +886,6 @@ remap_tess_levels(nir_shader *nir,
    };
    return nir_shader_intrinsics_pass(nir, remap_tess_levels_reversed,
                                      nir_metadata_control_flow, &cb);
-}
-
-/* Replace store_per_view_output to plain store_output, mapping the view index
- * to IO offset. Because we only use per-view outputs for position, the offset
- * pitch is always 1. */
-static bool
-lower_per_view_outputs(nir_builder *b,
-                       nir_intrinsic_instr *intrin,
-                       UNUSED void *cb_data)
-{
-   if (intrin->intrinsic != nir_intrinsic_store_per_view_output &&
-       intrin->intrinsic != nir_intrinsic_load_per_view_output)
-      return false;
-
-   b->cursor = nir_before_instr(&intrin->instr);
-
-   nir_src *view_index = nir_get_io_arrayed_index_src(intrin);
-   nir_src *offset = nir_get_io_offset_src(intrin);
-
-   nir_def *new_offset = nir_iadd(b, view_index->ssa, offset->ssa);
-
-   nir_intrinsic_instr *new;
-   if (intrin->intrinsic == nir_intrinsic_store_per_view_output)
-      new = nir_store_output(b, intrin->src[0].ssa, new_offset);
-   else {
-      nir_def *new_def = nir_load_output(b, intrin->def.num_components,
-                                         intrin->def.bit_size, new_offset);
-      new = nir_def_as_intrinsic(new_def);
-   }
-
-   nir_intrinsic_set_base(new, nir_intrinsic_base(intrin));
-   nir_intrinsic_set_range(new, nir_intrinsic_range(intrin));
-   nir_intrinsic_set_write_mask(new, nir_intrinsic_write_mask(intrin));
-   nir_intrinsic_set_component(new, nir_intrinsic_component(intrin));
-   nir_intrinsic_set_src_type(new, nir_intrinsic_src_type(intrin));
-
-   nir_io_semantics sem = nir_intrinsic_io_semantics(intrin);
-   /* the meaning of the offset src is different for brw */
-   sem.no_validate = 1;
-   nir_intrinsic_set_io_semantics(new, sem);
-
-   if (intrin->intrinsic == nir_intrinsic_load_per_view_output)
-      nir_def_rewrite_uses(&intrin->def, &new->def);
-   nir_instr_remove(&intrin->instr);
-
-   return true;
-}
-
-static bool
-brw_nir_lower_per_view_outputs(nir_shader *nir)
-{
-   return nir_shader_intrinsics_pass(nir, lower_per_view_outputs,
-                                     nir_metadata_control_flow,
-                                     NULL);
 }
 
 static bool
@@ -1207,7 +1311,7 @@ fragment_top_block_or_after_wa_18019110168(nir_function_impl *impl)
 void
 brw_nir_lower_fs_inputs(nir_shader *nir,
                         const struct intel_device_info *devinfo,
-                        const struct brw_wm_prog_key *key)
+                        const struct brw_fs_prog_key *key)
 {
    /* Always pull the PrimitiveID from the per-primitive block if mesh can be
     * involved.
@@ -1230,22 +1334,22 @@ brw_nir_lower_fs_inputs(nir_shader *nir,
                nir_shader_get_entrypoint(nir)))), *b = &_b;
       nir_def *index = nir_ubitfield_extract_imm(
          b,
-         nir_load_fs_msaa_intel(b),
-         INTEL_MSAA_FLAG_PRIMITIVE_ID_INDEX_OFFSET,
-         INTEL_MSAA_FLAG_PRIMITIVE_ID_INDEX_SIZE);
+         nir_load_fs_config_intel(b),
+         INTEL_FS_CONFIG_PRIMITIVE_ID_INDEX_OFFSET,
+         INTEL_FS_CONFIG_PRIMITIVE_ID_INDEX_SIZE);
      nir_def *per_vertex_offset =
          nir_iadd_imm(
             b,
             brw_nir_vertex_attribute_offset(
                b, nir_imul_imm(b, index, 4), devinfo),
             devinfo->grf_size);
-      /* When the attribute index is INTEL_MSAA_FLAG_PRIMITIVE_ID_MESH_INDEX,
+      /* When the attribute index is INTEL_FS_CONFIG_PRIMITIVE_ID_MESH_INDEX,
        * it means the value is coming from the per-primitive block. We always
        * lay out PrimitiveID at offset 0 in the per-primitive block.
        */
       nir_def *attribute_offset = nir_bcsel(
          b,
-         nir_ieq_imm(b, index, INTEL_MSAA_FLAG_PRIMITIVE_ID_INDEX_MESH),
+         nir_ieq_imm(b, index, INTEL_FS_CONFIG_PRIMITIVE_ID_INDEX_MESH),
          nir_imm_int(b, 0), per_vertex_offset);
       indirect_primitive_id =
          nir_load_attribute_payload_intel(b, 1, 32, attribute_offset);
@@ -1301,13 +1405,8 @@ brw_nir_lower_fs_inputs(nir_shader *nir,
 void
 brw_nir_lower_vue_outputs(nir_shader *nir)
 {
-   nir_foreach_shader_out_variable(var, nir) {
-      var->data.driver_location = var->data.location;
-   }
-
    NIR_PASS(_, nir, nir_lower_io, nir_var_shader_out, type_size_vec4,
             nir_lower_io_lower_64bit_to_32);
-   NIR_PASS(_, nir, brw_nir_lower_per_view_outputs);
 }
 
 void
@@ -1517,7 +1616,7 @@ brw_nir_optimize(brw_pass_tracker *pt)
 static unsigned
 lower_bit_size_callback(const nir_instr *instr, void *data)
 {
-   const struct brw_compiler *compiler = data;
+   const struct intel_device_info *devinfo = data;
 
    switch (instr->type) {
    case nir_instr_type_alu: {
@@ -1557,7 +1656,7 @@ lower_bit_size_callback(const nir_instr *instr, void *data)
           *
           * Older platforms have idiv instructions only for int32, so lower.
           */
-         return compiler->devinfo->verx10 >= 125 ? 0 : 32;
+         return devinfo->verx10 >= 125 ? 0 : 32;
       case nir_op_fceil:
       case nir_op_ffloor:
       case nir_op_ffract:
@@ -1767,7 +1866,7 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
           nir->options->lower_doubles_options);
    }
 
-   OPT(nir_lower_bit_size, lower_bit_size_callback, (void *)compiler);
+   OPT(nir_lower_bit_size, lower_bit_size_callback, (void *)devinfo);
 
    /* Lower a bunch of stuff */
    OPT(nir_lower_var_copies);
@@ -1798,8 +1897,7 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
    };
    OPT(nir_lower_subgroups, &subgroups_options);
 
-   nir_variable_mode indirect_mask =
-      brw_nir_no_indirect_mask(compiler, nir->info.stage);
+   nir_variable_mode indirect_mask = brw_nir_no_indirect_mask(nir->info.stage);
    OPT(nir_lower_indirect_derefs_to_if_else_trees, indirect_mask, UINT32_MAX);
 
    /* Even in cases where we can handle indirect temporaries via scratch, we
@@ -1834,7 +1932,7 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
     * nir_lower_system_values above.
     */
    if (nir->info.stage == MESA_SHADER_TESS_CTRL &&
-       compiler->use_tcs_multi_patch)
+       intel_use_tcs_multi_patch(devinfo))
       OPT(intel_nir_clamp_per_vertex_loads);
 
    /* Get rid of split copies */
@@ -2323,7 +2421,7 @@ static void
 brw_vectorize_lower_mem_access(brw_pass_tracker *pt,
                                enum brw_robustness_flags robust_flags)
 {
-   const struct brw_compiler *compiler = pt->compiler;
+   const struct intel_device_info *devinfo = pt->compiler->devinfo;
 
    nir_load_store_vectorize_options options = {
       .modes = nir_var_mem_ubo | nir_var_mem_ssbo |
@@ -2350,7 +2448,7 @@ brw_vectorize_lower_mem_access(brw_pass_tracker *pt,
     *   - fewer send messages
     *   - reduced register pressure
     */
-   if (OPT(intel_nir_blockify_uniform_loads, compiler->devinfo)) {
+   if (OPT(intel_nir_blockify_uniform_loads, devinfo)) {
       OPT(nir_opt_load_store_vectorize, &options);
 
       OPT(nir_opt_constant_folding);
@@ -2371,7 +2469,7 @@ brw_vectorize_lower_mem_access(brw_pass_tracker *pt,
    }
 
    struct brw_mem_access_cb_data cb_data = {
-      .devinfo = compiler->devinfo,
+      .devinfo = devinfo,
    };
 
    nir_lower_mem_access_bit_sizes_options mem_access_options = {
@@ -2395,7 +2493,7 @@ brw_vectorize_lower_mem_access(brw_pass_tracker *pt,
    /* Do this after the vectorization & brw_nir_rebase_const_offset_ubo_loads
     * so that we maximize the offset put into the messages.
     */
-   if (compiler->devinfo->ver >= 20) {
+   if (devinfo->ver >= 20) {
       OPT(brw_nir_ssbo_intel);
 
       const nir_opt_offsets_options offset_options = {
@@ -2621,7 +2719,7 @@ brw_postprocess_nir_opts(brw_pass_tracker *pt,
 
    OPT(brw_nir_lower_texture);
 
-   OPT(nir_lower_bit_size, lower_bit_size_callback, (void *)compiler);
+   OPT(nir_lower_bit_size, lower_bit_size_callback, (void *)devinfo);
 
    OPT(nir_opt_combine_barriers, combine_all_memory_barriers, NULL);
 
@@ -2639,7 +2737,7 @@ brw_postprocess_nir_opts(brw_pass_tracker *pt,
        * 8-bit integer math which needs to be lowered.
        */
       if (OPT(nir_lower_idiv, &options))
-         OPT(nir_lower_bit_size, lower_bit_size_callback, (void *)compiler);
+         OPT(nir_lower_bit_size, lower_bit_size_callback, (void *)devinfo);
    }
 
    if (devinfo->ver >= 30)
@@ -2720,32 +2818,14 @@ brw_postprocess_nir_opts(brw_pass_tracker *pt,
    OPT(brw_nir_lower_fsign);
    OPT(brw_nir_opt_fsat);
 
-   do {
-      pt->progress = false;
-
-      OPT(nir_opt_algebraic_late);
-
-      if (pt->progress) {
-         OPT(nir_opt_constant_folding);
-         OPT(nir_opt_copy_prop);
-         OPT(nir_opt_dce);
-         OPT(nir_opt_cse);
-      }
-   } while (pt->progress);
-
    OPT(nir_lower_fp16_casts, nir_lower_fp16_split_fp64);
 
-   OPT(nir_lower_alu_to_scalar, NULL, NULL);
-
-   while (OPT(nir_opt_algebraic_distribute_src_mods)) {
+   if (OPT(nir_lower_alu_to_scalar, NULL, NULL))
       OPT(nir_opt_constant_folding);
-      OPT(nir_opt_copy_prop);
-      OPT(nir_opt_dce);
-      OPT(nir_opt_cse);
-   }
 
    OPT(nir_opt_copy_prop);
    OPT(nir_opt_dce);
+   OPT(nir_opt_cse);
 
    nir_move_options move_all = nir_move_const_undef | nir_move_load_ubo |
                                nir_move_load_input | nir_move_comparisons |
@@ -2786,6 +2866,20 @@ brw_postprocess_nir_opts(brw_pass_tracker *pt,
     * round at the tail end.
     */
    brw_nir_lower_int64(pt);
+
+   do {
+      pt->progress = false;
+
+      OPT(nir_opt_algebraic_late);
+      OPT(nir_opt_algebraic_distribute_src_mods);
+
+      if (pt->progress) {
+         OPT(nir_opt_constant_folding);
+         OPT(nir_opt_copy_prop);
+         OPT(nir_opt_dce);
+         OPT(nir_opt_cse);
+      }
+   } while (pt->progress);
 
    /* Deal with EU fusion */
    if (devinfo->ver == 12) {
@@ -3152,40 +3246,6 @@ brw_type_for_nir_type(const struct intel_device_info *devinfo,
    }
 
    return BRW_TYPE_F;
-}
-
-nir_shader *
-brw_nir_create_passthrough_tcs(void *mem_ctx, const struct brw_compiler *compiler,
-                               const struct brw_tcs_prog_key *key)
-{
-   assert(key->input_vertices > 0);
-
-   const nir_shader_compiler_options *options =
-      &compiler->nir_options[MESA_SHADER_TESS_CTRL];
-
-   uint64_t inputs_read = key->outputs_written &
-      ~(VARYING_BIT_TESS_LEVEL_INNER | VARYING_BIT_TESS_LEVEL_OUTER);
-
-   unsigned locations[64];
-   unsigned num_locations = 0;
-
-   u_foreach_bit64(varying, inputs_read)
-      locations[num_locations++] = varying;
-
-   nir_shader *nir =
-      nir_create_passthrough_tcs_impl(options, locations, num_locations,
-                                      key->input_vertices);
-
-   ralloc_steal(mem_ctx, nir);
-
-   nir->info.inputs_read = inputs_read;
-   nir->info.tess._primitive_mode = key->_tes_primitive_mode;
-   nir_validate_shader(nir, "in brw_nir_create_passthrough_tcs");
-
-   struct brw_nir_compiler_opts opts = {};
-   brw_preprocess_nir(compiler, nir, &opts);
-
-   return nir;
 }
 
 nir_def *

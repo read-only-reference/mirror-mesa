@@ -591,7 +591,6 @@ static void si_reallocate_texture_inplace(struct si_context *sctx, struct si_tex
    tex->surface.meta_offset = new_tex->surface.meta_offset;
    tex->cb_color_info = new_tex->cb_color_info;
    memcpy(tex->color_clear_value, new_tex->color_clear_value, sizeof(tex->color_clear_value));
-   tex->last_msaa_resolve_target_micro_mode = new_tex->last_msaa_resolve_target_micro_mode;
 
    memcpy(tex->depth_clear_value, new_tex->depth_clear_value, sizeof(tex->depth_clear_value));
    tex->dirty_level_mask = new_tex->dirty_level_mask;
@@ -1051,7 +1050,7 @@ static struct si_texture *si_texture_create_object(struct pipe_screen *screen,
    struct si_resource *resource;
    struct si_screen *sscreen = (struct si_screen *)screen;
 
-   if (!sscreen->info.has_3d_cube_border_color_mipmap &&
+   if (!sscreen->info.cu_info.has_3d_cube_border_color_mipmap &&
        (base->last_level > 0 ||
         base->target == PIPE_TEXTURE_3D ||
         base->target == PIPE_TEXTURE_CUBE)) {
@@ -1208,8 +1207,6 @@ static struct si_texture *si_texture_create_object(struct pipe_screen *screen,
    }
 
    /* Applies to GCN. */
-   tex->last_msaa_resolve_target_micro_mode = tex->surface.micro_tile_mode;
-
    if (tex->is_depth) {
       tex->htile_stencil_disabled = !tex->surface.has_stencil;
 
@@ -1257,21 +1254,17 @@ static struct si_texture *si_texture_create_object(struct pipe_screen *screen,
    unsigned num_clears = 0;
 
    if (tex->cmask_buffer) {
-      /* Initialize the cmask to 0xCC (= compressed state). */
+      /* Initialize CMASK. */
       assert(num_clears < ARRAY_SIZE(clears));
       si_init_buffer_clear(&clears[num_clears++], &tex->cmask_buffer->b.b,
                            tex->surface.cmask_offset, tex->surface.cmask_size,
-                           0xCCCCCCCC);
+                           CMASK_MSAA_FMASK_CLEAR_0_COLOR_EXPANDED);
    }
    if (tex->is_depth && tex->surface.meta_offset) {
-      uint32_t clear_value = 0;
-
-      if (sscreen->info.gfx_level >= GFX9 || tex->tc_compatible_htile)
-         clear_value = 0x0000030F;
-
       assert(num_clears < ARRAY_SIZE(clears));
       si_init_buffer_clear(&clears[num_clears++], &tex->buffer.b.b, tex->surface.meta_offset,
-                           tex->surface.meta_size, clear_value);
+                           tex->surface.meta_size,
+                           tex->htile_stencil_disabled ? HTILE_Z_UNCOMPRESSED : HTILE_ZS_UNCOMPRESSED);
    }
 
    /* Initialize DCC only if the texture is not being imported. */

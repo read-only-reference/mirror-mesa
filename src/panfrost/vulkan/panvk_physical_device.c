@@ -316,6 +316,11 @@ get_device_heaps(struct panvk_physical_device *device,
          host_cached_not_coherent_type;
    }
 
+   const uint64_t request_va =
+      PANVK_DEBUG(NO_EXTENDED_VA_RANGE) ? 1ull << 32 : 1ull << 48;
+   device->memory.max_supported_va =
+      pan_clamp_to_usable_va_range(device->kmod.dev, request_va);
+
    return VK_SUCCESS;
 }
 
@@ -1422,7 +1427,16 @@ panvk_GetPhysicalDeviceImageFormatProperties2(
          physical_device, base_info->format, usage, base_info->type,
          base_info->tiling, base_info->flags);
       hic_props->optimalDeviceAccess = !can_use_afbc;
-      hic_props->identicalMemoryLayout = !can_use_afbc;
+
+      /* FIXME: we only support host transfer with certain modifiers and for now
+       * there's no easy way to know whether the presence of HOST_TRANSFER will
+       * be the thing that causes the modifier to be filtered out, and thus
+       * causing a difference in memory layout.
+       *
+       * See https://gitlab.freedesktop.org/panfrost/mesa/-/issues/281 for
+       * details.
+       */
+      hic_props->identicalMemoryLayout = false;
    }
 
    const struct vk_format_ycbcr_info *ycbcr_info =

@@ -36,6 +36,13 @@ enum {
    AC_EXP_FLAG_VALID_MASK = (1 << 2),
 };
 
+enum {
+   /* Whether nir_tex_instr should treat the deref or handle as an image binding
+    * (image_load lowered to tex, etc.).
+    */
+   AC_NIR_TEX_BACKEND_FLAG_IS_IMAGE = BITFIELD_BIT(0),
+};
+
 struct ac_nir_config {
    enum amd_gfx_level gfx_level;
    bool uses_aco;
@@ -82,10 +89,18 @@ ac_nir_load_smem(nir_builder *b, unsigned num_components, nir_def *addr, nir_def
 
 bool ac_nir_lower_sin_cos(nir_shader *shader);
 
-bool ac_nir_lower_intrinsics_to_args(nir_shader *shader, const enum amd_gfx_level gfx_level,
-                                     bool has_ls_vgpr_init_bug, const enum ac_hw_stage hw_stage,
-                                     unsigned wave_size, unsigned workgroup_size,
-                                     const struct ac_shader_args *ac_args);
+typedef struct {
+   enum amd_gfx_level gfx_level;
+   bool has_ls_vgpr_init_bug;
+   const enum ac_hw_stage hw_stage;
+   unsigned wave_size;
+   unsigned workgroup_size;
+   bool use_llvm;
+   bool load_grid_size_from_user_sgpr;
+} ac_nir_lower_intrinsics_to_args_options;
+
+bool ac_nir_lower_intrinsics_to_args(nir_shader *shader, const struct ac_shader_args *ac_args,
+                                     const ac_nir_lower_intrinsics_to_args_options *options);
 
 nir_xfb_info *ac_nir_get_sorted_xfb_info(const nir_shader *nir);
 
@@ -161,8 +176,7 @@ ac_nir_lower_gs_inputs_to_mem(nir_shader *shader,
                               bool triangle_strip_adjacency_fix);
 
 bool
-ac_nir_lower_indirect_derefs(nir_shader *shader,
-                             enum amd_gfx_level gfx_level);
+ac_nir_lower_indirect_derefs(nir_shader *shader);
 
 typedef struct {
    const struct radeon_info *hw_info;
@@ -350,7 +364,6 @@ ac_nir_lower_ps_early(nir_shader *nir, const ac_nir_lower_ps_early_options *opti
  */
 typedef struct {
    enum amd_gfx_level gfx_level;
-   enum radeon_family family;
    bool use_aco;
 
    /* System values. */
@@ -394,10 +407,10 @@ typedef struct {
     */
    bool fix_derivs_in_divergent_cf;
    unsigned max_wqm_vgprs;
-} ac_nir_lower_tex_options;
+} ac_nir_lower_image_tex_options;
 
 bool
-ac_nir_lower_tex(nir_shader *nir, const ac_nir_lower_tex_options *options);
+ac_nir_lower_image_tex(nir_shader *nir, const ac_nir_lower_image_tex_options *options);
 
 void
 ac_nir_store_debug_log_amd(nir_builder *b, nir_def *uvec4);
@@ -407,6 +420,9 @@ ac_nir_varying_expression_max_cost(nir_shader *producer, nir_shader *consumer);
 
 bool
 ac_nir_opt_shared_append(nir_shader *shader);
+
+bool
+ac_nir_opt_flip_if_for_mem_loads(nir_shader *shader);
 
 bool
 ac_nir_flag_smem_for_loads(nir_shader *shader, enum amd_gfx_level gfx_level, bool use_llvm);

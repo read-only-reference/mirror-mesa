@@ -297,6 +297,8 @@ validate_alu_instr(nir_alu_instr *instr, validate_state *state)
    }
 
    validate_def(&instr->def, state);
+
+   validate_assert(state, (instr->fp_math_ctrl & ~nir_op_infos[instr->op].valid_fp_math_ctrl) == 0);
 }
 
 static void
@@ -708,6 +710,16 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
       break;
    }
 
+   case nir_intrinsic_load_buffer_amd:
+      if (nir_intrinsic_access(instr) & ACCESS_USES_FORMAT_AMD) {
+         nir_alu_type dest_type = nir_intrinsic_dest_type(instr);
+         validate_assert(state, nir_alu_type_get_type_size(dest_type) &&
+                                nir_alu_type_get_base_type(dest_type));
+         validate_assert(state, nir_alu_type_get_type_size(dest_type) ==
+                                instr->def.bit_size);
+      }
+      break;
+
    case nir_intrinsic_store_buffer_amd:
       if (nir_intrinsic_access(instr) & ACCESS_USES_FORMAT_AMD) {
          unsigned writemask = nir_intrinsic_write_mask(instr);
@@ -718,6 +730,34 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
                             BITFIELD_MASK(nir_src_num_components(instr->src[0])));
       }
       break;
+
+   case nir_intrinsic_global_atomic_nv:
+   case nir_intrinsic_global_atomic_swap_nv:
+   case nir_intrinsic_shared_atomic_nv:
+   case nir_intrinsic_shared_atomic_swap_nv:
+   case nir_intrinsic_ldc_nv:
+   case nir_intrinsic_ldcx_nv:
+   case nir_intrinsic_load_global_nv:
+   case nir_intrinsic_load_scratch_nv:
+   case nir_intrinsic_load_shared_nv:
+   case nir_intrinsic_store_global_nv:
+   case nir_intrinsic_store_scratch_nv:
+   case nir_intrinsic_store_shared_nv:
+   case nir_intrinsic_store_shared_unlock_nv:
+   case nir_intrinsic_vild_nv: {
+      int base = nir_intrinsic_base(instr);
+      nir_src src = *nir_get_io_offset_src(instr);
+      unsigned const_bits = nir_get_io_base_size_nv(instr);
+
+      if (nir_src_is_const(src) && nir_src_as_int(src) == 0) {
+         validate_assert(state, base >= 0 && base < BITFIELD_MASK(const_bits));
+      } else {
+         int32_t max = BITFIELD_MASK(const_bits - 1);
+         int32_t min = ~BITFIELD_MASK(const_bits - 1);
+         validate_assert(state, base >= min && base < max);
+      }
+      break;
+   }
 
    default:
       break;
@@ -899,6 +939,11 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
        nir_intrinsic_has_align(instr)) {
       unsigned min_align = 1 << nir_intrinsic_offset_shift(instr);
       validate_assert(state, nir_intrinsic_align(instr) >= min_align);
+   }
+
+   if (nir_intrinsic_has_offset_shift_nv(instr)) {
+      unsigned shift = nir_intrinsic_offset_shift_nv(instr);
+      validate_assert(state, shift == 0 || (shift >= 2 && shift <= 4));
    }
 }
 

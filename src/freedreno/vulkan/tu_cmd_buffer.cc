@@ -2343,8 +2343,19 @@ tu_init_bin_preamble(struct tu_device *device)
 }
 
 template <chip CHIP>
+void
+tu_init_hw_rp(struct tu_cs *cs)
+{
+   if (CHIP >= A7XX) {
+      tu_cs_emit_regs(cs, VPC_UNKNOWN_CNTL(CHIP));
+      tu_cs_emit_regs(cs, RB_A2D_UNKNOWN_8C34(CHIP));
+   }
+}
+TU_GENX(tu_init_hw_rp);
+
+template <chip CHIP>
 static void
-tu6_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
+tu_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
 {
    struct tu_device *dev = cmd->device;
    const struct tu_physical_device *phys_dev = dev->physical_device;
@@ -2385,6 +2396,7 @@ tu6_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
       ~(TU_CMD_FLAG_WAIT_FOR_IDLE | TU_CMD_FLAG_CACHE_INVALIDATE);
 
    tu6_init_static_regs<CHIP>(cmd->device, cs);
+   tu_init_hw_rp<CHIP>(cs);
 
    emit_rb_ccu_cntl<CHIP>(cs, cmd->device, false);
    emit_vpc_attr_buf<CHIP>(cs, cmd->device, false);
@@ -2963,7 +2975,11 @@ tu_trace_end_render_pass(struct tu_cmd_buffer *cmd, bool gmem)
       cmd->state.lrz.valid,
       cmd->state.rp.lrz_disable_reason ? cmd->state.rp.lrz_disable_reason
                                        : "",
-      lrz_disabled_at_draw, lrz_write_disabled_at_draw, addr);
+      lrz_disabled_at_draw,
+      cmd->state.rp.lrz_write_disable_reason
+         ? cmd->state.rp.lrz_write_disable_reason
+         : "",
+      lrz_write_disabled_at_draw, addr);
 }
 
 static void
@@ -4201,7 +4217,7 @@ tu_cmd_render_tiles(struct tu_cmd_buffer *cmd,
     * via the patchpoints, so we need to re-emit them if they are reused for a
     * later render pass.
     */
-   if (cmd->state.pass->has_fdm)
+   if (cmd->fdm_bin_patchpoints.size != 0)
       cmd->state.dirty |= TU_CMD_DIRTY_FDM;
 
    /* Reset the gmem store CS entry lists so that the next render pass
@@ -4306,8 +4322,8 @@ tu_create_cmd_buffer(struct vk_command_pool *pool,
       container_of(pool->base.device, struct tu_device, vk);
    struct tu_cmd_buffer *cmd_buffer;
 
-   cmd_buffer = (struct tu_cmd_buffer *) vk_zalloc2(
-      &device->vk.alloc, &pool->alloc, sizeof(*cmd_buffer), 8,
+   cmd_buffer = (struct tu_cmd_buffer *) vk_zalloc(
+      &pool->alloc, sizeof(*cmd_buffer), 8,
       VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
 
    if (cmd_buffer == NULL)
@@ -4316,7 +4332,7 @@ tu_create_cmd_buffer(struct vk_command_pool *pool,
    VkResult result = vk_command_buffer_init(pool, &cmd_buffer->vk,
                                             &tu_cmd_buffer_ops, level);
    if (result != VK_SUCCESS) {
-      vk_free2(&device->vk.alloc, NULL, cmd_buffer);
+      vk_free(&pool->alloc, cmd_buffer);
       return result;
    }
 
@@ -4423,8 +4439,7 @@ tu_cmd_buffer_destroy(struct vk_command_buffer *vk_cmd_buffer)
    util_dynarray_fini(&cmd_buffer->vis_stream_cs_bos);
 
    vk_command_buffer_finish(&cmd_buffer->vk);
-   vk_free2(&cmd_buffer->device->vk.alloc, &cmd_buffer->vk.pool->alloc,
-            cmd_buffer);
+   vk_free(&cmd_buffer->vk.pool->alloc, cmd_buffer);
 }
 
 static void
@@ -4587,7 +4602,7 @@ tu_BeginCommandBuffer(VkCommandBuffer commandBuffer,
    if (cmd_buffer->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY) {
       switch (cmd_buffer->queue_family_index) {
       case TU_QUEUE_GENERAL:
-         TU_CALLX(cmd_buffer->device, tu6_init_hw)(cmd_buffer, &cmd_buffer->cs);
+         TU_CALLX(cmd_buffer->device, tu_init_hw)(cmd_buffer, &cmd_buffer->cs);
          break;
       default:
          break;
@@ -6330,6 +6345,7 @@ tu_render_pass_state_merge(struct tu_render_pass_state *dst,
    }
    if (!dst->lrz_write_disabled_at_draw &&
        src->lrz_write_disabled_at_draw) {
+      dst->lrz_write_disable_reason = src->lrz_write_disable_reason;
       dst->lrz_write_disabled_at_draw =
          dst->drawcall_count + src->lrz_write_disabled_at_draw;
    }
@@ -7122,6 +7138,7 @@ tu_CmdBeginRenderPass2(VkCommandBuffer commandBuffer,
 
    if (cmd->device->dbg_renderpass_stomp_cs) {
       tu_cs_emit_call(&cmd->cs, cmd->device->dbg_renderpass_stomp_cs);
+      cmd->state.dirty |= TU_CMD_DIRTY_COMPUTE_DESC_SETS;
    }
 
    for (unsigned i = 0; i < pass->user_attachment_count; i++) {
@@ -7300,8 +7317,6 @@ tu_CmdBeginRendering(VkCommandBuffer commandBuffer,
    };
    vk_cmd_set_rendering_attachment_locations(&cmd->vk, &ral_info);
 
-   cmd->patchpoints_ctx = ralloc_context(NULL);
-
    a = cmd->dynamic_subpasses[0].fsr_attachment;
    if (a != VK_ATTACHMENT_UNUSED) {
       const VkRenderingFragmentShadingRateAttachmentInfoKHR *fsr_info =
@@ -7330,6 +7345,7 @@ tu_CmdBeginRendering(VkCommandBuffer commandBuffer,
 
    if (!resuming && cmd->device->dbg_renderpass_stomp_cs) {
       tu_cs_emit_call(&cmd->cs, cmd->device->dbg_renderpass_stomp_cs);
+      cmd->state.dirty |= TU_CMD_DIRTY_COMPUTE_DESC_SETS;
    }
 
    /* We can't track LRZ across command buffer boundaries, so we have to
@@ -7362,6 +7378,7 @@ tu_CmdBeginRendering(VkCommandBuffer commandBuffer,
    tu_fill_render_pass_state(&cmd->state.vk_rp, cmd->state.pass, cmd->state.subpass);
 
    if (!resuming) {
+      cmd->patchpoints_ctx = ralloc_context(NULL);
       tu_emit_renderpass_begin(cmd);
       tu_emit_subpass_begin<CHIP>(cmd);
    }
@@ -8435,8 +8452,13 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
       const struct tu_shader *tcs = cmd->state.shaders[MESA_SHADER_TESS_CTRL];
 
       /* maximum number of patches that can fit in tess factor/param buffers */
-      uint32_t subdraw_size = MIN2(TU_TESS<CHIP>::FACTOR_SIZE / ir3_tess_factor_stride(tes->variant->key.tessellation),
-                           TU_TESS<CHIP>::PARAM_SIZE / (tcs->variant->output_size * 4));
+      uint32_t subdraw_size =
+         tcs->variant->output_size != 0
+            ? MIN2(
+                 TU_TESS<CHIP>::FACTOR_SIZE /
+                    ir3_tess_factor_stride(tes->variant->key.tessellation),
+                 TU_TESS<CHIP>::PARAM_SIZE / (tcs->variant->output_size * 4))
+            : 0;
       /* convert from # of patches to draw count */
       subdraw_size *= cmd->vk.dynamic_graphics_state.ts.patch_control_points;
 
@@ -9375,6 +9397,7 @@ tu_dispatch(struct tu_cmd_buffer *cmd,
     */
    if (cmd->device->dbg_renderpass_stomp_cs) {
       tu_cs_emit_state_ib(&cmd->cs, shader->state);
+      cmd->state.dirty |= TU_CMD_DIRTY_COMPUTE_DESC_SETS;
    }
 
    /* There appears to be a HW bug where in some rare circumstances it appears

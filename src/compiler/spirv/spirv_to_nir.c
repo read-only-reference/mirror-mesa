@@ -27,7 +27,6 @@
 
 #include "glsl_types.h"
 #include "vtn_private.h"
-#include "nir/nir_vla.h"
 #include "nir/nir_control_flow.h"
 #include "nir/nir_constant_expressions.h"
 #include "nir/nir_deref.h"
@@ -42,6 +41,7 @@
 #include "util/mesa-blake3.h"
 #include "util/bfloat.h"
 #include "util/float8.h"
+#include "util/stack_array.h"
 
 #include <stdio.h>
 
@@ -83,6 +83,10 @@ static const struct spirv_capabilities implemented_capabilities = {
    .DerivativeControl = true,
    .DeviceGroup = true,
    .DotProduct = true,
+   .DotProductBFloat16AccVALVE = true,
+   .DotProductFloat16AccFloat16VALVE = true,
+   .DotProductFloat16AccFloat32VALVE = true,
+   .DotProductFloat8AccFloat32VALVE = true,
    .DotProductInput4x8Bit = true,
    .DotProductInput4x8BitPacked = true,
    .DotProductInputAll = true,
@@ -232,6 +236,7 @@ static const struct debug_named_value mesa_spirv_debug_control[] = {
    { "values", MESA_SPIRV_DEBUG_VALUES,
      "Print information of the SPIR-V values" },
    { "asm", MESA_SPIRV_DEBUG_ASM, "Print the SPIR-V assembly" },
+   { "offsets", MESA_SPIRV_DEBUG_OFFSETS, "Print the SPIR-V assembly with offsets" },
    { "color", MESA_SPIRV_DEBUG_COLOR, "Debug in color, if available" },
    DEBUG_NAMED_VALUE_END,
 };
@@ -1407,7 +1412,7 @@ vtn_type_get_nir_type(struct vtn_builder *b, struct vtn_type *type,
       case vtn_base_type_struct: {
          bool need_new_struct = false;
          const uint32_t num_fields = type->length;
-         NIR_VLA(struct glsl_struct_field, fields, num_fields);
+         STACK_ARRAY(struct glsl_struct_field, fields, num_fields);
          for (unsigned i = 0; i < num_fields; i++) {
             fields[i] = *glsl_get_struct_field_data(type->type, i);
             const struct glsl_type *field_nir_type =
@@ -1417,20 +1422,25 @@ vtn_type_get_nir_type(struct vtn_builder *b, struct vtn_type *type,
                need_new_struct = true;
             }
          }
+
+         const struct glsl_type *result;
          if (need_new_struct) {
             if (glsl_type_is_interface(type->type)) {
-               return glsl_interface_type(fields, num_fields,
-                                          /* packing */ 0, false,
-                                          glsl_get_type_name(type->type));
+               result = glsl_interface_type(fields, num_fields,
+                                            /* packing */ 0, false,
+                                            glsl_get_type_name(type->type));
             } else {
-               return glsl_struct_type(fields, num_fields,
-                                       glsl_get_type_name(type->type),
-                                       glsl_struct_type_is_packed(type->type));
+               result = glsl_struct_type(fields, num_fields,
+                                         glsl_get_type_name(type->type),
+                                         glsl_struct_type_is_packed(type->type));
             }
          } else {
             /* No changes, just pass it on */
-            return type->type;
+            result = type->type;
          }
+
+         STACK_ARRAY_FINISH(fields);
+         return result;
       }
 
       case vtn_base_type_image:
@@ -2076,7 +2086,7 @@ vtn_handle_type(struct vtn_builder *b, SpvOp opcode,
       val->type->offsets = vtn_alloc_array(b, unsigned, num_fields);
       val->type->packed = false;
 
-      NIR_VLA(struct glsl_struct_field, fields, count);
+      STACK_ARRAY(struct glsl_struct_field, fields, count);
       for (unsigned i = 0; i < num_fields; i++) {
          val->type->members[i] = vtn_get_type(b, w[i + 2]);
          const char *name = NULL;
@@ -2132,6 +2142,8 @@ vtn_handle_type(struct vtn_builder *b, SpvOp opcode,
                                             name ? name : "struct",
                                             val->type->packed);
       }
+
+      STACK_ARRAY_FINISH(fields);
       break;
    }
 
@@ -2888,14 +2900,14 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
          if (glsl_type_is_bfloat_16(src_type) || glsl_type_is_e4m3fn(src_type) || glsl_type_is_e5m2(src_type))
             src_type = glsl_float_type();
 
-         bool exact;
-         nir_op op = vtn_nir_alu_op_for_spirv_opcode(b, opcode, &swap, &exact,
+         unsigned extra_fp_math_ctrl;
+         nir_op op = vtn_nir_alu_op_for_spirv_opcode(b, opcode, &swap, &extra_fp_math_ctrl,
                                                      src_type, dst_type);
 
-         /* No SPIR-V opcodes handled through this path should set exact.
+         /* No SPIR-V opcodes handled through this path should set fast math.
           * Since it is ignored, assert on it.
           */
-         assert(!exact);
+         assert(!extra_fp_math_ctrl);
 
          unsigned bit_size = glsl_get_bit_size(dst_type);
          nir_const_value src[3][NIR_MAX_VEC_COMPONENTS];
@@ -5300,6 +5312,12 @@ vtn_handle_entry_point(struct vtn_builder *b, const uint32_t *w,
    b->interface_ids = vtn_alloc_array(b, uint32_t, b->interface_ids_count);
    memcpy(b->interface_ids, &w[start], b->interface_ids_count * 4);
    qsort(b->interface_ids, b->interface_ids_count, 4, cmp_uint32_t);
+
+   if (stage == MESA_SHADER_KERNEL) {
+      *vtn_fp_math_ctrl_for_base_type(b, GLSL_TYPE_FLOAT16) |= nir_fp_preserve_sz_inf_nan;
+      *vtn_fp_math_ctrl_for_base_type(b, GLSL_TYPE_FLOAT) |= nir_fp_preserve_sz_inf_nan;
+      *vtn_fp_math_ctrl_for_base_type(b, GLSL_TYPE_DOUBLE) |= nir_fp_preserve_sz_inf_nan;
+   }
 }
 
 static bool
@@ -6833,6 +6851,9 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
    case SpvOpUSubSatINTEL:
    case SpvOpIMul32x16INTEL:
    case SpvOpUMul32x16INTEL:
+   case SpvOpFDot2MixAcc32VALVE:
+   case SpvOpFDot2MixAcc16VALVE:
+   case SpvOpFDot4MixAcc32VALVE:
       vtn_handle_alu(b, opcode, w, count);
       break;
 

@@ -911,7 +911,7 @@ static void si_preprocess_nir(struct si_nir_shader_ctx *ctx)
    NIR_PASS(progress, nir, nir_opt_large_constants, glsl_get_natural_size_align_bytes, 16);
 
    /* Lower all other indirect indexing to if-else ladders or scratch. */
-   progress |= ac_nir_lower_indirect_derefs(nir, sel->screen->info.gfx_level);
+   progress |= ac_nir_lower_indirect_derefs(nir);
 
    NIR_PASS(_, nir, si_nir_mark_divergent_texture_non_uniform);
    NIR_PASS(progress, nir, nir_lower_explicit_io, nir_var_mem_shared, nir_address_format_32bit_offset);
@@ -938,10 +938,10 @@ static void si_postprocess_nir(struct si_nir_shader_ctx *ctx)
    if (nir->info.stage == MESA_SHADER_FRAGMENT)
       NIR_PASS(progress, nir, nir_lower_fragcoord_wtrans);
 
-   NIR_PASS(progress, nir, ac_nir_lower_tex,
-            &(ac_nir_lower_tex_options){
+   NIR_PASS(progress, nir, ac_nir_lower_image_tex,
+            &(ac_nir_lower_image_tex_options){
                .gfx_level = sel->screen->info.gfx_level,
-               .lower_array_layer_round_even = !sel->screen->info.conformant_trunc_coord,
+               .lower_array_layer_round_even = !sel->screen->info.cu_info.conformant_trunc_coord,
             });
 
    if (nir->info.uses_resource_info_query)
@@ -954,7 +954,7 @@ static void si_postprocess_nir(struct si_nir_shader_ctx *ctx)
    /* LLVM does not work well with this, so is handled in llvm backend waterfall. */
    if (nir->info.use_aco_amd && ctx->temp_info.has_non_uniform_tex_access) {
       nir_lower_non_uniform_access_options options = {
-         .types = nir_lower_non_uniform_texture_access,
+         .types = nir_lower_non_uniform_texture_access | nir_lower_non_uniform_texture_query,
       };
       NIR_PASS(progress, nir, nir_lower_non_uniform_access, &options);
    }
@@ -1015,7 +1015,6 @@ static void si_postprocess_nir(struct si_nir_shader_ctx *ctx)
    } else if (nir->info.stage == MESA_SHADER_FRAGMENT && shader->is_monolithic) {
       ac_nir_lower_ps_late_options late_options = {
          .gfx_level = sel->screen->info.gfx_level,
-         .family = sel->screen->info.family,
          .use_aco = nir->info.use_aco_amd,
          .bc_optimize_for_persp = key->ps.part.prolog.bc_optimize_for_persp,
          .bc_optimize_for_linear = key->ps.part.prolog.bc_optimize_for_linear,
@@ -1098,6 +1097,7 @@ static void si_postprocess_nir(struct si_nir_shader_ctx *ctx)
             &(nir_load_store_vectorize_options){
                .modes = nir_var_mem_ssbo | nir_var_mem_ubo | nir_var_mem_shared | nir_var_mem_global |
                         nir_var_shader_temp,
+               .bounds_checked_modes = nir_var_mem_ssbo | nir_var_mem_ubo | nir_var_mem_shared,
                .callback = ac_nir_mem_vectorize_callback,
                .cb_data = &(struct ac_nir_config){sel->screen->info.gfx_level, sel->info.base.use_aco_amd},
                .has_shared2_amd = true,
@@ -1135,10 +1135,16 @@ static void si_postprocess_nir(struct si_nir_shader_ctx *ctx)
    NIR_PASS(progress, nir, nir_lower_int64);
    NIR_PASS(progress, nir, nir_lower_fp16_casts, nir_lower_fp16_split_fp64);
 
-   NIR_PASS(progress, nir, ac_nir_lower_intrinsics_to_args, sel->screen->info.gfx_level,
-            sel->screen->info.has_ls_vgpr_init_bug,
-            si_select_hw_stage(nir->info.stage, key, sel->screen->info.gfx_level),
-            shader->wave_size, si_get_max_workgroup_size(shader), &ctx->args.ac);
+   NIR_PASS(progress, nir, ac_nir_lower_intrinsics_to_args, &ctx->args.ac,
+            &(ac_nir_lower_intrinsics_to_args_options){
+               .gfx_level = sel->screen->info.gfx_level,
+               .has_ls_vgpr_init_bug = sel->screen->info.cu_info.has_ls_vgpr_init_bug,
+               .hw_stage = si_select_hw_stage(nir->info.stage, key, sel->screen->info.gfx_level),
+               .wave_size = shader->wave_size,
+               .workgroup_size = si_get_max_workgroup_size(shader),
+               .use_llvm = !nir->info.use_aco_amd,
+               .load_grid_size_from_user_sgpr = true,
+            });
 
    /* LLVM keep non-uniform sampler as index, so can't do this in NIR.
     * Must be done after si_nir_lower_resource().
@@ -1162,6 +1168,12 @@ static void si_postprocess_nir(struct si_nir_shader_ctx *ctx)
       .cb_data = &sel->screen->info.gfx_level,
    };
    NIR_PASS(_, nir, nir_opt_offsets, &offset_options);
+
+   bool opt_intrinsics = false;
+   if (sel->screen->info.gfx_level >= GFX11)
+      NIR_PASS(opt_intrinsics, nir, ac_nir_opt_flip_if_for_mem_loads);
+   if (opt_intrinsics) /* optimize inot(inverse_ballot) */
+      NIR_PASS(_, nir, nir_opt_intrinsics);
 
    si_nir_late_opts(nir);
 
@@ -1364,9 +1376,15 @@ si_nir_generate_gs_copy_shader(struct si_screen *sscreen,
    si_init_shader_args(shader, &linked.consumer.args, &gs_nir->info);
 
    NIR_PASS(_, nir, si_nir_lower_abi, shader, &linked.consumer.args);
-   NIR_PASS(_, nir, ac_nir_lower_intrinsics_to_args, sscreen->info.gfx_level,
-            sscreen->info.has_ls_vgpr_init_bug, AC_HW_VERTEX_SHADER, 64, 64,
-            &linked.consumer.args.ac);
+   NIR_PASS(_, nir, ac_nir_lower_intrinsics_to_args, &linked.consumer.args.ac,
+            &(ac_nir_lower_intrinsics_to_args_options){
+               .gfx_level = sscreen->info.gfx_level,
+               .has_ls_vgpr_init_bug = sscreen->info.cu_info.has_ls_vgpr_init_bug,
+               .hw_stage = AC_HW_VERTEX_SHADER,
+               .wave_size = 64,
+               .workgroup_size = 64,
+               .use_llvm = !nir->info.use_aco_amd,
+            });
 
    NIR_PASS(_, nir, ac_nir_lower_global_access);
    NIR_PASS(_, nir, nir_lower_int64);

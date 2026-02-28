@@ -243,7 +243,7 @@ if with_tests
 
     log = custom_target(name + '.log',
       output: name + '.log',
-      command: [cffdump, '--unit-test', '--bindless', args, files('../tests/traces/' + name + '.rd.gz')],
+      command: [cffdump, '--unit-test', args, files('../tests/traces/' + name + '.rd.gz')],
       capture: true,
     )
     test('cffdump-' + name,
@@ -300,7 +300,6 @@ if with_tests
   crashdec_tests = [
     ['crash', ['-sf']],
     ['crash_prefetch', ['-sf']],
-    ['prefetch-test', ['-sf']],
   ]
   foreach crashdec_test: crashdec_tests
     name = crashdec_test[0]

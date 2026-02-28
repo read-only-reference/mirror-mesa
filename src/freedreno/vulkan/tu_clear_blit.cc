@@ -3048,6 +3048,8 @@ tu_copy_image_to_image(struct tu_cmd_buffer *cmd,
          .array_size = layer_count,
          .tile_mode = TILE6_LINEAR,
          .is_3d = extent.depth > 1,
+         .plane = tu6_plane_index(src_image->vk.format,
+                                  info->srcSubresource.aspectMask),
       };
 
       fdl6_layout_image(&staging_layout, &cmd->device->physical_device->dev_info,
@@ -4090,8 +4092,10 @@ fdm_apply_sysmem_clear_coords(struct tu_cmd_buffer *cmd,
 
    VkExtent2D frag_area = frag_areas[MIN2(state->view, views - 1)];
    VkRect2D bin = bins[MIN2(state->view, views - 1)];
-   VkOffset2D hw_viewport_offset =
-      hw_viewport_offsets[MIN2(state->view, views - 1)];
+   /* On a7xx, GRAS_BIN_FOVEAT_OFFSET_* is applied per-viewport. We only use
+    * viewport 0 in the 3d blit so use offset 0.
+    */
+   VkOffset2D hw_viewport_offset = hw_viewport_offsets[0];
 
    VkOffset2D offset = tu_fdm_per_bin_offset(frag_area, bin, common_bin_offset);
 
@@ -5088,8 +5092,10 @@ fdm_apply_load_coords(struct tu_cmd_buffer *cmd,
       (const struct apply_load_coords_state *)data;
    VkExtent2D frag_area = frag_areas[MIN2(state->view, views - 1)];
    VkRect2D bin = bins[MIN2(state->view, views - 1)];
-   VkOffset2D hw_viewport_offset =
-      hw_viewport_offsets[MIN2(state->view, views - 1)];
+   /* On a7xx, GRAS_BIN_FOVEAT_OFFSET_* is applied per-viewport. We only use
+    * viewport 0 in the 3d blit so use offset 0.
+    */
+   VkOffset2D hw_viewport_offset = hw_viewport_offsets[0];
 
    assert(bin.extent.width % frag_area.width == 0);
    assert(bin.extent.height % frag_area.height == 0);
@@ -5116,6 +5122,15 @@ load_3d_blit(struct tu_cmd_buffer *cmd,
              const struct tu_render_pass_attachment *att,
              bool separate_stencil)
 {
+   if (CHIP >= A7XX && vk_format_is_depth_or_stencil(att->format)) {
+      /* Workaround for when concurrent resolve is enabled.
+       * We have to wait until all CP_EVENT_WRITE::BLIT are completed,
+       * otherwise writing to depth image as color confuses HW.
+       */
+      tu_emit_event_write<CHIP>(cmd, cs, FD_CCU_CLEAN_BLIT_CACHE);
+      /* WFI happens later below. */
+   }
+
    const struct tu_framebuffer *fb = cmd->state.framebuffer;
    enum pipe_format format = iview->view.format;
    if (iview->image->vk.format == VK_FORMAT_D32_SFLOAT_S8_UINT) {

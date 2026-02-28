@@ -120,6 +120,7 @@ struct aco_shader_info {
       bool tcs_in_out_eq;
       bool any_tcs_inputs_via_lds;
       bool has_prolog;
+      bool preserve_s2;
    } vs;
    struct {
       uint32_t num_inputs;
@@ -147,8 +148,6 @@ struct aco_compiler_options {
    bool record_asm;
    bool record_ir;
    bool record_stats;
-   bool has_ls_vgpr_init_bug;
-   bool load_grid_size_from_user_sgpr;
    bool optimisations_disabled;
    uint8_t enable_mrt_output_nan_fixup;
    bool wgp_mode;
