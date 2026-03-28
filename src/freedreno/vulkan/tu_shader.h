@@ -129,6 +129,7 @@ struct tu_shader_key {
    bool robust_uniform_access2;
    bool lower_view_index_to_device_index;
    bool custom_resolve;
+   bool emulate_alpha_to_coverage;
    enum ir3_wavesize_option api_wavesize, real_wavesize;
 };
 
@@ -142,6 +143,9 @@ tu_nir_lower_multiview(nir_shader *nir, uint32_t mask, struct tu_device *dev);
 
 bool
 tu_nir_lower_ray_queries(nir_shader *nir);
+
+bool
+tu_nir_lower_demote_samples(nir_shader *nir);
 
 nir_shader *
 tu_spirv_to_nir(struct tu_device *dev,
@@ -216,7 +220,7 @@ tu_compile_shaders(struct tu_device *device,
                    nir_shader **nir,
                    const struct tu_shader_key *keys,
                    struct tu_pipeline_layout *layout,
-                   const unsigned char *pipeline_sha1,
+                   const unsigned char *pipeline_blake3,
                    struct tu_shader **shaders,
                    char **nir_initial_disasm,
                    void *nir_initial_disasm_mem_ctx,

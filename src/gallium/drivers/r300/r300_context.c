@@ -17,6 +17,7 @@
 #include "r300_emit.h"
 #include "r300_screen.h"
 #include "r300_screen_buffer.h"
+#include "r300_texture.h"
 #include "compiler/radeon_regalloc.h"
 
 #include <inttypes.h>
@@ -30,7 +31,7 @@ static void r300_release_referenced_objects(struct r300_context *r300)
     unsigned i;
 
     /* Framebuffer state. */
-    util_framebuffer_init(&r300->context, NULL, r300->fb_cbufs, &r300->fb_zsbuf);
+    r300_framebuffer_init(&r300->context, NULL, r300->fb_cbufs, &r300->fb_zsbuf);
     util_unreference_framebuffer_state(fb);
 
     /* Textures. */
@@ -47,7 +48,7 @@ static void r300_release_referenced_objects(struct r300_context *r300)
 
     /* Manually-created vertex buffers. */
     pipe_vertex_buffer_unreference(&r300->dummy_vb);
-    pipe_surface_reference(&r300->locked_zbuffer, NULL);
+    pipe_surface_reference(&r300->locked_zbuffer, NULL, &r300->context, r300_surface_destroy);
     radeon_bo_reference(r300->rws, &r300->vbo, NULL);
 
     r300->context.delete_depth_stencil_alpha_state(&r300->context,
@@ -208,7 +209,7 @@ static bool r300_setup_atoms(struct r300_context* r300)
     R300_INIT_ATOM(zmask_clear, r300->screen->caps.zmask_ram > 0 ? 4 : 0);
     R300_INIT_ATOM(cmask_clear, 4);
     /* ZB (unpipelined), SU. */
-    R300_INIT_ATOM(query_start, 4);
+    R300_INIT_ATOM(query_start, 14);
 
     /* Replace emission functions for r500. */
     if (is_r500) {

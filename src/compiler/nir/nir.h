@@ -43,6 +43,7 @@
 #include "util/ralloc.h"
 #include "util/range_minimum_query.h"
 #include "util/set.h"
+#include "util/simple_mtx.h"
 #include "util/sparse_bitset.h"
 #include "util/u_math.h"
 #include "nir_defines.h"
@@ -1647,7 +1648,9 @@ bool nir_alu_srcs_negative_equal(const nir_alu_instr *alu1,
                                  const nir_alu_instr *alu2,
                                  unsigned src1, unsigned src2);
 
-bool nir_alu_src_is_trivial_ssa(const nir_alu_instr *alu, unsigned srcn);
+bool nir_alu_src_is_trivial_ssa(const nir_alu_src *src, unsigned num_components);
+
+bool nir_alu_has_trivial_src(const nir_alu_instr *alu, unsigned srcn);
 
 typedef enum {
    nir_deref_type_var,
@@ -1918,7 +1921,7 @@ static inline nir_cmat_reduce nir_cmat_call_reduce_flags(nir_cmat_call_instr *ca
 
 #include "nir_intrinsics.h"
 
-#define NIR_INTRINSIC_MAX_CONST_INDEX 8
+#define NIR_INTRINSIC_MAX_CONST_INDEX 9
 
 /** Represents an intrinsic
  *
@@ -2053,12 +2056,13 @@ typedef struct nir_io_semantics {
    unsigned interp_explicit_strict : 1; /* preserve original vertex order */
    /* Skip nir_validate of the intrinsic. Any new code that sets it will ba NAK'd. */
    unsigned no_validate : 1;
+
+   /* Start of the second uint. */
+   unsigned no_signed_zero : 1; /* whether it matters if the input/output is -0.0 or +0.0. */
+   unsigned padding : 31;
 } nir_io_semantics;
 
-/* Transform feedback info for 2 outputs. nir_intrinsic_store_output contains
- * this structure twice to support up to 4 outputs. The structure is limited
- * to 32 bits because it's stored in nir_intrinsic_instr::const_index[].
- */
+/* Transform feedback info for 4 outputs. */
 typedef struct nir_io_xfb {
    struct {
       /* start_component is equal to the index of out[]; add 2 for io_xfb2 */
@@ -2068,7 +2072,7 @@ typedef struct nir_io_xfb {
       uint8_t buffer : 4;         /* buffer index, max 3 */
       uint8_t offset;             /* transform feedback buffer offset in dwords,
                                      max (1K - 4) bytes */
-   } out[2];
+   } out[4];
 } nir_io_xfb;
 
 unsigned
@@ -2114,6 +2118,9 @@ typedef struct nir_intrinsic_info {
 
    /** the number of constant indices used by the intrinsic */
    uint8_t num_indices;
+
+   /** the number of 32bit slots used for storing constant indices. */
+   uint8_t num_index_slots;
 
    /** list of indices */
    uint8_t indices[NIR_INTRINSIC_MAX_CONST_INDEX];
@@ -3824,18 +3831,6 @@ nir_loop_last_continue_block(nir_loop *loop)
 }
 
 /**
- * Return the target block of a nir_jump_continue statement
- */
-static inline nir_block *
-nir_loop_continue_target(nir_loop *loop)
-{
-   if (nir_loop_has_continue_construct(loop))
-      return nir_loop_first_continue_block(loop);
-   else
-      return nir_loop_first_block(loop);
-}
-
-/**
  * Return true if this list of cf_nodes contains a single empty block.
  */
 static inline bool
@@ -4012,6 +4007,8 @@ typedef struct nir_shader {
    u_printf_info *printf_info;
 
    bool has_debug_info;
+   uint32_t nir_pass_depth;
+   bool nir_pass_recursed;
 } nir_shader;
 
 #define nir_foreach_function(func, shader) \
@@ -4975,24 +4972,39 @@ should_print_nir(UNUSED nir_shader *shader)
 #define NIR_STRINGIZE_INNER(x) #x
 #define NIR_STRINGIZE(x)       NIR_STRINGIZE_INNER(x)
 
+extern simple_mtx_t nir_print_lock;
+
 #define NIR_PASS(progress, nir, pass, ...) _PASS(pass, nir, {                            \
    nir_metadata_set_validation_flag(nir);                                                \
-   if (should_print_nir(nir))                                                            \
+   if (should_print_nir(nir)) {                                                          \
+      if ((nir)->nir_pass_depth++ == 0) {                                                \
+         simple_mtx_lock(&nir_print_lock);                                               \
+      } else {                                                                           \
+         (nir)->nir_pass_recursed = true;                                                \
+      }                                                                                  \
       printf("%s\n", #pass);                                                             \
+   }                                                                                     \
    static const char *when = "after " #pass " in " __FILE__ ":" NIR_STRINGIZE(__LINE__); \
    struct blob blob_before = nir_validate_progress_setup(nir);                           \
    if (pass(nir, ##__VA_ARGS__)) {                                                       \
       nir_validate_shader(nir, when);                                                    \
       UNUSED bool _;                                                                     \
       progress = true;                                                                   \
-      if (should_print_nir(nir))                                                         \
+      if (should_print_nir(nir)) {                                                       \
+         if ((nir)->nir_pass_recursed)                                                   \
+            printf("%s (finished)\n", #pass);                                            \
          nir_print_shader(nir, stdout);                                                  \
+      }                                                                                  \
       nir_metadata_check_validation_flag(nir);                                           \
       nir_validate_progress_finish(nir, &blob_before, true, when);                       \
    } else {                                                                              \
       if (NIR_DEBUG(EXTENDED_VALIDATION))                                                \
          nir_validate_shader(nir, when);                                                 \
       nir_validate_progress_finish(nir, &blob_before, false, when);                      \
+   }                                                                                     \
+   if (should_print_nir(nir) && --(nir)->nir_pass_depth == 0) {                          \
+      simple_mtx_unlock(&nir_print_lock);                                                \
+      (nir)->nir_pass_recursed = false;                                                  \
    }                                                                                     \
 })
 
@@ -5699,7 +5711,6 @@ bool nir_lower_vec_to_regs(nir_shader *shader, nir_instr_writemask_filter_cb cb,
                            const void *_data);
 
 bool nir_lower_alpha_to_coverage(nir_shader *shader,
-                                 uint8_t nr_samples,
                                  bool has_intrinsic,
                                  nir_def *dyn_enable);
 
@@ -5715,7 +5726,6 @@ bool nir_scale_fdiv(nir_shader *shader);
 bool nir_lower_alu_to_scalar(nir_shader *shader, nir_instr_filter_cb cb, const void *data);
 bool nir_lower_alu_width(nir_shader *shader, nir_vectorize_cb cb, const void *data);
 bool nir_lower_alu_vec8_16_srcs(nir_shader *shader);
-bool nir_lower_bool_to_bitsize(nir_shader *shader);
 bool nir_lower_bool_to_float(nir_shader *shader, bool has_fcsel_ne);
 bool nir_lower_bool_to_int32(nir_shader *shader);
 bool nir_opt_simplify_convert_alu_types(nir_shader *shader);
@@ -6335,8 +6345,7 @@ typedef struct nir_tex_src_type_constraint {
 bool nir_legalize_16bit_sampler_srcs(nir_shader *nir,
                                      nir_tex_src_type_constraints constraints);
 
-bool nir_lower_point_size(nir_shader *shader, float min, float max,
-                          nir_alu_type type);
+bool nir_lower_point_size(nir_shader *shader, float min, float max);
 
 bool nir_lower_default_point_size(nir_shader *nir);
 
@@ -6483,6 +6492,8 @@ bool nir_opt_algebraic_distribute_src_mods(nir_shader *shader);
 bool nir_opt_algebraic_integer_promotion(nir_shader *shader);
 bool nir_opt_reassociate_matrix_mul(nir_shader *shader);
 bool nir_opt_constant_folding(nir_shader *shader);
+
+bool nir_opt_fp_math_ctrl(nir_shader *shader);
 
 nir_def *nir_try_constant_fold_alu(nir_builder *b, nir_alu_instr *alu);
 
@@ -7045,8 +7056,8 @@ nir_is_io_compact(nir_shader *nir, bool is_output, unsigned location)
            location == VARYING_SLOT_CLIP_DIST1 ||
            location == VARYING_SLOT_CULL_DIST0 ||
            location == VARYING_SLOT_CULL_DIST1 ||
-           location == VARYING_SLOT_TESS_LEVEL_OUTER ||
-           location == VARYING_SLOT_TESS_LEVEL_INNER);
+           (nir->info.stage != MESA_SHADER_MESH && location == VARYING_SLOT_TESS_LEVEL_OUTER) ||
+           (nir->info.stage != MESA_SHADER_MESH && location == VARYING_SLOT_TESS_LEVEL_INNER));
 }
 
 #ifdef __cplusplus

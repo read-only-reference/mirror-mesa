@@ -88,19 +88,7 @@ fdl6_tile_alignment(struct fdl_layout *layout, uint32_t *heightalign)
       layout->pitchalign = 2;
    }
 
-   /* Empirical evidence suggests that images with UBWC could have much
-    * looser alignment requirements, however the validity of alignment is
-    * heavily undertested and the "officially" supported alignment is 4096b.
-    */
-   if (layout->ubwc || util_format_is_depth_or_stencil(layout->format) ||
-       fdl6_is_r8g8_layout(layout))
-      layout->base_align = 4096;
-   else if (layout->cpp == 1)
-      layout->base_align = 64;
-   else if (layout->cpp == 2)
-      layout->base_align = 128;
-   else
-      layout->base_align = 256;
+   layout->base_align = 4096;
 }
 
 /* NOTE: good way to test this is:  (for example)
@@ -351,9 +339,10 @@ fdl6_layout_image(struct fdl_layout *layout, const struct fd_dev_info *info,
       }
    }
 
-   if (layout->layer_first && !explicit_layout) {
+   if (layout->layer_first)
       layout->layer_size = align64(layout->size, 4096);
 
+   if (layout->layer_first && !explicit_layout) {
       if (params->sparse) {
          if (!in_sparse_miptail) {
             layout->mip_tail_first_lod = layout->mip_levels;

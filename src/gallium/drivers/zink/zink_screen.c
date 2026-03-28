@@ -169,6 +169,14 @@ zink_get_device_vendor(struct pipe_screen *pscreen)
    return zink_screen(pscreen)->vendor_name;
 }
 
+static int
+zink_get_screen_fd(struct pipe_screen *pscreen)
+{
+   struct zink_screen *screen = zink_screen(pscreen);
+
+   return screen->drm_fd;
+}
+
 static const char *
 zink_get_name(struct pipe_screen *pscreen)
 {
@@ -346,8 +354,8 @@ disk_cache_init(struct zink_screen *screen)
    blake3_hash blake3;
    _mesa_blake3_final(&ctx, blake3);
 
-   char cache_id[SHA1_DIGEST_STRING_LENGTH];
-   mesa_bytes_to_hex(cache_id, blake3, SHA1_DIGEST_LENGTH);
+   char cache_id[BLAKE3_HEX_LEN];
+   mesa_bytes_to_hex(cache_id, blake3, BLAKE3_KEY_LEN);
 
    screen->disk_cache = disk_cache_create("zink", cache_id, 0);
 
@@ -693,7 +701,16 @@ zink_init_compute_caps(struct zink_screen *screen)
    caps->max_local_size =
       screen->info.props.limits.maxComputeSharedMemorySize;
 
-   caps->subgroup_sizes = screen->info.props11.subgroupSize;
+   if (screen->info.feats13.subgroupSizeControl) {
+      uint32_t size = screen->info.props13.minSubgroupSize;
+      uint32_t max = screen->info.props13.maxSubgroupSize;
+
+      for (; size <= max; size <<= 1)
+         caps->subgroup_sizes |= size;
+   } else {
+      caps->subgroup_sizes = screen->info.props11.subgroupSize;
+   }
+
    caps->max_mem_alloc_size = screen->clamp_video_mem;
    caps->max_global_size = screen->total_video_mem;
    /* no way in vulkan to retrieve this information. */
@@ -1211,8 +1228,8 @@ zink_init_screen_caps(struct zink_screen *screen)
    caps->mesh.max_mesh_output_vertices = screen->info.mesh_props.maxMeshOutputVertices;
    caps->mesh.max_mesh_output_primitives = screen->info.mesh_props.maxMeshOutputPrimitives;
    caps->mesh.max_mesh_output_components = screen->info.mesh_props.maxMeshOutputComponents;
-   caps->mesh.max_mesh_output_layers = screen->info.mesh_props.maxMeshOutputLayers;
-   caps->mesh.max_mesh_multiview_view_count = screen->info.mesh_props.maxMeshMultiviewViewCount;
+   caps->mesh.max_mesh_output_layers = MAX2(screen->info.mesh_props.maxMeshOutputLayers, 1);
+   caps->mesh.max_mesh_multiview_view_count = MAX2(screen->info.mesh_props.maxMeshMultiviewViewCount, 1);
    caps->mesh.mesh_output_per_vertex_granularity = screen->info.mesh_props.meshOutputPerVertexGranularity;
    caps->mesh.mesh_output_per_primitive_granularity = screen->info.mesh_props.meshOutputPerPrimitiveGranularity;
 
@@ -1238,7 +1255,7 @@ zink_init_screen_caps(struct zink_screen *screen)
          caps->shader_subgroup_supported_stages = screen->info.subgroup.supportedStages & BITFIELD_MASK(MESA_SHADER_MESH_STAGES);
       else
          caps->shader_subgroup_supported_stages = screen->info.subgroup.supportedStages & BITFIELD_MASK(MESA_SHADER_STAGES);
-      caps->shader_subgroup_supported_features = screen->info.subgroup.supportedOperations & BITFIELD_MASK(PIPE_SHADER_SUBGROUP_NUM_FEATURES);
+      caps->shader_subgroup_supported_features = screen->info.subgroup.supportedOperations & PIPE_SHADER_SUBGROUP_FEATURE_MASK;
       caps->shader_subgroup_quad_all_stages = screen->info.subgroup.quadOperationsInAllStages;
    }
 }
@@ -1652,6 +1669,11 @@ zink_destroy_screen(struct pipe_screen *pscreen)
 
    if (screen->loader_lib)
       util_dl_close(screen->loader_lib);
+
+#ifdef HAVE_LIBDRM
+   if (screen->ro)
+      screen->ro->destroy(screen->ro);
+#endif
 
    if (screen->drm_fd != -1)
       close(screen->drm_fd);
@@ -3187,14 +3209,12 @@ check_hic_shader_read(struct zink_screen *screen)
 static void
 init_optimal_keys(struct zink_screen *screen)
 {
-   /* assume that anyone who knows enough to enable optimal_keys on turnip doesn't care about missing line stipple */
-   if (zink_debug & ZINK_DEBUG_OPTIMAL_KEYS && zink_driverid(screen) == VK_DRIVER_ID_MESA_TURNIP)
-      zink_debug |= ZINK_DEBUG_QUIET;
    screen->optimal_keys = !screen->need_decompose_attrs &&
                           screen->info.have_EXT_non_seamless_cube_map &&
                           screen->info.have_EXT_provoking_vertex &&
                           !screen->driconf.inline_uniforms &&
-                          !screen->driver_workarounds.no_linestipple &&
+                          /* Bypassing missing native line stippling support for Turnip as it shows no regressions */
+                          (!screen->driver_workarounds.no_linestipple || zink_driverid(screen) == VK_DRIVER_ID_MESA_TURNIP) &&
                           !screen->driver_workarounds.no_linesmooth &&
                           screen->info.maint5_props.polygonModePointSize &&
                           !screen->driver_compiler_workarounds.lower_robustImageAccess2 &&
@@ -3606,6 +3626,7 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
    for (unsigned i = 0; i < ARRAY_SIZE(screen->base.nir_options); i++)
       screen->base.nir_options[i] = &screen->nir_options;
 
+   screen->base.get_screen_fd = zink_get_screen_fd;
    screen->base.get_name = zink_get_name;
    if (screen->instance_info->have_KHR_external_memory_capabilities) {
       screen->base.get_device_uuid = zink_get_device_uuid;
@@ -3862,25 +3883,44 @@ free_device:
 }
 
 struct pipe_screen *
-zink_drm_create_screen(int fd, const struct pipe_screen_config *config)
+zink_drm_create_screen(int fd, const struct pipe_screen_config *config, struct renderonly *ro)
 {
    int64_t dev_major, dev_minor;
-   struct zink_screen *ret;
+   struct zink_screen *ret = NULL;
 
    if (zink_render_rdev(fd, &dev_major, &dev_minor))
       return NULL;
 
    ret = zink_internal_create_screen(config, dev_major, dev_minor, 0);
-
-   if (ret)
-      ret->drm_fd = os_dupfd_cloexec(fd);
-   if (ret && !ret->info.have_KHR_external_memory_fd) {
-      debug_printf("ZINK: KHR_external_memory_fd required!\n");
-      zink_destroy_screen(&ret->base);
+   if (!ret)
       return NULL;
+
+   ret->drm_fd = os_dupfd_cloexec(fd);
+#ifdef HAVE_LIBDRM
+   ret->ro = ro;
+#else
+   assert(!ro);
+#endif
+
+   if (!ret->info.have_KHR_external_memory_fd) {
+      debug_printf("ZINK: KHR_external_memory_fd required!\n");
+      goto fail;
+   }
+
+   /*
+    * Renderonly device may allocate buffers with arbitrary stride that
+    * can only be supported with EXT_image_drm_format_modifier.
+    */
+   if (ro && !ret->info.have_EXT_image_drm_format_modifier) {
+      debug_printf("ZINK: EXT_image_drm_format_modifier required for renderonly GPUs!\n");
+      goto fail;
    }
 
    return &ret->base;
+
+fail:
+   zink_destroy_screen(&ret->base);
+   return NULL;
 }
 
 struct pipe_screen *

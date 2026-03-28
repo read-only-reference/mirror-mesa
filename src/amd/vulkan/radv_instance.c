@@ -86,7 +86,6 @@ static const struct debug_control radv_debug_options[] = {
    {"novideo", RADV_DEBUG_NO_VIDEO},
    {"validatevas", RADV_DEBUG_VALIDATE_VAS},
    {"bo_history", RADV_DEBUG_DUMP_BO_HISTORY},
-   {"nobolist", RADV_DEBUG_NO_BO_LIST},
    {"dumpibs", RADV_DEBUG_DUMP_IBS},
    {"vm", RADV_DEBUG_VM},
    {"nosmemmitigation", RADV_DEBUG_NO_SMEM_MITIGATION},
@@ -192,7 +191,6 @@ static const driOptionDescription radv_dri_options[] = {
       DRI_CONF_RADV_DISABLE_ANISO_SINGLE_LEVEL(false)
       DRI_CONF_RADV_DISABLE_TRUNC_COORD(false)
       DRI_CONF_RADV_DISABLE_SINKING_LOAD_INPUT_FS(false)
-      DRI_CONF_RADV_DISABLE_DEPTH_STORAGE(false)
       DRI_CONF_RADV_FLUSH_BEFORE_QUERY_COPY(false)
       DRI_CONF_RADV_ENABLE_UNIFIED_HEAP_ON_APU(false)
       DRI_CONF_RADV_TEX_NON_UNIFORM(false)
@@ -222,7 +220,6 @@ radv_init_dri_debug_options(struct radv_instance *instance)
    drirc->debug.disable_dcc = driQueryOptionb(&drirc->options, "radv_disable_dcc");
    drirc->debug.disable_dcc_mips = driQueryOptionb(&drirc->options, "radv_disable_dcc_mips");
    drirc->debug.disable_dcc_stores = driQueryOptionb(&drirc->options, "radv_disable_dcc_stores");
-   drirc->debug.disable_depth_storage = driQueryOptionb(&drirc->options, "radv_disable_depth_storage");
    drirc->debug.disable_shrink_image_store = driQueryOptionb(&drirc->options, "radv_disable_shrink_image_store");
    drirc->debug.disable_sinking_load_input_fs = driQueryOptionb(&drirc->options, "radv_disable_sinking_load_input_fs");
    drirc->debug.disable_tc_compat_htile_in_general =

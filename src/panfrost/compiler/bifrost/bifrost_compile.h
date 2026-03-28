@@ -107,7 +107,6 @@ valhal_writes_extended_fifo(uint64_t outputs_written,
 #define DEFINE_OPTIONS(arch)                                                   \
    static const nir_shader_compiler_options bifrost_nir_options_v##arch = {    \
       .lower_scmp = true,                                                      \
-      .lower_vector_cmp = true,                                                \
       .lower_flrp16 = true,                                                    \
       .lower_flrp32 = true,                                                    \
       .lower_flrp64 = true,                                                    \
@@ -149,6 +148,7 @@ valhal_writes_extended_fifo(uint64_t outputs_written,
       .lower_uadd_carry = true,                                                \
       .lower_usub_borrow = true,                                               \
                                                                                \
+      .has_ldexp = true,                                                       \
       .has_isub = true,                                                        \
       .vectorize_vec2_16bit = true,                                            \
       .fuse_ffma16 = true,                                                     \

@@ -12,7 +12,6 @@
 #define RADV_SHADER_H
 
 #include "util/mesa-blake3.h"
-#include "util/sha1/sha1.h"
 #include "util/shader_stats.h"
 #include "util/u_math.h"
 #include "vulkan/vulkan.h"
@@ -104,6 +103,7 @@ struct radv_ps_epilog_key {
    uint8_t color_is_int8;
    uint8_t color_is_int10;
    uint8_t enable_mrt_output_nan_fixup;
+   uint8_t no_signed_zero;
 
    uint32_t colors_needed;
 
@@ -186,6 +186,10 @@ struct radv_graphics_pipeline_key {
 };
 
 struct radv_nir_compiler_options {
+   const struct ac_compiler_info *compiler_info;
+   enum amd_gfx_level gfx_level;
+   enum radeon_family family;
+   uint32_t address32_hi;
    bool robust_buffer_access_llvm;
    bool dump_shader;
    bool dump_ir;
@@ -196,7 +200,6 @@ struct radv_nir_compiler_options {
    bool check_ir;
    uint8_t enable_mrt_output_nan_fixup;
    bool wgp_mode;
-   const struct radeon_info *info;
 
    struct {
       void (*func)(void *private_data, enum aco_compiler_debug_level level, const char *message);
@@ -274,7 +277,7 @@ struct radv_shader_stage {
    const char *entrypoint;
    const VkSpecializationInfo *spec_info;
 
-   unsigned char shader_sha1[SHA1_DIGEST_LENGTH];
+   unsigned char shader_blake3[BLAKE3_KEY_LEN];
 
    nir_shader *nir;
    nir_shader *gs_copy_shader;
@@ -581,8 +584,7 @@ unsigned radv_get_max_scratch_waves(const struct radv_device *device, struct rad
 
 const char *radv_get_shader_name(const struct radv_shader_info *info, mesa_shader_stage stage);
 
-unsigned radv_compute_spi_ps_input(const struct radv_physical_device *pdev,
-                                   const struct radv_graphics_state_key *gfx_state,
+unsigned radv_compute_spi_ps_input(enum amd_gfx_level gfx_level, const struct radv_graphics_state_key *gfx_state,
                                    const struct radv_shader_info *info);
 
 bool radv_is_traversal_shader(nir_shader *nir);

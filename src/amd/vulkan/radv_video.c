@@ -983,7 +983,7 @@ radv_GetPhysicalDeviceVideoCapabilitiesKHR(VkPhysicalDevice physicalDevice, cons
          enc_caps->encodeInputPictureGranularity = pCapabilities->pictureAccessGranularity;
       ext->maxTiles.width = 2;
       ext->maxTiles.height = 16;
-      ext->minTileSize.width = 64;
+      ext->minTileSize.width = pdev->enc_hw_ver >= RADV_VIDEO_ENC_HW_5 ? 256 : 128;
       ext->minTileSize.height = 64;
       ext->maxTileSize.width = 4096;
       ext->maxTileSize.height = 4096;
@@ -1383,7 +1383,6 @@ radv_CmdControlVideoCodingKHR(VkCommandBuffer commandBuffer, const VkVideoCoding
 
    if (vid->sessionctx.mem) {
       cmd.session_va = radv_buffer_get_va(vid->sessionctx.mem->bo) + vid->sessionctx.offset;
-      radv_cs_add_buffer(device->ws, cs->b, vid->sessionctx.mem->bo);
    }
 
    if (vid->dec->embedded_size) {
@@ -2066,8 +2065,6 @@ fill_surface(struct radv_cmd_buffer *cmd_buf, struct radv_image *img, uint32_t s
          surf->planes[i].surf = &img->planes[i].surface;
       }
    }
-
-   radv_cs_add_buffer(radv_cmd_buffer_device(cmd_buf)->ws, cmd_buf->cs->b, img->bindings[0].bo);
 }
 
 static enum ac_video_dec_tier
@@ -2117,7 +2114,6 @@ radv_CmdDecodeVideoKHR(VkCommandBuffer commandBuffer, const VkVideoDecodeInfoKHR
 
    if (vid->sessionctx.mem) {
       cmd.session_va = radv_buffer_get_va(vid->sessionctx.mem->bo) + vid->sessionctx.offset;
-      radv_cs_add_buffer(device->ws, cs->b, vid->sessionctx.mem->bo);
    }
 
    if (vid->dec->embedded_size) {
@@ -2144,7 +2140,6 @@ radv_CmdDecodeVideoKHR(VkCommandBuffer commandBuffer, const VkVideoDecodeInfoKHR
    }
 
    cmd.bitstream_va += vk_buffer_address(&src_buffer->vk, frame_info->srcBufferOffset);
-   radv_cs_add_buffer(device->ws, cs->b, src_buffer->bo);
 
    VK_FROM_HANDLE(radv_image_view, db, frame_info->dstPictureResource.imageViewBinding);
    uint32_t db_slice = db->vk.base_array_layer + frame_info->dstPictureResource.baseArrayLayer;

@@ -14,6 +14,7 @@
 #include "ac_shadowed_regs.h"
 #include "compiler/nir/nir.h"
 #include "util/disk_cache.h"
+#include "util/helpers.h"
 #include "util/hex.h"
 #include "util/u_cpu_detect.h"
 #include "util/u_memory.h"
@@ -79,6 +80,10 @@ static const struct debug_named_value radeonsi_debug_options[] = {
    {"nodccmsaa", DBG(NO_DCC_MSAA), "Disable DCC for MSAA"},
    {"nofmask", DBG(NO_FMASK), "Disable MSAA compression"},
    {"nodma", DBG(NO_DMA), "Disable SDMA-copy for DRI_PRIME"},
+
+   {"forcegfxblit", DBG(FORCE_GFX_BLIT), "Force the use of fragment shaders for image clears, copies, blits, and resolve."},
+   {"forcecomputeblit", DBG(FORCE_COMPUTE_BLIT), "Force the use of compute shaders for image clears, copies, blits, and resolve."},
+   {"forcefastclear", DBG(FORCE_FAST_CLEAR), "Force the use of image \"fast clear\" when possible. For debug only."},
 
    {"extra_md", DBG(EXTRA_METADATA), "Set UMD metadata for all textures and with additional fields for umr"},
 
@@ -150,7 +155,6 @@ static const struct debug_named_value test_options[] = {
    {"testvmfaultshader", DBG(TEST_VMFAULT_SHADER), "Invoke a shader VM fault test and exit."},
    {"dmaperf", DBG(TEST_DMA_PERF), "Test DMA performance"},
    {"testmemperf", DBG(TEST_MEM_PERF), "Test map + memcpy perf using the winsys."},
-   {"blitperf", DBG(TEST_BLIT_PERF), "Test gfx and compute clear/copy/blit/resolve performance"},
 
    DEBUG_NAMED_VALUE_END /* must be last */
 };
@@ -634,7 +638,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
    }
 
    /* Border colors. */
-   if (sscreen->info.cu_info.has_3d_cube_border_color_mipmap) {
+   if (sscreen->info.compiler_info.has_3d_cube_border_color_mipmap) {
       sctx->border_color_table = malloc(SI_MAX_BORDER_COLORS * sizeof(*sctx->border_color_table));
       if (!sctx->border_color_table) {
          mesa_loge("can't create border_color_table");
@@ -673,21 +677,26 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
    sctx->b.set_device_reset_callback = si_set_device_reset_callback;
    sctx->b.set_frontend_noop = si_set_frontend_noop;
 
+#ifdef HAVE_GFX_COMPUTE
    si_init_all_descriptors(sctx);
    si_init_barrier_functions(sctx);
-   si_init_buffer_functions(sctx);
    si_init_clear_functions(sctx);
    si_init_blit_functions(sctx);
    si_init_compute_functions(sctx);
    si_init_compute_blit_functions(sctx);
    si_init_debug_functions(sctx);
-   si_init_fence_functions(sctx);
    si_init_query_functions(sctx);
    si_init_state_compute_functions(sctx);
+#else
+   list_inithead(&sctx->active_queries);
+#endif
+   si_init_buffer_functions(sctx);
+   si_init_fence_functions(sctx);
    si_init_context_texture_functions(sctx);
 
    /* Initialize graphics-only context functions. */
    if (sctx->is_gfx_queue) {
+#ifdef HAVE_GFX_COMPUTE
       if (sctx->gfx_level >= GFX10)
          si_gfx11_init_query(sctx);
       si_init_msaa_functions(sctx);
@@ -747,6 +756,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
       default:
          UNREACHABLE("unhandled gfx level");
       }
+#endif
    }
 
    if (screen->caps.mesh_shader)
@@ -1171,18 +1181,18 @@ static void si_disk_cache_create(struct si_screen *sscreen)
    if (sscreen->shader_debug_flags & DBG_ALL_SHADERS)
       return;
 
-   struct mesa_sha1 ctx;
-   unsigned char sha1[SHA1_DIGEST_LENGTH];
-   char cache_id[SHA1_DIGEST_STRING_LENGTH];
+   blake3_hasher ctx;
+   unsigned char blake3[BLAKE3_KEY_LEN];
+   char cache_id[BLAKE3_HEX_LEN];
 
-   _mesa_sha1_init(&ctx);
+   _mesa_blake3_init(&ctx);
 
 #ifdef RADEONSI_BUILD_ID_OVERRIDE
    {
       unsigned size = strlen(RADEONSI_BUILD_ID_OVERRIDE) / 2;
       char *data = alloca(size);
       parse_hex(data, RADEONSI_BUILD_ID_OVERRIDE, size);
-      _mesa_sha1_update(&ctx, data, size);
+      _mesa_blake3_update(&ctx, data, size);
    }
 #else
    if (!disk_cache_get_function_identifier(si_disk_cache_create, &ctx))
@@ -1197,10 +1207,10 @@ static void si_disk_cache_create(struct si_screen *sscreen)
    /* NIR options depend on si_screen::use_aco, which affects all shaders, including GLSL
     * compilation.
     */
-   _mesa_sha1_update(&ctx, &sscreen->use_aco, sizeof(sscreen->use_aco));
+   _mesa_blake3_update(&ctx, &sscreen->use_aco, sizeof(sscreen->use_aco));
 
-   _mesa_sha1_final(&ctx, sha1);
-   mesa_bytes_to_hex(cache_id, sha1, SHA1_DIGEST_LENGTH);
+   _mesa_blake3_final(&ctx, blake3);
+   mesa_bytes_to_hex(cache_id, blake3, BLAKE3_KEY_LEN);
 
    sscreen->disk_shader_cache = disk_cache_create(ac_get_family_name(sscreen->info.family),
                                                   cache_id, sscreen->info.address32_hi);
@@ -1327,13 +1337,6 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
    sscreen->ws = ws;
    ws->query_info(ws, &sscreen->info);
 
-   if (sscreen->info.gfx_level >= GFX9) {
-      sscreen->se_tile_repeat = 32 * sscreen->info.max_se;
-   } else {
-      ac_get_raster_config(&sscreen->info, &sscreen->pa_sc_raster_config,
-                           &sscreen->pa_sc_raster_config_1, &sscreen->se_tile_repeat);
-   }
-
    sscreen->context_roll_log_filename = debug_get_option("AMD_ROLLS", NULL);
    sscreen->debug_flags = debug_get_flags_option("R600_DEBUG", radeonsi_debug_options, 0);
    sscreen->debug_flags |= debug_get_flags_option("AMD_DEBUG", radeonsi_debug_options, 0);
@@ -1351,6 +1354,7 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
        !(sscreen->info.userq_ip_mask & (1 << AMD_IP_GFX)))
       sscreen->info.has_kernelq_reg_shadowing = true;
 
+#ifdef HAVE_GFX_COMPUTE
    bool support_aco = aco_is_gpu_supported(&sscreen->info);
 
 #if AMD_LLVM_AVAILABLE
@@ -1367,6 +1371,7 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
    }
 
    si_setup_force_shader_use_aco(sscreen, support_aco);
+#endif
 
    if ((sscreen->debug_flags & DBG(TMZ)) &&
        !sscreen->info.has_tmz_support) {
@@ -1394,7 +1399,9 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
    sscreen->b.destroy = si_destroy_screen;
    sscreen->b.set_max_shader_compiler_threads = si_set_max_shader_compiler_threads;
    sscreen->b.is_parallel_shader_compilation_finished = si_is_parallel_shader_compilation_finished;
+#ifdef HAVE_GFX_COMPUTE
    sscreen->b.finalize_nir = si_finalize_nir;
+#endif
 
    sscreen->nir_options = CALLOC_STRUCT(nir_shader_compiler_options);
 
@@ -1485,7 +1492,7 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
       num_comp_lo_threads = 1;
    }
 
-#ifndef NDEBUG
+#if !defined(NDEBUG) && defined(HAVE_GFX_COMPUTE)
    nir_process_debug_variable();
 
    /* Use a single compilation thread if NIR printing is enabled to avoid
@@ -1677,9 +1684,6 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
 
    if (test_flags & DBG(TEST_MEM_PERF))
       si_test_mem_perf(sscreen);
-
-   if (test_flags & DBG(TEST_BLIT_PERF))
-      si_test_blit_perf(sscreen);
 
    if (test_flags & (DBG(TEST_VMFAULT_CP) | DBG(TEST_VMFAULT_SHADER)))
       si_test_vmfault(sscreen, test_flags);

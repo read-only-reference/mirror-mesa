@@ -411,10 +411,10 @@ nir_gather_tcs_info(const nir_shader *nir, nir_tcs_info *info,
    unsigned tess_level_writes_le_two = 0;
    unsigned tess_level_writes_gt_two = 0;
 
-   struct hash_table *range_ht = _mesa_pointer_hash_table_create(NULL);
-
    /* Gather barriers and which values are written to tess level outputs. */
    nir_foreach_function_impl(impl, nir) {
+      nir_fp_analysis_state range_ht = nir_create_fp_analysis_state(impl);
+
       nir_foreach_block(block, impl) {
          nir_foreach_instr(instr, block) {
             if (instr->type != nir_instr_type_intrinsic)
@@ -458,36 +458,26 @@ nir_gather_tcs_info(const nir_shader *nir, nir_tcs_info *info,
                   continue;
                }
 
-               const struct fp_result_range r =
-                  nir_analyze_fp_range(range_ht, scalar.def);
+               fp_class_mask fp_class =
+                  nir_analyze_fp_class(&range_ht, scalar.def);
 
-               switch (r.range) {
-               case unknown:
-               case ge_zero:
-               case ne_zero:
-               default:
+               if (fp_class & (FP_CLASS_ANY_NEG | FP_CLASS_ANY_ZERO | FP_CLASS_NAN))
                   tess_level_writes_le_zero |= BITFIELD_BIT(shift);
+
+               if (fp_class & (FP_CLASS_GT_ZERO_LT_POS_ONE | FP_CLASS_POS_ONE))
                   tess_level_writes_le_one |= BITFIELD_BIT(shift);
+
+               if (fp_class & (FP_CLASS_GT_POS_ONE | FP_CLASS_POS_INF)) {
                   tess_level_writes_le_two |= BITFIELD_BIT(shift);
                   tess_level_writes_gt_two |= BITFIELD_BIT(shift);
-                  break;
-               case lt_zero:
-               case le_zero:
-               case eq_zero:
-                  tess_level_writes_le_zero |= BITFIELD_BIT(shift);
-                  break;
-               case gt_zero:
-                  tess_level_writes_le_one |= BITFIELD_BIT(shift);
-                  tess_level_writes_le_two |= BITFIELD_BIT(shift);
-                  tess_level_writes_gt_two |= BITFIELD_BIT(shift);
-                  break;
                }
             }
          }
       }
+
+      nir_free_fp_analysis_state(&range_ht);
    }
 
-   ralloc_free(range_ht);
 
    /* Determine which outer tess level components can discard patches.
     * If the primitive type is unspecified, we have to assume the worst case.

@@ -245,6 +245,10 @@ static int si_init_surface(struct si_screen *sscreen, struct radeon_surf *surfac
            sscreen->debug_flags & DBG(NO_DCC) ||
            (ptex->bind & PIPE_BIND_SCANOUT && sscreen->debug_flags & DBG(NO_DISPLAY_DCC))))
          flags |= RADEON_SURF_DISABLE_DCC;
+
+      if (sscreen->debug_flags & DBG(NO_FMASK) ||
+          ptex->flags & PIPE_RESOURCE_FLAG_SPARSE)
+         flags |= RADEON_SURF_NO_FMASK;
    } else {
       /* Gfx6-11 */
       if (!is_flushed_depth && is_depth) {
@@ -1050,7 +1054,7 @@ static struct si_texture *si_texture_create_object(struct pipe_screen *screen,
    struct si_resource *resource;
    struct si_screen *sscreen = (struct si_screen *)screen;
 
-   if (!sscreen->info.cu_info.has_3d_cube_border_color_mipmap &&
+   if (!sscreen->info.compiler_info.has_3d_cube_border_color_mipmap &&
        (base->last_level > 0 ||
         base->target == PIPE_TEXTURE_3D ||
         base->target == PIPE_TEXTURE_CUBE)) {

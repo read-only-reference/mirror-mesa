@@ -381,8 +381,8 @@ radv_use_htile_for_image(const struct radv_device *device, const struct radv_ima
    if (!(image->vk.usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT))
       return false;
 
-   if (image->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT)
-      return false;
+   /* Storage isn't allowed with depth/stencil images. */
+   assert(!(image->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT));
 
    /* TODO:
     * - Investigate about mips+layers.
@@ -904,12 +904,10 @@ radv_image_alloc_values(const struct radv_device *device, struct radv_image *ima
    }
 
    if (pdev->info.gfx_level == GFX12) {
-      const struct radeon_surf *surf = &image->planes[0].surface;
-
       /* Allocate HiZ metadata when the image has depth/stencil aspects to implement a workaround. */
-      if (pdev->gfx12_hiz_wa == RADV_GFX12_HIZ_WA_FULL && surf->u.gfx9.zs.hiz.offset &&
+      if (pdev->gfx12_hiz_wa == RADV_GFX12_HIZ_WA_FULL && radv_image_has_hiz(image) &&
           (image->vk.aspects == (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))) {
-         image->hiz_valid_offset = image->size;
+         image->hiz_metadata_offset = image->size;
          image->size += image->vk.mip_levels * 4;
       }
    }
@@ -1596,10 +1594,8 @@ radv_layout_is_htile_compressed(const struct radv_device *device, const struct r
       return false;
 
    switch (layout) {
-   case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
    case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
    case VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL:
-   case VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL:
       return radv_htile_enabled(image, level);
    case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
       return radv_tc_compat_htile_enabled(image, level) ||
@@ -1623,8 +1619,8 @@ radv_layout_is_htile_compressed(const struct radv_device *device, const struct r
        * introducing corruption.
        */
       return false;
-   case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
-   case VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL:
+   case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL:
+   case VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL:
       if (radv_tc_compat_htile_enabled(image, level) ||
           (radv_htile_enabled(image, level) &&
            !(image->vk.usage & (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)))) {
@@ -1636,8 +1632,12 @@ radv_layout_is_htile_compressed(const struct radv_device *device, const struct r
          return false;
       }
       break;
-   default:
+   case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+   case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+   case VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ:
       return radv_tc_compat_htile_enabled(image, level);
+   default:
+      UNREACHABLE("Invalid image layouts!");
    }
 }
 
@@ -1653,12 +1653,12 @@ radv_layout_can_fast_clear(const struct radv_device *device, const struct radv_i
    if (!(image->vk.usage & RADV_IMAGE_USAGE_WRITE_BITS))
       return false;
 
-   /* All images that support comp-to-single can be fast cleared on any queues as long as DCC is
-    * compressed because this doesn't require to set fast-clear registers or to perform
+   /* All images that support comp-to-single can be fast cleared on graphics/compute queues as long
+    * as DCC is compressed because this doesn't require to set fast-clear registers or to perform
     * fast-clear eliminate.
-    * TODO: Generalize this to GFX10-10.3.
+    * TODO: Figure out if it's possible with MSAA on GFX10-10.3.
     */
-   if (pdev->info.gfx_level >= GFX11 && image->support_comp_to_single)
+   if (image->support_comp_to_single && (pdev->info.gfx_level >= GFX11 || image->vk.samples == 1))
       return true;
 
    if (layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL && layout != VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL)

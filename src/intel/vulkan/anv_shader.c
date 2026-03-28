@@ -66,9 +66,9 @@ anv_shader_deserialize(struct vk_device *vk_device,
    data.push_desc_info.fully_promoted_ubo_descriptors = blob_read_uint32(blob);
    data.push_desc_info.push_set_buffer = blob_read_uint8(blob);
 
-   blob_copy_bytes(blob, data.bind_map.surface_sha1, sizeof(data.bind_map.surface_sha1));
-   blob_copy_bytes(blob, data.bind_map.sampler_sha1, sizeof(data.bind_map.sampler_sha1));
-   blob_copy_bytes(blob, data.bind_map.push_sha1, sizeof(data.bind_map.push_sha1));
+   blob_copy_bytes(blob, data.bind_map.surface_blake3, sizeof(data.bind_map.surface_blake3));
+   blob_copy_bytes(blob, data.bind_map.sampler_blake3, sizeof(data.bind_map.sampler_blake3));
+   blob_copy_bytes(blob, data.bind_map.push_blake3, sizeof(data.bind_map.push_blake3));
    data.bind_map.layout_type = blob_read_uint16(blob);
    data.bind_map.binding_mask = blob_read_uint16(blob);
    data.bind_map.surface_count = blob_read_uint8(blob);
@@ -95,6 +95,7 @@ anv_shader_deserialize(struct vk_device *vk_device,
    data.bind_map.pushed_sets = blob_read_uint8(blob);
    blob_copy_bytes(blob, data.bind_map.dynamic_descriptors,
                    sizeof(data.bind_map.dynamic_descriptors));
+   data.bind_map.inferred_behavior = blob_read_uint8(blob);
 
    if (blob->overrun)
       return vk_error(device, VK_ERROR_UNKNOWN);
@@ -147,12 +148,12 @@ anv_shader_serialize(struct vk_device *device,
    blob_write_uint32(blob, shader->push_desc_info.fully_promoted_ubo_descriptors);
    blob_write_uint8(blob, shader->push_desc_info.push_set_buffer);
 
-   blob_write_bytes(blob, shader->bind_map.surface_sha1,
-                    sizeof(shader->bind_map.surface_sha1));
-   blob_write_bytes(blob, shader->bind_map.sampler_sha1,
-                    sizeof(shader->bind_map.sampler_sha1));
-   blob_write_bytes(blob, shader->bind_map.push_sha1,
-                    sizeof(shader->bind_map.push_sha1));
+   blob_write_bytes(blob, shader->bind_map.surface_blake3,
+                    sizeof(shader->bind_map.surface_blake3));
+   blob_write_bytes(blob, shader->bind_map.sampler_blake3,
+                    sizeof(shader->bind_map.sampler_blake3));
+   blob_write_bytes(blob, shader->bind_map.push_blake3,
+                    sizeof(shader->bind_map.push_blake3));
    blob_write_uint16(blob, shader->bind_map.layout_type);
    blob_write_uint16(blob, shader->bind_map.binding_mask);
    blob_write_uint8(blob, shader->bind_map.surface_count);
@@ -179,6 +180,7 @@ anv_shader_serialize(struct vk_device *device,
    blob_write_uint8(blob, shader->bind_map.pushed_sets);
    blob_write_bytes(blob, shader->bind_map.dynamic_descriptors,
                     sizeof(shader->bind_map.dynamic_descriptors));
+   blob_write_uint8(blob, shader->bind_map.inferred_behavior);
 
    return !blob->out_of_memory;
 }
@@ -715,8 +717,10 @@ anv_shader_create(struct anv_device *device,
       goto error_state;
 
    anv_shader_heap_upload(&device->shader_heap,
-                          shader->kernel, shader_data->code,
-                          shader_data->prog_data.base.program_size);
+                          shader->kernel,
+                          shader_data->code,
+                          shader->prog_data,
+                          shader->stats->dispatch_width);
 
    if (mesa_shader_stage_is_rt(shader->vk.stage)) {
       const struct brw_bs_prog_data *bs_prog_data =
@@ -881,8 +885,10 @@ anv_replay_rt_shader_group(struct vk_device *vk_device,
          assert(result == VK_SUCCESS);
 
          anv_shader_heap_upload(&device->shader_heap,
-                                shader->replay_kernel, shader->code,
-                                shader->prog_data->program_size);
+                                shader->replay_kernel,
+                                shader->code,
+                                shader->prog_data,
+                                shader->stats->dispatch_width);
       }
 
       simple_mtx_unlock(&shader->replay_mutex);

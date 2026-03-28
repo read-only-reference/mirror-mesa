@@ -472,6 +472,7 @@ debian-arm64:
       -D perfetto=true
     GALLIUM_ST:
       -D gallium-rusticl=true
+      -D legacy-wayland=bind-wayland-display
     RUN_MESON_TESTS: "false"  # run by debian-arm64-build-testing
     S3_ARTIFACT_NAME: mesa-arm64-default-${BUILDTYPE}
 

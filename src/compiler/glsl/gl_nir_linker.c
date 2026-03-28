@@ -811,15 +811,15 @@ add_shader_variable(const struct gl_constants *consts,
        *     type, a single entry will be generated, using the variable name
        *     from the shader source."
        */
-      struct gl_shader_variable *sha_v =
+      struct gl_shader_variable *blake3_v =
          create_shader_variable(shProg, var, name, type, interface_type,
                                 use_implicit_location, location,
                                 outermost_struct_type);
-      if (!sha_v)
+      if (!blake3_v)
          return false;
 
       return link_util_add_program_resource(shProg, resource_set,
-                                            programInterface, sha_v, stage_mask);
+                                            programInterface, blake3_v, stage_mask);
    }
    }
 }
@@ -1192,9 +1192,12 @@ remove_dead_varyings_pre_linking(nir_shader *nir)
 bool
 gl_nir_add_point_size(nir_shader *nir)
 {
-   nir_variable *psiz = nir_create_variable_with_location(nir, nir_var_shader_out,
-                                                          VARYING_SLOT_PSIZ, glsl_float_type());
-   psiz->data.how_declared = nir_var_hidden;
+   nir_variable *psiz;
+   if (!nir->info.io_lowered) {
+      psiz = nir_create_variable_with_location(nir, nir_var_shader_out,
+                                               VARYING_SLOT_PSIZ, glsl_float_type());
+      psiz->data.how_declared = nir_var_hidden;
+   }
 
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
    nir_builder b = nir_builder_create(impl);
@@ -1207,10 +1210,19 @@ gl_nir_add_point_size(nir_shader *nir)
                 intr->intrinsic == nir_intrinsic_copy_deref) {
                nir_variable *var = nir_intrinsic_get_var(intr, 0);
                if (var->data.location == VARYING_SLOT_POS) {
+                  assert(!nir->info.io_lowered);
                   b.cursor = nir_after_instr(instr);
                   nir_deref_instr *deref = nir_build_deref_var(&b, psiz);
                   nir_store_deref(&b, deref, nir_imm_float(&b, 1.0), BITFIELD_BIT(0));
                   found = true;
+               }
+            } else if (intr->intrinsic == nir_intrinsic_store_output) {
+               nir_io_semantics sem = nir_intrinsic_io_semantics(intr);
+               if (sem.location == VARYING_SLOT_POS) {
+                  assert(nir->info.io_lowered);
+                  b.cursor = nir_after_instr(instr);
+                  nir_store_output(&b, nir_imm_float(&b, 1.0), nir_imm_int(&b, 0),
+                                   .io_semantics.location = VARYING_SLOT_PSIZ);
                }
             }
          }
@@ -1218,8 +1230,13 @@ gl_nir_add_point_size(nir_shader *nir)
    }
    if (!found) {
       b.cursor = nir_before_impl(impl);
-      nir_deref_instr *deref = nir_build_deref_var(&b, psiz);
-      nir_store_deref(&b, deref, nir_imm_float(&b, 1.0), BITFIELD_BIT(0));
+      if (nir->info.io_lowered) {
+         nir_store_output(&b, nir_imm_float(&b, 1.0), nir_imm_int(&b, 0),
+                          .io_semantics.location = VARYING_SLOT_PSIZ);
+      } else {
+         nir_deref_instr *deref = nir_build_deref_var(&b, psiz);
+         nir_store_deref(&b, deref, nir_imm_float(&b, 1.0), BITFIELD_BIT(0));
+      }
    }
 
    nir->info.outputs_written |= VARYING_BIT_PSIZ;
@@ -1684,12 +1701,27 @@ cross_validate_globals(void *mem_ctx, const struct gl_constants *consts,
                      existing->data.mode == nir_var_mem_ssbo &&
                      existing->data.from_ssbo_unsized_array &&
                      glsl_get_gl_type(var->type) == glsl_get_gl_type(existing->type))) {
-                  linker_error(prog, "%s `%s' declared as type "
-                                 "`%s' and type `%s'\n",
-                                 gl_nir_mode_string(var),
-                                 var->name, glsl_get_type_name(var->type),
-                                 glsl_get_type_name(existing->type));
-                  return;
+
+                  /* Relax precision matching on unused uniforms for early ES shaders */
+                  if (prog->IsES && !var->interface_type &&
+                      !(existing->data.used && var->data.used) &&
+                      glsl_base_type_is_integer(glsl_get_gl_type(var->type)) == glsl_base_type_is_integer(glsl_get_gl_type(existing->type)) &&
+                      glsl_base_type_is_float(glsl_get_gl_type(var->type)) == glsl_base_type_is_float(glsl_get_gl_type(existing->type)) &&
+                      prog->GLSL_Version < 300) {
+                     linker_warning(prog, "%s `%s' declared as type "
+                                    "`%s' and type `%s'\n",
+                                    gl_nir_mode_string(var),
+                                    var->name, glsl_get_type_name(var->type),
+                                    glsl_get_type_name(existing->type));
+
+                  } else {
+                     linker_error(prog, "%s `%s' declared as type "
+                                    "`%s' and type `%s'\n",
+                                    gl_nir_mode_string(var),
+                                    var->name, glsl_get_type_name(var->type),
+                                    glsl_get_type_name(existing->type));
+                     return;
+                  }
                }
             }
          }

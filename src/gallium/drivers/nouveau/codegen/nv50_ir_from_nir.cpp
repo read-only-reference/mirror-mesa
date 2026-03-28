@@ -3581,7 +3581,6 @@ nvir_nir_shader_compiler_options(int chipset, uint8_t shader_type)
    op.lower_fneg = false;
    op.lower_ineg = false;
    op.lower_scmp = true; // TODO: not implemented yet
-   op.lower_vector_cmp = false;
    op.lower_bitops = false;
    op.lower_isign = (chipset >= NVISA_GV100_CHIPSET);
    op.lower_fsign = (chipset >= NVISA_GV100_CHIPSET);
@@ -3591,7 +3590,6 @@ nvir_nir_shader_compiler_options(int chipset, uint8_t shader_type)
    op.lower_ffract = true;
    op.lower_fceil = false; // TODO
    op.lower_ftrunc = false;
-   op.lower_ldexp = true;
    op.lower_pack_half_2x16 = true;
    op.lower_pack_unorm_2x16 = true;
    op.lower_pack_snorm_2x16 = true;

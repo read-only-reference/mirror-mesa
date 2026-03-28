@@ -1010,11 +1010,13 @@ nir_get_io_offset_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_load_global_block_intel:
    case nir_intrinsic_load_shared_uniform_block_intel:
    case nir_intrinsic_load_global_constant_uniform_block_intel:
+   case nir_intrinsic_load_urb_lsc_intel:
    case nir_intrinsic_load_shared2_amd:
    case nir_intrinsic_load_const_ir3:
    case nir_intrinsic_load_shared_ir3:
    case nir_intrinsic_load_push_data_intel:
    case nir_intrinsic_vild_nv:
+   case nir_intrinsic_load_shader_indirect_data_intel:
       return 0;
    case nir_intrinsic_load_ubo:
    case nir_intrinsic_load_ubo_vec4:
@@ -1026,6 +1028,9 @@ nir_get_io_offset_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_load_per_primitive_output:
    case nir_intrinsic_load_interpolated_input:
    case nir_intrinsic_load_global_amd:
+   case nir_intrinsic_load_global_bounded:
+   case nir_intrinsic_load_global_constant_offset:
+   case nir_intrinsic_load_global_constant_bounded:
    case nir_intrinsic_store_output:
    case nir_intrinsic_store_pixel_local:
    case nir_intrinsic_store_shared:
@@ -1035,6 +1040,7 @@ nir_get_io_offset_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_store_global_2x32:
    case nir_intrinsic_store_global_etna:
    case nir_intrinsic_store_global_nv:
+   case nir_intrinsic_store_urb_lsc_intel:
    case nir_intrinsic_store_scratch:
    case nir_intrinsic_store_scratch_nv:
    case nir_intrinsic_ssbo_atomic:
@@ -1046,6 +1052,7 @@ nir_get_io_offset_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_store_shared_block_intel:
    case nir_intrinsic_load_ubo_uniform_block_intel:
    case nir_intrinsic_load_ssbo_uniform_block_intel:
+   case nir_intrinsic_load_urb_vec4_intel:
    case nir_intrinsic_load_buffer_amd:
    case nir_intrinsic_store_shared2_amd:
    case nir_intrinsic_store_shared_ir3:
@@ -1057,6 +1064,7 @@ nir_get_io_offset_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_store_per_primitive_output:
    case nir_intrinsic_load_attribute_pan:
    case nir_intrinsic_store_ssbo_block_intel:
+   case nir_intrinsic_store_urb_vec4_intel:
    case nir_intrinsic_store_buffer_amd:
    case nir_intrinsic_store_ssbo_intel:
    case nir_intrinsic_store_global_amd:
@@ -1180,11 +1188,14 @@ nir_get_io_data_src_number(const nir_intrinsic_instr *intr)
    case nir_intrinsic_store_raw_output_pan:
    case nir_intrinsic_store_combined_output_pan:
    case nir_intrinsic_store_tile_pan:
-   case nir_intrinsic_store_converted_mem_pan:
+   case nir_intrinsic_store_global_cvt_pan:
+   case nir_intrinsic_store_global_psiz_pan:
    case nir_intrinsic_store_tlb_sample_color_v3d:
    case nir_intrinsic_store_uvs_agx:
    case nir_intrinsic_store_local_pixel_agx:
    case nir_intrinsic_store_agx:
+   case nir_intrinsic_store_urb_lsc_intel:
+   case nir_intrinsic_store_urb_vec4_intel:
       return 0;
 
    case nir_intrinsic_store_deref:

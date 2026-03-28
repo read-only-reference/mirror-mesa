@@ -182,9 +182,14 @@ fill_operation(struct teflon_delegate *delegate, TfLiteContext *tf_context, TfLi
       operation->pooling.padding_same = params->padding == kTfLitePaddingSame;
       break;
    }
-   case kTfLiteBuiltinAdd:
+   case kTfLiteBuiltinAdd: {
+      TfLiteAddParams *params = (TfLiteAddParams *)node->builtin_data;
+
       operation->type = PIPE_ML_OPERATION_TYPE_ADD;
+      operation->add.relu = params->activation == kTfLiteActRelu ||
+                            params->activation == kTfLiteActRelu6;
       break;
+   }
    case kTfLiteBuiltinConcatenation: {
       TfLiteConcatenationParams *params = node->builtin_data;
 
@@ -308,6 +313,35 @@ all_zero_points_equal(const TfLiteAffineQuantization *quant)
    return true;
 }
 
+static size_t
+tf_format_to_size(TfLiteType type)
+{
+   switch (type) {
+   case kTfLiteFloat32:
+      return sizeof(float);
+   case kTfLiteFloat64:
+      return sizeof(double);
+   case kTfLiteInt8:
+      return sizeof(int8_t);
+   case kTfLiteUInt8:
+      return sizeof(uint8_t);
+   case kTfLiteInt16:
+      return sizeof(int16_t);
+   case kTfLiteUInt16:
+      return sizeof(uint16_t);
+   case kTfLiteInt32:
+      return sizeof(int32_t);
+   case kTfLiteUInt32:
+      return sizeof(uint32_t);
+   case kTfLiteInt64:
+      return sizeof(int64_t);
+   case kTfLiteUInt64:
+      return sizeof(uint64_t);
+   default:
+      return 0;
+   }
+}
+
 static void
 fill_tensor(struct teflon_delegate *delegate, TfLiteContext *tf_context, struct pipe_tensor *tensor, unsigned index)
 {
@@ -320,6 +354,7 @@ fill_tensor(struct teflon_delegate *delegate, TfLiteContext *tf_context, struct 
    if (tf_tensor.data.data)
       tensor->resource = create_resource(context, tf_tensor);
 
+   tensor->type_size = tf_format_to_size(tf_tensor.type);
    tensor->index = index;
    for (int out_dim = 0; out_dim < 4; out_dim++) {
       int in_dim = tf_tensor.dims->size - 4 + out_dim;
@@ -334,14 +369,28 @@ fill_tensor(struct teflon_delegate *delegate, TfLiteContext *tf_context, struct 
       tensor->scale = quant->scale->data[0];
       tensor->zero_point = quant->zero_point->data[0];
 
-      assert(quant->scale->size == quant->zero_point->size);
-      if (quant->scale->size > 1 &&
-          (!all_scales_equal(quant) || !all_zero_points_equal(quant))) {
+      /* Handle per-channel quantization */
+      if (quant->scale->size > 1 && !all_scales_equal(quant)) {
          tensor->scales = calloc(quant->scale->size, sizeof(*tensor->scales));
          memcpy(tensor->scales, quant->scale->data, quant->scale->size * sizeof(*tensor->scales));
 
-         tensor->zero_points = calloc(quant->zero_point->size, sizeof(*tensor->zero_points));
-         memcpy(tensor->zero_points, quant->zero_point->data, quant->zero_point->size * sizeof(*tensor->zero_points));
+         tensor->zero_points = calloc(quant->scale->size, sizeof(*tensor->zero_points));
+         if (quant->zero_point->size == quant->scale->size) {
+            /* Same number of zero_points as scales - copy directly */
+            memcpy(tensor->zero_points, quant->zero_point->data, quant->scale->size * sizeof(*tensor->zero_points));
+         } else if (quant->zero_point->size == 1) {
+            /* Single zero_point for all channels (common for symmetric quantization) - replicate it */
+            for (int i = 0; i < quant->scale->size; i++) {
+               tensor->zero_points[i] = quant->zero_point->data[0];
+            }
+         } else {
+            /* Unexpected case - use first zero_point for all */
+            fprintf(stderr, "teflon: WARNING: tensor %d has %d scales but %d zero_points, using first zero_point for all\n",
+                    index, quant->scale->size, quant->zero_point->size);
+            for (int i = 0; i < quant->scale->size; i++) {
+               tensor->zero_points[i] = quant->zero_point->data[0];
+            }
+         }
       }
    }
 
@@ -720,9 +769,10 @@ fused_relu6_supported(TfLiteTensor *tensor)
    assert(tensor->quantization.type == kTfLiteAffineQuantization);
    affine = (TfLiteAffineQuantization *)tensor->quantization.params;
 
-   assert(affine->scale->size == affine->zero_point->size);
-   for (int i = 0; i < affine->zero_point->size; i++) {
-      if ((quantized_max - affine->zero_point->data[i]) * affine->scale->data[i] > 6.0f)
+   /* Handle per-channel quantization where zero_point->size may be 1 */
+   for (int i = 0; i < affine->scale->size; i++) {
+      int zp_idx = (affine->zero_point->size == 1) ? 0 : i;
+      if ((quantized_max - affine->zero_point->data[zp_idx]) * affine->scale->data[i] > 6.0f)
          return false;
    }
    return true;
@@ -758,6 +808,7 @@ PrepareDelegate(TfLiteContext *tf_context, TfLiteDelegate *tf_delegate)
 
    for (int i = 0; i < tf_context->tensors_size; i++)
       fill_tensor(delegate, tf_context, &delegate->tensors[i], i);
+   delegate->tensor_count = tf_context->tensors_size;
 
    teflon_debug("%3s %-15s %3s %-11s %s\n", "idx", "type", "ver", "support", "inputs");
    teflon_debug("================================================================================================\n");
@@ -954,9 +1005,14 @@ tflite_plugin_destroy_delegate(TfLiteDelegate *tf_delegate)
    }
 
    for (int i = 0; i < delegate->tensor_count; i++) {
-      free(delegate->tensors[i].scales);
-      free(delegate->tensors[i].zero_points);
-      pipe_resource_reference(&delegate->tensors[i].resource, NULL);
+      if (delegate->tensors[i].scales)
+         free(delegate->tensors[i].scales);
+
+      if (delegate->tensors[i].zero_points)
+         free(delegate->tensors[i].zero_points);
+
+      if (delegate->tensors[i].resource)
+         pipe_resource_reference(&delegate->tensors[i].resource, NULL);
    }
    free(delegate->tensors);
 

@@ -1497,8 +1497,8 @@ ir3_nir_lower_variant(struct ir3_shader_variant *so,
     * straddling loads.  Align everything to vec4 to avoid that, though we
     * could theoretically do better.
     */
-   OPT(s, nir_opt_large_constants, glsl_get_vec4_size_align_bytes,
-       32 /* bytes */);
+   progress |= OPT(s, nir_opt_large_constants, glsl_get_vec4_size_align_bytes,
+                   32 /* bytes */);
    progress |= OPT(s, ir3_nir_lower_load_constant, so);
 
    /* Lower large temporaries to scratch, which in Qualcomm terms is private
@@ -1639,7 +1639,8 @@ ir3_nir_lower_variant(struct ir3_shader_variant *so,
     */
    bool more_late_algebraic = true;
    while (more_late_algebraic) {
-      more_late_algebraic = OPT(s, nir_opt_algebraic_late);
+      more_late_algebraic = OPT(s, nir_opt_algebraic_late) ||
+         OPT(s, ir3_nir_opt_algebraic_late);
       if (!more_late_algebraic && so->compiler->gen >= 5) {
          /* Lowers texture operations that have only f2f16 or u2u16 called on
           * them to have a 16-bit destination.  Also, lower 16-bit texture
@@ -1759,6 +1760,9 @@ ir3_get_driver_param_info(const nir_shader *shader, nir_intrinsic_instr *intr,
       break;
    case nir_intrinsic_load_frag_invocation_count:
       param_info->offset = IR3_DP_FS(frag_invocation_count);
+      break;
+   case nir_intrinsic_load_alpha_to_coverage_enable_ir3:
+      param_info->offset = IR3_DP_FS(alpha_to_coverage_enable);
       break;
    default:
       return false;

@@ -2708,6 +2708,63 @@ make_dst_dummy(struct ir3_instruction *instr)
    dst->num = INVALID_REG;
 }
 
+static type_t
+ir3_type_from_nir(struct ir3_context *ctx, nir_alu_type type)
+{
+   switch (type) {
+   case nir_type_int16:      return TYPE_S16;
+   case nir_type_int32:      return TYPE_S32;
+   case nir_type_uint16:     return TYPE_U16;
+   case nir_type_uint32:     return TYPE_U32;
+   case nir_type_float16:    return TYPE_F16;
+   case nir_type_float32:    return TYPE_F32;
+   default:
+      ir3_context_error(ctx, "Unhandled convert_alu_types type\n");
+   }
+}
+
+static void
+emit_intrinsic_convert_alu_types(struct ir3_context *ctx,
+                                 nir_intrinsic_instr *conv,
+                                 struct ir3_instruction **dst)
+{
+   struct ir3_builder *b = &ctx->build;
+   unsigned dest_components = nir_intrinsic_dest_components(conv);
+   bool use_shared = !conv->def.divergent &&
+      ctx->compiler->info->props.has_scalar_alu;
+   struct ir3_instruction *const *input_src =
+      ir3_get_src_shared(ctx, &conv->src[0], use_shared);
+
+   type_t src_type = ir3_type_from_nir(ctx, nir_intrinsic_src_type(conv));
+   type_t dst_type = ir3_type_from_nir(ctx, nir_intrinsic_dest_type(conv));
+   bool sat = nir_intrinsic_saturate(conv);
+   round_t rnd;
+
+   switch (nir_intrinsic_rounding_mode(conv)) {
+   case nir_rounding_mode_rtne:
+      rnd = ROUND_EVEN;
+      break;
+   case nir_rounding_mode_ru:
+      rnd = ROUND_POS_INF;
+      break;
+   case nir_rounding_mode_rd:
+      rnd = ROUND_NEG_INF;
+      break;
+   case nir_rounding_mode_rtz:
+   default:
+      rnd = ROUND_ZERO;
+      break;
+   }
+
+   /* TODO use ir3_instruction_rpt? */
+   for (int i = 0; i < dest_components; i++) {
+      dst[i] = ir3_COV(b, input_src[i], src_type, dst_type);
+      dst[i]->cat1.round = rnd;
+      if (sat)
+         dst[i]->flags |= IR3_INSTR_SAT;
+   }
+}
+
 static void
 emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 {
@@ -3160,6 +3217,9 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
    case nir_intrinsic_load_frag_invocation_count:
       dst[0] = create_driver_param(ctx, IR3_DP_FS(frag_invocation_count));
       break;
+   case nir_intrinsic_load_alpha_to_coverage_enable_ir3:
+      dst[0] = create_driver_param(ctx, IR3_DP_FS(alpha_to_coverage_enable));
+      break;
    case nir_intrinsic_load_frag_size_ir3:
    case nir_intrinsic_load_frag_offset_ir3:
    case nir_intrinsic_load_gmem_frag_scale_ir3:
@@ -3500,6 +3560,10 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
       break;
    case nir_intrinsic_ray_intersection_ir3:
       emit_ray_intersection(ctx, intr, dst);
+      break;
+   case nir_intrinsic_convert_alu_types:
+      emit_intrinsic_convert_alu_types(ctx, intr, dst);
+      create_rpt = true;
       break;
    default:
       ir3_context_error(ctx, "Unhandled intrinsic type: %s\n",
@@ -4597,6 +4661,8 @@ instr_can_be_predicated(nir_instr *instr)
       case nir_intrinsic_demote_if:
       case nir_intrinsic_terminate:
       case nir_intrinsic_terminate_if:
+      case nir_intrinsic_vote_all:
+      case nir_intrinsic_vote_any:
          return false;
       default:
          return true;

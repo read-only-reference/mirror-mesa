@@ -82,8 +82,8 @@ get_pipeline(struct radv_device *device, struct radv_image *image, VkPipeline *p
       return VK_SUCCESS;
    }
 
-   nir_shader *cs = radv_meta_nir_build_dcc_retile_compute_shader(device, pdev->info.gfx_level,
-                                                                  pdev->info.gb_addr_config, &image->planes[0].surface);
+   nir_shader *cs = radv_meta_nir_build_dcc_retile_compute_shader(pdev->info.gfx_level, pdev->info.gb_addr_config,
+                                                                  &image->planes[0].surface);
 
    const VkPipelineShaderStageCreateInfo stage_info = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -111,7 +111,6 @@ void
 radv_retile_dcc(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image)
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
-   struct radv_cmd_stream *cs = cmd_buffer->cs;
    VkPipelineLayout layout;
    VkPipeline pipeline;
    VkResult result;
@@ -134,8 +133,6 @@ radv_retile_dcc(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image)
    radv_meta_bind_compute_pipeline(cmd_buffer, pipeline);
 
    const uint64_t va = image->bindings[0].addr;
-
-   radv_cs_add_buffer(device->ws, cs->b, image->bindings[0].bo);
 
    radv_meta_bind_descriptors(cmd_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 2,
                               (VkDescriptorGetInfoEXT[]){

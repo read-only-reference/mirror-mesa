@@ -52,7 +52,6 @@ kk_get_nir_options(struct vk_physical_device *vk_pdev, mesa_shader_stage stage,
       .lower_pack_split = true,
       .lower_unpack_half_2x16 = true,
       .has_cs_global_id = true,
-      .lower_vector_cmp = true,
       .lower_fquantize2f16 = true,
       .lower_scmp = true,
       .lower_ifind_msb = true,
@@ -184,8 +183,8 @@ kk_hash_graphics_state(struct vk_physical_device *device,
       kk_populate_fs_key(&key, state);
       _mesa_blake3_update(&blake3_ctx, &key, sizeof(key));
 
-      _mesa_blake3_update(&blake3_ctx, &state->rp->view_mask,
-                          sizeof(state->rp->view_mask));
+      _mesa_blake3_update(&blake3_ctx, &state->mv->view_mask,
+                          sizeof(state->mv->view_mask));
    }
 
    _mesa_blake3_final(&blake3_ctx, blake3_out);
@@ -485,7 +484,7 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir,
 
    /* Massage IO related variables to please Metal */
    if (nir->info.stage == MESA_SHADER_VERTEX) {
-      NIR_PASS(_, nir, kk_nir_lower_vs_multiview, state->rp->view_mask);
+      NIR_PASS(_, nir, kk_nir_lower_vs_multiview, state->mv->view_mask);
 
       /* kk_nir_lower_vs_multiview may create a temporary array to assign the
        * correct view index. Since we don't handle derefs, we need to get rid of
@@ -496,7 +495,7 @@ kk_lower_nir(struct kk_device *dev, nir_shader *nir,
 
       NIR_PASS(_, nir, msl_ensure_vertex_position_output);
    } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
-      NIR_PASS(_, nir, kk_nir_lower_fs_multiview, state->rp->view_mask);
+      NIR_PASS(_, nir, kk_nir_lower_fs_multiview, state->mv->view_mask);
 
       if (state->rp->depth_attachment_format != VK_FORMAT_UNDEFINED &&
           state->ial && state->ial->depth_att != MESA_VK_ATTACHMENT_NO_INDEX) {
@@ -1004,7 +1003,7 @@ gather_graphics_pipeline_create_info(
             ? vk_format_to_mtl_pixel_format(rp->stencil_attachment_format)
             : MTL_PIXEL_FORMAT_INVALID;
 
-      info.vs.view_mask = rp->view_mask;
+      info.vs.view_mask = state->mv->view_mask;
    }
 
    info.vs.has_ds = has_static_depth_stencil_state(state);

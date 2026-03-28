@@ -79,7 +79,7 @@ get_itob_pipeline(struct radv_device *device, const struct radv_image *image, Vk
       return VK_SUCCESS;
    }
 
-   nir_shader *cs = radv_meta_nir_build_itob_compute_shader(device, is_3d);
+   nir_shader *cs = radv_meta_nir_build_itob_compute_shader(is_3d);
 
    const VkPipelineShaderStageCreateInfo stage_info = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -161,7 +161,7 @@ get_btoi_pipeline(struct radv_device *device, const struct radv_image *image, Vk
       return VK_SUCCESS;
    }
 
-   nir_shader *cs = radv_meta_nir_build_btoi_compute_shader(device, is_3d);
+   nir_shader *cs = radv_meta_nir_build_btoi_compute_shader(is_3d);
 
    const VkPipelineShaderStageCreateInfo stage_info = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -254,7 +254,7 @@ get_itoi_pipeline(struct radv_device *device, const struct radv_image *src_image
       return VK_SUCCESS;
    }
 
-   nir_shader *cs = radv_meta_nir_build_itoi_compute_shader(device, src_3d, dst_3d, samples);
+   nir_shader *cs = radv_meta_nir_build_itoi_compute_shader(src_3d, dst_3d, samples);
 
    const VkPipelineShaderStageCreateInfo stage_info = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -337,7 +337,7 @@ get_cleari_pipeline(struct radv_device *device, const struct radv_image *image, 
       return VK_SUCCESS;
    }
 
-   nir_shader *cs = radv_meta_nir_build_cleari_compute_shader(device, is_3d, samples);
+   nir_shader *cs = radv_meta_nir_build_cleari_compute_shader(is_3d, samples);
 
    const VkPipelineShaderStageCreateInfo stage_info = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -397,7 +397,7 @@ get_cleari_96bit_pipeline(struct radv_device *device, VkPipeline *pipeline_out, 
       return VK_SUCCESS;
    }
 
-   nir_shader *cs = radv_meta_nir_build_cleari_96bit_compute_shader(device);
+   nir_shader *cs = radv_meta_nir_build_cleari_96bit_compute_shader();
 
    const VkPipelineShaderStageCreateInfo stage_info = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -771,7 +771,6 @@ radv_meta_clear_image_cs_96bit(struct radv_cmd_buffer *cmd_buffer, struct radv_m
                                const VkClearColorValue *clear_color)
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
-   struct radv_cmd_stream *cs = cmd_buffer->cs;
    VkPipelineLayout layout;
    VkPipeline pipeline;
    unsigned stride;
@@ -782,8 +781,6 @@ radv_meta_clear_image_cs_96bit(struct radv_cmd_buffer *cmd_buffer, struct radv_m
       vk_command_buffer_set_error(&cmd_buffer->vk, result);
       return;
    }
-
-   radv_cs_add_buffer(device->ws, cs->b, dst->image->bindings[0].bo);
 
    radv_meta_bind_descriptors(cmd_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 1,
                               (VkDescriptorGetInfoEXT[]){{

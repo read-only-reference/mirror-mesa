@@ -151,40 +151,43 @@ anv_shader_init_uuid(struct anv_physical_device *device)
     * compiler's output, not having that workaroung enabled with an app
     * expecting fp64 support will just crash in the backend.
     */
-   struct mesa_sha1 ctx;
-   _mesa_sha1_init(&ctx);
+   blake3_hasher ctx;
+   _mesa_blake3_init(&ctx);
 
    const bool indirect_descriptors = device->indirect_descriptors;
-   _mesa_sha1_update(&ctx, &indirect_descriptors, sizeof(indirect_descriptors));
+   _mesa_blake3_update(&ctx, &indirect_descriptors, sizeof(indirect_descriptors));
 
    const int spilling_rate = device->compiler->spilling_rate;
-   _mesa_sha1_update(&ctx, &spilling_rate, sizeof(spilling_rate));
+   _mesa_blake3_update(&ctx, &spilling_rate, sizeof(spilling_rate));
 
    const uint8_t afs = device->instance->assume_full_subgroups;
-   _mesa_sha1_update(&ctx, &afs, sizeof(afs));
+   _mesa_blake3_update(&ctx, &afs, sizeof(afs));
 
    const bool afswb = device->instance->assume_full_subgroups_with_barrier;
-   _mesa_sha1_update(&ctx, &afswb, sizeof(afswb));
+   _mesa_blake3_update(&ctx, &afswb, sizeof(afswb));
 
    const bool afs_shm = device->instance->assume_full_subgroups_with_shared_memory;
-   _mesa_sha1_update(&ctx, &afs_shm, sizeof(afs_shm));
+   _mesa_blake3_update(&ctx, &afs_shm, sizeof(afs_shm));
 
    const bool erwf = device->instance->emulate_read_without_format;
-   _mesa_sha1_update(&ctx, &erwf, sizeof(erwf));
+   _mesa_blake3_update(&ctx, &erwf, sizeof(erwf));
 
    const bool lttd = device->instance->lower_terminate_to_discard;
-   _mesa_sha1_update(&ctx, &lttd, sizeof(lttd));
+   _mesa_blake3_update(&ctx, &lttd, sizeof(lttd));
 
    const bool large_wg_wa =
       device->instance->large_workgroup_non_coherent_image_workaround;
-   _mesa_sha1_update(&ctx, &large_wg_wa, sizeof(large_wg_wa));
+   _mesa_blake3_update(&ctx, &large_wg_wa, sizeof(large_wg_wa));
 
    const bool lto_disable = device->instance->disable_lto;
-   _mesa_sha1_update(&ctx, &lto_disable, sizeof(lto_disable));
+   _mesa_blake3_update(&ctx, &lto_disable, sizeof(lto_disable));
 
-   uint8_t sha1[SHA1_DIGEST_LENGTH];
-   _mesa_sha1_final(&ctx, sha1);
-   memcpy(device->shader_binary_uuid, sha1, sizeof(device->shader_binary_uuid));
+   const bool btp_bti_rcc = device->rt_change_needs_flush;
+   _mesa_blake3_update(&ctx, &btp_bti_rcc, sizeof(btp_bti_rcc));
+
+   uint8_t blake3[BLAKE3_KEY_LEN];
+   _mesa_blake3_final(&ctx, blake3);
+   memcpy(device->shader_binary_uuid, blake3, sizeof(device->shader_binary_uuid));
 }
 
 static const struct nir_shader_compiler_options *
@@ -304,7 +307,7 @@ populate_base_gfx_prog_key(struct brw_base_prog_key *key,
 
    populate_base_prog_key(key, device, rs);
 
-   key->view_mask = (gfx_state && gfx_state->rp) ? gfx_state->rp->view_mask : 0;
+   key->view_mask = (gfx_state && gfx_state->mv) ? gfx_state->mv->view_mask : 0;
 
    key->vue_layout =
       (util_bitcount(link_stages) > 1 && (link_stages & VK_SHADER_STAGE_FRAGMENT_BIT)) ?
@@ -1629,6 +1632,12 @@ anv_shader_lower_nir(struct anv_device *device,
    shader_data->push_desc_info.fully_promoted_ubo_descriptors =
       anv_nir_push_desc_ubo_fully_promoted(
          nir, set_layouts, set_layout_count, &shader_data->bind_map);
+
+   /* Only detected clearing compute shaders, these are the only problematic
+    * cases we're aware of.
+    */
+   if (nir->info.stage == MESA_SHADER_COMPUTE)
+      shader_data->bind_map.inferred_behavior = anv_nir_clear_shader_analysis(nir);
 }
 
 static uint32_t
@@ -1810,38 +1819,38 @@ anv_debug_archiver_init(void *mem_ctx, struct anv_shader_data *shaders_data,
     * are linked together, also include a combined hash of all stages to
     * distinguish from the not linked case.
     */
-   unsigned char linked_hash[SHA1_DIGEST_LENGTH];
+   unsigned char linked_hash[BLAKE3_KEY_LEN];
    if (shader_count > 1) {
-      struct mesa_sha1 ctx;
-      _mesa_sha1_init(&ctx);
+      blake3_hasher ctx;
+      _mesa_blake3_init(&ctx);
 
       for (uint32_t s = 0; s < shader_count; s++) {
          struct anv_shader_data *shader_data = &shaders_data[s];
          struct vk_shader_compile_info *info = shader_data->info;
-         _mesa_sha1_update(&ctx, info->nir->info.source_blake3, BLAKE3_OUT_LEN);
-         _mesa_sha1_update(&ctx, &shader_data->key, shader_data->key_size);
+         _mesa_blake3_update(&ctx, info->nir->info.source_blake3, BLAKE3_OUT_LEN);
+         _mesa_blake3_update(&ctx, &shader_data->key, shader_data->key_size);
       }
-      _mesa_sha1_final(&ctx, linked_hash);
+      _mesa_blake3_final(&ctx, linked_hash);
    }
 
    for (uint32_t s = 0; s < shader_count; s++) {
       struct anv_shader_data *shader_data = &shaders_data[s];
       struct vk_shader_compile_info *info = shader_data->info;
 
-      char name[SHA1_DIGEST_STRING_LENGTH + 4] = {};
+      char name[BLAKE3_HEX_LEN + 4] = {};
       {
-         struct mesa_sha1 ctx;
-         unsigned char hash[SHA1_DIGEST_LENGTH];
-         _mesa_sha1_init(&ctx);
-         _mesa_sha1_update(&ctx, info->nir->info.source_blake3, BLAKE3_OUT_LEN);
-         _mesa_sha1_update(&ctx, &shader_data->key, shader_data->key_size);
+         blake3_hasher ctx;
+         unsigned char hash[BLAKE3_KEY_LEN];
+         _mesa_blake3_init(&ctx);
+         _mesa_blake3_update(&ctx, info->nir->info.source_blake3, BLAKE3_OUT_LEN);
+         _mesa_blake3_update(&ctx, &shader_data->key, shader_data->key_size);
          if (shader_count > 1)
-            _mesa_sha1_update(&ctx, linked_hash, SHA1_DIGEST_LENGTH);
-         _mesa_sha1_final(&ctx, hash);
+            _mesa_blake3_update(&ctx, linked_hash, BLAKE3_KEY_LEN);
+         _mesa_blake3_final(&ctx, hash);
 
-         _mesa_sha1_format(name, hash);
+         _mesa_blake3_format(name, hash);
       }
-      memcpy(&name[SHA1_DIGEST_STRING_LENGTH - 1], ".anv", 4);
+      memcpy(&name[BLAKE3_HEX_LEN - 1], ".anv", 4);
 
       shader_data->archiver =
          debug_archiver_open(mem_ctx, name, PACKAGE_VERSION MESA_GIT_SHA1);

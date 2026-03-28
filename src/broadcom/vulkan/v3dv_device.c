@@ -171,6 +171,7 @@ get_device_extensions(const struct v3dv_physical_device *device,
       .KHR_load_store_op_none               = true,
       .KHR_performance_query                = device->caps.perfmon,
       .KHR_relaxed_block_layout             = true,
+      .KHR_robustness2                      = true,
       .KHR_maintenance1                     = true,
       .KHR_maintenance2                     = true,
       .KHR_maintenance3                     = true,
@@ -229,6 +230,7 @@ get_device_extensions(const struct v3dv_physical_device *device,
       .EXT_pipeline_creation_cache_control  = true,
       .EXT_pipeline_creation_feedback       = true,
       .EXT_pipeline_robustness              = true,
+      .EXT_robustness2                      = true,
       .EXT_primitive_topology_list_restart  = true,
       .EXT_private_data                     = true,
       .EXT_provoking_vertex                 = true,
@@ -404,6 +406,9 @@ get_features(const struct v3dv_physical_device *physical_device,
       .shaderZeroInitializeWorkgroupMemory = true,
       .synchronization2 = true,
       .robustImageAccess = true,
+      .robustBufferAccess2 = false,
+      .robustImageAccess2 = true,
+      .nullDescriptor = false,
       .shaderIntegerDotProduct = true,
 
       /* VK_EXT_4444_formats */
@@ -546,6 +551,14 @@ static VkResult enumerate_devices(struct vk_instance *vk_instance);
 
 static void destroy_physical_device(struct vk_physical_device *device);
 
+static const struct debug_control v3dv_pipeline_cache_control[] = {
+   { "full", V3DV_PIPELINE_CACHE_FULL },
+   { "no-default-cache", V3DV_PIPELINE_CACHE_NO_DEFAULT },
+   { "no-meta-cache", V3DV_PIPELINE_CACHE_NO_META },
+   { "off", V3DV_PIPELINE_CACHE_OFF },
+   { NULL, 0 },
+};
+
 static const driOptionDescription v3dv_dri_options[] = {
    DRI_CONF_SECTION_PERFORMANCE
       DRI_CONF_VK_X11_OVERRIDE_MIN_IMAGE_COUNT(0)
@@ -605,28 +618,26 @@ v3dv_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    instance->vk.physical_devices.destroy = destroy_physical_device;
 
    /* We start with the default values for the pipeline_cache envvars.
-    *
-    * FIXME: with so many options now, perhaps we could use parse_debug_string
     */
    instance->pipeline_cache_enabled = true;
    instance->default_pipeline_cache_enabled = true;
    instance->meta_cache_enabled = true;
    const char *pipeline_cache_str = os_get_option("V3DV_ENABLE_PIPELINE_CACHE");
-   if (pipeline_cache_str != NULL) {
-      if (strncmp(pipeline_cache_str, "full", 4) == 0) {
-         /* nothing to do, just to filter correct values */
-      } else if (strncmp(pipeline_cache_str, "no-default-cache", 16) == 0) {
-         instance->default_pipeline_cache_enabled = false;
-      } else if (strncmp(pipeline_cache_str, "no-meta-cache", 13) == 0) {
-         instance->meta_cache_enabled = false;
-      } else if (strncmp(pipeline_cache_str, "off", 3) == 0) {
-         instance->pipeline_cache_enabled = false;
-         instance->default_pipeline_cache_enabled = false;
-         instance->meta_cache_enabled = false;
-      } else {
-         mesa_loge("Wrong value for envvar V3DV_ENABLE_PIPELINE_CACHE. "
-                   "Allowed values are: full, no-default-cache, no-meta-cache, off\n");
-      }
+   uint64_t pipeline_cache_flags =
+      parse_debug_string(pipeline_cache_str, v3dv_pipeline_cache_control);
+   if (pipeline_cache_str != NULL && pipeline_cache_flags == 0) {
+      mesa_loge("Wrong value for envvar V3DV_ENABLE_PIPELINE_CACHE. "
+                "Allowed values are: full, no-default-cache, no-meta-cache, off\n");
+   } else if (pipeline_cache_flags & V3DV_PIPELINE_CACHE_OFF) {
+      instance->pipeline_cache_enabled = false;
+      instance->default_pipeline_cache_enabled = false;
+      instance->meta_cache_enabled = false;
+   } else if (pipeline_cache_flags & V3DV_PIPELINE_CACHE_NO_DEFAULT) {
+      instance->default_pipeline_cache_enabled = false;
+   } else if (pipeline_cache_flags & V3DV_PIPELINE_CACHE_NO_META) {
+      instance->meta_cache_enabled = false;
+   } else if (pipeline_cache_flags & V3DV_PIPELINE_CACHE_FULL) {
+      /* nothing to do, just to filter correct values */
    }
 
    if (instance->pipeline_cache_enabled == false) {
@@ -806,18 +817,18 @@ init_uuids(struct v3dv_physical_device *device)
    uint32_t vendor_id = v3dv_physical_device_vendor_id(device);
    uint32_t device_id = v3dv_physical_device_device_id(device);
 
-   struct mesa_sha1 sha1_ctx;
-   uint8_t sha1[SHA1_DIGEST_LENGTH];
-   STATIC_ASSERT(VK_UUID_SIZE <= sizeof(sha1));
+   blake3_hasher blake3_ctx;
+   uint8_t blake3[BLAKE3_KEY_LEN];
+   STATIC_ASSERT(VK_UUID_SIZE <= sizeof(blake3));
 
    /* The pipeline cache UUID is used for determining when a pipeline cache is
     * invalid.  It needs both a driver build and the PCI ID of the device.
     */
-   _mesa_sha1_init(&sha1_ctx);
-   _mesa_sha1_update(&sha1_ctx, build_id_data(note), build_id_len);
-   _mesa_sha1_update(&sha1_ctx, &device_id, sizeof(device_id));
-   _mesa_sha1_final(&sha1_ctx, sha1);
-   memcpy(device->pipeline_cache_uuid, sha1, VK_UUID_SIZE);
+   _mesa_blake3_init(&blake3_ctx);
+   _mesa_blake3_update(&blake3_ctx, build_id_data(note), build_id_len);
+   _mesa_blake3_update(&blake3_ctx, &device_id, sizeof(device_id));
+   _mesa_blake3_final(&blake3_ctx, blake3);
+   memcpy(device->pipeline_cache_uuid, blake3, VK_UUID_SIZE);
 
    /* The driver UUID is used for determining sharability of images and memory
     * between two Vulkan instances in separate processes.  People who want to
@@ -830,11 +841,11 @@ init_uuids(struct v3dv_physical_device *device)
     * Since we never have more than one device, this doesn't need to be a real
     * UUID.
     */
-   _mesa_sha1_init(&sha1_ctx);
-   _mesa_sha1_update(&sha1_ctx, &vendor_id, sizeof(vendor_id));
-   _mesa_sha1_update(&sha1_ctx, &device_id, sizeof(device_id));
-   _mesa_sha1_final(&sha1_ctx, sha1);
-   memcpy(device->device_uuid, sha1, VK_UUID_SIZE);
+   _mesa_blake3_init(&blake3_ctx);
+   _mesa_blake3_update(&blake3_ctx, &vendor_id, sizeof(vendor_id));
+   _mesa_blake3_update(&blake3_ctx, &device_id, sizeof(device_id));
+   _mesa_blake3_final(&blake3_ctx, blake3);
+   memcpy(device->device_uuid, blake3, VK_UUID_SIZE);
 
    return VK_SUCCESS;
 }
@@ -843,8 +854,8 @@ static void
 v3dv_physical_device_init_disk_cache(struct v3dv_physical_device *device)
 {
 #ifdef ENABLE_SHADER_CACHE
-   char timestamp[SHA1_DIGEST_STRING_LENGTH];
-   _mesa_sha1_format(timestamp, device->driver_build_sha1);
+   char timestamp[BLAKE3_HEX_LEN];
+   _mesa_blake3_format(timestamp, device->driver_build_sha1);
 
    assert(device->name);
    device->disk_cache = disk_cache_create(device->name, timestamp, v3d_mesa_debug);
@@ -1229,6 +1240,10 @@ get_device_properties(const struct v3dv_physical_device *device,
             VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DEVICE_DEFAULT_EXT,
       .defaultRobustnessImages =
             VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_DEVICE_DEFAULT_EXT,
+
+      /* VK_EXT_robustness2 */
+      .robustStorageBufferAccessSizeAlignment = 1,
+      .robustUniformBufferAccessSizeAlignment = 1,
 
       /* VkPhysicalDeviceMultiDrawPropertiesEXT */
       .maxMultiDrawCount = 2048,
@@ -1898,7 +1913,8 @@ v3dv_CreateDevice(VkPhysicalDevice physicalDevice,
    if (device->vk.enabled_features.robustBufferAccess)
       perf_debug("Device created with Robust Buffer Access enabled.\n");
 
-   if (device->vk.enabled_features.robustImageAccess)
+   if (device->vk.enabled_features.robustImageAccess ||
+       device->vk.enabled_features.robustImageAccess2)
       perf_debug("Device created with Robust Image Access enabled.\n");
 
 

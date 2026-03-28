@@ -17,6 +17,8 @@ static const driOptionDescription anv_dri_options[] = {
       DRI_CONF_ANV_ASSUME_FULL_SUBGROUPS(0)
       DRI_CONF_ANV_ASSUME_FULL_SUBGROUPS_WITH_BARRIER(false)
       DRI_CONF_ANV_ASSUME_FULL_SUBGROUPS_WITH_SHARED_MEMORY(false)
+      DRI_CONF_ANV_BARRIER_POST_TYPED_CLEAR_SHADER(false)
+      DRI_CONF_ANV_BARRIER_POST_UNTYPED_CLEAR_SHADER(false)
       DRI_CONF_ANV_DISABLE_FCV(false)
       DRI_CONF_ANV_ENABLE_BUFFER_COMP(false)
       DRI_CONF_ANV_DISABLE_DRM_AUX_MODIFIERS(false)
@@ -27,6 +29,7 @@ static const driOptionDescription anv_dri_options[] = {
       DRI_CONF_ANV_FP64_WORKAROUND_ENABLED(false)
       DRI_CONF_ANV_GENERATED_INDIRECT_THRESHOLD(4)
       DRI_CONF_ANV_GENERATED_INDIRECT_RING_THRESHOLD(100)
+      DRI_CONF_ANV_STATE_CACHE_PERF_FIX(false)
       DRI_CONF_NO_16BIT(false)
       DRI_CONF_INTEL_BINDING_TABLE_BLOCK_SIZE(BINDING_TABLE_POOL_DEFAULT_BLOCK_SIZE,
                                               1024, 128 * 1024)
@@ -45,7 +48,11 @@ static const driOptionDescription anv_dri_options[] = {
       DRI_CONFIG_INTEL_TE_DISTRIBUTION(true)
       DRI_CONFIG_INTEL_STORAGE_CACHE_POLICY_WT(false)
       DRI_CONF_ANV_LARGE_WORKGROUP_NON_COHERENT_IMAGE_WORKAROUND(false)
+#if DETECT_OS_ANDROID && ANDROID_API_LEVEL >= 37
+      DRI_CONF_ANV_COMPRESSION_CONTROL_ENABLED(true)
+#else
       DRI_CONF_ANV_COMPRESSION_CONTROL_ENABLED(false)
+#endif
       DRI_CONF_ANV_FAKE_NONLOCAL_MEMORY(false)
       DRI_CONF_OPT_E(intel_stack_id, 512, 256, 2048,
                      "Control the number stackIDs (i.e. number of unique rays in the RT subsytem)",
@@ -181,6 +188,8 @@ anv_init_dri_options(struct anv_instance *instance)
        driQueryOptionb(&instance->dri_options, "anv_sample_mask_out_opengl_behaviour");
     instance->force_filter_addr_rounding =
        driQueryOptionb(&instance->dri_options, "anv_force_filter_addr_rounding");
+    instance->state_cache_perf_fix =
+       driQueryOptionb(&instance->dri_options, "anv_state_cache_perf_fix");
     instance->lower_depth_range_rate =
        driQueryOptionf(&instance->dri_options, "lower_depth_range_rate");
     instance->no_16bit =
@@ -240,6 +249,10 @@ anv_init_dri_options(struct anv_instance *instance)
        driQueryOptionb(&instance->dri_options, "anv_disable_drm_ccs_modifiers");
     instance->binding_table_block_size = util_next_power_of_two(
        driQueryOptioni(&instance->dri_options, "intel_binding_table_block_size"));
+    instance->barrier_post_typed_clear_shader =
+       driQueryOptionb(&instance->dri_options, "anv_barrier_post_typed_clear_shader");
+    instance->barrier_post_untyped_clear_shader =
+       driQueryOptionb(&instance->dri_options, "anv_barrier_post_untyped_clear_shader");
 
     if (instance->vk.app_info.engine_name &&
         !strcmp(instance->vk.app_info.engine_name, "DXVK")) {
@@ -253,7 +266,7 @@ anv_init_dri_options(struct anv_instance *instance)
         instance->force_filter_addr_rounding &= !is_d3d9;
     }
 
-    instance->disable_lto = 
+    instance->disable_lto =
         driQueryOptionb(&instance->dri_options, "anv_disable_link_time_optimization");
 
     instance->stack_ids = driQueryOptioni(&instance->dri_options, "intel_stack_id");
@@ -313,6 +326,9 @@ VkResult anv_CreateInstance(
 
    instance->debug = parse_debug_string(os_get_option("ANV_DEBUG"),
                                         debug_control);
+
+   process_intel_debug_variable();
+   instance->vk.enable_debug_logging = INTEL_DEBUG(DEBUG_PERF);
 
    intel_driver_ds_init();
 

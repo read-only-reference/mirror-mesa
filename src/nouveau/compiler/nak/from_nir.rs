@@ -652,11 +652,18 @@ impl<'a> ShaderFromNir<'a> {
 
                     srcs_vec.push(Some(b.prmt4(prmt_srcs, prmt).into()));
                 }
-                32 => {
-                    assert!(comps == 1);
-                    let s = usize::from(alu_src.swizzle[0]);
-                    srcs_vec.push(Some(ssa[s].into()));
-                }
+                32 => match comps {
+                    1 => {
+                        let s = usize::from(alu_src.swizzle[0]);
+                        srcs_vec.push(Some(ssa[s].into()));
+                    }
+                    2 => {
+                        let s0 = usize::from(alu_src.swizzle[0]);
+                        let s1 = usize::from(alu_src.swizzle[1]);
+                        srcs_vec.push(Some([ssa[s0], ssa[s1]].into()));
+                    }
+                    _ => panic!("Invalid num_components: {comps}"),
+                },
                 64 => {
                     assert!(comps == 1);
                     let s = usize::from(alu_src.swizzle[0]);
@@ -787,6 +794,24 @@ impl<'a> ShaderFromNir<'a> {
                     _ => panic!("Unknown extract op: {}", alu.op),
                 }
                 .into()
+            }
+            nir_op_f2f16 | nir_op_f2f16_rtne | nir_op_f2f16_rtz
+                if alu.def.num_components == 2 =>
+            {
+                assert!(b.sm() >= 86);
+
+                let dst = b.alloc_ssa(RegFile::GPR);
+                let src = srcs(0).to_ssa();
+                b.push_op(OpF2FP {
+                    dst: dst.clone().into(),
+                    srcs: [src[1].into(), src[0].into()],
+                    rnd_mode: match alu.op {
+                        nir_op_f2f16_rtne => FRndMode::NearestEven,
+                        nir_op_f2f16_rtz => FRndMode::Zero,
+                        _ => self.float_ctl[FloatType::F16].rnd_mode,
+                    },
+                });
+                dst.into()
             }
             nir_op_f2f16 | nir_op_f2f16_rtne | nir_op_f2f16_rtz
             | nir_op_f2f32 | nir_op_f2f64 => {
@@ -3033,12 +3058,103 @@ impl<'a> ShaderFromNir<'a> {
                 self.set_dst(&intrin.def, dst.into());
             }
             nir_intrinsic_isberd_nv => {
+                let base = u16::try_from(intrin.range_base()).unwrap();
+                let range = u16::try_from(intrin.range()).unwrap();
+                let range = base..(base + range);
+
+                let flags = intrin.flags();
+                let flags: nak_nir_isbe_flags =
+                    unsafe { std::mem::transmute_copy(&flags) };
+
+                assert!(intrin.def.num_components() == 1);
+
+                let size_B = intrin.def.bit_size() / 8;
+
+                let access_type = match flags.access() {
+                    NAK_ISBE_ACCESS_MAP => IsbeAccessType::Map,
+                    NAK_ISBE_ACCESS_PATCH => IsbeAccessType::Patch,
+                    NAK_ISBE_ACCESS_PRIM => IsbeAccessType::Primitive,
+                    NAK_ISBE_ACCESS_ATTR => IsbeAccessType::Attribute,
+                    _ => panic!("Invalid ISBE access {}", flags.access()),
+                };
+
+                if matches!(access_type, IsbeAccessType::Attribute)
+                    && !flags.per_primitive()
+                    && !range.is_empty()
+                {
+                    if let ShaderIoInfo::Vtg(io) = &mut self.info.io {
+                        if flags.output() {
+                            io.mark_attrs_written(range);
+                        } else {
+                            io.mark_attrs_read(range);
+                        }
+                    } else {
+                        panic!("Must be a VTG stage");
+                    }
+                }
+
                 let dst = b.alloc_ssa(RegFile::GPR);
                 b.push_op(OpIsberd {
                     dst: dst.into(),
-                    idx: self.get_src(&srcs[0]),
+                    offset: self.get_src(&srcs[0]),
+                    imm_offset: u16::try_from(intrin.base()).unwrap(),
+                    output: flags.output(),
+                    skew: flags.skew(),
+                    mem_type: MemType::from_size(size_B, false),
+                    access_type,
                 });
                 self.set_dst(&intrin.def, dst.into());
+            }
+            nir_intrinsic_isbewr_nv => {
+                let base = u16::try_from(intrin.range_base()).unwrap();
+                let range = u16::try_from(intrin.range()).unwrap();
+                let range = base..(base + range);
+
+                let flags = intrin.flags();
+                let flags: nak_nir_isbe_flags =
+                    unsafe { std::mem::transmute_copy(&flags) };
+
+                assert!(srcs[0].num_components() == 1);
+
+                let size_B = srcs[0].bit_size() / 8;
+
+                let access_type = match flags.access() {
+                    NAK_ISBE_ACCESS_MAP => IsbeAccessType::Map,
+                    NAK_ISBE_ACCESS_PATCH => {
+                        panic!("PATCH access is invalid in ISBEWR")
+                    }
+                    NAK_ISBE_ACCESS_PRIM => {
+                        panic!("PRIM access is invalid in ISBEWR")
+                    }
+                    NAK_ISBE_ACCESS_ATTR => IsbeAccessType::Attribute,
+                    _ => panic!("Invalid ISBE access {}", flags.access()),
+                };
+
+                if matches!(access_type, IsbeAccessType::Attribute)
+                    && !flags.per_primitive()
+                    && !range.is_empty()
+                {
+                    if let ShaderIoInfo::Vtg(io) = &mut self.info.io {
+                        if flags.output() {
+                            io.mark_store_req(range.clone());
+                            io.mark_attrs_written(range);
+                        } else {
+                            io.mark_attrs_read(range);
+                        }
+                    } else {
+                        panic!("Must be a VTG stage");
+                    }
+                }
+
+                b.push_op(OpIsbewr {
+                    offset: self.get_src(&srcs[1]),
+                    imm_offset: u16::try_from(intrin.base()).unwrap(),
+                    data: self.get_src(&srcs[0]),
+                    output: flags.output(),
+                    skew: flags.skew(),
+                    mem_type: MemType::from_size(size_B, false),
+                    access_type,
+                });
             }
             nir_intrinsic_vild_nv => {
                 let dst = b.alloc_ssa(RegFile::GPR);
@@ -3071,11 +3187,13 @@ impl<'a> ShaderFromNir<'a> {
                         .get_eviction_priority(intrin.access()),
                 };
                 let addr = self.get_src(&srcs[0]);
+                let pred = self.get_src(&srcs[1]);
                 let dst = b.alloc_ssa_vec(RegFile::GPR, size_B.div_ceil(4));
 
                 b.push_op(OpLd {
                     dst: dst.clone().into(),
                     addr: addr,
+                    pred: pred,
                     offset: intrin.base(),
                     stride: OffsetStride::X1,
                     access: access,
@@ -3186,6 +3304,7 @@ impl<'a> ShaderFromNir<'a> {
                 b.push_op(OpLd {
                     dst: dst.clone().into(),
                     addr: addr,
+                    pred: true.into(),
                     offset: intrin.base(),
                     stride: OffsetStride::X1,
                     access: access,
@@ -3208,6 +3327,7 @@ impl<'a> ShaderFromNir<'a> {
                 b.push_op(OpLd {
                     dst: dst.clone().into(),
                     addr: addr,
+                    pred: true.into(),
                     offset: intrin.base(),
                     stride: intrin.offset_shift_nv().try_into().unwrap(),
                     access: access,

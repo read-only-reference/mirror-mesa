@@ -1450,8 +1450,6 @@ RADV driver environment variables
       disable dithering for alpha to coverage
    ``nobinning``
       disable primitive binning
-   ``nobolist``
-      disable the global BO list when no features require it
    ``nocache``
       disable shaders cache
    ``nocompute``
@@ -2141,6 +2139,9 @@ PowerVR driver environment variables
 
    ``alloc_extra_vtxins``
       Allocates additional vertex input registers.
+
+   ``int_smp``
+      Enable integer coordinate support for sampler instructions.
 
 .. envvar:: PCO_SKIP_PASSES
 

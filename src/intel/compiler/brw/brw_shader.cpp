@@ -20,6 +20,21 @@
 #include "util/u_math.h"
 
 void
+brw_assign_urb_setup(brw_shader &s)
+{
+   struct brw_vue_prog_data *vue_prog_data = brw_vue_prog_data(s.prog_data);
+   const unsigned verts =
+      s.stage == MESA_SHADER_GEOMETRY ? s.nir->info.gs.vertices_in : 1;
+
+   s.first_non_payload_grf += 8 * vue_prog_data->urb_read_length * verts;
+
+   /* Rewrite all ATTR file references to HW_REGs. */
+   foreach_block_and_inst(block, brw_inst, inst, s.cfg) {
+      s.convert_attr_sources_to_hw_regs(inst);
+   }
+}
+
+void
 brw_shader::emit_tes_terminate()
 {
    assert(stage == MESA_SHADER_TESS_EVAL);
@@ -156,7 +171,6 @@ brw_shader::brw_shader(const brw_shader_params *params)
    this->fail_msg = NULL;
 
    this->payload_ = NULL;
-   this->source_depth_to_render_target = false;
    this->first_non_payload_grf = 0;
 
    this->last_scratch = 0;
@@ -311,47 +325,12 @@ brw_barycentric_mode(const struct brw_fs_prog_key *key,
 bool
 brw_shader::mark_last_urb_write_with_eot()
 {
-   brw_inst *limit = NULL;
-   foreach_block_reverse(block, cfg) {
-      foreach_inst_in_block_reverse(brw_inst, inst, block) {
-         if (inst->opcode == SHADER_OPCODE_URB_WRITE_LOGICAL) {
-            inst->eot = true;
-            limit = inst;
-            break;
-         } else if (inst->is_control_flow() || inst->has_side_effects()) {
-            limit = inst;
-            break;
-         }
-      }
-
-      if (limit)
-         break;
+   brw_inst *inst = cfg->last_block()->end();
+   if (inst && inst->opcode == SHADER_OPCODE_URB_WRITE_LOGICAL) {
+      inst->eot = true;
+      return true;
    }
-
-   if (!limit || !limit->eot)
-      return false;
-
-   brw_analysis_dependency_class dep = BRW_DEPENDENCY_INSTRUCTION_DETAIL;
-
-   /* Delete now dead instructions. */
-   bool done = false;
-   foreach_block_reverse(block, cfg) {
-      foreach_inst_in_block_reverse_safe(brw_inst, dead, block) {
-         if (dead == limit) {
-            done = true;
-            break;
-         }
-
-         dep = dep | BRW_DEPENDENCY_INSTRUCTION_IDENTITY;
-         dead->remove();
-      }
-
-      if (done)
-         break;
-   }
-
-   invalidate_analysis(dep);
-   return true;
+   return false;
 }
 
 void
@@ -365,124 +344,8 @@ brw_shader::assign_curb_setup()
       this->push_data_size += prog_data->push_sizes[i];
    }
 
-   uint64_t used = 0;
-   const bool pull_constants =
-      devinfo->verx10 >= 125 &&
-      (mesa_shader_stage_is_compute(stage) ||
-       mesa_shader_stage_is_mesh(stage)) &&
-      this->push_data_size > 0;
-
-   if (pull_constants) {
-      const bool pull_constants_a64 =
-         (mesa_shader_stage_is_rt(stage) &&
-          brw_bs_prog_data(prog_data)->uses_inline_push_addr) ||
-         ((mesa_shader_stage_is_compute(stage) ||
-           mesa_shader_stage_is_mesh(stage)) &&
-          brw_cs_prog_data(prog_data)->uses_inline_push_addr);
-      assert(devinfo->has_lsc);
-      brw_builder ubld = brw_builder(this, 1).exec_all().at_start(cfg->first_block());
-
-      brw_reg base_addr;
-      if (pull_constants_a64) {
-         /* The address of the push constants is at offset 0 in the inline
-          * parameter.
-          */
-         base_addr =
-            mesa_shader_stage_is_rt(stage) ?
-            retype(bs_payload().inline_parameter, BRW_TYPE_UQ) :
-            retype(cs_payload().inline_parameter, BRW_TYPE_UQ);
-      } else {
-         /* The base offset for our push data is passed in as R0.0[31:6]. We
-          * have to mask off the bottom 6 bits.
-          */
-         base_addr = ubld.AND(retype(brw_vec1_grf(0, 0), BRW_TYPE_UD),
-                              brw_imm_ud(INTEL_MASK(31, 6)));
-      }
-
-      brw_analysis_dependency_class dirty_bits = BRW_DEPENDENCY_INSTRUCTIONS;
-
-      /* On Gfx12-HP we load constants at the start of the program using A32
-       * stateless messages.
-       */
-      const unsigned n_push_data_regs = reg_unit(devinfo) *
-         DIV_ROUND_UP(this->push_data_size, reg_unit(devinfo) * REG_SIZE);
-      for (unsigned i = 0; i < this->push_data_size / REG_SIZE;) {
-         /* Limit ourselves to LSC HW limit of 8 GRFs (256bytes D32V64). */
-         unsigned num_regs = MIN2(this->push_data_size / REG_SIZE - i, 8);
-         assert(num_regs > 0);
-         num_regs = 1 << util_logbase2(num_regs);
-
-         brw_reg addr;
-
-         if (i != 0 && brw_lsc_supports_base_offset(devinfo) == false) {
-            if (pull_constants_a64) {
-               dirty_bits |= BRW_DEPENDENCY_VARIABLES;
-               /* We need to do the carry manually as when this pass is run,
-                * we're not expecting any 64bit ALUs. Unfortunately all the
-                * 64bit lowering is done in NIR.
-                */
-               addr = ubld.vgrf(BRW_TYPE_UQ);
-               brw_reg addr_ldw = subscript(addr, BRW_TYPE_UD, 0);
-               brw_reg addr_udw = subscript(addr, BRW_TYPE_UD, 1);
-               brw_reg base_addr_ldw = subscript(base_addr, BRW_TYPE_UD, 0);
-               brw_reg base_addr_udw = subscript(base_addr, BRW_TYPE_UD, 1);
-               ubld.ADD(addr_ldw, base_addr_ldw, brw_imm_ud(i * REG_SIZE));
-               ubld.CMP(ubld.null_reg_d(), addr_ldw, base_addr_ldw, BRW_CONDITIONAL_L);
-               set_predicate(BRW_PREDICATE_NORMAL,
-                             ubld.ADD(addr_udw, base_addr_udw, brw_imm_ud(1)));
-               set_predicate_inv(BRW_PREDICATE_NORMAL, true,
-                                 ubld.MOV(addr_udw, base_addr_udw));
-            } else {
-               addr = ubld.ADD(base_addr, brw_imm_ud(i * REG_SIZE));
-            }
-         } else {
-            addr = base_addr;
-         }
-
-         brw_send_inst *send = ubld.SEND();
-         send->dst = retype(brw_vec8_grf(payload().num_regs + i, 0),
-                            BRW_TYPE_UD);
-
-         send->src[SEND_SRC_DESC]     = brw_imm_ud(0);
-         send->src[SEND_SRC_EX_DESC]  = brw_lsc_supports_base_offset(devinfo) ?
-                                        brw_imm_ud(lsc_flat_ex_desc(devinfo,
-                                                                    i * REG_SIZE)) :
-                                        brw_imm_ud(0);
-         send->src[SEND_SRC_PAYLOAD1] = addr;
-         send->src[SEND_SRC_PAYLOAD2] = brw_reg();
-
-         send->sfid = BRW_SFID_UGM;
-         uint32_t desc = lsc_msg_desc(devinfo, LSC_OP_LOAD,
-                                      LSC_ADDR_SURFTYPE_FLAT,
-                                      pull_constants_a64 ?
-                                      LSC_ADDR_SIZE_A64 : LSC_ADDR_SIZE_A32,
-                                      LSC_DATA_SIZE_D32,
-                                      num_regs * 8 /* num_channels */,
-                                      true /* transpose */,
-                                      LSC_CACHE(devinfo, LOAD, L1STATE_L3MOCS));
-         send->header_size = 0;
-         send->mlen = lsc_msg_addr_len(
-            devinfo, pull_constants_a64 ?
-            LSC_ADDR_SIZE_A64 : LSC_ADDR_SIZE_A32, 1);
-         send->size_written =
-            lsc_msg_dest_len(devinfo, LSC_DATA_SIZE_D32, num_regs * 8) * REG_SIZE;
-         assert((payload().num_regs + i + send->size_written / REG_SIZE) <=
-                (payload().num_regs + n_push_data_regs));
-         send->is_volatile = true;
-
-         send->src[SEND_SRC_DESC] =
-            brw_imm_ud(desc | brw_message_desc(devinfo,
-                                               send->mlen,
-                                               send->size_written / REG_SIZE,
-                                               send->header_size));
-
-         i += num_regs;
-      }
-
-      invalidate_analysis(dirty_bits);
-   }
-
    /* Map the offsets in the UNIFORM file to fixed HW regs. */
+   uint64_t used = 0;
    foreach_block_and_inst(block, brw_inst, inst, cfg) {
       for (unsigned int i = 0; i < inst->sources; i++) {
 	 if (inst->src[i].file != UNIFORM)
@@ -982,6 +845,17 @@ brw_allocate_registers(brw_shader &s, bool allow_spilling)
       if (OPT(brw_opt_cmod_propagation))
          OPT(brw_opt_dead_code_eliminate);
 
+      if (OPT(brw_opt_cmp_flag_destination,
+               /* We want something like
+                * brw_wm_prog_data(s.prog_data)->uses_kill, but there are
+                * other things that can cause the sample_mask_flag_subreg to
+                * be used.
+                */
+              s.stage == MESA_SHADER_FRAGMENT)) {
+         OPT(brw_opt_cmod_propagation);
+         OPT(brw_opt_dead_code_eliminate);
+      }
+
       allocated = brw_assign_regs(s, allow_spilling, spill_all);
    }
 
@@ -1041,6 +915,15 @@ brw_allocate_registers(brw_shader &s, bool allow_spilling)
     * and final scheduling has already happend, this won't help.
     */
    OPT(brw_opt_cmod_propagation);
+
+   if (OPT(brw_opt_cmp_flag_destination,
+           /* We want something like brw_wm_prog_data(s.prog_data)->uses_kill,
+            * but there are other things that can cause the
+            * sample_mask_flag_subreg to be used.
+            */
+           s.stage == MESA_SHADER_FRAGMENT)) {
+      OPT(brw_opt_cmod_propagation);
+   }
 
    if (s.devinfo->ver >= 30)
       OPT(brw_lower_send_gather);

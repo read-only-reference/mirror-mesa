@@ -178,6 +178,14 @@ wsi_headless_surface_get_formats(VkIcdSurfaceBase *icd_surface,
          out_fmt->format = VK_FORMAT_R8G8B8A8_UNORM;
          out_fmt->colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
       }
+      vk_outarray_append_typed(VkSurfaceFormatKHR, &out, out_fmt) {
+         out_fmt->format = VK_FORMAT_B8G8R8A8_SRGB;
+         out_fmt->colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+      }
+      vk_outarray_append_typed(VkSurfaceFormatKHR, &out, out_fmt) {
+         out_fmt->format = VK_FORMAT_R8G8B8A8_SRGB;
+         out_fmt->colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+      }
    } else {
       vk_outarray_append_typed(VkSurfaceFormatKHR, &out, out_fmt) {
          out_fmt->format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -185,6 +193,14 @@ wsi_headless_surface_get_formats(VkIcdSurfaceBase *icd_surface,
       }
       vk_outarray_append_typed(VkSurfaceFormatKHR, &out, out_fmt) {
          out_fmt->format = VK_FORMAT_B8G8R8A8_UNORM;
+         out_fmt->colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+      }
+      vk_outarray_append_typed(VkSurfaceFormatKHR, &out, out_fmt) {
+         out_fmt->format = VK_FORMAT_R8G8B8A8_SRGB;
+         out_fmt->colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+      }
+      vk_outarray_append_typed(VkSurfaceFormatKHR, &out, out_fmt) {
+         out_fmt->format = VK_FORMAT_B8G8R8A8_SRGB;
          out_fmt->colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
       }
    }
@@ -210,6 +226,14 @@ wsi_headless_surface_get_formats2(VkIcdSurfaceBase *icd_surface,
          out_fmt->surfaceFormat.format = VK_FORMAT_R8G8B8A8_UNORM;
          out_fmt->surfaceFormat.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
       }
+      vk_outarray_append_typed(VkSurfaceFormat2KHR, &out, out_fmt) {
+         out_fmt->surfaceFormat.format = VK_FORMAT_B8G8R8A8_SRGB;
+         out_fmt->surfaceFormat.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+      }
+      vk_outarray_append_typed(VkSurfaceFormat2KHR, &out, out_fmt) {
+         out_fmt->surfaceFormat.format = VK_FORMAT_R8G8B8A8_SRGB;
+         out_fmt->surfaceFormat.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+      }
    } else {
       vk_outarray_append_typed(VkSurfaceFormat2KHR, &out, out_fmt) {
          out_fmt->surfaceFormat.format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -217,6 +241,14 @@ wsi_headless_surface_get_formats2(VkIcdSurfaceBase *icd_surface,
       }
       vk_outarray_append_typed(VkSurfaceFormat2KHR, &out, out_fmt) {
          out_fmt->surfaceFormat.format = VK_FORMAT_B8G8R8A8_UNORM;
+         out_fmt->surfaceFormat.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+      }
+      vk_outarray_append_typed(VkSurfaceFormat2KHR, &out, out_fmt) {
+         out_fmt->surfaceFormat.format = VK_FORMAT_R8G8B8A8_SRGB;
+         out_fmt->surfaceFormat.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+      }
+      vk_outarray_append_typed(VkSurfaceFormat2KHR, &out, out_fmt) {
+         out_fmt->surfaceFormat.format = VK_FORMAT_B8G8R8A8_SRGB;
          out_fmt->surfaceFormat.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
       }
    }
@@ -415,7 +447,7 @@ wsi_headless_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
       .sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2,
       .pNext = &mod_list,
    };
-   if (wsi_device->supports_modifiers) {
+   if (!wsi_device->sw && wsi_device->supports_modifiers) {
       wsi_device->GetPhysicalDeviceFormatProperties2(
          wsi_device->pdevice, pCreateInfo->imageFormat, &props);
       assert(mod_list.drmFormatModifierCount > 0);
@@ -434,16 +466,27 @@ wsi_headless_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
          mods[i] = mod_props[i].drmFormatModifier;
    }
 
-   struct wsi_drm_image_params drm_params = {
-      .base.image_type = WSI_IMAGE_TYPE_DRM,
-      .same_gpu = true,
-      .num_modifier_lists = mod_list.drmFormatModifierCount > 0 ? 1 : 0,
-      .num_modifiers = &mod_list.drmFormatModifierCount,
-      .modifiers = (const uint64_t **)&mods,
-   };
+   struct wsi_base_image_params *image_params = NULL;
+   struct wsi_cpu_image_params cpu_params;
+   struct wsi_drm_image_params drm_params;
+   if (wsi_device->sw) {
+      cpu_params = (struct wsi_cpu_image_params) {
+         .base.image_type = WSI_IMAGE_TYPE_CPU,
+      };
+      image_params = &cpu_params.base;
+   } else {
+      drm_params = (struct wsi_drm_image_params) {
+         .base.image_type = WSI_IMAGE_TYPE_DRM,
+         .same_gpu = true,
+         .num_modifier_lists = mod_list.drmFormatModifierCount > 0 ? 1 : 0,
+         .num_modifiers = &mod_list.drmFormatModifierCount,
+         .modifiers = (const uint64_t **)&mods,
+      };
+      image_params = &drm_params.base;
+   }
 
    result = wsi_swapchain_init(wsi_device, &chain->base, device,
-                               pCreateInfo, &drm_params.base, pAllocator);
+                               pCreateInfo, image_params, pAllocator);
 
    STACK_ARRAY_FINISH(mods);
    STACK_ARRAY_FINISH(mod_props);

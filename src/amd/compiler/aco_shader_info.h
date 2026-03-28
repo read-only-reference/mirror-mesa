@@ -142,7 +142,7 @@ enum aco_compiler_debug_level {
 };
 
 struct aco_compiler_options {
-   const struct ac_cu_info* cu_info;
+   const struct ac_compiler_info* compiler_info;
    bool dump_ir;
    bool dump_preoptir;
    bool record_asm;
@@ -155,10 +155,6 @@ struct aco_compiler_options {
    enum radeon_family family;
    enum amd_gfx_level gfx_level;
    uint32_t address32_hi;
-   struct {
-      void (*func)(void* private_data, enum aco_compiler_debug_level level, const char* message);
-      void* private_data;
-   } debug;
 };
 
 enum aco_statistic {

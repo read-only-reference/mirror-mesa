@@ -100,7 +100,7 @@ struct amd_ip_info {
    uint32_t ib_pad_dw_mask;
 };
 
-struct ac_cu_info {
+struct ac_compiler_info {
    enum amd_gfx_level gfx_level;
    uint32_t max_waves_per_simd;
    uint32_t num_physical_sgprs_per_simd;
@@ -112,6 +112,8 @@ struct ac_cu_info {
    uint32_t min_wave64_vgpr_alloc;
    uint32_t max_vgpr_alloc;
    uint32_t wave64_vgpr_alloc_granularity;
+
+   uint32_t hs_offchip_workgroup_dw_size;
 
    /* Flags */
    uint32_t has_lds_bank_count_16 : 1;
@@ -139,7 +141,9 @@ struct ac_cu_info {
    uint32_t has_ngg_passthru_no_msg : 1;
    /* Whether local invocation IDs are packed in a single VGPR. */
    uint32_t local_invocation_ids_packed : 1;
-
+   /* Whether the chip supports FMASK. */
+   uint32_t has_fmask : 1;
+   /* Whether 3D textures, cubemap textures, border colors, and mipmapping are supported. (CDNA) */
    uint32_t has_3d_cube_border_color_mipmap : 1;
 
    /* conformant_trunc_coord is equal to TA_CNTL2.TRUNCATE_COORD_MODE, which exists since gfx11.
@@ -164,6 +168,12 @@ struct ac_cu_info {
     */
    uint32_t conformant_trunc_coord : 1;
 
+   uint32_t has_attr_ring : 1;
+   uint32_t mesh_fast_launch_2 : 1;
+
+   /* GFX6-7: limit TCS workgroup to 16 patches for better performance. */
+   uint32_t smaller_tcs_workgroups : 1;
+
    /* Some GFX6 GPUs have a bug where it only looks at the x writemask component. */
    uint32_t has_gfx6_mrt_export_bug : 1;
    /* Pre-GFX9: A bug where the alpha component of 10_10_10_2 formats is always unsigned.*/
@@ -178,8 +188,14 @@ struct ac_cu_info {
    uint32_t has_cb_lt16bit_int_clamp_bug : 1;
    /* GFX10.3: whether frag_pos.z needs adjusting when VRS is used. */
    uint32_t has_vrs_frag_pos_z_bug : 1;
+   /* GFX10: hang when NGG exports zero vertices and primitives. */
+   uint32_t has_ngg_fully_culled_bug : 1;
+   /* GFX11-11.5: require wait between attribute stores and the final export. */
+   uint32_t has_attr_ring_wait_bug : 1;
+   /* GFX6: limit TCS workgroup to one patch if primitive ID is used. */
+   uint32_t has_primid_instancing_bug : 1;
 
-   uint32_t reserved : 12;
+   uint32_t reserved : 5;
 };
 
 struct radeon_info {
@@ -246,6 +262,7 @@ struct radeon_info {
    bool has_small_prim_filter_sample_loc_bug;
    bool has_pops_missed_overlap_bug;
    bool has_zero_index_buffer_bug;
+   bool has_db_force_stencil_valid_bug;
    bool has_two_planes_iterate256_bug;
    bool has_vgt_flush_ngg_legacy_bug;
    bool has_prim_restart_sync_bug;
@@ -259,9 +276,7 @@ struct radeon_info {
    bool has_sqtt_auto_flush_mode_bug;
    bool never_send_perfcounter_stop;
    bool discardable_allows_big_page;
-   bool has_ngg_fully_culled_bug;
    bool has_export_conflict_bug;
-   bool has_attr_ring_wait_bug;
    bool cp_dma_supports_sparse;
    bool has_vrs_ds_export_bug;
    bool has_taskmesh_indirect0_bug;
@@ -395,8 +410,9 @@ struct radeon_info {
     */
    bool uses_kernel_cu_mask;
 
+   struct ac_compiler_info compiler_info;
+
    /* Shader cores. */
-   struct ac_cu_info cu_info;
    uint16_t cu_mask[AMD_MAX_SE][AMD_MAX_SA_PER_SE];
    uint32_t r600_max_quad_pipes; /* wave size / 16 */
    uint32_t max_good_cu_per_sa;
@@ -416,7 +432,6 @@ struct radeon_info {
    uint32_t pos_ring_offset;              /* GFX12+ */
    uint32_t prim_ring_offset;             /* GFX12+ */
    uint32_t total_attribute_pos_prim_ring_size; /* GFX11+ */
-   bool has_attr_ring;
 
    /* Tessellation rings. */
    uint32_t hs_offchip_param;
@@ -449,6 +464,11 @@ struct radeon_info {
    bool spi_cu_en_has_effect;
    uint32_t spi_cu_en;
 
+   /* Raster config. */
+   uint32_t pa_sc_raster_config;
+   uint32_t pa_sc_raster_config_1;
+   uint32_t se_tile_repeat;
+
    struct {
       uint32_t shadow_size;
       uint32_t shadow_alignment;
@@ -469,7 +489,7 @@ enum ac_query_gpu_info_result {
 
 enum ac_query_gpu_info_result ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
                                                 bool require_pci_bus_info);
-void ac_fill_cu_info(struct radeon_info *info, struct drm_amdgpu_info_device *device_info);
+void ac_fill_compiler_info(struct radeon_info *info, struct drm_amdgpu_info_device *device_info);
 
 void ac_compute_driver_uuid(char *uuid, size_t size);
 

@@ -24,7 +24,7 @@
 #include "anv_nir.h"
 #include "nir/nir_builder.h"
 #include "compiler/brw/brw_nir.h"
-#include "util/mesa-sha1.h"
+#include "util/mesa-blake3.h"
 #include "util/set.h"
 
 #include "vk_enum_to_str.h"
@@ -170,6 +170,12 @@ add_binding(struct apply_pipeline_layout_state *state,
    if (set_layout->vk.flags &
        VK_DESCRIPTOR_SET_LAYOUT_CREATE_EMBEDDED_IMMUTABLE_SAMPLERS_BIT_EXT)
       state->set[set].binding[binding].properties |= BINDING_PROPERTY_EMBEDDED_SAMPLER;
+
+   /* Don't use the binding table if we can avoid RT flush between BTI
+    * changes.
+    */
+   if (!state->pdevice->rt_change_needs_flush)
+      state->set[set].binding[binding].properties |= BINDING_PROPERTY_NO_BINDING_TABLE;
 
    return &state->set[set].binding[binding];
 }
@@ -2662,11 +2668,11 @@ anv_nir_apply_pipeline_layout(nir_shader *shader,
     * bind map, hash them.  This lets us quickly determine if the actual
     * mapping has changed and not just a no-op pipeline change.
     */
-   _mesa_sha1_compute(map->surface_to_descriptor,
+   _mesa_blake3_compute(map->surface_to_descriptor,
                       map->surface_count * sizeof(struct anv_pipeline_binding),
-                      map->surface_sha1);
-   _mesa_sha1_compute(map->sampler_to_descriptor,
+                      map->surface_blake3);
+   _mesa_blake3_compute(map->sampler_to_descriptor,
                       map->sampler_count * sizeof(struct anv_pipeline_binding),
-                      map->sampler_sha1);
+                      map->sampler_blake3);
    return progress;
 }

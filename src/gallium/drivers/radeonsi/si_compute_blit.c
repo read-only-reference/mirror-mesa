@@ -7,7 +7,6 @@
 #include "si_pipe.h"
 #include "util/format/u_format.h"
 #include "util/format_srgb.h"
-#include "util/helpers.h"
 #include "util/hash_table.h"
 #include "util/u_pack_color.h"
 #include "ac_nir_meta.h"
@@ -214,38 +213,6 @@ bool si_compute_clear_copy_buffer(struct si_context *sctx, struct pipe_resource 
    return true;
 }
 
-void si_clear_buffer(struct si_context *sctx, struct pipe_resource *dst,
-                     uint64_t offset, uint64_t size, uint32_t *clear_value,
-                     uint32_t clear_value_size, enum si_clear_method method,
-                     bool render_condition_enable)
-{
-   if (!size)
-      return;
-
-   ASSERTED unsigned clear_alignment = MIN2(clear_value_size, 4);
-
-   assert(clear_value_size != 3 && clear_value_size != 6); /* 12 is allowed. */
-   assert(offset % clear_alignment == 0);
-   assert(size % clear_alignment == 0);
-   assert(offset < (UINT32_MAX & ~0x3)); /* the limit of pipe_shader_buffer::buffer_size */
-   assert(align(size, 16) < UINT32_MAX); /* we round up the size to 16 for compute */
-
-   uint32_t clamped;
-   if (util_lower_clearsize_to_dword(clear_value, (int*)&clear_value_size, &clamped))
-      clear_value = &clamped;
-
-   if (si_compute_clear_copy_buffer(sctx, dst, offset, NULL, 0, size, clear_value,
-                                    clear_value_size, 0, render_condition_enable,
-                                    method == SI_AUTO_SELECT_CLEAR_METHOD))
-      return;
-
-   /* Compute handles all unaligned sizes, so this is always aligned. */
-   assert(offset % 4 == 0 && size % 4 == 0 && clear_value_size == 4);
-   assert(!render_condition_enable);
-
-   si_cp_dma_clear_buffer(sctx, &sctx->gfx_cs, dst, offset, size, *clear_value);
-}
-
 static void si_pipe_clear_buffer(struct pipe_context *ctx, struct pipe_resource *dst,
                                  unsigned offset, unsigned size, const void *clear_value,
                                  int clear_value_size)
@@ -256,19 +223,6 @@ static void si_pipe_clear_buffer(struct pipe_context *ctx, struct pipe_resource 
    si_clear_buffer(sctx, dst, offset, size, (uint32_t *)clear_value, clear_value_size,
                    SI_AUTO_SELECT_CLEAR_METHOD, false);
    si_barrier_after_simple_buffer_op(sctx, 0, dst, NULL);
-}
-
-void si_copy_buffer(struct si_context *sctx, struct pipe_resource *dst, struct pipe_resource *src,
-                    uint64_t dst_offset, uint64_t src_offset, unsigned size)
-{
-   if (!size)
-      return;
-
-   if (si_compute_clear_copy_buffer(sctx, dst, dst_offset, src, src_offset, size, NULL, 0, 0,
-                                    false, true))
-      return;
-
-   si_cp_dma_copy_buffer(sctx, dst, src, dst_offset, src_offset, size);
 }
 
 void si_compute_shorten_ubyte_buffer(struct si_context *sctx, struct pipe_resource *dst, struct pipe_resource *src,
@@ -437,7 +391,7 @@ void si_compute_expand_fmask(struct pipe_context *ctx, struct pipe_resource *tex
    unsigned log_samples = util_logbase2(tex->nr_samples);
    assert(tex->nr_samples >= 2);
 
-   assert(sctx->gfx_level < GFX11);
+   assert(sctx->screen->info.compiler_info.has_fmask);
 
    /* EQAA FMASK expansion is unimplemented. */
    if (tex->nr_samples != tex->nr_storage_samples)
@@ -706,9 +660,6 @@ bool si_compute_copy_image(struct si_context *sctx, struct pipe_resource *dst, u
    info.src.format = src_format;
    info.mask = util_format_is_depth_or_stencil(dst_format) ? PIPE_MASK_ZS : PIPE_MASK_RGBA;
 
-   /* Only the compute blit can copy compressed and subsampled images. */
-   fail_if_slow &= !dst_access && !src_access;
-
    bool success = si_compute_blit(sctx, &info, NULL, dst_access, src_access, fail_if_slow);
    assert((!dst_access && !src_access) || success);
    return success;
@@ -754,7 +705,11 @@ bool si_compute_blit(struct si_context *sctx, const struct pipe_blit_info *info,
     * AMD_DEBUG=nofmask fixes them. EQAA image stores are also unimplemented.
     * MSAA image stores work fine on Gfx11 (it has neither FMASK nor EQAA).
     */
-   if (sctx->gfx_level < GFX11 && !(sctx->screen->debug_flags & DBG(NO_FMASK)) && dst_samples > 1)
+   if (sctx->screen->info.compiler_info.has_fmask && !(sctx->screen->debug_flags & DBG(NO_FMASK)) && dst_samples > 1)
+      return false;
+
+   if (sctx->is_gfx_queue && sctx->screen->debug_flags & DBG(FORCE_GFX_BLIT) &&
+       !((src_access | dst_access) & SI_IMAGE_ACCESS_BLOCK_FORMAT_AS_UINT))
       return false;
 
    if (info->dst_sample != 0 ||
@@ -770,7 +725,11 @@ bool si_compute_blit(struct si_context *sctx, const struct pipe_blit_info *info,
       .use_aco = sctx->screen->use_aco,
       .no_fmask = sctx->screen->debug_flags & DBG(NO_FMASK),
       /* Compute queues can't fail because there is no alternative. */
-      .fail_if_slow = sctx->is_gfx_queue && fail_if_slow,
+      .fail_if_slow = sctx->is_gfx_queue && fail_if_slow &&
+                      /* Compressed and subsampled image blits can't fail because
+                       * the gfx (pixel shader) blit doesn't support them. */
+                      !((src_access | dst_access) & SI_IMAGE_ACCESS_BLOCK_FORMAT_AS_UINT) &&
+                      !(sctx->screen->debug_flags & DBG(FORCE_COMPUTE_BLIT)),
    };
 
    struct ac_cs_blit_description blit = {

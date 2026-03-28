@@ -1751,8 +1751,7 @@ static LLVMValueRef visit_atomic_ssbo(struct ac_nir_context *ctx, nir_intrinsic_
       }
 
       unsigned cache_flags =
-         ac_get_hw_cache_flags(ctx->ac.gfx_level,
-                               nir_intrinsic_access(instr), ac_access_type_atomic).value;
+         ac_get_llvm_cache_flags(&ctx->ac, nir_intrinsic_access(instr), ac_access_type_atomic);
 
       params[arg_count++] = data;
       params[arg_count++] = descriptor;
@@ -2220,7 +2219,7 @@ static LLVMValueRef visit_image_load(struct ac_nir_context *ctx, const nir_intri
    assert(dim != GLSL_SAMPLER_DIM_BUF);
 
    if (instr->intrinsic == nir_intrinsic_bindless_image_fragment_mask_load_amd) {
-      assert(ctx->ac.gfx_level < GFX11);
+      assert(ctx->ac.info->has_fmask);
 
       args.opcode = ac_image_load;
       args.resource = ctx->abi->load_sampler_desc(ctx->abi, dynamic_index, AC_DESC_FMASK);
@@ -2414,8 +2413,7 @@ static LLVMValueRef visit_image_atomic(struct ac_nir_context *ctx, const nir_int
          LLVMTypeRef data_type = LLVMTypeOf(params[0]);
          char type[8];
          unsigned cache_flags =
-            ac_get_hw_cache_flags(ctx->ac.gfx_level,
-                                  nir_intrinsic_access(instr), ac_access_type_atomic).value;
+            ac_get_llvm_cache_flags(&ctx->ac, nir_intrinsic_access(instr), ac_access_type_atomic);
 
          params[param_count++] = ctx->ac.i32_0; /* soffset */
          params[param_count++] = LLVMConstInt(ctx->ac.i32, cache_flags, 0);
@@ -3342,8 +3340,8 @@ static bool visit_intrinsic(struct ac_nir_context *ctx, nir_intrinsic_instr *ins
    }
    case nir_intrinsic_export_amd: {
       unsigned flags = nir_intrinsic_flags(instr);
-      unsigned target = nir_intrinsic_base(instr);
-      unsigned write_mask = nir_intrinsic_write_mask(instr);
+      unsigned target = nir_intrinsic_target(instr);
+      unsigned write_mask = nir_intrinsic_enabled_channels(instr);
 
       struct ac_export_args args = {
          .target = target,
@@ -3479,7 +3477,7 @@ static void tex_fetch_ptrs(struct ac_nir_context *ctx, nir_tex_instr *instr,
       /* The fragment mask is fetched from the compressed
        * multisampled surface.
        */
-      assert(ctx->ac.gfx_level < GFX11);
+      assert(ctx->ac.info->has_fmask);
       main_descriptor = AC_DESC_FMASK;
    }
 

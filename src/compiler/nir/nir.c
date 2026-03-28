@@ -658,16 +658,22 @@ nir_alu_src_copy(nir_alu_src *dest, const nir_alu_src *src)
 }
 
 bool
-nir_alu_src_is_trivial_ssa(const nir_alu_instr *alu, unsigned srcn)
+nir_alu_src_is_trivial_ssa(const nir_alu_src *src, unsigned num_components)
 {
    static uint8_t trivial_swizzle[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
    STATIC_ASSERT(ARRAY_SIZE(trivial_swizzle) == NIR_MAX_VEC_COMPONENTS);
 
+   return (src->src.ssa->num_components == num_components) &&
+          (memcmp(src->swizzle, trivial_swizzle, num_components) == 0);
+}
+
+bool
+nir_alu_has_trivial_src(const nir_alu_instr *alu, unsigned srcn)
+{
    const nir_alu_src *src = &alu->src[srcn];
    unsigned num_components = nir_ssa_alu_instr_src_components(alu, srcn);
 
-   return (src->src.ssa->num_components == num_components) &&
-          (memcmp(src->swizzle, trivial_swizzle, num_components) == 0);
+   return nir_alu_src_is_trivial_ssa(src, num_components);
 }
 
 static void
@@ -1858,7 +1864,7 @@ nir_def_components_read(const nir_def *def)
 bool
 nir_def_all_uses_are_fsat(const nir_def *def)
 {
-   nir_foreach_use(src, def) {
+   nir_foreach_use_including_if(src, def) {
       if (nir_src_is_if(src))
          return false;
 
@@ -1877,7 +1883,7 @@ nir_def_all_uses_are_fsat(const nir_def *def)
 bool
 nir_def_all_uses_ignore_sign_bit(const nir_def *def)
 {
-   nir_foreach_use(use, def) {
+   nir_foreach_use_including_if(use, def) {
       if (nir_src_is_if(use))
          return false;
       nir_instr *instr = nir_src_parent_instr(use);
@@ -3353,8 +3359,11 @@ nir_intrinsic_copy_const_indices(nir_intrinsic_instr *dst, nir_intrinsic_instr *
       /* require that dst instruction also uses the same const_index[]: */
       assert(dst_info->index_map[i] > 0);
 
-      dst->const_index[dst_info->index_map[i] - 1] =
-         src->const_index[src_info->index_map[i] - 1];
+      unsigned size = nir_intrinsic_index_size(i);
+
+      memcpy(&dst->const_index[dst_info->index_map[i] - 1],
+             &src->const_index[src_info->index_map[i] - 1],
+             sizeof(dst->const_index[0]) * size);
    }
 }
 
@@ -3642,12 +3651,12 @@ nir_instr_xfb_write_mask(nir_intrinsic_instr *instr)
       unsigned wr_mask = nir_intrinsic_write_mask(instr) << nir_intrinsic_component(instr);
       assert((wr_mask & ~0xf) == 0); /* only 4 components allowed */
 
+      nir_io_xfb xfb = nir_intrinsic_io_xfb(instr);
       unsigned iter_mask = wr_mask;
       while (iter_mask) {
          unsigned i = u_bit_scan(&iter_mask);
-         nir_io_xfb xfb = i < 2 ? nir_intrinsic_io_xfb(instr) : nir_intrinsic_io_xfb2(instr);
-         if (xfb.out[i % 2].num_components)
-            mask |= BITFIELD_RANGE(i, xfb.out[i % 2].num_components) & wr_mask;
+         if (xfb.out[i].num_components)
+            mask |= BITFIELD_RANGE(i, xfb.out[i].num_components) & wr_mask;
       }
    }
 

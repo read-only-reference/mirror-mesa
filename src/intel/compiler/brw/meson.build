@@ -77,6 +77,7 @@ libintel_compiler_brw_files = files(
   'brw_opt_algebraic.cpp',
   'brw_opt_bank_conflicts.cpp',
   'brw_opt_cmod_propagation.cpp',
+  'brw_opt_cmp_flag_destination.cpp',
   'brw_opt_combine_constants.cpp',
   'brw_opt_copy_propagation.cpp',
   'brw_opt_cse.cpp',
@@ -157,11 +158,13 @@ if with_tests
     executable(
       'intel_compiler_brw_tests',
       files(
+        'test_def_analysis.cpp',
         'test_eu_compact.cpp',
         'test_eu_validate.cpp',
         'test_helpers.cpp',
         'test_helpers.h',
         'test_insert_load_reg.cpp',
+        'test_lower_regioning.cpp',
         'test_lower_scoreboard.cpp',
         'test_opt_algebraic.cpp',
         'test_opt_cmod_propagation.cpp',

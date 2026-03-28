@@ -47,13 +47,11 @@ static void si_emit_cb_render_state(struct si_context *sctx, unsigned index)
    unsigned i;
 
    /* Avoid a hang that happens when dual source blending is enabled
-    * but there is not enough color outputs. This is undefined behavior,
+    * but there are no color outputs. This is undefined behavior,
     * so disable color writes completely.
-    *
-    * Reproducible with Unigine Heaven 4.0 and drirc missing.
     */
    if (blend->dual_src_blend && sctx->shader.ps.cso &&
-       (sctx->shader.ps.cso->info.colors_written & 0x3) != 0x3)
+       (sctx->shader.ps.cso->info.colors_written & 0x3) == 0)
       cb_target_mask = 0;
 
    /* GFX9: Flush DFSM when CB_TARGET_MASK changes.
@@ -1467,7 +1465,7 @@ static void *si_create_dsa_state(struct pipe_context *ctx,
       dsa->db_stencil_write_mask = S_028094_WRITEMASK(state->stencil[0].writemask) |
                                    S_028094_WRITEMASK_BF(state->stencil[1].writemask);
 
-      if (sctx->gfx_level == GFX12) {
+      if (sctx->screen->info.has_db_force_stencil_valid_bug) {
          dsa->gfx12_force_stencil_valid = state->stencil[0].zpass_op != state->stencil[0].zfail_op ||
                                           (state->stencil[1].enabled &&
                                            state->stencil[1].zpass_op != state->stencil[1].zfail_op);
@@ -1831,10 +1829,14 @@ static void si_emit_db_render_state(struct si_context *sctx, unsigned index)
    }
 
    unsigned db_render_override2 =
-         S_028010_DISABLE_ZMASK_EXPCLEAR_OPTIMIZATION(sctx->db_depth_disable_expclear) |
-         S_028010_DISABLE_SMEM_EXPCLEAR_OPTIMIZATION(sctx->db_stencil_disable_expclear) |
          S_028010_DECOMPRESS_Z_ON_FLUSH(sctx->framebuffer.nr_samples >= 4) |
          S_028010_CENTROID_COMPUTATION_MODE(sctx->gfx_level >= GFX10_3 ? 1 : 0);
+
+   if (sctx->gfx_level <= GFX11_5) {
+      db_render_override2 |=
+         S_028010_DISABLE_ZMASK_EXPCLEAR_OPTIMIZATION(sctx->db_depth_disable_expclear) |
+         S_028010_DISABLE_SMEM_EXPCLEAR_OPTIMIZATION(sctx->db_stencil_disable_expclear);
+   }
 
    if (sctx->gfx_level >= GFX12) {
       radeon_begin(&sctx->gfx_cs);
@@ -1911,7 +1913,7 @@ static uint32_t si_translate_texformat(struct pipe_screen *screen, enum pipe_for
 
 static unsigned is_wrap_mode_legal(struct si_screen *screen, unsigned wrap)
 {
-   if (!screen->info.cu_info.has_3d_cube_border_color_mipmap) {
+   if (!screen->info.compiler_info.has_3d_cube_border_color_mipmap) {
       switch (wrap) {
       case PIPE_TEX_WRAP_CLAMP:
       case PIPE_TEX_WRAP_CLAMP_TO_BORDER:
@@ -2200,7 +2202,7 @@ static bool si_is_format_supported(struct pipe_screen *screen, enum pipe_format 
       usage |= PIPE_BIND_SAMPLER_VIEW;
 
    if ((target == PIPE_TEXTURE_3D || target == PIPE_TEXTURE_CUBE) &&
-        !sscreen->info.cu_info.has_3d_cube_border_color_mipmap)
+        !sscreen->info.compiler_info.has_3d_cube_border_color_mipmap)
       return false;
 
    if (util_format_get_num_planes(format) >= 2)
@@ -2406,7 +2408,7 @@ static void si_init_depth_surface(struct si_context *sctx)
       .num_samples = tex->buffer.b.b.nr_samples,
       .first_layer = sctx->framebuffer.state.zsbuf.first_layer,
       .last_layer = sctx->framebuffer.state.zsbuf.last_layer,
-      .allow_expclear = true,
+      .allow_expclear = sctx->gfx_level <= GFX11_5,
       .htile_enabled = sctx->gfx_level < GFX12 && si_htile_enabled(tex, level, PIPE_MASK_ZS),
       .htile_stencil_disabled = tex->htile_stencil_disabled,
    };
@@ -2567,7 +2569,7 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
       if (cb->color_is_int10)
          sctx->framebuffer.color_is_int10 |= 1 << i;
 
-      if (tex->surface.fmask_offset)
+      if (sctx->gfx_level < GFX11 && tex->surface.fmask_offset)
          sctx->framebuffer.compressed_cb_mask |= 1 << i;
       else
          sctx->framebuffer.uncompressed_cb_mask |= 1 << i;
@@ -4122,7 +4124,7 @@ static void *si_create_sampler_state(struct pipe_context *ctx,
    bool trunc_coord = (state->min_img_filter == PIPE_TEX_FILTER_NEAREST &&
                        state->mag_img_filter == PIPE_TEX_FILTER_NEAREST &&
                        state->compare_mode == PIPE_TEX_COMPARE_NONE) ||
-                      sscreen->info.cu_info.conformant_trunc_coord;
+                      sscreen->info.compiler_info.conformant_trunc_coord;
    union pipe_color_union clamped_border_color;
 
    if (!rstate) {
@@ -4133,7 +4135,7 @@ static void *si_create_sampler_state(struct pipe_context *ctx,
    if (!is_wrap_mode_legal(sscreen, state->wrap_s) ||
        !is_wrap_mode_legal(sscreen, state->wrap_t) ||
        !is_wrap_mode_legal(sscreen, state->wrap_r) ||
-       (!sscreen->info.cu_info.has_3d_cube_border_color_mipmap &&
+       (!sscreen->info.compiler_info.has_3d_cube_border_color_mipmap &&
         (state->min_mip_filter != PIPE_TEX_MIPFILTER_NONE ||
          state->max_anisotropy > 0))) {
       assert(0);
@@ -4866,8 +4868,8 @@ static bool gfx6_init_gfx_preamble_state(struct si_context *sctx)
 
    if (sctx->is_gfx_queue && !sctx->uses_kernelq_reg_shadowing) {
       ac_pm4_cmd_add(&pm4->base, PKT3(PKT3_CONTEXT_CONTROL, 1, 0));
-      ac_pm4_cmd_add(&pm4->base, CC0_UPDATE_LOAD_ENABLES(1));
-      ac_pm4_cmd_add(&pm4->base, CC1_UPDATE_SHADOW_ENABLES(1));
+      ac_pm4_cmd_add(&pm4->base, S_28_1_UPDATE_LOAD_ENABLES(1));
+      ac_pm4_cmd_add(&pm4->base, S_28_2_UPDATE_SHADOW_ENABLES(1));
 
       if (sscreen->dpbb_allowed) {
          ac_pm4_cmd_add(&pm4->base, PKT3(PKT3_EVENT_WRITE, 0, 0));
@@ -4956,17 +4958,17 @@ static bool gfx10_init_gfx_preamble_state(struct si_context *sctx)
        */
       if (sctx->gfx_level != GFX11_5) {
          ac_pm4_cmd_add(&pm4->base, PKT3(PKT3_CONTEXT_CONTROL, 1, 0));
-         ac_pm4_cmd_add(&pm4->base, CC0_UPDATE_LOAD_ENABLES(1) | CC0_LOAD_PER_CONTEXT_STATE(1) |
-                           CC0_LOAD_CS_SH_REGS(1) | CC0_LOAD_GFX_SH_REGS(1) |
-                           CC0_LOAD_GLOBAL_UCONFIG(1));
-         ac_pm4_cmd_add(&pm4->base, CC1_UPDATE_SHADOW_ENABLES(1) | CC1_SHADOW_PER_CONTEXT_STATE(1) |
-                           CC1_SHADOW_CS_SH_REGS(1) | CC1_SHADOW_GFX_SH_REGS(1) |
-                           CC1_SHADOW_GLOBAL_UCONFIG(1) | CC1_SHADOW_GLOBAL_CONFIG(1));
+         ac_pm4_cmd_add(&pm4->base, S_28_1_UPDATE_LOAD_ENABLES(1) | S_28_1_LOAD_PER_CONTEXT_STATE(1) |
+                           S_28_1_LOAD_CS_SH_REGS(1) | S_28_1_LOAD_GFX_SH_REGS(1) |
+                           S_28_1_LOAD_GLOBAL_UCONFIG(1));
+         ac_pm4_cmd_add(&pm4->base, S_28_2_UPDATE_SHADOW_ENABLES(1) | S_28_2_SHADOW_PER_CONTEXT_STATE(1) |
+                           S_28_2_SHADOW_CS_SH_REGS(1) | S_28_2_SHADOW_GFX_SH_REGS(1) |
+                           S_28_2_SHADOW_GLOBAL_UCONFIG(1) | S_28_2_SHADOW_GLOBAL_CONFIG(1));
       }
    } else if (sctx->is_gfx_queue && !sctx->uses_kernelq_reg_shadowing) {
       ac_pm4_cmd_add(&pm4->base, PKT3(PKT3_CONTEXT_CONTROL, 1, 0));
-      ac_pm4_cmd_add(&pm4->base, CC0_UPDATE_LOAD_ENABLES(1));
-      ac_pm4_cmd_add(&pm4->base, CC1_UPDATE_SHADOW_ENABLES(1));
+      ac_pm4_cmd_add(&pm4->base, S_28_1_UPDATE_LOAD_ENABLES(1));
+      ac_pm4_cmd_add(&pm4->base, S_28_2_UPDATE_SHADOW_ENABLES(1));
 
       if (sscreen->dpbb_allowed) {
          ac_pm4_cmd_add(&pm4->base, PKT3(PKT3_EVENT_WRITE, 0, 0));
@@ -5037,16 +5039,16 @@ static bool gfx12_init_gfx_preamble_state(struct si_context *sctx)
 
    if (sctx->uses_userq_reg_shadowing) {
       ac_pm4_cmd_add(&pm4->base, PKT3(PKT3_CONTEXT_CONTROL, 1, 0));
-      ac_pm4_cmd_add(&pm4->base, CC0_UPDATE_LOAD_ENABLES(1) | CC0_LOAD_PER_CONTEXT_STATE(1) |
-                        CC0_LOAD_CS_SH_REGS(1) | CC0_LOAD_GFX_SH_REGS(1) |
-                        CC0_LOAD_GLOBAL_UCONFIG(1));
-      ac_pm4_cmd_add(&pm4->base, CC1_UPDATE_SHADOW_ENABLES(1) | CC1_SHADOW_PER_CONTEXT_STATE(1) |
-                        CC1_SHADOW_CS_SH_REGS(1) | CC1_SHADOW_GFX_SH_REGS(1) |
-                        CC1_SHADOW_GLOBAL_UCONFIG(1) | CC1_SHADOW_GLOBAL_CONFIG(1));
+      ac_pm4_cmd_add(&pm4->base, S_28_1_UPDATE_LOAD_ENABLES(1) | S_28_1_LOAD_PER_CONTEXT_STATE(1) |
+                        S_28_1_LOAD_CS_SH_REGS(1) | S_28_1_LOAD_GFX_SH_REGS(1) |
+                        S_28_1_LOAD_GLOBAL_UCONFIG(1));
+      ac_pm4_cmd_add(&pm4->base, S_28_2_UPDATE_SHADOW_ENABLES(1) | S_28_2_SHADOW_PER_CONTEXT_STATE(1) |
+                        S_28_2_SHADOW_CS_SH_REGS(1) | S_28_2_SHADOW_GFX_SH_REGS(1) |
+                        S_28_2_SHADOW_GLOBAL_UCONFIG(1) | S_28_2_SHADOW_GLOBAL_CONFIG(1));
    } else if (sctx->is_gfx_queue && !sctx->uses_kernelq_reg_shadowing) {
       ac_pm4_cmd_add(&pm4->base, PKT3(PKT3_CONTEXT_CONTROL, 1, 0));
-      ac_pm4_cmd_add(&pm4->base, CC0_UPDATE_LOAD_ENABLES(1));
-      ac_pm4_cmd_add(&pm4->base, CC1_UPDATE_SHADOW_ENABLES(1));
+      ac_pm4_cmd_add(&pm4->base, S_28_1_UPDATE_LOAD_ENABLES(1));
+      ac_pm4_cmd_add(&pm4->base, S_28_2_UPDATE_SHADOW_ENABLES(1));
    }
 
    if (sctx->is_gfx_queue && sscreen->dpbb_allowed && !sctx->uses_userq_reg_shadowing) {
@@ -5106,4 +5108,33 @@ bool si_init_gfx_preamble_state(struct si_context *sctx)
       ret = gfx6_init_gfx_preamble_state(sctx);
 
    return ret;
+}
+
+void si_ps_key_update_framebuffer(struct si_context *sctx)
+{
+   struct si_shader_selector *sel = sctx->shader.ps.cso;
+   union si_shader_key *key = &sctx->shader.ps.key;
+
+   if (!sel)
+      return;
+
+   /* ps_uses_fbfetch is true only if the color buffer is bound. */
+   if (sctx->ps_uses_fbfetch) {
+      struct pipe_surface *cb0 = &sctx->framebuffer.state.cbufs[0];
+      struct pipe_resource *tex = cb0->texture;
+
+      /* 1D textures are allocated and used as 2D on GFX9. */
+      key->ps.mono.fbfetch_msaa = sctx->framebuffer.nr_samples > 1;
+      key->ps.mono.fbfetch_is_1D =
+         sctx->gfx_level != GFX9 &&
+         (tex->target == PIPE_TEXTURE_1D || tex->target == PIPE_TEXTURE_1D_ARRAY);
+      key->ps.mono.fbfetch_layered =
+         tex->target == PIPE_TEXTURE_1D_ARRAY || tex->target == PIPE_TEXTURE_2D_ARRAY ||
+         tex->target == PIPE_TEXTURE_CUBE || tex->target == PIPE_TEXTURE_CUBE_ARRAY ||
+         tex->target == PIPE_TEXTURE_3D;
+   } else {
+      key->ps.mono.fbfetch_msaa = 0;
+      key->ps.mono.fbfetch_is_1D = 0;
+      key->ps.mono.fbfetch_layered = 0;
+   }
 }

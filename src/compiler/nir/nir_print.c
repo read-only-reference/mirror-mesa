@@ -38,6 +38,8 @@
 #include "nir.h"
 #include "nir_builder.h"
 
+simple_mtx_t nir_print_lock = SIMPLE_MTX_INITIALIZER;
+
 static void
 print_indentation(unsigned levels, FILE *fp)
 {
@@ -898,6 +900,8 @@ print_access(enum gl_access_qualifier access, print_state *state, const char *se
       { ACCESS_ATOMIC, "atomic" },
       { ACCESS_FUSED_EU_DISABLE_INTEL, "fused-eu-disable-intel" },
       { ACCESS_SPARSE, "sparse" },
+      { ACCESS_ISTREAM_PAN, "istream-pan" },
+      { ACCESS_ESTREAM_PAN, "estream-pan" },
    };
 
    bool first = true;
@@ -951,10 +955,11 @@ print_var_decl(nir_variable *var, print_state *state)
    const char *const inv = (var->data.invariant) ? "invariant " : "";
    const char *const per_view = (var->data.per_view) ? "per_view " : "";
    const char *const per_primitive = (var->data.per_primitive) ? "per_primitive " : "";
+   const char *const per_vertex = (var->data.per_vertex) ? "per_vertex " : "";
    const char *const ray_query = (var->data.ray_query) ? "ray_query " : "";
    const char *const fb_fetch = var->data.fb_fetch_output ? "fb_fetch_output " : "";
-   fprintf(fp, "%s%s%s%s%s%s%s%s%s%s %s ",
-           bindless, cent, samp, patch, inv, per_view, per_primitive,
+   fprintf(fp, "%s%s%s%s%s%s%s%s%s%s%s %s ",
+           bindless, cent, samp, patch, inv, per_view, per_primitive, per_vertex,
            ray_query, fb_fetch,
            get_variable_mode_str(var->data.mode, false),
            glsl_interp_mode_name(var->data.interpolation));
@@ -1599,17 +1604,17 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
          if (io.no_validate)
             fprintf(fp, " no_validate");
 
+         if (io.no_signed_zero)
+            fprintf(fp, " no_signed_zero");
+
          break;
       }
 
-      case NIR_INTRINSIC_IO_XFB:
-      case NIR_INTRINSIC_IO_XFB2: {
-         /* This prints both IO_XFB and IO_XFB2. */
-         fprintf(fp, "xfb%s(", idx == NIR_INTRINSIC_IO_XFB ? "" : "2");
+      case NIR_INTRINSIC_IO_XFB: {
+         fprintf(fp, "xfb(");
          bool first = true;
-         for (unsigned i = 0; i < 2; i++) {
-            unsigned start_comp = (idx == NIR_INTRINSIC_IO_XFB ? 0 : 2) + i;
-            nir_io_xfb xfb = start_comp < 2 ? nir_intrinsic_io_xfb(instr) : nir_intrinsic_io_xfb2(instr);
+         for (unsigned i = 0; i < 4; i++) {
+            nir_io_xfb xfb = nir_intrinsic_io_xfb(instr);
 
             if (!xfb.out[i].num_components)
                continue;
@@ -1620,9 +1625,9 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
 
             if (xfb.out[i].num_components > 1) {
                fprintf(fp, "components=%u..%u",
-                       start_comp, start_comp + xfb.out[i].num_components - 1);
+                       i, i + xfb.out[i].num_components - 1);
             } else {
-               fprintf(fp, "component=%u", start_comp);
+               fprintf(fp, "component=%u", i);
             }
             fprintf(fp, " buffer=%u offset=%u",
                     xfb.out[i].buffer, (uint32_t)xfb.out[i].offset * 4);

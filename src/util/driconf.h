@@ -207,6 +207,10 @@
    DRI_CONF_OPT_B(allow_glsl_120_subset_in_110, def, \
                   "Allow a subset of GLSL 1.20 in GLSL 1.10 as needed by SPECviewperf13")
 
+#define DRI_CONF_ALLOW_GLSL_EMBEDDED_STRUCTURE_DECLARATIONS(def) \
+   DRI_CONF_OPT_B(allow_glsl_embedded_structure_declarations, def, \
+                  "Allow embedded structure declarations again in GLSL 1.20+")
+
 #define DRI_CONF_ALLOW_GLSL_BUILTIN_CONST_EXPRESSION(def) \
    DRI_CONF_OPT_B(allow_glsl_builtin_const_expression, def, \
                   "Allow builtins as part of constant expressions")
@@ -254,6 +258,9 @@
 #define DRI_CONF_GLTHREAD_NOP_CHECK_FRAMEBUFFER_STATUS(def) \
    DRI_CONF_OPT_B(glthread_nop_check_framebuffer_status, def, \
                   "glthread always returns GL_FRAMEBUFFER_COMPLETE to prevent synchronization.")
+
+#define DRI_CONF_FORCE_EXPLICIT_UNIFORM_LOC_ZERO() \
+   DRI_CONF_OPT_S_NODEF(force_explicit_uniform_loc_zero, "Forces an explicit uniform location of zero for the uniform.")
 
 #define DRI_CONF_FORCE_GL_VENDOR() \
    DRI_CONF_OPT_S_NODEF(force_gl_vendor, "Override GPU vendor string.")
@@ -681,6 +688,10 @@
    DRI_CONF_OPT_B(tu_enable_softfloat32, def, \
                   "Enable softfloat emulation for float32 denormals")
 
+#define DRI_CONF_TU_EMULATE_ALPHA_TO_COVERAGE(def) \
+   DRI_CONF_OPT_B(tu_emulate_alpha_to_coverage, def, \
+                  "Enable emulation of alpha-to-coverage")
+
 /**
  * \brief Honeykrisp specific configuration options
  */
@@ -775,10 +786,6 @@
 #define DRI_CONF_RADV_DISABLE_SINKING_LOAD_INPUT_FS(def) \
    DRI_CONF_OPT_B(radv_disable_sinking_load_input_fs, def, \
                   "Disable sinking load inputs for fragment shaders")
-
-#define DRI_CONF_RADV_DISABLE_DEPTH_STORAGE(def) \
-  DRI_CONF_OPT_B(radv_disable_depth_storage, def, \
-                 "Hides support for storage access to depth formats")
 
 #define DRI_CONF_RADV_FLUSH_BEFORE_QUERY_COPY(def) \
   DRI_CONF_OPT_B( \
@@ -926,6 +933,10 @@
 #define DRI_CONF_ANV_EXTERNAL_MEMORY_IMPLICIT_SYNC(def) \
    DRI_CONF_OPT_B(anv_external_memory_implicit_sync, def, "Implicit sync on external BOs")
 
+#define DRI_CONF_ANV_STATE_CACHE_PERF_FIX(def) \
+   DRI_CONF_OPT_B(anv_state_cache_perf_fix, def, \
+                  "Whether COMMON_SLICE_CHICKEN3 bit13 should be programmed to enable BTP+BTI RCC keying")
+
 #define DRI_CONF_ANV_COMPRESSION_CONTROL_ENABLED(def) \
    DRI_CONF_OPT_B(compression_control_enabled, def, "Enable VK_EXT_image_compression_control support")
 
@@ -956,6 +967,14 @@
 #define DRI_CONF_ANV_DISABLE_LINK_TIME_OPTIMIZATION(def) \
    DRI_CONF_OPT_B(anv_disable_link_time_optimization, def, \
                   "Disable linking of graphics pipeline shaders")
+
+#define DRI_CONF_ANV_BARRIER_POST_UNTYPED_CLEAR_SHADER(def) \
+   DRI_CONF_OPT_B(anv_barrier_post_untyped_clear_shader, def, \
+                  "Insert pipeline barriers post clearing shader on untyped data")
+
+#define DRI_CONF_ANV_BARRIER_POST_TYPED_CLEAR_SHADER(def) \
+   DRI_CONF_OPT_B(anv_barrier_post_typed_clear_shader, def, \
+                  "Insert pipeline barriers post clearing shader on typed data")
 
 /**
  * \brief HASVK specific configuration options

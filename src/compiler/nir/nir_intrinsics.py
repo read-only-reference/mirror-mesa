@@ -34,9 +34,13 @@ src3 = ('src', 3)
 src4 = ('src', 4)
 
 class Index(object):
-    def __init__(self, c_data_type, name):
+    def __init__(self, c_data_type, name, size):
+        # 64bit non struct types are possible, but intrinsics set/get
+        # need to be updated for that.
+        assert "struct" in c_data_type or size == 1
         self.c_data_type = c_data_type
         self.name = name
+        self.size = size
 
 class Intrinsic(object):
    """Class that represents all the information about an intrinsic opcode.
@@ -83,7 +87,14 @@ class Intrinsic(object):
        self.has_dest = (dest_components >= 0)
        self.dest_components = dest_components
        self.num_indices = len(indices)
+       self.num_index_slots = sum([idx.size for idx in indices])
        self.indices = indices
+       self.index_map = []
+       prefix = 0
+       for idx in indices:
+           self.index_map.append(prefix + 1)
+           prefix += idx.size
+       assert prefix <= 9
        self.flags = flags
        self.sysval = sysval
        self.bit_sizes = bit_sizes if isinstance(bit_sizes, list) else []
@@ -104,8 +115,8 @@ QUADGROUP_FLAGS = [CAN_ELIMINATE, QUADGROUP]
 INTR_INDICES = []
 INTR_OPCODES = {}
 
-def index(c_data_type, name):
-    idx = Index(c_data_type, name)
+def index(c_data_type, name, size = 1):
+    idx = Index(c_data_type, name, size)
     INTR_INDICES.append(idx)
     globals()[name.upper()] = idx
 
@@ -136,6 +147,12 @@ index("int", "base")
 
 # For store instructions, a writemask for the store.
 index("unsigned", "write_mask")
+
+# Same as write_mask, but can be 0 and still have side effects
+index("unsigned", "enabled_channels")
+
+# Generic named value
+index("unsigned", "target")
 
 # The stream-id for GS emit_vertex/end_primitive intrinsics.
 index("unsigned", "stream_id")
@@ -283,11 +300,10 @@ index("mesa_scope", "memory_scope")
 index("mesa_scope", "execution_scope")
 
 # Semantics of an IO instruction
-index("struct nir_io_semantics", "io_semantics")
+index("struct nir_io_semantics", "io_semantics", size = 2)
 
 # Transform feedback info
-index("struct nir_io_xfb", "io_xfb")
-index("struct nir_io_xfb", "io_xfb2")
+index("struct nir_io_xfb", "io_xfb", size = 2)
 
 # Ray query values accessible from the RayQueryKHR object
 index("nir_ray_query_value", "ray_query_value")
@@ -590,6 +606,10 @@ intrinsic("shuffle", src_comp=[0, 1], dest_comp=0, bit_sizes=src0, flags=SUBGROU
 intrinsic("shuffle_xor", src_comp=[0, 1], dest_comp=0, bit_sizes=src0, flags=SUBGROUP_FLAGS)
 intrinsic("shuffle_up", src_comp=[0, 1], dest_comp=0, bit_sizes=src0, flags=SUBGROUP_FLAGS)
 intrinsic("shuffle_down", src_comp=[0, 1], dest_comp=0, bit_sizes=src0, flags=SUBGROUP_FLAGS)
+
+# SPV_INTEL_subgroups shuffles.
+intrinsic("shuffle_up_intel", src_comp=[0, 0, 1], dest_comp=0, bit_sizes=src0, flags=SUBGROUP_FLAGS)
+intrinsic("shuffle_down_intel", src_comp=[0, 0, 1], dest_comp=0, bit_sizes=src0, flags=SUBGROUP_FLAGS)
 
 # Quad operations from SPIR-V.
 intrinsic("quad_broadcast", src_comp=[0, 1], dest_comp=0, bit_sizes=src0, flags=QUADGROUP_FLAGS)
@@ -1316,7 +1336,7 @@ def store(name, srcs, indices=[], flags=[]):
     intrinsic("store_" + name, [0] + srcs, indices=indices, flags=flags)
 
 # src[] = { value, offset }.
-store("output", [1], [BASE, RANGE, WRITE_MASK, COMPONENT, SRC_TYPE, IO_SEMANTICS, IO_XFB, IO_XFB2])
+store("output", [1], [BASE, RANGE, WRITE_MASK, COMPONENT, SRC_TYPE, IO_SEMANTICS, IO_XFB])
 # src[] = { value, offset }.
 store("pixel_local", [1], [BASE, RANGE, WRITE_MASK, COMPONENT, FORMAT, SRC_TYPE, IO_SEMANTICS])
 # src[] = { value, vertex, offset }.
@@ -1523,6 +1543,7 @@ intrinsic("load_frag_coord_unscaled_ir3", dest_comp=4,
           flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
 intrinsic("load_frag_coord_gmem_ir3", dest_comp=4,
           flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
+system_value("alpha_to_coverage_enable_ir3", 1)
 
 # Per-view gl_FragSizeEXT and gl_FragCoord offset.
 intrinsic("load_frag_size_ir3", src_comp=[1], dest_comp=2, indices=[RANGE],
@@ -1638,6 +1659,15 @@ intrinsic("prefetch_ubo_ir3", [1], flags=[CAN_REORDER])
 # src[] = { vertex_id, instance_id, offset }
 load("attribute_pan", [1, 1, 1], [BASE, COMPONENT, DEST_TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
 
+# src[] = { idx, bary }
+load("var_pan", [1, 2], [DEST_TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
+# src[] = { idx }
+load("var_flat_pan", [1], [DEST_TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
+# src[] = { offset, bary }
+load("var_buf_pan", [1, 2], [SRC_TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
+# src[] = { offset }
+load("var_buf_flat_pan", [1], [SRC_TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
+
 # Panfrost-specific intrinsic to load the shader_output special-FAU value on 5th Gen.
 intrinsic("load_shader_output_pan", dest_comp=1, src_comp=[], bit_sizes=[32],
           indices=[], flags=[CAN_REORDER, CAN_ELIMINATE])
@@ -1704,11 +1734,30 @@ store("tile_pan", [1, 1, 1], indices=[ACCESS, SRC_TYPE, IO_SEMANTICS])
 
 # Load converted memory given an address and a conversion descriptor
 # src[] = { address, conversion }
-load("converted_mem_pan", [1, 1], indices=[DEST_TYPE, IO_SEMANTICS], flags=[CAN_ELIMINATE])
+load("global_cvt_pan", [1, 1], indices=[DEST_TYPE, ACCESS], flags=[CAN_ELIMINATE])
 
-# Store a value to memory with conversion given an address and a conversion descriptor
+# Store a value to memory with conversion given an address and a conversion
+# descriptor.  The hardware also supports AUTO32, meaning a global store without
+# any conversion for 32-bit values, this behaviour can be enabled by setting
+# SRC_TYPE = `32` (using nir_type_invalid instead of real types).
 # src[] = { value, address, conversion }
-store("converted_mem_pan", [1, 1], indices=[IO_SEMANTICS])
+store("global_cvt_pan", [1, 1], indices=[SRC_TYPE, ACCESS])
+
+# Same exact opcode as store_global, but used to tag a gl_PointSize write.
+# This is needed to later mask out the write in the backend.
+# src[] = { value, address }
+store("global_psiz_pan", [1], indices=[WRITE_MASK, ACCESS])
+
+# Base index of the output buffer passed into the IDVS on Valhall.
+system_value("idvs_output_buf_index_pan", 1, bit_sizes=[32])
+
+# src[] = { handle, vertex_id, instance_id }
+intrinsic("lea_attr_pan", [1, 1, 1], dest_comp=3, bit_sizes=[32],
+          indices=[SRC_TYPE], flags=[CAN_ELIMINATE, CAN_REORDER])
+
+# src[] = { handle, index }
+intrinsic("lea_buf_pan", [1, 1], dest_comp=2, bit_sizes=[32],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
 
 # Load the address and potentially the conversion descriptor for a texel buffer index.
 # The 64 bit address is always in the first two channels, while the 32 bit
@@ -1845,7 +1894,8 @@ store("global_amd", [1, 1], indices=[BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET, WRIT
 
 # src[] = { address }. BASE is a 24 bit unsigned offset if a constant 0 address is given,
 # signed otherwise.
-load("global_nv", [1], indices=[BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET], flags=[CAN_ELIMINATE])
+# load_global_nv has an additional boolean input that makes the load return 0 on false.
+load("global_nv", [1, 1], indices=[BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET], flags=[CAN_ELIMINATE])
 store("global_nv", [1], indices=[BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET])
 load("scratch_nv", [1], indices=[BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET], flags=[CAN_ELIMINATE])
 store("scratch_nv", [1], indices=[BASE, ALIGN_MUL, ALIGN_OFFSET])
@@ -2163,14 +2213,14 @@ system_value("lds_ngg_gs_out_vertex_base_amd", 1)
 
 # AMD GPU shader output export instruction
 # src[] = { export_value, row }
-# BASE = export target
+# TARGET = export target
 # FLAGS = AC_EXP_FLAG_*
-intrinsic("export_amd", [0], indices=[BASE, WRITE_MASK, FLAGS])
-intrinsic("export_row_amd", [0, 1], indices=[BASE, WRITE_MASK, FLAGS])
+intrinsic("export_amd", [0], indices=[TARGET, ENABLED_CHANNELS, FLAGS])
+intrinsic("export_row_amd", [0, 1], indices=[TARGET, ENABLED_CHANNELS, FLAGS])
 
 # Export dual source blend outputs with swizzle operation
 # src[] = { mrt0, mrt1 }
-intrinsic("export_dual_src_blend_amd", [0, 0], indices=[WRITE_MASK])
+intrinsic("export_dual_src_blend_amd", [0, 0], indices=[ENABLED_CHANNELS])
 
 # Alpha test reference value
 system_value("alpha_reference_amd", 1)
@@ -2532,6 +2582,12 @@ intrinsic("store_per_primitive_payload_intel", src_comp=[-1], indices=[BASE, COM
 # Number of data items being operated on for a SIMD program.
 system_value("simd_width_intel", 1)
 
+# Address delivered in R0[31:6] compute, mesh & task shaders on Gfx12.5+
+# coming from
+# (3DSTATE_MESH_SHADER_DATA|3DSTATE_TASK_SHADER_DATA|COMPUTE_WALKER)
+# IndirectDataStartAddress
+system_value("indirect_address_intel", 1)
+
 # Load a relocatable 32-bit value
 intrinsic("load_reloc_const_intel", dest_comp=1, bit_sizes=[32],
           indices=[PARAM_IDX, BASE], flags=[CAN_ELIMINATE, CAN_REORDER])
@@ -2585,7 +2641,7 @@ store("shared_block_intel", [1], [BASE, ALIGN_MUL, ALIGN_OFFSET])
 
 # src[] = { address }.
 load("global_constant_uniform_block_intel", [1],
-     [ACCESS, ALIGN_MUL, ALIGN_OFFSET], [CAN_ELIMINATE, CAN_REORDER])
+     [ACCESS, ALIGN_MUL, ALIGN_OFFSET, BASE], [CAN_ELIMINATE, CAN_REORDER])
 
 # Similar to load_global_const_block_intel but for UBOs
 # offset should be uniform
@@ -2632,6 +2688,12 @@ store("urb_vec4_intel", [1, 1, 1], [BASE])
 #
 # src[] = { value, address }.
 store("urb_lsc_intel", [1], [BASE])
+
+# Load from indirect address delivered in the thread payloads in compute, mesh
+# & task shaders on Gfx12.5+
+#
+# src[] = { offset }.
+load("shader_indirect_data_intel", [1], [BASE, RANGE, ALIGN_MUL, ALIGN_OFFSET])
 
 # Return a handle for a shader's input or output URB memory.
 system_value("urb_input_handle_intel", 1)
@@ -2745,8 +2807,15 @@ intrinsic("ldcx_nv", dest_comp=0, src_comp=[1, 1],
           flags=[CAN_ELIMINATE, CAN_REORDER])
 intrinsic("load_sysval_nv", dest_comp=1, src_comp=[], bit_sizes=[32, 64],
           indices=[ACCESS, BASE, DIVERGENT], flags=[CAN_ELIMINATE])
-intrinsic("isberd_nv", dest_comp=1, src_comp=[1], bit_sizes=[32],
-          flags=[CAN_ELIMINATE, CAN_REORDER])
+# src[] = { offset }.
+# FLAGS is struct nak_nir_isbe_flags
+intrinsic("isberd_nv", dest_comp=1, src_comp=[1], bit_sizes=[8, 16, 32],
+          indices=[BASE, RANGE_BASE, RANGE, FLAGS, ACCESS],
+          flags=[CAN_ELIMINATE])
+# src[] = { data, offset }.
+# FLAGS is struct nak_nir_isbe_flags
+intrinsic("isbewr_nv", src_comp=[0, 1],
+          indices=[BASE, RANGE_BASE, RANGE, FLAGS, ACCESS], flags=[])
 intrinsic("vild_nv", dest_comp=1, src_comp=[1], bit_sizes=[32],
           flags=[CAN_ELIMINATE, CAN_REORDER],
           indices=[BASE])

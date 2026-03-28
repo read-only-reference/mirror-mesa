@@ -37,7 +37,7 @@ struct ac_llvm_flow {
  * The caller is responsible for initializing ctx::module and ctx::builder.
  */
 void ac_llvm_context_init(struct ac_llvm_context *ctx, struct ac_llvm_compiler *compiler,
-                          const struct ac_cu_info *info, enum ac_float_mode float_mode,
+                          const struct ac_compiler_info *info, enum ac_float_mode float_mode,
                           unsigned wave_size, bool exports_color_null, bool exports_mrtz)
 {
    ctx->context = LLVMContextCreate();
@@ -418,7 +418,7 @@ void ac_build_optimization_barrier(struct ac_llvm_context *ctx, LLVMValueRef *pg
    } else {
       LLVMTypeRef old_type = LLVMTypeOf(*pgpr);
 
-      if (old_type == ctx->i1)
+      if (old_type == ctx->i1 || old_type == ctx->i8)
          *pgpr = LLVMBuildZExt(builder, *pgpr, ctx->i32, "");
 
       if (old_type == LLVMVectorType(ctx->i16, 3))
@@ -430,7 +430,7 @@ void ac_build_optimization_barrier(struct ac_llvm_context *ctx, LLVMValueRef *pg
 
       *pgpr = LLVMBuildCall2(builder, ftype, inlineasm, pgpr, 1, "");
 
-      if (old_type == ctx->i1)
+      if (old_type == ctx->i1 || old_type == ctx->i8)
          *pgpr = LLVMBuildTrunc(builder, *pgpr, old_type, "");
 
       if (old_type == LLVMVectorType(ctx->i16, 3))
@@ -492,42 +492,20 @@ LLVMValueRef ac_build_vote_any(struct ac_llvm_context *ctx, LLVMValueRef value)
                         "");
 }
 
-LLVMValueRef ac_build_varying_gather_values(struct ac_llvm_context *ctx, LLVMValueRef *values,
-                                            unsigned value_count, unsigned component)
-{
-   LLVMValueRef vec = NULL;
-
-   if (value_count == 1) {
-      return values[component];
-   } else if (!value_count)
-      UNREACHABLE("value_count is 0");
-
-   for (unsigned i = component; i < value_count + component; i++) {
-      LLVMValueRef value = values[i];
-
-      if (i == component)
-         vec = LLVMGetUndef(LLVMVectorType(LLVMTypeOf(value), value_count));
-      LLVMValueRef index = LLVMConstInt(ctx->i32, i - component, false);
-      vec = LLVMBuildInsertElement(ctx->builder, vec, value, index, "");
-   }
-   return vec;
-}
-
-LLVMValueRef ac_build_gather_values_extended(struct ac_llvm_context *ctx, LLVMValueRef *values,
-                                             unsigned value_count, unsigned value_stride,
-                                             bool always_vector)
+LLVMValueRef ac_build_gather_values(struct ac_llvm_context *ctx, LLVMValueRef *values,
+                                    unsigned value_count)
 {
    LLVMBuilderRef builder = ctx->builder;
    LLVMValueRef vec = NULL;
    unsigned i;
 
-   if (value_count == 1 && !always_vector) {
+   if (value_count == 1) {
       return values[0];
    } else if (!value_count)
       UNREACHABLE("value_count is 0");
 
    for (i = 0; i < value_count; i++) {
-      LLVMValueRef value = values[i * value_stride];
+      LLVMValueRef value = values[i];
 
       if (!i)
          vec = LLVMGetUndef(LLVMVectorType(LLVMTypeOf(value), value_count));
@@ -535,12 +513,6 @@ LLVMValueRef ac_build_gather_values_extended(struct ac_llvm_context *ctx, LLVMVa
       vec = LLVMBuildInsertElement(builder, vec, value, index, "");
    }
    return vec;
-}
-
-LLVMValueRef ac_build_gather_values(struct ac_llvm_context *ctx, LLVMValueRef *values,
-                                    unsigned value_count)
-{
-   return ac_build_gather_values_extended(ctx, values, value_count, 1, false);
 }
 
 LLVMValueRef ac_build_concat(struct ac_llvm_context *ctx, LLVMValueRef a, LLVMValueRef b)
@@ -840,10 +812,24 @@ LLVMValueRef ac_build_load_to_sgpr(struct ac_llvm_context *ctx, struct ac_llvm_p
    return ac_build_load_custom(ctx, ptr.t, ptr.v, index, true, true, true);
 }
 
-static unsigned get_cache_flags(struct ac_llvm_context *ctx, enum gl_access_qualifier access,
-                                enum ac_access_type type)
+unsigned ac_get_llvm_cache_flags(struct ac_llvm_context *ctx, enum gl_access_qualifier access,
+                                 enum ac_access_type type)
 {
-   return ac_get_hw_cache_flags(ctx->gfx_level, access, type).value;
+   union ac_hw_cache_flags flags = ac_get_hw_cache_flags(ctx->gfx_level, access, type);
+   unsigned llvm_flags;
+
+   if (ctx->gfx_level >= GFX12) {
+      llvm_flags = (uint32_t)flags.gfx12.temporal_hint |
+                   ((uint32_t)flags.gfx12.scope << 3) |
+                   ((uint32_t)flags.gfx12.swizzled << 6);
+   } else {
+      llvm_flags = (uint32_t)!!(flags.value & ac_glc) |
+                   ((uint32_t)!!(flags.value & ac_slc) << 1) |
+                   ((uint32_t)!!(flags.value & ac_dlc) << 2) |
+                   ((uint32_t)!!(flags.value & ac_swizzled) << 3);
+   }
+
+   return llvm_flags;
 }
 
 static void ac_build_buffer_store_common(struct ac_llvm_context *ctx, LLVMValueRef rsrc,
@@ -860,7 +846,7 @@ static void ac_build_buffer_store_common(struct ac_llvm_context *ctx, LLVMValueR
       args[idx++] = vindex ? vindex : ctx->i32_0;
    args[idx++] = voffset ? voffset : ctx->i32_0;
    args[idx++] = soffset ? soffset : ctx->i32_0;
-   args[idx++] = LLVMConstInt(ctx->i32, get_cache_flags(ctx, access, type), 0);
+   args[idx++] = LLVMConstInt(ctx->i32, ac_get_llvm_cache_flags(ctx, access, type), 0);
    const char *indexing_kind = vindex ? "struct" : "raw";
    char name[256], type_name[8];
 
@@ -924,7 +910,7 @@ static LLVMValueRef ac_build_buffer_load_common(struct ac_llvm_context *ctx, LLV
       args[idx++] = vindex;
    args[idx++] = voffset ? voffset : ctx->i32_0;
    args[idx++] = soffset ? soffset : ctx->i32_0;
-   args[idx++] = LLVMConstInt(ctx->i32, get_cache_flags(ctx, access, ac_access_type_load), 0);
+   args[idx++] = LLVMConstInt(ctx->i32, ac_get_llvm_cache_flags(ctx, access, ac_access_type_load), 0);
    unsigned return_channels =
       !ac_has_vec3_support(ctx->gfx_level, use_format) && num_channels == 3 ? 4 : num_channels;
    const char *indexing_kind = vindex ? "struct" : "raw";
@@ -1010,7 +996,8 @@ LLVMValueRef ac_build_buffer_load(struct ac_llvm_context *ctx, LLVMValueRef rsrc
          LLVMValueRef args[3] = {
             rsrc,
             offset,
-            LLVMConstInt(ctx->i32, get_cache_flags(ctx, access | ACCESS_SMEM_AMD, ac_access_type_load), 0),
+            LLVMConstInt(ctx->i32, ac_get_llvm_cache_flags(ctx, access | ACCESS_SMEM_AMD,
+                                                           ac_access_type_load), 0),
          };
          result[i] = ac_build_intrinsic(ctx, name, channel_type, args, 3, AC_ATTR_INVARIANT_LOAD);
       }
@@ -1063,7 +1050,7 @@ static LLVMValueRef ac_build_tbuffer_load(struct ac_llvm_context *ctx, LLVMValue
    args[idx++] = voffset ? voffset : ctx->i32_0;
    args[idx++] = soffset ? soffset : ctx->i32_0;
    args[idx++] = LLVMConstInt(ctx->i32, tbuffer_format, 0);
-   args[idx++] = LLVMConstInt(ctx->i32, get_cache_flags(ctx, access, ac_access_type_load), 0);
+   args[idx++] = LLVMConstInt(ctx->i32, ac_get_llvm_cache_flags(ctx, access, ac_access_type_load), 0);
    const char *indexing_kind = vindex ? "struct" : "raw";
    char name[256], type_name[8];
 
@@ -1680,10 +1667,9 @@ LLVMValueRef ac_build_image_opcode(struct ac_llvm_context *ctx, struct ac_image_
 
    args[num_args++] = a->tfe ? ctx->i32_1 : ctx->i32_0; /* texfailctrl */
    args[num_args++] = LLVMConstInt(
-      ctx->i32, get_cache_flags(ctx,
-                                a->access,
-                                (atomic ? ac_access_type_atomic :
-                                 load ? ac_access_type_load : ac_access_type_store_subdword)),
+      ctx->i32, ac_get_llvm_cache_flags(ctx, a->access,
+                                        (atomic ? ac_access_type_atomic :
+                                                  load ? ac_access_type_load : ac_access_type_store_subdword)),
       false);
 
    const char *name;
@@ -3560,7 +3546,7 @@ struct ac_llvm_pointer ac_build_main(const struct ac_shader_args *args, struct a
 
    /* Enable denormals for FP16 and FP64, disable denormals for FP32 */
 #if LLVM_VERSION_MAJOR >= 23
-   LLVMAttributeRef fpenv_attr = LLVMCreateDenormalFPEnvAttribute(ctx,
+   LLVMAttributeRef fpenv_attr = LLVMCreateDenormalFPEnvAttribute(ctx->context,
                                     LLVMDenormalModeKindIEEE,
                                     LLVMDenormalModeKindIEEE,
                                     LLVMDenormalModeKindPreserveSign,

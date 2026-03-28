@@ -670,7 +670,7 @@ if with_gallium_d3d12 or with_microsoft_clc or with_microsoft_vk or (with_any_vk
   dep_dxheaders = dependency('directx-headers', required : false)
   if not dep_dxheaders.found()
     dep_dxheaders = dependency('DirectX-Headers',
-      version : '>= 1.618.1',
+      version : '>= 1.619.1',
       fallback : ['DirectX-Headers', 'dep_dxheaders'],
       required : with_gallium_d3d12 or with_microsoft_vk
     )
@@ -819,6 +819,14 @@ if with_gallium_rusticl
   if not with_gallium
     error('rusticl requires at least one gallium driver.')
   endif
+endif
+
+# Do built drivers need to include gfx/compute queues support?
+# TODO: add a separate option to allow to build a VA-API driver without the features
+# that depend on these queues. When added a lightweight decode-only VA-API driver could be built
+with_gfx_compute = with_any_opengl or get_option('vulkan-drivers').length() > 0 or with_gallium_rusticl or with_gallium_va
+if with_gfx_compute
+  pre_args += '-DHAVE_GFX_COMPUTE'
 endif
 
 with_virtgpu_kumquat = get_option('virtgpu_kumquat') and with_gfxstream_vk
@@ -1024,12 +1032,22 @@ if get_option('allow-kcmp') \
   pre_args += '-DALLOW_KCMP'
 endif
 
-# On Windows, a venv has no versioned aliased to 'python'.
-prog_python = find_program('python3', 'python', version : '>= 3.9')
+# Find a python executable that meets our version requirement.
+# - On Windows, a venv has no versioned aliased to 'python'.
+# - On RHEL 9, python3 is 3.9, so we must use python3.12.
+python_version_req = '>= 3.10'
+python_exec_list = ['python3.16', 'python3.15', 'python3.14', 'python3.13',
+                    'python3.12', 'python3.11', 'python3.10', 'python3', 'python']
 
-has_mako = run_command(
-  prog_python, '-c',
-  '''
+foreach p : python_exec_list
+  prog_python = find_program(p, required : false, version : python_version_req)
+  if not prog_python.found()
+    continue
+  endif
+
+  has_mako = run_command(
+    prog_python, '-c',
+    '''
 import sys
 
 try:
@@ -1048,6 +1066,21 @@ except:
 if Version(mako.__version__) < Version("0.8.0"):
     sys.exit(1)
 ''', check: false)
+  if has_mako.returncode() != 0
+    continue
+  endif
+
+  has_yaml = run_command(prog_python, '-c', 'import yaml', check: false)
+  if has_yaml.returncode() != 0
+    continue
+  endif
+
+  break
+endforeach
+
+if not prog_python.found()
+  error('Python ' + python_version_req + ' not found')
+endif
 
 if has_mako.returncode() == 1
   error('Python (3.x) mako module >= 0.8.0 required to build mesa.')
@@ -1055,11 +1088,6 @@ elif has_mako.returncode() == 2
   error('One of Python (3.x) packaging or distutils module is required.')
 endif
 
-has_yaml = run_command(
-  prog_python, '-c',
-  '''
-import yaml
-  ''', check: false)
 if has_yaml.returncode() != 0
   error('Python (3.x) yaml module (PyYAML) required to build mesa.')
 endif
@@ -1982,6 +2010,9 @@ if with_clc
     if dep_llvm.version().version_compare('>= 18.0')
       clang_modules += 'clangAPINotes'
     endif
+    if dep_llvm.version().version_compare('>= 22.0')
+      clang_modules += ['clangAnalysisLifetimeSafety', 'clangOptions']
+    endif
 
     dep_clang = []
     foreach m : clang_modules
@@ -2090,6 +2121,8 @@ else
   prog_flex = find_program('flex', required : needs_flex_bison, disabler : true)
   prog_flex_cpp = prog_flex
 endif
+
+prog_ln = find_program('ln', required : false)
 
 _libunwind = get_option('libunwind') \
   .require(not with_platform_android, error_message : 'Android requires the use of the backtrace library, not libunwind')

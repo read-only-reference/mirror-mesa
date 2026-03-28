@@ -729,7 +729,7 @@ if (nir_is_rounding_mode_rtz(execution_mode, bit_size)) {
 binop("iadd", tint, _2src_commutative + associative, "(uint64_t)src0 + (uint64_t)src1")
 binop("iadd_sat", tint, _2src_commutative, """
       util_add_check_overflow({dest_type}, src0, src1) ?
-         (src1 < 0 ? u_intN_max(bit_size) : u_uintN_max(bit_size)) : (src0 + src1)
+         (src1 < 0 ? u_intN_min(bit_size) : u_intN_max(bit_size)) : (src0 + src1)
 """, "", True)
 binop("uadd_sat", tuint, _2src_commutative,
       "util_add_check_overflow({dest_type}, src0, src1) ? u_uintN_max(sizeof(src0) * 8) : (src0 + src1)",
@@ -957,15 +957,6 @@ binop_reduce_all_sizes("ball_iequal",  1, tint, "{src0} == {src1}",
                        "{src0} && {src1}", "{src}")
 binop_reduce_all_sizes("bany_inequal", 1, tint, "{src0} != {src1}",
                        "{src0} || {src1}", "{src}")
-
-# non-integer-aware GLSL-style comparisons that return 0.0 or 1.0
-
-binop_reduce("fall_equal",  1, tfloat32, tfloat32, "{src0} == {src1}",
-             "{src0} && {src1}", "{src} ? 1.0f : 0.0f",
-             valid_fp_math_ctrl = preserve_sz_inf_nan)
-binop_reduce("fany_nequal", 1, tfloat32, tfloat32, "{src0} != {src1}",
-             "{src0} || {src1}", "{src} ? 1.0f : 0.0f",
-             valid_fp_math_ctrl = preserve_sz_inf_nan)
 
 # These comparisons for integer-less hardware return 1.0 and 0.0 for true
 # and false respectively

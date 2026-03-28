@@ -76,20 +76,6 @@ genX(cmd_buffer_ensure_cfe_state)(struct anv_cmd_buffer *cmd_buffer,
       case 2048: cfe.StackIDControl = StackIDs2048; break;
       default:   UNREACHABLE("invalid stack_ids value");
       }
-
-#if INTEL_WA_14021821874_GFX_VER || INTEL_WA_14018813551_GFX_VER || INTEL_WA_14026600921_GFX_VER
-      /* Wa_14021821874, Wa_14018813551, Wa_14026600921:
-       *
-       * "StackIDControlOverride_RTGlobals = 0 (i.e. 2k)". We
-       * already set stack size per ray to 64 in brw_nir_lower_rt_intrinsics
-       * as the workaround also requires.
-       */
-      if (intel_needs_workaround(cmd_buffer->device->info, 14021821874) ||
-          intel_needs_workaround(cmd_buffer->device->info, 14018813551) ||
-          intel_needs_workaround(cmd_buffer->device->info, 14026600921))
-         cfe.StackIDControl = StackIDs2048;
-#endif
-
 #endif
 
       cfe.OverDispatchControl = 2; /* 50% overdispatch */
@@ -114,7 +100,7 @@ cmd_buffer_flush_compute_state(struct anv_cmd_buffer *cmd_buffer)
                               comp_state->shader->prog_data->total_shared > 0 ?
                               device->l3_slm_config : device->l3_config);
 
-   genX(cmd_buffer_update_color_aux_op(cmd_buffer, ISL_AUX_OP_NONE));
+   genX(cmd_buffer_update_color_aux_op)(cmd_buffer, ANV_COLOR_AUX_OP_CLASS_NONE);
 
    genX(flush_descriptor_buffers)(cmd_buffer, &comp_state->base,
                                   VK_SHADER_STAGE_COMPUTE_BIT);
@@ -478,6 +464,36 @@ fill_inline_params(struct GENX(COMPUTE_WALKER_BODY) *body,
 }
 
 static inline void
+cmd_buffer_post_dispatch_wa(struct anv_cmd_buffer *cmd_buffer)
+{
+   genX(cmd_buffer_post_dispatch_wa)(cmd_buffer);
+
+   struct anv_cmd_compute_state *comp_state = &cmd_buffer->state.compute;
+
+   /* Workaround WaW hazards in applications that clear a buffer and start
+    * writing to it immediately without a barrier between the clear & write
+    * operations.
+    */
+   if (cmd_buffer->device->physical->instance->barrier_post_typed_clear_shader &&
+       (comp_state->shader->bind_map.inferred_behavior & ANV_PIPELINE_BEHAVIOR_CLEAR_TYPED)) {
+      anv_add_pending_pipe_bits(cmd_buffer,
+                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                                ANV_PIPE_HDC_PIPELINE_FLUSH_BIT,
+                                "clear shader typed L1 flush app wa");
+   }
+   if (cmd_buffer->device->physical->instance->barrier_post_untyped_clear_shader &&
+       (comp_state->shader->bind_map.inferred_behavior & ANV_PIPELINE_BEHAVIOR_CLEAR_UNTYPED)) {
+      anv_add_pending_pipe_bits(cmd_buffer,
+                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                                ANV_PIPE_UNTYPED_DATAPORT_CACHE_FLUSH_BIT |
+                                ANV_PIPE_HDC_PIPELINE_FLUSH_BIT,
+                                "clear shader untyped L1 flush app wa");
+   }
+}
+
+static inline void
 emit_indirect_compute_walker(struct anv_cmd_buffer *cmd_buffer,
                              const struct brw_cs_prog_data *prog_data,
                              struct anv_address indirect_addr)
@@ -531,10 +547,8 @@ emit_indirect_compute_walker(struct anv_cmd_buffer *cmd_buffer,
                                                 indirect_addr.bo, 0),
       );
 
-   genX(cmd_buffer_post_dispatch_wa)(cmd_buffer);
+   cmd_buffer_post_dispatch_wa(cmd_buffer);
 }
-
-
 
 static inline void
 emit_compute_walker(struct anv_cmd_buffer *cmd_buffer,
@@ -595,7 +609,7 @@ emit_compute_walker(struct anv_cmd_buffer *cmd_buffer,
 #endif
       );
 
-   genX(cmd_buffer_post_dispatch_wa)(cmd_buffer);
+   cmd_buffer_post_dispatch_wa(cmd_buffer);
 }
 
 #else /* #if GFX_VERx10 >= 125 */
@@ -987,7 +1001,7 @@ cmd_buffer_emit_rt_dispatch_globals(struct anv_cmd_buffer *cmd_buffer,
          .bo = rt->scratch.bo,
          .offset = rt->scratch.layout.ray_stack_start,
       },
-#if GFX_VERx10 == 300
+#if GFX_VERx10 >= 300
       .CallStackHandler   = anv_shader_internal_get_handler(
          cmd_buffer->device->rt_trivial_return, 0),
 #else
@@ -1055,7 +1069,7 @@ cmd_buffer_emit_rt_dispatch_globals_indirect(struct anv_cmd_buffer *cmd_buffer,
          .bo = rt->scratch.bo,
          .offset = rt->scratch.layout.ray_stack_start,
       },
-#if GFX_VERx10 == 300
+#if GFX_VERx10 >= 300
       .CallStackHandler   = anv_shader_internal_get_handler(
          cmd_buffer->device->rt_trivial_return, 0),
 #else
@@ -1144,9 +1158,11 @@ cmd_buffer_trace_rays(struct anv_cmd_buffer *cmd_buffer,
 
    trace_intel_begin_rays(&cmd_buffer->trace);
 
+   cmd_buffer->state.compute.trace_rays_active = true;
+
    genX(cmd_buffer_config_l3)(cmd_buffer, device->l3_config);
 
-   genX(cmd_buffer_update_color_aux_op(cmd_buffer, ISL_AUX_OP_NONE));
+   genX(cmd_buffer_update_color_aux_op)(cmd_buffer, ANV_COLOR_AUX_OP_CLASS_NONE);
 
    genX(flush_descriptor_buffers)(cmd_buffer, &rt->base,
                                   ANV_RT_STAGE_BITS);
@@ -1304,6 +1320,11 @@ cmd_buffer_trace_rays(struct anv_cmd_buffer *cmd_buffer,
       btd.BTDMidthreadpreemption = false;
 #endif
 
+#if GFX_VER >= 20
+      /* TODO: We can tune this value specific to apps. */
+      btd.ControlsthemaximumnumberofoutstandingRayQueriesperSS =
+         RAYS_QUERIES_OUTSTANDING_1024;
+#endif
 #if GFX_VER >= 30
       btd.RTMemStructures64bModeEnable = true;
 #endif

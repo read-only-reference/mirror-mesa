@@ -218,7 +218,7 @@ radv_pipeline_stage_init(VkPipelineCreateFlags2 pipeline_flags, const VkPipeline
 
    radv_shader_layout_init(pipeline_layout, out_stage->stage, &out_stage->layout);
 
-   vk_pipeline_hash_shader_stage(pipeline_flags, sinfo, NULL, out_stage->shader_sha1);
+   vk_pipeline_hash_shader_stage(pipeline_flags, sinfo, NULL, out_stage->shader_blake3);
 }
 
 void
@@ -250,6 +250,7 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
 {
    const struct radv_physical_device *pdev = radv_device_physical(device);
    enum amd_gfx_level gfx_level = pdev->info.gfx_level;
+   const bool use_llvm = pdev->use_llvm;
    bool progress;
 
    /* Wave and workgroup size should already be filled. */
@@ -263,7 +264,6 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
    }
 
    /* LLVM could support more of these in theory. */
-   bool use_llvm = radv_use_llvm_for_stage(pdev, stage->stage);
    radv_nir_opt_tid_function_options tid_options = {
       .use_masked_swizzle_amd = true,
       .use_dpp16_shift_amd = !use_llvm && gfx_level >= GFX8,
@@ -321,7 +321,7 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
          NIR_PASS(_, stage->nir, nir_opt_non_uniform_access);
       }
 
-      if (!radv_use_llvm_for_stage(pdev, stage->stage)) {
+      if (!use_llvm) {
          nir_lower_non_uniform_access_options options = {
             .types = lower_non_uniform_access_types,
             .callback = &non_uniform_access_callback,
@@ -336,15 +336,14 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
    if (progress)
       constant_fold_for_push_const = true;
 
-   NIR_PASS(
-      _, stage->nir, ac_nir_lower_image_tex,
-      &(ac_nir_lower_image_tex_options){
-         .gfx_level = gfx_level,
-         .lower_array_layer_round_even = !pdev->info.cu_info.conformant_trunc_coord || pdev->cache_key.disable_trunc_coord,
-         .fix_derivs_in_divergent_cf =
-            stage->stage == MESA_SHADER_FRAGMENT && !radv_use_llvm_for_stage(pdev, stage->stage),
-         .max_wqm_vgprs = 64, // TODO: improve spiller and RA support for linear VGPRs
-      });
+   NIR_PASS(_, stage->nir, ac_nir_lower_image_tex,
+            &(ac_nir_lower_image_tex_options){
+               .gfx_level = gfx_level,
+               .lower_array_layer_round_even =
+                  !pdev->info.compiler_info.conformant_trunc_coord && !pdev->cache_key.disable_trunc_coord,
+               .fix_derivs_in_divergent_cf = stage->stage == MESA_SHADER_FRAGMENT && !use_llvm,
+               .max_wqm_vgprs = 64, // TODO: improve spiller and RA support for linear VGPRs
+            });
 
    if (stage->nir->info.uses_resource_info_query)
       NIR_PASS(_, stage->nir, ac_nir_lower_resinfo, gfx_level);
@@ -409,7 +408,7 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
          ac_nir_lower_legacy_gs_options options = {
             .has_gen_prim_query = false,
             .has_pipeline_stats_query = false,
-            .gfx_level = pdev->info.gfx_level,
+            .gfx_level = gfx_level,
             .export_clipdist_mask = stage->info.outinfo.clip_dist_mask | stage->info.outinfo.cull_dist_mask,
             .param_offsets = stage->info.outinfo.vs_output_param_offset,
             .has_param_exports = stage->info.outinfo.param_exports,
@@ -425,7 +424,7 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
    } else if (stage->stage == MESA_SHADER_FRAGMENT) {
       ac_nir_lower_ps_late_options late_options = {
          .gfx_level = gfx_level,
-         .use_aco = !radv_use_llvm_for_stage(pdev, stage->stage),
+         .use_aco = !use_llvm,
          .bc_optimize_for_persp = G_0286CC_PERSP_CENTER_ENA(stage->info.ps.spi_ps_input_ena) &&
                                   G_0286CC_PERSP_CENTROID_ENA(stage->info.ps.spi_ps_input_ena),
          .bc_optimize_for_linear = G_0286CC_LINEAR_CENTER_ENA(stage->info.ps.spi_ps_input_ena) &&
@@ -438,7 +437,7 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
       };
 
       if (!late_options.no_color_export) {
-         late_options.dual_src_blend_swizzle = gfx_state->ps.epilog.mrt0_is_dual_src && gfx_level >= GFX11;
+         late_options.dual_src_blend = gfx_state->ps.epilog.mrt0_is_dual_src;
          late_options.color_is_int8 = gfx_state->ps.epilog.color_is_int8;
          late_options.color_is_int10 = gfx_state->ps.epilog.color_is_int10;
          late_options.enable_mrt_output_nan_fixup =
@@ -470,7 +469,7 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
    /* This must be after lowering resources to descriptor loads and before lowering intrinsics
     * to args and lowering int64.
     */
-   if (!radv_use_llvm_for_stage(pdev, stage->stage))
+   if (!use_llvm)
       ac_nir_optimize_uniform_atomics(stage->nir);
 
    NIR_PASS(_, stage->nir, nir_opt_uniform_subgroup,
@@ -491,11 +490,12 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
    NIR_PASS(_, stage->nir, ac_nir_lower_intrinsics_to_args, &stage->args.ac,
             &(ac_nir_lower_intrinsics_to_args_options){
                .gfx_level = gfx_level,
-               .has_ls_vgpr_init_bug = pdev->info.cu_info.has_ls_vgpr_init_bug && gfx_state && !gfx_state->vs.has_prolog,
+               .has_ls_vgpr_init_bug =
+                  pdev->info.compiler_info.has_ls_vgpr_init_bug && gfx_state && !gfx_state->vs.has_prolog,
                .hw_stage = radv_select_hw_stage(&stage->info, gfx_level),
                .wave_size = stage->info.wave_size,
                .workgroup_size = stage->info.workgroup_size,
-               .use_llvm = radv_use_llvm_for_stage(pdev, stage->stage),
+               .use_llvm = use_llvm,
                .load_grid_size_from_user_sgpr = device->load_grid_size_from_user_sgpr,
             });
    NIR_PASS(_, stage->nir, radv_nir_lower_abi, gfx_level, stage, gfx_state, pdev->info.address32_hi);
@@ -506,6 +506,7 @@ radv_postprocess_nir(struct radv_device *device, const struct radv_graphics_stat
       NIR_PASS(_, stage->nir, nir_opt_copy_prop);
       NIR_PASS(_, stage->nir, nir_opt_constant_folding);
       NIR_PASS(_, stage->nir, nir_opt_cse);
+      NIR_PASS(_, stage->nir, nir_opt_if, nir_opt_if_optimize_phi_true_false);
       NIR_PASS(_, stage->nir, nir_opt_shrink_vectors, true);
 
       NIR_PASS(_, stage->nir, ac_nir_flag_smem_for_loads, gfx_level, use_llvm);
@@ -1019,7 +1020,7 @@ radv_GetPipelineExecutableInternalRepresentationsKHR(
    /* backend IR */
    if (p < end) {
       p->isText = true;
-      if (radv_use_llvm_for_stage(pdev, stage)) {
+      if (pdev->use_llvm) {
          VK_COPY_STR(p->name, "LLVM IR");
          VK_COPY_STR(p->description, "The LLVM IR after some optimizations");
       } else {
@@ -1137,23 +1138,23 @@ radv_copy_shader_stage_create_info(struct radv_device *device, uint32_t stageCou
 
 void
 radv_pipeline_hash(const struct radv_device *device, const struct radv_pipeline_layout *pipeline_layout,
-                   struct mesa_sha1 *ctx)
+                   blake3_hasher *ctx)
 {
-   _mesa_sha1_update(ctx, device->cache_hash, sizeof(device->cache_hash));
+   _mesa_blake3_update(ctx, device->cache_hash, sizeof(device->cache_hash));
    if (pipeline_layout)
-      _mesa_sha1_update(ctx, pipeline_layout->hash, sizeof(pipeline_layout->hash));
+      _mesa_blake3_update(ctx, pipeline_layout->hash, sizeof(pipeline_layout->hash));
 }
 
 void
 radv_pipeline_hash_shader_stage(VkPipelineCreateFlags2 pipeline_flags, const VkPipelineShaderStageCreateInfo *sinfo,
-                                const struct radv_shader_stage_key *stage_key, struct mesa_sha1 *ctx)
+                                const struct radv_shader_stage_key *stage_key, blake3_hasher *ctx)
 {
-   unsigned char shader_sha1[SHA1_DIGEST_LENGTH];
+   unsigned char shader_blake3[BLAKE3_KEY_LEN];
 
-   vk_pipeline_hash_shader_stage(pipeline_flags, sinfo, NULL, shader_sha1);
+   vk_pipeline_hash_shader_stage(pipeline_flags, sinfo, NULL, shader_blake3);
 
-   _mesa_sha1_update(ctx, shader_sha1, sizeof(shader_sha1));
-   _mesa_sha1_update(ctx, stage_key, sizeof(*stage_key));
+   _mesa_blake3_update(ctx, shader_blake3, sizeof(shader_blake3));
+   _mesa_blake3_update(ctx, stage_key, sizeof(*stage_key));
 }
 
 static void

@@ -545,6 +545,10 @@ typedef struct {
     * useless double fills */
    bool no_spill;
 
+   /* Tags the gl_PointSize memory write, this is used if we want to
+    * create a variant without psiz writes */
+   bool is_psiz_write;
+
    /* On Bifrost: A value of bi_table to override the table, inducing a
     * DTSEL_IMM pair if nonzero.
     *
@@ -633,6 +637,7 @@ typedef struct {
 
       struct {
          enum bi_seg seg;       /* LOAD, STORE, SEG_ADD, SEG_SUB */
+         enum va_memory_access mem_access; /* LOAD, STORE, LD_CVT, ST_CVT */
          bool preserve_null;    /* SEG_ADD, SEG_SUB */
          enum bi_extend extend; /* LOAD, IMUL */
       };

@@ -5,6 +5,7 @@ libpanfrost_compiler_files = files(
   'pan_compiler.c',
   'pan_compiler.h',
   'pan_nir_collect_varyings.c',
+  'pan_nir_lower_bool_to_bitsize.c',
   'pan_nir_lower_frag_coord_zw.c',
   'pan_nir_lower_framebuffer.c',
   'pan_nir_lower_fs_outputs.c',
@@ -15,8 +16,10 @@ libpanfrost_compiler_files = files(
   'pan_nir_lower_sample_position.c',
   'pan_nir_lower_store_component.c',
   'pan_nir_lower_texel_buffer_index.c',
+  'pan_nir_lower_varyings_io.c',
   'pan_nir_lower_vertex_id.c',
   'pan_nir_lower_xfb.c',
+  'pan_nir_resize_varying_io.c',
 )
 
 subdir('bifrost')

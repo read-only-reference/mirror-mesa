@@ -8,9 +8,6 @@ zink-lavapipe:
     - .deqp-test
     - .zink-lavapipe-test
   timeout: 15m  # base run time = 10m, but it's on the shared runners so it can go up
-  tags:
-    # FIXME: kvm is a hack, should not be needed
-    - $FDO_RUNNER_JOB_PRIORITY_TAG_X86_64_KVM
   variables:
     DEQP_SUITE: zink-lavapipe
     PIGLIT_NO_WINDOW: 1
@@ -73,6 +70,9 @@ zink-anv-adl:
     # We use gbm because its a copy of tgl job
     PIGLIT_PLATFORM: gbm
     FDO_CI_CONCURRENT: 6 # higher is too much, and leads to OOM
+    # Xe regression in 6.19
+    # https://gitlab.freedesktop.org/drm/xe/kernel/-/issues/7584
+    KERNEL_TAG: "v6.17-mesa-ddf6"
   parallel: 4
 
 # Manual full run when you want to double-check the full status.
@@ -173,14 +173,14 @@ zink-tu-a618:
     - .lava-arm64-test-gl
     - .zink-turnip-collabora-rules
     - .zink-test
-    - .lava-sc7180-trogdor-lazor-limozeen:arm64
+    - .lava-sc7180-trogdor-kingoftown:arm64
   variables:
     DEQP_SUITE: zink-tu-a618
     FLAKES_CHANNEL: "#freedreno-ci"
     HWCI_START_WESTON: 1
     GPU_VERSION: zink-tu-a618
     DRIVER_NAME: null  # Don't use freedreno skips
-    ZINK_DEBUG: optimal_keys,validation
+    ZINK_DEBUG: validation
   parallel: 3
 
 zink-tu-a618-traces:
@@ -220,7 +220,6 @@ zink-tu-a750:
     GPU_VERSION: zink-tu-a750
     HWCI_START_WESTON: 1
     DRIVER_NAME: null  # Don't use freedreno skips
-    ZINK_DEBUG: optimal_keys
 
 ############### Combined testing (GL, GLES, Piglit) on NVK / RADV
 zink-nvk-ga106-valve:

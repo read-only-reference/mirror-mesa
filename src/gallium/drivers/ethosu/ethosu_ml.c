@@ -23,8 +23,6 @@
 #include "ethosu_lower.h"
 #include "ethosu_ml.h"
 
-struct ethosu_block IFM_UBLOCK = {2, 2, 8};
-struct ethosu_block OFM_UBLOCK = {2, 2, 8};
 struct ethosu_block ARCH_OFM_BLOCK_MAX = {64, 32, 128};
 struct ethosu_block SUB_KERNEL_MAX = {8, 8, 65536};
 
@@ -57,13 +55,14 @@ ethosu_register_tensor(struct ethosu_subgraph *subgraph,
    new_tensor.shape.width = ptensor->dims[2];
    new_tensor.shape.depth = ptensor->dims[3];
    new_tensor.layout = ETHOSU_LAYOUT_NHWC;
+   new_tensor.type_size = ptensor->type_size;
    util_dynarray_append(&subgraph->tensors, new_tensor);
 }
 
-void
-ethosu_allocate_feature_map(struct ethosu_subgraph *subgraph, struct ethosu_feature_map *feature_map)
+unsigned
+ethosu_allocate_feature_map(struct ethosu_subgraph *subgraph, unsigned tensor_idx)
 {
-   struct ethosu_tensor *tensor = ethosu_find_tensor(subgraph, feature_map->tensor_idx);
+   struct ethosu_tensor *tensor = ethosu_find_tensor(subgraph, tensor_idx);
    unsigned size;
 
    if (tensor->layout == ETHOSU_LAYOUT_NHWC) {
@@ -74,19 +73,18 @@ ethosu_allocate_feature_map(struct ethosu_subgraph *subgraph, struct ethosu_feat
       assert(0 && "Unsupported layout");
       size = 0; // This should never happen
    }
+   size *= tensor->type_size;
 
    assert(tensor);
 
-   if (tensor->size > 0) {
-      feature_map->tiles.addresses[0] = tensor->offset;
-      return;
-   }
+   if (tensor->size > 0)
+      return tensor->offset;
 
    tensor->offset = subgraph->io_used;
    tensor->size = size;
    subgraph->io_used += ALIGN_POT(size, 16);
 
-   feature_map->tiles.addresses[0] = tensor->offset;
+   return tensor->offset;
 }
 
 struct ethosu_tensor *
@@ -137,50 +135,42 @@ ethosu_quantize_scale(double scale, uint32_t *shift)
    return quantized_scale;
 }
 
-static bool
-tensor_quantization_supported(struct pipe_tensor *tensor)
-{
-   /*
-    * Per-axis quantization not supported, for details see:
-    * https://ai.google.dev/edge/litert/models/quantization_spec#per-axis_vs_per-tensor
-    */
-   return tensor->scales == NULL && tensor->zero_points == NULL;
-}
-
 bool
 ethosu_ml_operation_supported(struct pipe_context *pcontext,
                               const struct pipe_ml_operation *operation)
 {
    bool supported = false;
 
+   if (operation->input_tensors[0]->type_size == 4 ||
+       operation->output_tensors[0]->type_size == 4)
+      return false;
+
    switch (operation->type) {
    case PIPE_ML_OPERATION_TYPE_CONVOLUTION: {
-      struct pipe_tensor *input_tensor = operation->input_tensors[0];
-      struct pipe_tensor *weight_tensor = operation->conv.weight_tensor;
-      struct pipe_tensor *bias_tensor = operation->conv.bias_tensor;
-      struct pipe_tensor *output_tensor = operation->output_tensors[0];
-
-      // Dilation and per-axis quantization not yet implemented
-      if (tensor_quantization_supported(input_tensor) &&
-          tensor_quantization_supported(weight_tensor) &&
-          tensor_quantization_supported(bias_tensor) &&
-          tensor_quantization_supported(output_tensor) &&
-          operation->conv.dilation_width_factor == 1 &&
+      /*
+       * Dilation is not yet implemented.
+       */
+      if (operation->conv.dilation_width_factor == 1 &&
           operation->conv.dilation_height_factor == 1)
          supported = true;
 
       break;
    }
    case PIPE_ML_OPERATION_TYPE_ADD:
-      supported = operation->input_tensors[0]->resource == NULL &&
-                  operation->input_tensors[1]->resource == NULL;
-      break;
    case PIPE_ML_OPERATION_TYPE_POOLING:
    case PIPE_ML_OPERATION_TYPE_STRIDED_SLICE:
    case PIPE_ML_OPERATION_TYPE_PAD:
-   case PIPE_ML_OPERATION_TYPE_RESIZE:
       supported = true;
       break;
+   case PIPE_ML_OPERATION_TYPE_RESIZE: {
+      /* NPU only supports 2x nearest neighbor upscaling */
+      struct pipe_tensor *input = operation->input_tensors[0];
+      struct pipe_tensor *output = operation->output_tensors[0];
+      bool is_2x_height = (output->dims[1] == 2 * input->dims[1]);
+      bool is_2x_width = (output->dims[2] == 2 * input->dims[2]);
+      supported = is_2x_height && is_2x_width;
+      break;
+   }
    case PIPE_ML_OPERATION_TYPE_CONCATENATION:
       supported = operation->conc.axis == 3 ||
                   operation->conc.axis == -1;
@@ -207,6 +197,21 @@ ethosu_ml_subgraph_create(struct pipe_context *pcontext,
    subgraph->tensors = UTIL_DYNARRAY_INIT;
    subgraph->operations = UTIL_DYNARRAY_INIT;
 
+   /* Allocate register state tracking arrays */
+   subgraph->cmd0_state = calloc(ETHOSU_MAX_REG_INDEX, sizeof(*subgraph->cmd0_state));
+   subgraph->cmd1_state = calloc(ETHOSU_MAX_REG_INDEX, sizeof(*subgraph->cmd1_state));
+   subgraph->cmd0_valid = calloc(ETHOSU_MAX_REG_INDEX, sizeof(bool));
+   subgraph->cmd1_valid = calloc(ETHOSU_MAX_REG_INDEX, sizeof(bool));
+   if (!subgraph->cmd0_state || !subgraph->cmd1_state ||
+       !subgraph->cmd0_valid || !subgraph->cmd1_valid) {
+      free(subgraph->cmd0_state);
+      free(subgraph->cmd1_state);
+      free(subgraph->cmd0_valid);
+      free(subgraph->cmd1_valid);
+      free(subgraph);
+      return NULL;
+   }
+
    ethosu_lower_graph(subgraph, poperations, count);
 
    ethosu_emit_cmdstream(subgraph);
@@ -228,6 +233,7 @@ ethosu_ml_subgraph_create(struct pipe_context *pcontext,
 
    if (subgraph->coefs_used > 0) {
       subgraph->coefs_rsrc = pipe_buffer_create(pscreen, 0, PIPE_USAGE_DEFAULT, subgraph->coefs_used);
+      assert(subgraph->coefs_rsrc != NULL);
       pipe_buffer_write(subgraph->base.context, subgraph->coefs_rsrc, 0, subgraph->coefs_used, subgraph->coefs);
 
       free(subgraph->coefs);
@@ -243,6 +249,7 @@ ethosu_ml_subgraph_create(struct pipe_context *pcontext,
    }
 
    subgraph->io_rsrc = pipe_buffer_create(pscreen, 0, PIPE_USAGE_DEFAULT, subgraph->io_used);
+   assert(subgraph->io_rsrc != NULL);
 
    return &subgraph->base;
 }
@@ -356,8 +363,18 @@ ethosu_ml_subgraph_destroy(struct pipe_context *pcontext,
    ret = drmIoctl(screen->fd, DRM_IOCTL_GEM_CLOSE, &arg);
    assert(ret >= 0);
 
+   util_dynarray_foreach (&subgraph->operations, struct ethosu_operation, operation) {
+      free(operation->kernel.scales);
+      free(operation->kernel.zero_points);
+   }
    util_dynarray_fini(&subgraph->operations);
+
    util_dynarray_fini(&subgraph->tensors);
+
+   free(subgraph->cmd0_state);
+   free(subgraph->cmd1_state);
+   free(subgraph->cmd0_valid);
+   free(subgraph->cmd1_valid);
 
    free(subgraph);
 }

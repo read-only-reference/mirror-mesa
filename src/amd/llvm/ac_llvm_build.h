@@ -130,7 +130,7 @@ struct ac_llvm_context {
    LLVMValueRef empty_md;
    LLVMValueRef three_md;
 
-   const struct ac_cu_info *info;
+   const struct ac_compiler_info *info;
    enum amd_gfx_level gfx_level;
 
    unsigned wave_size;
@@ -145,7 +145,7 @@ struct ac_llvm_context {
 };
 
 void ac_llvm_context_init(struct ac_llvm_context *ctx, struct ac_llvm_compiler *compiler,
-                          const struct ac_cu_info *info, enum ac_float_mode float_mode,
+                          const struct ac_compiler_info *info, enum ac_float_mode float_mode,
                           unsigned wave_size, bool exports_color_null, bool exports_mrtz);
 
 void ac_llvm_context_dispose(struct ac_llvm_context *ctx);
@@ -184,12 +184,6 @@ LLVMValueRef ac_build_vote_all(struct ac_llvm_context *ctx, LLVMValueRef value);
 
 LLVMValueRef ac_build_vote_any(struct ac_llvm_context *ctx, LLVMValueRef value);
 
-LLVMValueRef ac_build_varying_gather_values(struct ac_llvm_context *ctx, LLVMValueRef *values,
-                                            unsigned value_count, unsigned component);
-
-LLVMValueRef ac_build_gather_values_extended(struct ac_llvm_context *ctx, LLVMValueRef *values,
-                                             unsigned value_count, unsigned value_stride,
-                                             bool always_vector);
 LLVMValueRef ac_build_gather_values(struct ac_llvm_context *ctx, LLVMValueRef *values,
                                     unsigned value_count);
 
@@ -492,6 +486,9 @@ LLVMValueRef ac_build_is_inf_or_nan(struct ac_llvm_context *ctx, LLVMValueRef a)
 void ac_build_dual_src_blend_swizzle(struct ac_llvm_context *ctx,
                                      struct ac_export_args *mrt0,
                                      struct ac_export_args *mrt1);
+
+unsigned ac_get_llvm_cache_flags(struct ac_llvm_context *ctx, enum gl_access_qualifier access,
+                                 enum ac_access_type type);
 
 #ifdef __cplusplus
 }
